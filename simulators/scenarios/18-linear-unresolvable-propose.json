@@ -1,0 +1,37 @@
+{
+  "name": "18-linear-unresolvable-propose",
+  "description": "Linear ticket classified as unresolvable → propose policy (default) → DM proposal to admin (S123)",
+  "events": [
+    {
+      "id": "evt-18-001",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700001800000,
+      "payload": {
+        "ticket_id": "LAN-7",
+        "title": "Make everything faster",
+        "description": "The app is slow sometimes."
+      },
+      "workspace": "ws-18"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-18-001",
+        "classification": "unresolvable",
+        "action": "propose",
+        "status": "proposed"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-18-001",
+        "action_type": "slack_post",
+        "payload_contains": "unresolvable"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

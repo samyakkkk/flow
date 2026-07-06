@@ -1,0 +1,31 @@
+{
+  "name": "14-meeting-decision-graphwrite",
+  "description": "Meeting segment classified as decision → auto policy → upsertNode to graph + audit graphwrite (S075)",
+  "events": [
+    {
+      "id": "evt-14-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700001400000,
+      "payload": {
+        "text": "We decided to migrate the job queue to SQS by end of Q3.",
+        "meeting_id": "mtg-2026-07-05",
+        "segment_id": "seg-001"
+      },
+      "workspace": "ws-14"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-14-001",
+        "classification": "decision",
+        "action": "graphwrite",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

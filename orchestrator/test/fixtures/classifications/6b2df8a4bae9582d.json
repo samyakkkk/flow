@@ -1,0 +1,10 @@
+{
+  "classification": "correction",
+  "confidence": 0.95,
+  "extracted": {
+    "corrects": "Redis used for session caching",
+    "correction": "Memcached replaced Redis for session caching last quarter",
+    "subject": "session caching",
+    "technology": "Memcached"
+  }
+}

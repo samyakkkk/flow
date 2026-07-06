@@ -1,0 +1,48 @@
+{
+  "name": "06-mention-question-answer",
+  "description": "@mention question → answer_job audit, then (fake opencode) answer delivered to the thread via outbox slack_post with citations.",
+  "events": [
+    {
+      "id": "evt-mq-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700000006000,
+      "payload": {
+        "text": "How is authentication handled in the system?",
+        "channel": "#engineering",
+        "user_id": "U006",
+        "ts": "1700000006000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-mq-001",
+        "classification": "question",
+        "action": "answer_job",
+        "status": "ok"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-mq-001",
+        "action_type": "slack_post",
+        "payload_contains": "#engineering"
+      },
+      {
+        "event_id": "evt-mq-001",
+        "action_type": "slack_post",
+        "payload_contains": "Sources:"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": [
+      {
+        "event_id": "evt-mq-001",
+        "has_citations": true
+      }
+    ]
+  }
+}

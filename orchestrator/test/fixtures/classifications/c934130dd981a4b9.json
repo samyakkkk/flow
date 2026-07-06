@@ -1,0 +1,7 @@
+{
+  "classification": "unresolvable",
+  "confidence": 0.84,
+  "extracted": {
+    "reason": "vague description, no owner, ticket is old"
+  }
+}

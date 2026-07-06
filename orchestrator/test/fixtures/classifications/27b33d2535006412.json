@@ -1,0 +1,8 @@
+{
+  "classification": "task_discussion",
+  "confidence": 0.89,
+  "extracted": {
+    "task": "Build GraphQL wrapper around REST APIs for better developer experience",
+    "area": "api"
+  }
+}

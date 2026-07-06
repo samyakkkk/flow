@@ -1,0 +1,35 @@
+{
+  "name": "dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 7600",
+    "build": "next build",
+    "start": "next start --port 7600",
+    "lint": "eslint",
+    "smoke": "node scripts/smoke.mjs",
+    "verify": "next build && node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@falkordb/canvas": "^0.2.1",
+    "@types/cytoscape": "^3.21.9",
+    "@types/dompurify": "^3.0.5",
+    "cookies": "^0.9.1",
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.5",
+    "next": "16.2.10",
+    "next-auth": "^4.24.14",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

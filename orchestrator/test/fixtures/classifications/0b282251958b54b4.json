@@ -1,0 +1,8 @@
+{
+  "classification": "sensitive",
+  "confidence": 0.99,
+  "extracted": {
+    "contains": "credentials",
+    "types": ["api_key", "password"]
+  }
+}

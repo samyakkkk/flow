@@ -1,0 +1,32 @@
+{
+  "name": "11-noise-suppressed",
+  "description": "Slack ambient noise → suppressed by default policy (slack_ambient.noise=off), no corpus insert, no graphwrite",
+  "events": [
+    {
+      "id": "evt-11-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700001100000,
+      "payload": {
+        "text": "lol ok sure whatever 😂",
+        "channel": "#random",
+        "user_id": "U011",
+        "ts": "1700001100000"
+      },
+      "workspace": "ws-11"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-11-001",
+        "classification": "noise",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": ["lol ok sure whatever"],
+    "answers": []
+  }
+}

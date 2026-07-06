@@ -1,0 +1,109 @@
+// fake-opencode.ts — Canned opencode results for tests (FLOW_FAKE_OPENCODE=1).
+// Imported dynamically by opencode.ts when env flag is set.
+//
+// The run() signature now receives (opts, jobId) so simulate_notify can POST
+// /v1/notify N times using process.env.ORCHESTRATOR_URL + FLOW_ADMIN_TOKEN.
+// simulate_notify is passed as opts.input.simulate_notify (integer).
+//
+// simulate_notify hook: when an "answer" or "continue" job has input.simulate_notify = N,
+// fake-opencode fires N real HTTP POSTs to /v1/notify before returning. This lets
+// scenario 10 exercise the budget end-to-end.
+
+import type { JobInput } from "../src/opencode.js";
+
+export async function run(
+  opts: JobInput,
+  jobId: string
+): Promise<{ result: unknown; sessionId: string }> {
+  const sessionId = `fake-ses-${jobId}`;
+
+  switch (opts.type) {
+    case "answer":
+    case "continue": {
+      // simulate_notify: fire N notify calls before returning (test hook for G10 budget)
+      const simulateNotify = opts.input.simulate_notify as number | undefined;
+      if (simulateNotify && simulateNotify > 0) {
+        await fireSimulatedNotifies(jobId, simulateNotify);
+      }
+
+      const isContinue = opts.type === "continue";
+      const question = isContinue
+        ? (opts.input.message as string | undefined) ?? ""
+        : (opts.input.question as string | undefined) ?? "";
+
+      const answerMd = isContinue
+        ? `**Continued:** I remember you asked: "${question}". The codebase uses TypeScript.`
+        : `**Answer:** Here is the answer to: "${question}"\n\nThe codebase uses TypeScript with a monorepo layout.`;
+
+      return {
+        result: {
+          answer_md: answerMd,
+          citations: [
+            { kind: "node", ref: "node:Concept:typescript-usage" },
+            { kind: "file", ref: "flow/orchestrator/src/index.ts:1" },
+          ],
+          confidence: 0.88,
+          gaps: ["Deployment specifics not yet indexed"],
+          session_id: sessionId,
+        },
+        sessionId,
+      };
+    }
+
+    case "index_repo":
+      return {
+        result: {
+          status: "ok",
+          nodes_written: 12,
+          edges_written: 8,
+          repo: opts.input.repo,
+          branch: opts.input.branch,
+        },
+        sessionId,
+      };
+
+    case "enrich":
+      return {
+        result: {
+          status: "ok",
+          enrichments: 3,
+        },
+        sessionId,
+      };
+
+    default:
+      return { result: { status: "ok" }, sessionId };
+  }
+}
+
+// ------------------------------------------------------------------
+// Fire N HTTP POSTs to /v1/notify for simulate_notify test hook.
+// Uses process.env.ORCHESTRATOR_URL + FLOW_ADMIN_TOKEN (injected by
+// run-scenarios.ts into the orchestrator subprocess env).
+// ------------------------------------------------------------------
+
+async function fireSimulatedNotifies(jobId: string, count: number): Promise<void> {
+  const baseUrl =
+    process.env.ORCHESTRATOR_URL ??
+    `http://127.0.0.1:${process.env.ORCHESTRATOR_PORT ?? "7500"}`;
+  const token = process.env.FLOW_ADMIN_TOKEN ?? "dev-token";
+
+  for (let i = 1; i <= count; i++) {
+    try {
+      await fetch(`${baseUrl}/v1/notify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          job_id: jobId,
+          text: `[simulate-notify ${i}/${count}] Progress update from opencode`,
+        }),
+      });
+    } catch (err) {
+      // Non-fatal: log and continue so budget logic is still exercised
+      console.warn(`[fake-opencode] simulate_notify ${i}/${count} failed:`, err);
+    }
+  }
+}

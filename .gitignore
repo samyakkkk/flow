@@ -1,0 +1,9 @@
+node_modules/
+.env
+*.db
+data/
+.next/
+
+# local/dev artifacts (not product)
+.context/
+index-workspace/repos.json

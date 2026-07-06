@@ -1,0 +1,101 @@
+# Changelog
+
+All notable changes to Flow. Newest first. Dates are the day work landed.
+
+## [Unreleased]
+
+### Added — real brand icons + share-ready README
+- **Brand icons** — GitHub, Linear, Slack, Fireflies, and the coding agents (Anthropic/Claude Code, OpenAI/Codex, OpenCode) now render as proper monochrome inline SVG marks (Simple Icons paths where official; a drawn spark for Fireflies) instead of emoji/geometric glyphs. New `BrandIcon` component; no icon-library dependency.
+- **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
+- **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
+
+### Added — model selection per agent session
+- **Pick the model** (and reasoning/effort level) from the session header, per ACP session config options: Claude Code (5 models + effort), Codex (2 models + reasoning effort), OpenCode (500+ models). Selecting one calls `session/set_config_option` live; the choice persists and survives reload. Required advertising the `session.configOptions` client capability at initialize — without it the agents don't send their model list.
+- **Fixed `flow down` leaving the orchestrator alive** — pids.json goes stale after manual restarts/crashes, so `down` now also kills whatever still holds each project port (the orchestrator surviving a restart meant the next `up` silently ran old code).
+
+### Added — Agents v1: run your coding agents from Flow
+- **Agents page** — every coding agent installed on the machine (Claude Code, Codex, OpenCode) with live detection, plus a task kickoff form (agent × connected repo × prompt). Missing agents show install hints.
+- **Live session view** — streaming transcript (messages, collapsible thinking, tool rows with flow-graph calls highlighted 🧠, plan checklist), steering input (follow-ups when idle; interrupts and redirects mid-run), Stop, real permission cards (Allow / Always allow / Reject from the browser), agent mode dropdown (e.g. Claude's Manual/Auto), archived state after restarts with full transcript replay from JSONL.
+- **The brain lights up as agents use it** — the session view's graph panel highlights the exact nodes the agent queries, live ("7 nodes consulted by this session"), and the transcript shows "consulted the brain" markers with the node ids. The graph is visibly the center of the experience.
+- Verified with real sessions on all three backends: Claude Code (permissions + steering + a genuine security finding in api-service), OpenCode (contract mapping across both repos, 9 graph calls), Codex (protocol works incl. modes; account was usage-limited — the real reason now surfaces from adapter stderr instead of "Internal error").
+- **Long-session performance** — replaying 700+ transcript events one render at a time froze the page: SSE events now batch-flush (~90ms) client-side, and bulky tool payloads (file bodies, up to 56KB per event) are stripped from the wire while the JSONL transcript keeps everything.
+- **No process leaks** — the injected MCP exits when its agent goes away, and the orchestrator kills adapter subprocesses on shutdown (finished sessions had been leaving orphans that eventually starved the machine).
+- **Orchestrator ACP runtime** (`agents/runtime.ts`, `agents/routes.ts`): detects installed agents (Claude Code / Codex / OpenCode), spawns their ACP adapters, creates sessions in connected-repo checkouts, streams every session event over SSE, and relays steering — follow-up prompts (queue + cancel-current), stop, permission replies, mode changes. Dashboard never spawns processes; everything rides the orchestrator HTTP API (cloud mode later = same API).
+- **Read-only graph MCP injected per session** — every agent session gets `flow-graph` (find_entity / get_entity / read_query / list_schema only); each tool call is reported back with the graph node ids it touched, for live brain highlighting. Proven end-to-end with a real opencode session: 3 graph calls, node ids captured, grounded answer (handler.ts:100), clean end_turn.
+
+### Docs — agent-dispatch architecture decided (Shellular + ACP + MCP)
+- `docs/AGENT_DISPATCH.md`: Shellular is Flow's agent-execution plane. Flow acts as a headless Shellular client (relay + libsodium, `AI_SESSION_CREATE` with per-session `mcpServers` injection — verified in claude-agent-acp, codex-acp, and opencode sources) to trigger coding-agent tasks on any paired machine and stream progress back; the gateway grows an HTTP MCP endpoint; repos get MCP config written on connect; `flow acp` exposes the answerer as an agent inside Shellular/Zed. Roadmap reordered accordingly.
+
+### Changed — brain graph now uses FalkorDB's own renderer (semantic zoom)
+- **Swapped cytoscape for `@falkordb/canvas`** — the exact web component FalkorDB's browser uses (force-graph + d3-force: charge −400, collision = node size + padding, weak centering). The condensed hairball is gone; the graph settles into a spread-out constellation with degree-sized, type-colored nodes.
+- **Semantic zoom** — zooming in spreads nodes apart on screen and reveals name labels inside the circles (level-of-detail: labels/arrows are hidden when zoomed out, appear past zoom 1), so you can focus on individual nodes as you dive in.
+- **Fit-to-constellation** — isolated nodes drift to the edges under charge; the initial fit now frames the connected cluster instead of letting outliers shrink it to a corner.
+- **Stable refreshes** — poll updates diff the data and use position-preserving merges, so the constellation never re-randomizes or jitters while indexing runs. Node click → info card and Ask-view cited-node highlighting (accent + dimming) carried over.
+
+### Fixed — agent hangs, crash recovery, brain viz (found during first real demo run)
+- **Root-caused every orchestrator-spawned agent hang**: Node `spawn` left stdin an open pipe and opencode waited on it forever (0 output → timeout). One line (`stdio:["ignore",…]`) — answers went from 10-min timeouts to ~80s.
+- **Answer jobs now parse the answerer's structured JSON** (answer_md / citations / confidence) from the transcript instead of dumping raw text with citations hardcoded empty; raw-text fallback preserved.
+- **Brain graph viz was empty despite a full graph**: the overview route sent `{query}` (gateway wants `{cypher}`) and parsed the wrong node shape (FalkorDB `id` is an internal int; real id/name are in `properties`, label in `labels[0]`). Now renders (118 nodes · 245 edges on demo).
+- **Per-project agent gateway routing** (`GRAPH_GATEWAY_URL` injected) so builders write to the right graph; index/enrich timeout 45min; staggered process starts (boot-recovery "database is locked").
+
+### Added — Home as the source-management hub + live indexing feedback
+- **All source management on Home** — GitHub card lists connected repos by name with per-repo status (indexing / indexed / queued), "+ Add repositories" inline picker; Linear/Fireflies connect inline (green "Connected" when a key is set); meeting-notes upload; Slack locked in local mode. The separate connections page is now secondary.
+- **"Updating the brain…" overlay** — while any repo is indexing, the graph canvas shows a pulsing accent indicator and the partial graph dims, so you can see work happening. Graph polls every 5s during indexing.
+- **Activity shows real names** — repo-connect rows read the repo name from audit detail (was showing job UUIDs).
+
+### Added — the new dashboard experience (per approved UX spec)
+- **Home is a guided state machine**: no key → the "Flow needs a brain" gate; key set → friendly source cards (GitHub picker, Linear, Fireflies, meeting notes; Slack locked in local mode); indexing → "Reading your sources…" with live per-source status; alive → the brain front and center.
+- **The brain graph is the hero** — live-updating force graph on a dark canvas, type-colored, click a node for a plain-language card; beautiful empty state. (Fixed a flexbox collapse that rendered it as a strip.)
+- **Floating "Ask Flow" bar on every page** → Ask view with sanitized markdown answers, plain-phrase confidence, citation chips, and the answer's subgraph highlighted.
+- **Humanized Activity** — a timeline of sentences ("Connected api-service — indexing now"); noise hidden entirely; raw log behind an Advanced toggle. Source labels never leak internal keys.
+- **Quiet menu** — Home + Ask primary; Sources/Automations/Activity/Settings as a secondary cluster. 68 smoke checks.
+
+### Added — LLM & event observability
+- Every live classifier call (full prompt, raw response, model, latency, per-attempt retries, errors) and every opencode job (summary row + complete JSONL transcript at `data/.../job-logs/<job>.jsonl`, stderr on failure) is recorded. Query via `GET /v1/llmlog?kind=&ref=`. Joined with the audit log, events table, gateway journal, and per-service logs, every decision is traceable end to end.
+
+### Added — UX & design system
+- **Design system** (`docs/DESIGN.md`) — warm editorial language (cream paper, single yellow accent, Lora serif, Space Mono labels) with shared primitives; applied across the dashboard.
+- **UX spec** (`docs/UX.md`, user-approved) — the dashboard as a guided state machine: key gate → connect sources → watch the brain build → alive; floating Ask bar; humanized activity.
+- **State 0 "Flow needs a brain"** — first-run OpenRouter key gate with live validation; nothing else is reachable until the brain works.
+
+### Fixed — repo connect pipeline
+- **Connecting a repo no longer gets "classified as noise"** — the dashboard's repo-connect action was routed through the LLM classifier (a button click is not language); now handled deterministically: register → clone (async, private repos via GITHUB_TOKEN, token never persisted) → index job. Root causes fixed alongside: live classifier is now the production default (fixture replay was shipping as prod behavior behind the misnamed `FLOW_TEST_LIVE` flag, mislabeling everything as low-confidence noise); a missing OpenRouter key degrades with an explicit "add it in Settings" reason; fixture recording no longer writes into the source tree in production.
+
+### Fixed — multi-project dashboards
+- Next.js allows only one `next dev` per directory, so a second project's dashboard silently failed to start. Dashboards now share one production build (auto-rebuilt when source changes) and each runs `next start -p <port>`. `flow up` also health-checks the dashboard, so a failure is loud.
+
+### Added — settings in the dashboard
+- `/settings` page + `GET/PUT /v1/settings`: all config (OpenRouter key, models, integration keys, poll intervals, confidence floor) viewable/editable in the UI. Secrets AES-256-GCM-encrypted in the project DB, masked in responses, changes audited (values never logged). Precedence: dashboard-set > env > default. **Hot-apply**: adding a key starts its poller immediately (proven live against Linear). `.env` now holds only the bootstrap admin token.
+
+### Docs
+- Adopt `CHANGELOG.md` + `ROADMAP.md` as the tracking docs (newest first); durable design consolidated into `docs/ARCHITECTURE.md`. Retired the overnight-build scaffolding docs.
+
+## 2026-07-06 — Multi-project & install shape
+
+### Added
+- **`flow` CLI** — `project create` / `up` / `down` / `ls`. Per-project folders under `data/projects/<name>/` (project.json, `.env` with auto-generated admin token, `workspace/.opencode` from template, `repos/`). Multiple projects run side-by-side on port triplets; FalkorDB shared via named graphs.
+- **Local/prod mode gating** — `GET /v1/mode`; Slack adapter refuses to boot in local mode; dashboard shows Slack as "Always-on only — deploy to enable."
+- **Poll-since-cursor ingestion engine** — the single ingestion mechanism. GitHub / Linear / Fireflies pollers, `poll_cursors` table, `GET /v1/ingest/status`, catching-up indicator. Webhooks reduced to an optional "poll now" nudge.
+- **Dashboard repo picker** — gh CLI → PAT → none fallback, searchable checkbox list, indexed-state badges; mode badge; live ingest-status panel.
+
+### Changed
+- **Unified into one repo** — `graph-gateway/` and `index-workspace/` moved inside `flow/`; all cross-directory paths env-driven.
+
+### Fixed
+- `flow project create` now generates a per-project `FLOW_ADMIN_TOKEN` (was falling back to a shared insecure default); `.env` written `0600`.
+
+## 2026-07-05 — Overnight v1 build
+
+### Added
+- **Orchestrator** — Fastify service: event ingest, LLM classifier (fixture-replayable), policy toggle matrix, single-write action layer, outbox, SQLite corpus (FTS5), job queue, audit log.
+- **graph-gateway** — FalkorDB behind typed verbs (find/upsert/relate/get/read/merge/schema), provenance-required writes, dedup gate, append-only journal, HTTP + MCP.
+- **Integrations** — Slack (Bolt Socket Mode), Linear (incl. idempotent CONTEXT BY FLOW), GitHub (webhook + poll), meetings upload, outbox drainer. Verified against live Linear + GitHub.
+- **Notify tool + session-per-chat (G10)** — scoped notify with budget pushback; thread↔opencode-session binding; real `--session` resume verified.
+- **Dashboard** — login, connections, permissions matrix, ask + cytoscape graph viz, activity, repos.
+- **Simulators** — 40 scenarios across 3 workspaces proving policy divergence + isolation; Linear mock.
+- **Landing page**, **docker-compose + EC2/local deploy docs**, **`verify-all.sh`**, **155-scenario spec** (`docs/scenarios.md`).
+
+### Fixed (review pass)
+- **graphwrite hit nonexistent gateway paths** — every knowledge-graph write 404'd (masked by a permissive test stub). Corrected to `/v1/verbs/*` with proper provenance; proven end-to-end against the live gateway.
+- **Dashboard pages served unauthenticated** — auth middleware was never wired (misfiled). Fixed; smoke test hardened.
+- Config store XOR→AES-256-GCM (stored plaintext on empty token). `spawnSync`→async spawn (froze event loop). Secret scan before DB insert (TOCTOU) + meeting-segment secret filter. Job-scoped notify token instead of admin token in agent subprocess. Crash stall-recovery on boot. Timing-safe token compare.

@@ -1,0 +1,104 @@
+{
+  "name": "38-isolation-workspace",
+  "description": "Cross-workspace isolation. Events in ws-alpha and ws-beta are processed independently: thread_key includes workspace so sessions never bleed. ws-alpha knowledge_claim → graphwrite (no outbox). ws-beta task_discussion → propose (outbox). Audit rows keyed by distinct event IDs prove no cross-contamination. G12.",
+  "events": [
+    {
+      "id": "evt-38-alpha-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003800000,
+      "payload": {
+        "text": "The storage service uses AWS S3 with server-side encryption for all user data.",
+        "channel": "#infra",
+        "user_id": "U038A",
+        "ts": "1700003800000"
+      },
+      "workspace": "ws-alpha"
+    },
+    {
+      "id": "evt-38-beta-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003801000,
+      "payload": {
+        "text": "We need to build a data pipeline for real-time analytics processing.",
+        "channel": "#data-infra",
+        "user_id": "U038B",
+        "ts": "1700003801000"
+      },
+      "workspace": "ws-beta"
+    },
+    {
+      "id": "evt-38-alpha-002",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700003810000,
+      "delay_before_ms": 100,
+      "payload": {
+        "text": "What encryption does the storage service use?",
+        "channel": "#infra",
+        "user_id": "U038C",
+        "ts": "1700003810",
+        "thread_ts": "1700003810"
+      },
+      "workspace": "ws-alpha"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-38-alpha-001",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-38-beta-001",
+        "classification": "task_discussion",
+        "action": "propose",
+        "status": "proposed"
+      },
+      {
+        "event_id": "evt-38-alpha-002",
+        "classification": "question",
+        "action": "answer_job",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-38-alpha-001",
+        "action": "propose"
+      },
+      {
+        "event_id": "evt-38-beta-001",
+        "action": "graphwrite"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-38-beta-001",
+        "action_type": "slack_post",
+        "payload_contains": "task_discussion"
+      },
+      {
+        "event_id": "evt-38-alpha-002",
+        "action_type": "slack_post",
+        "payload_contains": "#infra"
+      }
+    ],
+    "outbox_absent": [
+      {
+        "event_id": "evt-38-alpha-001",
+        "action_type": "slack_post"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": [
+      {
+        "event_id": "evt-38-alpha-002",
+        "has_citations": true
+      }
+    ]
+  }
+}

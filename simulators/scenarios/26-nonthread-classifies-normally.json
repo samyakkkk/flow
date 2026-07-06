@@ -1,0 +1,70 @@
+{
+  "name": "26-nonthread-classifies-normally",
+  "description": "Non-threaded message in a channel with an active session classifies normally (NOT session_continue). First mention creates session; second message has a different ts and NO thread_ts, so its thread_key differs → ambient classification. S013/S014 behavior verification.",
+  "events": [
+    {
+      "id": "evt-26-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700002600000,
+      "payload": {
+        "text": "What is the retry logic in the scraper service?",
+        "channel": "#backend2",
+        "user_id": "U026A",
+        "ts": "1700002600",
+        "thread_ts": "1700002600"
+      },
+      "workspace": "ws-26"
+    },
+    {
+      "id": "evt-26-002",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700002650000,
+      "delay_before_ms": 900,
+      "payload": {
+        "text": "Our logging stack uses ELK for centralized log analysis.",
+        "channel": "#backend2",
+        "user_id": "U026A",
+        "ts": "1700002650000"
+      },
+      "workspace": "ws-26"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-26-001",
+        "classification": "question",
+        "action": "answer_job",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-26-002",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-26-002",
+        "action": "session_continue"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-26-001",
+        "action_type": "slack_post",
+        "payload_contains": "#backend2"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": [
+      {
+        "event_id": "evt-26-001",
+        "has_citations": true
+      }
+    ]
+  }
+}

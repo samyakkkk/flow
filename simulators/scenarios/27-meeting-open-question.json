@@ -1,0 +1,31 @@
+{
+  "name": "27-meeting-open-question",
+  "description": "Meeting segment classified as open_question → auto policy → corpus_insert audit (stored for demand signal), no graph write",
+  "events": [
+    {
+      "id": "evt-27-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700002700000,
+      "payload": {
+        "text": "Should we use Kubernetes or ECS for container orchestration?",
+        "meeting_id": "mtg-2026-07-06",
+        "segment_id": "seg-003"
+      },
+      "workspace": "ws-27"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-27-001",
+        "classification": "open_question",
+        "action": "corpus_insert",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

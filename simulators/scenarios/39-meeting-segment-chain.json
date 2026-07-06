@@ -1,0 +1,109 @@
+{
+  "name": "39-meeting-segment-chain",
+  "description": "Multiple meeting segments with all 5 classifications: decision→graphwrite, action_item→propose, noise→suppressed, knowledge_claim→graphwrite, open_question→corpus_insert. Tests full meeting taxonomy end-to-end. S075/S076/S081.",
+  "events": [
+    {
+      "id": "evt-39-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700003900000,
+      "payload": {
+        "text": "We decided to use PostgreSQL as the primary database for the analytics module.",
+        "meeting_id": "mtg-2026-07-07",
+        "segment_id": "seg-010"
+      },
+      "workspace": "ws-39"
+    },
+    {
+      "id": "evt-39-002",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700003901000,
+      "payload": {
+        "text": "ACTION: Carol to set up the PostgreSQL schema by Wednesday.",
+        "meeting_id": "mtg-2026-07-07",
+        "segment_id": "seg-011"
+      },
+      "workspace": "ws-39"
+    },
+    {
+      "id": "evt-39-003",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700003902000,
+      "payload": {
+        "text": "Alright moving on to the next item on the agenda.",
+        "meeting_id": "mtg-2026-07-07",
+        "segment_id": "seg-012"
+      },
+      "workspace": "ws-39"
+    },
+    {
+      "id": "evt-39-004",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700003903000,
+      "payload": {
+        "text": "The deployment pipeline uses GitHub Actions for CI and Terraform for infra.",
+        "meeting_id": "mtg-2026-07-07",
+        "segment_id": "seg-013"
+      },
+      "workspace": "ws-39"
+    },
+    {
+      "id": "evt-39-005",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700003904000,
+      "payload": {
+        "text": "Should we migrate the monitoring stack to Datadog or keep using Prometheus?",
+        "meeting_id": "mtg-2026-07-07",
+        "segment_id": "seg-014"
+      },
+      "workspace": "ws-39"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-39-001",
+        "classification": "decision",
+        "action": "graphwrite",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-39-002",
+        "classification": "action_item",
+        "action": "propose",
+        "status": "proposed"
+      },
+      {
+        "event_id": "evt-39-003",
+        "classification": "noise",
+        "action": "suppressed",
+        "status": "suppressed"
+      },
+      {
+        "event_id": "evt-39-004",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-39-005",
+        "classification": "open_question",
+        "action": "corpus_insert",
+        "status": "ok"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-39-002",
+        "action_type": "slack_post",
+        "payload_contains": "action_item"
+      }
+    ],
+    "corpus_absent": ["moving on to the next item"],
+    "answers": []
+  }
+}

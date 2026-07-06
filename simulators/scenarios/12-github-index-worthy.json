@@ -1,0 +1,32 @@
+{
+  "name": "12-github-index-worthy",
+  "description": "GitHub merge with behavioral code changes → index_worthy → index_job enqueued (S060)",
+  "events": [
+    {
+      "id": "evt-12-001",
+      "source": "github",
+      "type": "merge",
+      "ts": 1700001200000,
+      "payload": {
+        "repo": "acme/api",
+        "branch": "main",
+        "commit": "abc12345def67890",
+        "changed_files": ["src/rate_limiter.ts", "src/api.ts"]
+      },
+      "workspace": "ws-12"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-12-001",
+        "classification": "index_worthy",
+        "action": "index_job",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

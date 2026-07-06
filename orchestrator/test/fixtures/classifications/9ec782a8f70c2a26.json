@@ -1,0 +1,8 @@
+{
+  "classification": "question",
+  "confidence": 0.90,
+  "extracted": {
+    "topic": "storage service encryption",
+    "area": "storage"
+  }
+}

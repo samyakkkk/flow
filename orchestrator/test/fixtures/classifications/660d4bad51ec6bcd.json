@@ -1,0 +1,8 @@
+{
+  "classification": "index_worthy",
+  "confidence": 0.95,
+  "extracted": {
+    "affected_systems": ["rate_limiter", "api"],
+    "change_type": "behavioral"
+  }
+}

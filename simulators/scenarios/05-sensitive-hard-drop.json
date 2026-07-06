@@ -1,0 +1,27 @@
+{
+  "name": "05-sensitive-hard-drop",
+  "description": "Sensitive content → hard drop: nothing in audit, corpus, or outbox",
+  "events": [
+    {
+      "id": "evt-sens-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000005000,
+      "payload": {
+        "text": "My API key is sk-1234567890abcdef and the DB password is supersecret!",
+        "channel": "#dev",
+        "user_id": "U005",
+        "ts": "1700000005000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [],
+    "outbox": [],
+    "corpus_absent": [
+      "supersecret"
+    ],
+    "answers": []
+  }
+}

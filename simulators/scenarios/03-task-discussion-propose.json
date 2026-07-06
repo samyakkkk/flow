@@ -1,0 +1,44 @@
+{
+  "name": "03-task-discussion-propose",
+  "description": "task_discussion → propose mode: outbox DM, NO direct linear write",
+  "events": [
+    {
+      "id": "evt-td-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000003000,
+      "payload": {
+        "text": "We need to build a new auth service with OAuth2 support next sprint.",
+        "channel": "#product",
+        "user_id": "U003",
+        "ts": "1700000003000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-td-001",
+        "classification": "task_discussion",
+        "action": "propose",
+        "status": "proposed"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-td-001",
+        "action_type": "slack_post",
+        "payload_contains": "task_discussion"
+      }
+    ],
+    "outbox_absent": [
+      {
+        "event_id": "evt-td-001",
+        "action_type": "linear_ticket_create"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

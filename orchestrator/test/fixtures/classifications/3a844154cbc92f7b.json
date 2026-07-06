@@ -1,0 +1,7 @@
+{
+  "classification": "skip",
+  "confidence": 0.93,
+  "extracted": {
+    "reason": "docs and configuration only, no behavioral code changes"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "classification": "action_item",
+  "confidence": 0.94,
+  "extracted": {
+    "owner": "Carol",
+    "task": "Set up PostgreSQL schema for analytics module",
+    "due": "Wednesday"
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "name": "37-ws-question-about-system",
+  "description": "MULTI-WORKSPACE: question_about_system in 3 workspaces. ws-default and ws-permissive (auto) → demand_signal, no reply. ws-strict (propose) → DM proposal outbox. G12.",
+  "skip_base_run": true,
+  "events": [
+    {
+      "id": "evt-37-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003700000,
+      "payload": {
+        "text": "How does the auth service integrate with the new API gateway component?",
+        "channel": "#general-ws",
+        "user_id": "U037",
+        "ts": "1700003700000"
+      },
+      "workspace": "ws-default"
+    }
+  ],
+  "expect": {
+    "audits": [],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  },
+  "workspace_runs": [
+    {
+      "workspace": "ws-permissive",
+      "id_prefix": "perm-",
+      "policy_patch": {
+        "slack_ambient.question_about_system": "auto"
+      },
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-37-001",
+            "classification": "question_about_system",
+            "action": "demand_signal",
+            "status": "ok"
+          }
+        ],
+        "audits_absent": [
+          {
+            "event_id": "evt-37-001",
+            "action": "propose"
+          }
+        ],
+        "outbox": [],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-strict",
+      "id_prefix": "strict-",
+      "policy_patch": {
+        "slack_ambient.question_about_system": "propose"
+      },
+      "teardown_patch": {
+        "slack_ambient.question_about_system": "auto"
+      },
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-37-001",
+            "classification": "question_about_system",
+            "action": "propose",
+            "status": "proposed"
+          }
+        ],
+        "audits_absent": [
+          {
+            "event_id": "evt-37-001",
+            "action": "demand_signal"
+          }
+        ],
+        "outbox": [
+          {
+            "event_id": "evt-37-001",
+            "action_type": "slack_post",
+            "payload_contains": "question_about_system"
+          }
+        ],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-default",
+      "id_prefix": "def-",
+      "policy_patch": {},
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-37-001",
+            "classification": "question_about_system",
+            "action": "demand_signal",
+            "status": "ok"
+          }
+        ],
+        "outbox": [],
+        "corpus_absent": [],
+        "answers": []
+      }
+    }
+  ]
+}

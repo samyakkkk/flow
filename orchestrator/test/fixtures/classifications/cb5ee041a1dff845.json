@@ -1,0 +1,8 @@
+{
+  "classification": "question",
+  "confidence": 0.92,
+  "extracted": {
+    "topic": "retry logic",
+    "service": "scraper"
+  }
+}

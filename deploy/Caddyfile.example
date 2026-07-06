@@ -1,0 +1,42 @@
+# Caddyfile.example — Copy to /etc/caddy/Caddyfile and replace YOUR_DOMAIN.
+#
+# Only the dashboard is exposed to the internet.
+# The orchestrator and gateway remain on the Docker network / localhost.
+# Caddy automatically obtains and renews TLS certificates from Let's Encrypt.
+
+YOUR_DOMAIN {
+    # Proxy all traffic to the dashboard container.
+    # The dashboard's Next.js API routes talk to the orchestrator server-side
+    # (http://orchestrator:7500 on the Docker network) — never client-side.
+    reverse_proxy localhost:7600
+
+    # Security headers
+    header {
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+        # HTTPS only
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Disable server fingerprinting
+        -Server
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/flow.log
+        format json
+    }
+}
+
+# Optional: FalkorDB browser on a separate subdomain (internal use only).
+# Protect it behind basic auth or VPN if you expose it at all.
+#
+# graph.YOUR_DOMAIN {
+#     basicauth {
+#         admin <bcrypt-hashed-password>
+#     }
+#     reverse_proxy localhost:3000
+# }

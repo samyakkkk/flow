@@ -1,0 +1,8 @@
+{
+  "classification": "question_about_system",
+  "confidence": 0.85,
+  "extracted": {
+    "topic": "auth service integration with API gateway",
+    "area": "authentication"
+  }
+}

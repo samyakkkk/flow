@@ -1,0 +1,9 @@
+{
+  "classification": "task_discussion",
+  "confidence": 0.88,
+  "extracted": {
+    "task": "Build new auth service with OAuth2 support",
+    "timeline": "next sprint",
+    "assignee": null
+  }
+}

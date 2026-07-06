@@ -1,0 +1,8 @@
+{
+  "classification": "decision",
+  "confidence": 0.93,
+  "extracted": {
+    "decision": "use PostgreSQL as primary database for analytics module",
+    "system": "analytics database"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "24-duplicate-event-id",
+  "description": "Same event ID posted twice. First insert succeeds; second is INSERT OR IGNORE (idempotent at events table). System must not crash. At least one correct audit row exists. Encodes S102.",
+  "events": [
+    {
+      "id": "evt-24-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700002400000,
+      "payload": {
+        "text": "The payment service uses Stripe as the primary payment processor.",
+        "channel": "#engineering",
+        "user_id": "U024",
+        "ts": "1700002400000"
+      },
+      "workspace": "ws-24"
+    },
+    {
+      "id": "evt-24-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700002400000,
+      "payload": {
+        "text": "The payment service uses Stripe as the primary payment processor.",
+        "channel": "#engineering",
+        "user_id": "U024",
+        "ts": "1700002400000"
+      },
+      "workspace": "ws-24"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-24-001",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

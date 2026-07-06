@@ -1,0 +1,73 @@
+{
+ "name": "10-notify-budget",
+ "description": "Fake opencode fires simulate_notify=4 notify calls. Calls 1+2 accepted (outbox slack_post), call 3 rejected with pushback (audit pushback, no outbox), call 4 delivered but audit-flagged (user spec: insist-after-pushback is allowed).",
+ "events": [
+  {
+   "id": "evt-10-001",
+   "source": "slack",
+   "type": "mention",
+   "ts": 1700000100000,
+   "payload": {
+    "text": "Can you do a long indexing run and send me updates?",
+    "channel": "#engineering",
+    "user_id": "U100A",
+    "ts": "1700000100",
+    "thread_ts": "1700000100",
+    "simulate_notify": "4"
+   },
+   "workspace": "ws-notify-test"
+  }
+ ],
+ "expect": {
+  "audits": [
+   {
+    "event_id": "evt-10-001",
+    "classification": "question",
+    "action": "answer_job",
+    "status": "ok"
+   },
+   {
+    "event_id": "evt-10-001",
+    "action": "notify",
+    "status": "ok"
+   },
+   {
+    "event_id": "evt-10-001",
+    "action": "notify",
+    "status": "pushback"
+   },
+   {
+    "event_id": "evt-10-001",
+    "action": "notify",
+    "status": "flagged"
+   }
+  ],
+  "audits_absent": [],
+  "outbox": [
+   {
+    "event_id": "evt-10-001",
+    "action_type": "slack_post",
+    "payload_contains": "simulate-notify 1/"
+   },
+   {
+    "event_id": "evt-10-001",
+    "action_type": "slack_post",
+    "payload_contains": "simulate-notify 2/"
+   },
+   {
+    "event_id": "evt-10-001",
+    "action_type": "slack_post",
+    "payload_contains": "simulate-notify 4/"
+   }
+  ],
+  "outbox_absent": [
+   {
+    "event_id": "evt-10-001",
+    "action_type": "slack_post",
+    "payload_contains": "simulate-notify 3/"
+   }
+  ],
+  "corpus_absent": [],
+  "answers": []
+ }
+}

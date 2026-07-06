@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.89,
+  "extracted": {
+    "claim": "ELK stack for centralized log analysis",
+    "technology": "ELK",
+    "area": "logging"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "classification": "task_discussion",
+  "confidence": 0.91,
+  "extracted": {
+    "task": "Add rate limiting to protect public API endpoints from abuse",
+    "priority": "high",
+    "area": "security"
+  }
+}

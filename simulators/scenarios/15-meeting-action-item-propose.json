@@ -1,0 +1,43 @@
+{
+  "name": "15-meeting-action-item-propose",
+  "description": "Meeting action_item → propose policy (default) → DM proposal in outbox, no direct Linear write (S076)",
+  "events": [
+    {
+      "id": "evt-15-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700001500000,
+      "payload": {
+        "text": "ACTION: Bob to write the API migration script by next Friday.",
+        "meeting_id": "mtg-2026-07-05",
+        "segment_id": "seg-002"
+      },
+      "workspace": "ws-15"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-15-001",
+        "classification": "action_item",
+        "action": "propose",
+        "status": "proposed"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-15-001",
+        "action_type": "slack_post",
+        "payload_contains": "action_item"
+      }
+    ],
+    "outbox_absent": [
+      {
+        "event_id": "evt-15-001",
+        "action_type": "linear_ticket_create"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

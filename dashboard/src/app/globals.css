@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/* Flow design system — warm editorial. See docs/DESIGN.md */
+:root {
+  --cream: rgb(255, 255, 249);
+  --sand: rgb(234, 235, 228);
+  --paper: rgb(242, 243, 235);
+  --ink: rgb(54, 55, 38);
+  --text: rgb(73, 73, 57);
+  --text-muted: rgb(133, 134, 122);
+  --accent: rgb(255, 247, 129);
+  --line: rgba(0, 0, 0, 0.06);
+
+  --ok: rgb(90, 140, 90);
+  --warn: rgb(184, 134, 60);
+  --danger: rgb(168, 80, 70);
+
+  --shadow-sm: 0 0 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 0 3px 0 rgba(0, 0, 0, 0.10);
+
+  /* legacy aliases so any not-yet-migrated page still renders sanely */
+  --background: var(--cream);
+  --surface: var(--paper);
+  --surface-2: var(--sand);
+  --border: var(--line);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-muted);
+}
+
+@theme inline {
+  --color-cream: var(--cream);
+  --color-sand: var(--sand);
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-line: var(--line);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+
+  --color-background: var(--cream);
+  --color-foreground: var(--text);
+
+  --font-display: var(--font-lora), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-space-mono), ui-monospace, "Cascadia Code", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--cream);
+  color: var(--text);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The signature section kicker: • MONO LABEL */
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.kicker::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Node-pop: the brain growing */
+@keyframes node-pop {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.node-pop { animation: node-pop 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* Live pulse dot */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.live-dot { animation: live-pulse 1.4s ease-in-out infinite; }
+
+/* Gentle enter */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise-in 0.6s ease-out both; }
+
+/* Scrollbar — warm */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(54, 55, 38, 0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(54, 55, 38, 0.3); }

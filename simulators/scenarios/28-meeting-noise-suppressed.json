@@ -1,0 +1,31 @@
+{
+  "name": "28-meeting-noise-suppressed",
+  "description": "Meeting segment classified as noise → policy off (default: meeting_segment.noise=off) → suppressed, no corpus insert, no graph write (S081)",
+  "events": [
+    {
+      "id": "evt-28-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700002800000,
+      "payload": {
+        "text": "Let us take a five minute break everyone.",
+        "meeting_id": "mtg-2026-07-06",
+        "segment_id": "seg-004"
+      },
+      "workspace": "ws-28"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-28-001",
+        "classification": "noise",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": ["five minute break"],
+    "answers": []
+  }
+}

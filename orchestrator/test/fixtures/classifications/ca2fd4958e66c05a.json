@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.92,
+  "extracted": {
+    "claim": "Redis is used for the job queue across all microservices",
+    "technology": "Redis",
+    "area": "job queue"
+  }
+}

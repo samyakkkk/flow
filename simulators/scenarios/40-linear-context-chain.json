@@ -1,0 +1,66 @@
+{
+  "name": "40-linear-context-chain",
+  "description": "Two linear tickets in one scenario: LAN-501 (needs_context → contextblock) and LAN-502 (not_applicable → suppressed). Tests that different linear classifications produce independent outcomes with no interference. S058/S152.",
+  "events": [
+    {
+      "id": "evt-40-001",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700004000000,
+      "payload": {
+        "ticket_id": "LAN-501",
+        "title": "Implement OAuth2 login flow",
+        "description": "Need to add OAuth2 support for third-party login providers."
+      },
+      "workspace": "ws-40"
+    },
+    {
+      "id": "evt-40-002",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700004001000,
+      "payload": {
+        "ticket_id": "LAN-502",
+        "title": "Outdated dependency in package.json",
+        "description": ""
+      },
+      "workspace": "ws-40"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-40-001",
+        "classification": "needs_context",
+        "action": "contextblock",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-40-002",
+        "classification": "not_applicable",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-40-002",
+        "action": "contextblock"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-40-001",
+        "action_type": "linear_context_update"
+      }
+    ],
+    "outbox_absent": [
+      {
+        "event_id": "evt-40-002",
+        "action_type": "linear_context_update"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

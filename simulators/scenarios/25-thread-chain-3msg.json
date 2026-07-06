@@ -1,0 +1,104 @@
+{
+  "name": "25-thread-chain-3msg",
+  "description": "3-message thread chain in same session: first @mention creates session (answer_job), second and third messages route to session_continue (no re-classify). All three produce outbox slack_post replies. G10 session-per-chat. S008/S010.",
+  "events": [
+    {
+      "id": "evt-25-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700002500000,
+      "payload": {
+        "text": "How does the caching layer work in the backend services?",
+        "channel": "#backend",
+        "user_id": "U025A",
+        "ts": "1700002500",
+        "thread_ts": "1700002500"
+      },
+      "workspace": "ws-25"
+    },
+    {
+      "id": "evt-25-002",
+      "source": "slack",
+      "type": "message",
+      "ts": 1700002510000,
+      "delay_before_ms": 900,
+      "payload": {
+        "text": "What about cache invalidation strategies?",
+        "channel": "#backend",
+        "user_id": "U025A",
+        "ts": "1700002510",
+        "thread_ts": "1700002500"
+      },
+      "workspace": "ws-25"
+    },
+    {
+      "id": "evt-25-003",
+      "source": "slack",
+      "type": "message",
+      "ts": 1700002520000,
+      "delay_before_ms": 900,
+      "payload": {
+        "text": "And what about cache eviction policies specifically?",
+        "channel": "#backend",
+        "user_id": "U025B",
+        "ts": "1700002520",
+        "thread_ts": "1700002500"
+      },
+      "workspace": "ws-25"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-25-001",
+        "classification": "question",
+        "action": "answer_job",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-25-002",
+        "action": "session_continue",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-25-003",
+        "action": "session_continue",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-25-002",
+        "action": "answer_job"
+      },
+      {
+        "event_id": "evt-25-003",
+        "action": "answer_job"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-25-001",
+        "action_type": "slack_post",
+        "payload_contains": "#backend"
+      },
+      {
+        "event_id": "evt-25-002",
+        "action_type": "slack_post",
+        "payload_contains": "#backend"
+      },
+      {
+        "event_id": "evt-25-003",
+        "action_type": "slack_post",
+        "payload_contains": "#backend"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": [
+      {
+        "event_id": "evt-25-001",
+        "has_citations": true
+      }
+    ]
+  }
+}

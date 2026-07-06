@@ -1,0 +1,38 @@
+{
+  "name": "30-mention-command",
+  "description": "@mention classified as command → auto policy → stored in corpus + audit corpus_insert (command falls to else path in handleSlackAuto v1). S002. Note: answer_job path is for 'question' only.",
+  "events": [
+    {
+      "id": "evt-30-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700003000000,
+      "payload": {
+        "text": "index the new crawler repository at github.com/acme/crawler",
+        "channel": "#ops",
+        "user_id": "U030",
+        "ts": "1700003000000"
+      },
+      "workspace": "ws-30"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-30-001",
+        "classification": "command",
+        "action": "corpus_insert",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-30-001",
+        "action": "answer_job"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

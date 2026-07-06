@@ -1,0 +1,36 @@
+{
+  "name": "16-linear-needs-context",
+  "description": "Linear webhook ticket → needs_context → auto policy → contextblock update queued in outbox (S058, S016)",
+  "events": [
+    {
+      "id": "evt-16-001",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700001600000,
+      "payload": {
+        "ticket_id": "LAN-201",
+        "title": "Fix auth token expiry",
+        "description": "Session tokens are expiring too early in the API."
+      },
+      "workspace": "ws-16"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-16-001",
+        "classification": "needs_context",
+        "action": "contextblock",
+        "status": "ok"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-16-001",
+        "action_type": "linear_context_update"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

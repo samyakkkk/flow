@@ -1,0 +1,121 @@
+{
+  "name": "35-ws-task-discussion",
+  "description": "MULTI-WORKSPACE: task_discussion in 3 workspaces. ws-permissive (auto) → linear_ticket_create in outbox. ws-default and ws-strict (propose) → DM proposal outbox. Demonstrates auto vs propose divergence for the same event. G12.",
+  "skip_base_run": true,
+  "events": [
+    {
+      "id": "evt-35-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003500000,
+      "payload": {
+        "text": "We should build a GraphQL wrapper around REST APIs to improve developer experience.",
+        "channel": "#platform-ws",
+        "user_id": "U035",
+        "ts": "1700003500000"
+      },
+      "workspace": "ws-default"
+    }
+  ],
+  "expect": {
+    "audits": [],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  },
+  "workspace_runs": [
+    {
+      "workspace": "ws-permissive",
+      "id_prefix": "perm-",
+      "policy_patch": {
+        "slack_ambient.task_discussion": "auto"
+      },
+      "teardown_patch": {
+        "slack_ambient.task_discussion": "propose"
+      },
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-35-001",
+            "classification": "task_discussion",
+            "action": "linear_ticket_create",
+            "status": "ok"
+          }
+        ],
+        "audits_absent": [
+          {
+            "event_id": "evt-35-001",
+            "action": "propose"
+          }
+        ],
+        "outbox": [
+          {
+            "event_id": "evt-35-001",
+            "action_type": "linear_ticket_create"
+          }
+        ],
+        "outbox_absent": [
+          {
+            "event_id": "evt-35-001",
+            "action_type": "slack_post",
+            "payload_contains": "task_discussion"
+          }
+        ],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-default",
+      "id_prefix": "def-",
+      "policy_patch": {},
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-35-001",
+            "classification": "task_discussion",
+            "action": "propose",
+            "status": "proposed"
+          }
+        ],
+        "outbox": [
+          {
+            "event_id": "evt-35-001",
+            "action_type": "slack_post",
+            "payload_contains": "task_discussion"
+          }
+        ],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-strict",
+      "id_prefix": "strict-",
+      "policy_patch": {
+        "slack_ambient.task_discussion": "propose"
+      },
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-35-001",
+            "classification": "task_discussion",
+            "action": "propose",
+            "status": "proposed"
+          }
+        ],
+        "outbox": [
+          {
+            "event_id": "evt-35-001",
+            "action_type": "slack_post",
+            "payload_contains": "task_discussion"
+          }
+        ],
+        "corpus_absent": [],
+        "answers": []
+      }
+    }
+  ]
+}

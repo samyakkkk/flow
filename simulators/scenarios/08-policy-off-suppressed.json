@@ -1,0 +1,42 @@
+{
+  "name": "08-policy-off-suppressed",
+  "description": "knowledge_claim with policy toggled to off → suppressed audit, no graph write",
+  "setup": {
+    "policy_patch": {
+      "slack_ambient.knowledge_claim": "off"
+    }
+  },
+  "teardown": {
+    "policy_patch": {
+      "slack_ambient.knowledge_claim": "auto"
+    }
+  },
+  "events": [
+    {
+      "id": "evt-pol-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000008000,
+      "payload": {
+        "text": "Our microservices communicate via gRPC for internal calls.",
+        "channel": "#engineering",
+        "user_id": "U008",
+        "ts": "1700000008000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-pol-001",
+        "classification": "knowledge_claim",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.6,
+  "extracted": {
+    "claim": "possibly using MongoDB for analytics store",
+    "certainty": "low"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "17-linear-duplicate-propose",
+  "description": "Linear ticket classified as duplicate_candidate → propose policy (default) → DM proposal (S057)",
+  "events": [
+    {
+      "id": "evt-17-001",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700001700000,
+      "payload": {
+        "ticket_id": "LAN-88",
+        "title": "Rate limiter 429 handling",
+        "description": "Rate limiter does not properly handle 429 responses from upstream."
+      },
+      "workspace": "ws-17"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-17-001",
+        "classification": "duplicate_candidate",
+        "action": "propose",
+        "status": "proposed"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-17-001",
+        "action_type": "slack_post",
+        "payload_contains": "duplicate_candidate"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

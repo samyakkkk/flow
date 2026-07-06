@@ -1,0 +1,109 @@
+{
+  "name": "34-ws-knowledge-claim",
+  "description": "MULTI-WORKSPACE: same knowledge_claim event in 3 workspaces. ws-default/permissive (auto) → graphwrite. ws-strict (propose) → propose+outbox. Demonstrates divergent outcomes. G12.",
+  "skip_base_run": true,
+  "events": [
+    {
+      "id": "evt-34-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003400000,
+      "payload": {
+        "text": "The API gateway uses Kong for traffic routing and load balancing.",
+        "channel": "#platform-ws",
+        "user_id": "U034",
+        "ts": "1700003400000"
+      },
+      "workspace": "ws-default"
+    }
+  ],
+  "expect": {
+    "audits": [],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  },
+  "workspace_runs": [
+    {
+      "workspace": "ws-permissive",
+      "id_prefix": "perm-",
+      "policy_patch": {
+        "slack_ambient.knowledge_claim": "auto"
+      },
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-34-001",
+            "classification": "knowledge_claim",
+            "action": "graphwrite",
+            "status": "ok"
+          }
+        ],
+        "audits_absent": [
+          {
+            "event_id": "evt-34-001",
+            "action": "propose"
+          }
+        ],
+        "outbox": [],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-strict",
+      "id_prefix": "strict-",
+      "policy_patch": {
+        "slack_ambient.knowledge_claim": "propose"
+      },
+      "teardown_patch": {
+        "slack_ambient.knowledge_claim": "auto"
+      },
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-34-001",
+            "classification": "knowledge_claim",
+            "action": "propose",
+            "status": "proposed"
+          }
+        ],
+        "audits_absent": [
+          {
+            "event_id": "evt-34-001",
+            "action": "graphwrite"
+          }
+        ],
+        "outbox": [
+          {
+            "event_id": "evt-34-001",
+            "action_type": "slack_post",
+            "payload_contains": "knowledge_claim"
+          }
+        ],
+        "corpus_absent": [],
+        "answers": []
+      }
+    },
+    {
+      "workspace": "ws-default",
+      "id_prefix": "def-",
+      "policy_patch": {},
+      "teardown_patch": {},
+      "expect": {
+        "audits": [
+          {
+            "event_id": "evt-34-001",
+            "classification": "knowledge_claim",
+            "action": "graphwrite",
+            "status": "ok"
+          }
+        ],
+        "outbox": [],
+        "corpus_absent": [],
+        "answers": []
+      }
+    }
+  ]
+}

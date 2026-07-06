@@ -1,0 +1,76 @@
+{
+  "name": "09-thread-followup-same-session",
+  "description": "First @mention in a thread triggers answer job and binds session. Second message in same thread_ts skips the classifier entirely (session_continue audit) and routes directly into the bound session; the reply is delivered via outbox.",
+  "events": [
+    {
+      "id": "evt-09-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700000090000,
+      "payload": {
+        "text": "How does the corpus search work?",
+        "channel": "#qa-channel",
+        "user_id": "U090A",
+        "ts": "1700000090",
+        "thread_ts": "1700000090"
+      },
+      "workspace": "ws-test"
+    },
+    {
+      "id": "evt-09-002",
+      "source": "slack",
+      "type": "message",
+      "ts": 1700000095000,
+      "delay_before_ms": 900,
+      "payload": {
+        "text": "And what about FTS5 specifically?",
+        "channel": "#qa-channel",
+        "user_id": "U090A",
+        "ts": "1700000095",
+        "thread_ts": "1700000090"
+      },
+      "workspace": "ws-test"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-09-001",
+        "classification": "question",
+        "action": "answer_job",
+        "status": "ok"
+      },
+      {
+        "event_id": "evt-09-002",
+        "action": "session_continue",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-09-002",
+        "action": "answer_job"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-09-001",
+        "action_type": "slack_post",
+        "payload_contains": "#qa-channel"
+      },
+      {
+        "event_id": "evt-09-002",
+        "action_type": "slack_post",
+        "payload_contains": "#qa-channel"
+      }
+    ],
+    "outbox_absent": [],
+    "corpus_absent": [],
+    "answers": [
+      {
+        "event_id": "evt-09-001",
+        "has_citations": true
+      }
+    ]
+  }
+}

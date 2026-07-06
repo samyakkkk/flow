@@ -1,0 +1,32 @@
+{
+  "name": "31-mention-feedback",
+  "description": "@mention classified as feedback → auto policy → corpus insert + audit corpus_insert (feedback falls to else path in handleSlackAuto, same as command). S003.",
+  "events": [
+    {
+      "id": "evt-31-001",
+      "source": "slack",
+      "type": "mention",
+      "ts": 1700003100000,
+      "payload": {
+        "text": "You got that wrong, the default session timeout is 60 seconds not 30 seconds.",
+        "channel": "#engineering",
+        "user_id": "U031",
+        "ts": "1700003100000"
+      },
+      "workspace": "ws-31"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-31-001",
+        "classification": "feedback",
+        "action": "corpus_insert",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

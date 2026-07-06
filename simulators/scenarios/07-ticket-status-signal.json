@@ -1,0 +1,38 @@
+{
+  "name": "07-ticket-status-signal",
+  "description": "ticket_status_signal → propose mode: outbox DM proposal",
+  "events": [
+    {
+      "id": "evt-tss-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000007000,
+      "payload": {
+        "text": "AUTH-123 is now deployed to staging, waiting for QA sign-off.",
+        "channel": "#releases",
+        "user_id": "U007",
+        "ts": "1700000007000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-tss-001",
+        "classification": "ticket_status_signal",
+        "action": "propose",
+        "status": "proposed"
+      }
+    ],
+    "outbox": [
+      {
+        "event_id": "evt-tss-001",
+        "action_type": "slack_post",
+        "payload_contains": "ticket_status_signal"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

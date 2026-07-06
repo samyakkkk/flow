@@ -1,0 +1,31 @@
+{
+  "name": "19-linear-not-applicable-suppressed",
+  "description": "Linear ticket classified as not_applicable → policy off (default) → suppressed with no outbox or graph write (S152)",
+  "events": [
+    {
+      "id": "evt-19-001",
+      "source": "linear",
+      "type": "webhook",
+      "ts": 1700001900000,
+      "payload": {
+        "ticket_id": "LAN-300",
+        "title": "Re: comment on ticket",
+        "description": "User commented: LGTM!"
+      },
+      "workspace": "ws-19"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-19-001",
+        "classification": "not_applicable",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

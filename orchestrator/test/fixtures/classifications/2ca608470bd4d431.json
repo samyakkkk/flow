@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.90,
+  "extracted": {
+    "claim": "Kong used for API gateway traffic routing and load balancing",
+    "technology": "Kong",
+    "area": "api gateway"
+  }
+}

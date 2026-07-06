@@ -1,0 +1,22 @@
+{
+  "name": "flow",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Flow — multi-project CLI for the knowledge-graph agent system.",
+  "bin": {
+    "flow": "bin/flow.mjs"
+  },
+  "scripts": {
+    "dev": "npm run --workspace orchestrator dev & npm run --workspace graph-gateway dev & npm run --workspace dashboard dev",
+    "verify": "bash verify-all.sh"
+  },
+  "workspaces": [
+    "orchestrator",
+    "graph-gateway",
+    "dashboard"
+  ],
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  }
+}

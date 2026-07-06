@@ -1,0 +1,32 @@
+{
+  "name": "13-github-skip-docs",
+  "description": "GitHub merge with docs-only changes → skip → suppressed (no index job). S061.",
+  "events": [
+    {
+      "id": "evt-13-001",
+      "source": "github",
+      "type": "merge",
+      "ts": 1700001300000,
+      "payload": {
+        "repo": "acme/api",
+        "branch": "main",
+        "commit": "bcd23456efg78901",
+        "changed_files": ["README.md", "docs/api.md"]
+      },
+      "workspace": "ws-13"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-13-001",
+        "classification": "skip",
+        "action": "suppressed",
+        "status": "suppressed"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

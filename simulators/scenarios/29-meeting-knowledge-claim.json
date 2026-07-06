@@ -1,0 +1,31 @@
+{
+  "name": "29-meeting-knowledge-claim",
+  "description": "Meeting segment classified as knowledge_claim → auto policy → graphwrite (S082 baseline: meeting claim stored)",
+  "events": [
+    {
+      "id": "evt-29-001",
+      "source": "meeting",
+      "type": "segment",
+      "ts": 1700002900000,
+      "payload": {
+        "text": "We confirmed that Redis is used for the job queue across all microservices.",
+        "meeting_id": "mtg-2026-07-06",
+        "segment_id": "seg-005"
+      },
+      "workspace": "ws-29"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-29-001",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

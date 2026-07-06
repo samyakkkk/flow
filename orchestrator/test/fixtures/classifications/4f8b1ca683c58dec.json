@@ -1,0 +1,9 @@
+{
+  "classification": "question_about_system",
+  "confidence": 0.85,
+  "extracted": {
+    "question": "How does the deployment pipeline work for the mobile app?",
+    "subject": "deployment pipeline",
+    "platform": "mobile"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "33-dismiss-outbox-action",
+  "description": "task_discussion event → propose outbox. Then mid-scenario PATCH dismiss: row marked dismissed, no linear write, outbox_dismiss audit. Tests DSL 'actions' step with patch_outbox dismiss.",
+  "events": [
+    {
+      "id": "evt-33-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700003300000,
+      "payload": {
+        "text": "We could consider a GraphQL API layer on top of existing REST services.",
+        "channel": "#platform",
+        "user_id": "U033",
+        "ts": "1700003300000"
+      },
+      "workspace": "ws-33"
+    }
+  ],
+  "actions": [
+    {
+      "type": "patch_outbox",
+      "find_by_event_id": "evt-33-001",
+      "decision": "dismiss"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-33-001",
+        "classification": "task_discussion",
+        "action": "propose",
+        "status": "proposed"
+      },
+      {
+        "event_id": "evt-33-001",
+        "classification": "human_decision",
+        "action": "outbox_dismiss",
+        "status": "ok"
+      }
+    ],
+    "audits_absent": [
+      {
+        "event_id": "evt-33-001",
+        "action": "linear_ticket_create"
+      }
+    ],
+    "outbox": [],
+    "outbox_absent": [
+      {
+        "event_id": "evt-33-001",
+        "action_type": "slack_post",
+        "payload_contains": "task_discussion"
+      }
+    ],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

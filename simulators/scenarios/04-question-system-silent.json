@@ -1,0 +1,32 @@
+{
+  "name": "04-question-system-silent",
+  "description": "Ambient question_about_system → stays SILENT by default: demand_signal audit only, no answer job, no outbox post.",
+  "events": [
+    {
+      "id": "evt-qs-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000004000,
+      "payload": {
+        "text": "How does the deployment pipeline work for the mobile app?",
+        "channel": "#silent-channel",
+        "user_id": "U004",
+        "ts": "1700000004000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-qs-001",
+        "classification": "question_about_system",
+        "action": "demand_signal",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

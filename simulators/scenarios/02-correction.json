@@ -1,0 +1,33 @@
+{
+  "name": "02-correction",
+  "description": "Correction with high confidence (≥0.9) → graph write + audit record",
+  "events": [
+    {
+      "id": "evt-corr-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000002000,
+      "payload": {
+        "text": "Actually, we switched from Redis to Memcached last quarter for session caching.",
+        "channel": "#engineering",
+        "user_id": "U002",
+        "ts": "1700000002000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-corr-001",
+        "classification": "correction",
+        "action": "graphwrite",
+        "status": "ok",
+        "confidence_min": 0.9
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}

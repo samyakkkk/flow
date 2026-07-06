@@ -1,0 +1,8 @@
+{
+  "classification": "question",
+  "confidence": 0.93,
+  "extracted": {
+    "topic": "caching layer",
+    "area": "backend"
+  }
+}

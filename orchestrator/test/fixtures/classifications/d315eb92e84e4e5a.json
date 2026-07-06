@@ -1,0 +1,8 @@
+{
+  "classification": "command",
+  "confidence": 0.92,
+  "extracted": {
+    "command": "index_repo",
+    "repo": "github.com/acme/crawler"
+  }
+}

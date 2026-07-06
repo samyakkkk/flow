@@ -1,0 +1,32 @@
+{
+  "name": "01-knowledge-claim",
+  "description": "Ambient knowledge_claim → graph write + audit record",
+  "events": [
+    {
+      "id": "evt-kc-001",
+      "source": "slack",
+      "type": "ambient",
+      "ts": 1700000001000,
+      "payload": {
+        "text": "We use Redis for all session caching in production.",
+        "channel": "#engineering",
+        "user_id": "U001",
+        "ts": "1700000001000"
+      },
+      "workspace": "test-ws"
+    }
+  ],
+  "expect": {
+    "audits": [
+      {
+        "event_id": "evt-kc-001",
+        "classification": "knowledge_claim",
+        "action": "graphwrite",
+        "status": "ok"
+      }
+    ],
+    "outbox": [],
+    "corpus_absent": [],
+    "answers": []
+  }
+}
