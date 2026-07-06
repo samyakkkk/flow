@@ -8,7 +8,7 @@ A self-hostable **knowledge graph + agent runner for your codebase.** Point it a
 
 <img src="docs/images/home.png" width="760" alt="Flow dashboard — the live brain graph of your codebase with a floating Ask bar" />
 
-[Quickstart](#quickstart) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md) · MIT licensed
+[Quickstart](#quickstart) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md) · AGPL-3.0
 
 </div>
 
@@ -176,7 +176,7 @@ Please run `verify-all.sh` before opening a PR and add a `CHANGELOG.md` entry. F
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+[GNU AGPL-3.0](LICENSE). You're free to self-host, use, and modify Flow — including inside a company for internal purposes. If you run a modified version as a network service, the AGPL requires you to share those modifications under the same license. (For a commercial license without the copyleft terms, get in touch.)
 
 ## Acknowledgements
 

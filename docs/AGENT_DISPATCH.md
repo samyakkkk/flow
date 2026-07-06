@@ -115,6 +115,6 @@ This is opt-in per machine and respects the existing secret-scan gate.
 
 ## Licensing note
 
-Shellular CLI/protocol are AGPL-3.0. Fine for us (friend; and we consume the
-npm package as a dependency / separate process, we don't fork it into MIT
-Flow). The ACP adapters we spawn are Apache-2.0.
+Shellular CLI/protocol are AGPL-3.0 — the same license as Flow, so there's no
+tension: we consume the npm package as a dependency / separate process. The ACP
+adapters we spawn are Apache-2.0 (permissive, flows into AGPL fine).

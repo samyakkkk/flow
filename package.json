@@ -1,8 +1,9 @@
 {
   "name": "flow",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Flow — multi-project CLI for the knowledge-graph agent system.",
+  "description": "Flow \u2014 multi-project CLI for the knowledge-graph agent system.",
   "bin": {
     "flow": "bin/flow.mjs"
   },

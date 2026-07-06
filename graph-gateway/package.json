@@ -1,6 +1,7 @@
 {
   "name": "graph-gateway",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "description": "Single write path for the memory graph: typed verbs over FalkorDB with provenance-required writes, an append-only journal, an HTTP API, and an MCP adapter.",
