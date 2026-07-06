@@ -30,13 +30,13 @@ The graph is the center. Both you and your agents build from it.
 
 ### Understand your codebase
 
-- **A living knowledge graph** — connect a repo and OpenCode workers index it into a graph of services, capabilities, APIs, resources, and the *usage contracts* between them. Every claim carries evidence, confidence, and provenance, written through a single governed gateway so many writers can't rot the ontology.
+- **A living knowledge graph** — connect a repo and Flow indexes it into a graph of services, capabilities, APIs, resources, and the *usage contracts* between them. Every claim carries evidence, confidence, and provenance, written through a single governed gateway so many writers can't rot the ontology.
 - **Grounded Q&A with citations** — ask from a floating bar on any page. Answers come back with `file:line` evidence, a plain-language confidence, and the answer's subgraph highlighted on the graph — not a guess.
-- **A graph you can actually read** — a force-directed constellation (FalkorDB's own renderer) with degree-sized, type-colored nodes and semantic zoom; click any node for a plain-language card.
+- **A graph you can actually read** — a force-directed constellation with degree-sized, type-colored nodes and semantic zoom; click any node for a plain-language card.
 
 ### Run your coding agents from one place
 
-<!-- TODO: agent-session screenshot (model picker, "consulted the brain" markers, live graph highlight) from a public demo repo -->
+<img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
 
 - **Claude Code, Codex, and OpenCode**, detected on your machine and driven over the [Agent Client Protocol](https://agentclientprotocol.com) from the dashboard — no terminal juggling.
 - **Pick the model per session** — Claude Code (5 models + effort), Codex (2 models + reasoning effort), OpenCode (500+ models). The choice applies live and survives reload.
@@ -110,7 +110,7 @@ Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); agent-dispatch de
 
 ## Using your coding agents
 
-<!-- TODO: Agents-page screenshot from a public demo repo -->
+<img src="docs/images/agents.png" width="760" alt="Flow's Agents page — Claude Code, Codex, and OpenCode detected, with a task kickoff form" />
 
 1. **Connect a repo** on Home so there's a checkout for the agent to work in.
 2. Open **Agents** — installed agents (Claude Code / Codex / OpenCode) show up with live detection; missing ones show install hints.
@@ -124,7 +124,7 @@ The dashboard never spawns processes itself — everything rides the orchestrato
 
 ## Connecting more sources
 
-<!-- TODO: sources screenshot from a public demo repo -->
+<img src="docs/images/sources.png" width="760" alt="Connecting sources in Flow — GitHub, Linear, Fireflies, and Slack" />
 
 All sources are configured **in the dashboard**, not in env files. Keys are AES-256-GCM encrypted in the project database, masked in responses, and hot-applied — adding a key starts its poller immediately, no restart.
 
