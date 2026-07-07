@@ -170,6 +170,14 @@ The worst bug is "I handed it to someone and it didn't install." Keep these true
   port is already served or `FALKOR_HOST` is remote, and fails with *guidance*
   (not a stack trace) when Docker is genuinely needed. Never make Docker a hard,
   unexplained requirement.
+- **DECIDED (Jul 2026): FalkorDB in Docker stays.** Docker friction is
+  acceptable for a dev audience; don't propose swapping the graph store. If a
+  zero-Docker mode is ever truly needed, the fallback is implementing the
+  gateway verbs on **SQLite** (already shipped, prebuilt) — NOT another niche
+  embedded graph engine (Kuzu was archived Oct 2025; that class of dependency
+  is a liability). Coupling is thin by design: one Cypher call site, vanilla
+  MATCH/MERGE/CREATE; the only truly Cypher-shaped surface is the agent-facing
+  `read_query` MCP verb.
 - **One run story: `flow up`.** Don't reintroduce a root `docker-compose.yml` or
   docs that say "docker compose up" for local — that sends agents/users down a
   competing, half-working path. The compose file lives in `deploy/`, labelled
