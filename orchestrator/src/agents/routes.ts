@@ -8,6 +8,7 @@
 //   POST /v1/agents/sessions/:id/cancel   stop the current turn
 //   POST /v1/agents/sessions/:id/permission {requestId, optionId|null}
 //   POST /v1/agents/sessions/:id/mode     {modeId}
+//   GET  /v1/agents/sessions/:id/diff     unified git diff of the checkout
 //   GET  /v1/agents/sessions/:id/files    {q} — @mention file/folder autocomplete
 //   GET  /v1/agents/repos/files           {repo, q} — same, before a session exists
 //   POST /v1/agents/graph-activity        (from the injected MCP subprocess)
@@ -23,6 +24,7 @@ import {
   listRepoFiles,
   listRepoOptions,
   listSessionFiles,
+  sessionDiff,
   listSessions,
   readTranscript,
   recordGraphActivity,
@@ -175,6 +177,15 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     }
     const r = openLocation(id, target);
     if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  // What the agent changed in its checkout — unified git diff vs HEAD plus
+  // untracked files. Works for live and archived sessions.
+  app.get("/v1/agents/sessions/:id/diff", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const r = await sessionDiff(id);
+    if ("error" in r) return reply.code(404).send(r);
     return r;
   });
 

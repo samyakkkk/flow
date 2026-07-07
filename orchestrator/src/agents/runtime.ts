@@ -794,6 +794,82 @@ export function sessionLocation(id: string): { cwd: string } | null {
 }
 
 // ---------------------------------------------------------------------------
+// Session diff — what the agent changed in its repo checkout. Sourced from
+// `git` (not ACP tool-call content) so it's the same regardless of backend and
+// works for reloaded/archived sessions. Non-mutating: never touches the index.
+
+export interface SessionDiff {
+  files: Array<{ path: string; additions: number; deletions: number; status: "modified" | "added" }>;
+  diff: string;
+  truncated: boolean;
+}
+
+const DIFF_MAX_BYTES = 400_000;
+const UNTRACKED_MAX = 60;
+
+// Resolve stdout even on non-zero exit — `git diff` exits 1 when differences
+// exist (not an error), and we still want the diff text it printed.
+function runGit(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      args,
+      { cwd, maxBuffer: 16 * 1024 * 1024, timeout: 8000 },
+      (_err, stdout) => resolve(stdout ?? "")
+    );
+  });
+}
+
+export async function sessionDiff(id: string): Promise<SessionDiff | { error: string }> {
+  const cwd = sessionCwd(id);
+  if (!cwd) return { error: "Unknown session" };
+  if (!existsSync(cwd)) return { error: `Folder not found: ${cwd}` };
+  const inside = (await runGit(cwd, ["rev-parse", "--is-inside-work-tree"])).trim();
+  if (inside !== "true") return { files: [], diff: "", truncated: false };
+
+  const files: SessionDiff["files"] = [];
+
+  // Tracked changes vs HEAD (staged + unstaged, combined).
+  const numstat = await runGit(cwd, ["diff", "HEAD", "--numstat"]);
+  for (const line of numstat.split("\n")) {
+    const cols = line.split("\t");
+    if (cols.length < 3) continue;
+    files.push({
+      path: cols[2],
+      additions: cols[0] === "-" ? 0 : parseInt(cols[0], 10) || 0,
+      deletions: cols[1] === "-" ? 0 : parseInt(cols[1], 10) || 0,
+      status: "modified",
+    });
+  }
+  let diff = await runGit(cwd, ["diff", "HEAD"]);
+
+  // Untracked, non-ignored files → render as additions via --no-index, which
+  // never writes to the index.
+  const untracked = (await runGit(cwd, ["ls-files", "--others", "--exclude-standard"]))
+    .split("\n")
+    .filter(Boolean)
+    .slice(0, UNTRACKED_MAX);
+  for (const f of untracked) {
+    const d = await runGit(cwd, ["diff", "--no-index", "--", "/dev/null", f]);
+    if (!d) continue;
+    diff += (diff ? "\n" : "") + d;
+    files.push({
+      path: f,
+      additions: d.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
+      deletions: 0,
+      status: "added",
+    });
+  }
+
+  let truncated = false;
+  if (diff.length > DIFF_MAX_BYTES) {
+    diff = diff.slice(0, DIFF_MAX_BYTES);
+    truncated = true;
+  }
+  return { files, diff, truncated };
+}
+
+// ---------------------------------------------------------------------------
 // File/folder mentions (@-tagging) — lets the dashboard offer autocomplete
 // over a repo checkout's tracked + untracked-but-not-ignored paths, the same
 // way editor-integrated agent harnesses let you @-tag a file or folder.

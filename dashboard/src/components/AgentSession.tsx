@@ -8,6 +8,7 @@ import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
+import { DiffView, type DiffFile } from "@/components/DiffView";
 
 // ---------------------------------------------------------------------------
 // Event → transcript reduction
@@ -274,7 +275,14 @@ export function AgentSession({ id }: { id: string }) {
   const [sendError, setSendError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
+  // Optimistically-shown messages: rendered the instant you hit send, before
+  // the SSE stream round-trips the user_prompt event back. Reconciled by text.
+  const [pending, setPending] = useState<string[]>([]);
+  // Session diff (what the agent changed in its checkout).
+  const [diff, setDiff] = useState<{ files: DiffFile[]; diff: string; truncated: boolean } | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
   // Metadata once
@@ -352,11 +360,64 @@ export function AgentSession({ id }: { id: string }) {
     return ids.size > 0 ? [...ids] : view.graphNodeIds;
   }, [events, now, view.graphNodeIds]);
 
-  // Autoscroll while pinned to bottom
+  // Autoscroll: stay pinned to the bottom as content grows. A ResizeObserver
+  // on the content catches every height change — including markdown that mounts
+  // its HTML asynchronously, which a render-effect fires too early to catch.
   useEffect(() => {
     const el = transcriptRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const toBottom = () => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    };
+    toBottom();
+    const ro = new ResizeObserver(toBottom);
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, []);
+
+  // Drop optimistic messages once their real user_prompt block shows up.
+  const userBlockTexts = useMemo(
+    () => view.blocks.flatMap((b) => (b.type === "user" ? [b.text] : [])),
+    [view.blocks]
+  );
+  const visiblePending = useMemo(() => {
+    if (pending.length === 0) return pending;
+    const pool = [...userBlockTexts];
+    return pending.filter((t) => {
+      const i = pool.indexOf(t);
+      if (i !== -1) {
+        pool.splice(i, 1);
+        return false;
+      }
+      return true;
+    });
+  }, [pending, userBlockTexts]);
+  useEffect(() => {
+    if (visiblePending.length !== pending.length) setPending(visiblePending);
+  }, [visiblePending, pending.length]);
+
+  // Poll the session diff: promptly while the agent works, lazily once idle,
+  // never when archived. Cheap for the small diffs these sessions produce.
+  useEffect(() => {
+    if (archived) return;
+    let cancelled = false;
+    const load = () => {
+      fetch(`/api/agents/sessions/${id}/diff`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!cancelled && d && Array.isArray(d.files)) setDiff(d);
+        })
+        .catch(() => {});
+    };
+    load();
+    const running = view.status === "running" || view.status === "starting";
+    const iv = setInterval(load, running ? 5000 : 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [id, archived, view.status]);
 
   const act = useCallback(
     async (action: string, body: unknown = {}) => {
@@ -411,6 +472,17 @@ export function AgentSession({ id }: { id: string }) {
     setInput("");
     setSendError("");
     setBusy(true);
+    // Show it immediately and snap to the bottom — no waiting on the round-trip.
+    stickToBottom.current = true;
+    setPending((p) => [...p, text]);
+    const dropOptimistic = () =>
+      setPending((p) => {
+        const i = p.indexOf(text);
+        if (i === -1) return p;
+        const next = [...p];
+        next.splice(i, 1);
+        return next;
+      });
     try {
       const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
         method: "POST",
@@ -424,10 +496,12 @@ export function AgentSession({ id }: { id: string }) {
         // backend genuinely can't resume, not just a hiccup.
         setSendError(d.error ?? "Couldn't send message.");
         setInput(text);
+        dropOptimistic();
       }
     } catch {
       setSendError("Couldn't reach the server.");
       setInput(text);
+      dropOptimistic();
     } finally {
       setBusy(false);
     }
@@ -566,8 +640,9 @@ export function AgentSession({ id }: { id: string }) {
               const el = e.currentTarget;
               stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
             }}
-            className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3"
+            className="flex-1 overflow-y-auto px-5 py-4"
           >
+           <div ref={contentRef} className="flex flex-col gap-3">
             {view.blocks.length === 0 && (
               <p className="text-text-muted text-[13px]">Waking the agent…</p>
             )}
@@ -664,6 +739,17 @@ export function AgentSession({ id }: { id: string }) {
               }
             })}
 
+            {/* Optimistic messages — shown before the stream echoes them back. */}
+            {visiblePending.map((t, i) => (
+              <div
+                key={`pending-${i}`}
+                className="self-end max-w-[85%] rounded-lg px-3.5 py-2.5 opacity-60"
+                style={{ background: "var(--accent)" }}
+              >
+                <p className="text-ink text-[13.5px] whitespace-pre-wrap break-words">{t}</p>
+              </div>
+            ))}
+
             {/* Permission prompts */}
             {view.permissions.map((p) => (
               <div key={p.requestId} className="rounded-lg border px-4 py-3" style={{ borderColor: "var(--warn)", background: "rgba(184,134,60,0.06)" }}>
@@ -701,7 +787,38 @@ export function AgentSession({ id }: { id: string }) {
                 </span>
               </div>
             )}
+           </div>
           </div>
+
+          {/* Changes — the git diff of the agent's checkout. Collapsed by
+              default; the header shows a live +/- summary so you notice edits. */}
+          {diff && diff.files.length > 0 && (
+            <div className="border-t border-line" style={{ background: "var(--paper)" }}>
+              <button
+                onClick={() => setShowDiff((s) => !s)}
+                className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-cream transition"
+              >
+                <span className="text-text-muted text-[10px]">{showDiff ? "▾" : "▸"}</span>
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
+                  Changes
+                </span>
+                <span className="text-[11.5px] text-text">
+                  {diff.files.length} {diff.files.length === 1 ? "file" : "files"}
+                </span>
+                <span className="text-[11.5px]" style={{ color: "rgb(60,120,70)", fontFamily: "var(--font-mono)" }}>
+                  +{diff.files.reduce((n, f) => n + f.additions, 0)}
+                </span>
+                <span className="text-[11.5px]" style={{ color: "rgb(168,80,70)", fontFamily: "var(--font-mono)" }}>
+                  −{diff.files.reduce((n, f) => n + f.deletions, 0)}
+                </span>
+              </button>
+              {showDiff && (
+                <div className="px-4 pb-3 max-h-[45vh] overflow-y-auto">
+                  <DiffView diff={diff.diff} truncated={diff.truncated} />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Steer bar */}
           {sendError && (
