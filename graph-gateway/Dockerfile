@@ -2,9 +2,10 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Install dependencies (all deps: tsx is a devDep but needed at runtime)
-COPY package.json package-lock.json ./
-RUN npm ci
+# Install dependencies (all deps: tsx is a devDep but needed at runtime).
+# npm install from package.json: workspace members carry no standalone lockfile.
+COPY package.json ./
+RUN npm install --no-audit --no-fund
 
 # Copy source
 COPY src/ ./src/

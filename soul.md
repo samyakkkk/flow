@@ -170,6 +170,27 @@ The worst bug is "I handed it to someone and it didn't install." Keep these true
   docs that say "docker compose up" for local — that sends agents/users down a
   competing, half-working path. The compose file lives in `deploy/`, labelled
   experimental.
+- **One lockfile.** The root `package-lock.json` is the single source of truth;
+  workspace members (orchestrator, graph-gateway, dashboard) must NOT have their
+  own — a stale per-workspace lock generated on macOS once recorded only the
+  darwin binary for a nested native dep, so clean Linux installs couldn't build
+  the dashboard. If a native platform binary goes missing on some OS, regenerate
+  the root lock (`rm -rf node_modules package-lock.json && npm install`) and
+  check the lock lists ALL platform variants. (`simulators/` is standalone and
+  keeps its own lock.)
+- **`.npmrc engine-strict=true` is a guard, keep it.** On npm 10, dependency
+  install scripts run BEFORE the root `preinstall` hook — so on a bad Node the
+  preinstall guard never fires and users get a node-gyp wall. engine-strict
+  makes npm refuse up front.
+- **`flow up` preflights native deps** (`preflightNativeDeps` in `bin/flow.mjs`):
+  an install attempted on another Node leaves an ABI-mismatched module that
+  *shadows* a later correct install (nearest `node_modules` wins) — pulling a
+  fix doesn't heal a poisoned clone. The preflight probes better-sqlite3 from
+  the orchestrator's resolution context and prints the clean-reinstall fix.
+- **After any dependency change, re-run the cold-install smoke test**
+  (`docs/INSTALL_SMOKE_TEST.md`) — containers, not the dev box, are the only
+  honest fresh machine. The dev box lies: it has toolchains, caches, and
+  historical `node_modules` layouts a stranger doesn't.
 
 ---
 

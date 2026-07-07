@@ -10,10 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install all deps (tsx is a devDep but required at runtime — no compile step).
-# `npm install` (not `npm ci`): this package is an npm-workspaces member, so its
-# standalone package-lock.json can lag the source of truth (package.json). Let
-# npm reconcile from package.json in-image; the local path uses the root lock.
-COPY package.json package-lock.json ./
+# `npm install` from package.json only: workspace members carry no standalone
+# lockfile (the root package-lock.json is the single source of truth, but it
+# lives outside this build context).
+COPY package.json ./
 RUN npm install --no-audit --no-fund
 
 # Copy TypeScript source only (test/ and data/ are excluded)

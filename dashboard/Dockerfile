@@ -2,9 +2,10 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Install all dependencies (including devDeps needed for build)
-COPY package.json package-lock.json ./
-RUN npm ci
+# Install all dependencies (including devDeps needed for build).
+# npm install from package.json: workspace members carry no standalone lockfile.
+COPY package.json ./
+RUN npm install --no-audit --no-fund
 
 # Copy source files needed for Next.js build
 COPY src/ ./src/

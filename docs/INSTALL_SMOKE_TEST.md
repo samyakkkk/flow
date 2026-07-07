@@ -40,10 +40,13 @@ docker run --rm node:22-slim bash -lc '
 Expected: all four ✅ lines. Watch 1a closely — a `better-sqlite3` or other
 native-dep regression shows up here first.
 
-## Check 2 — Node 20 is refused loudly at preinstall
+## Check 2 — Node 20 is refused up front, before any dependency scripts
 
-The guard must stop the install **before** anything confusing happens, with the
-`nvm install 22` fix in the message.
+Two layers: `.npmrc engine-strict=true` makes npm itself refuse (`EBADENGINE`
+"Unsupported engine") before ANY dependency install script runs, and the
+`preinstall` guard prints the `nvm install 22` fix on runners that skip engine
+checks. Either message passes; a node-gyp/compile wall in the log FAILS —
+that's the confusing-death mode this check exists to prevent.
 
 ```bash
 docker run --rm node:20-slim bash -lc '
@@ -51,10 +54,12 @@ docker run --rm node:20-slim bash -lc '
   git clone --depth 1 https://github.com/samyakkkk/flow.git /flow
   cd /flow
   npm install --no-audit --no-fund > /tmp/i.log 2>&1
-  if [ $? -ne 0 ] && grep -q "Flow needs Node 22" /tmp/i.log; then
-    echo "✅ Node 20 blocked with friendly message"
+  RC=$?
+  if [ $RC -ne 0 ] && grep -qE "Unsupported engine|EBADENGINE|Flow needs Node 22" /tmp/i.log \
+     && ! grep -qE "node-gyp|gyp ERR" /tmp/i.log; then
+    echo "✅ Node 20 refused up front (no dependency scripts ran)"
   else
-    echo "❌ guard failed — install did not stop cleanly:"; tail -30 /tmp/i.log
+    echo "❌ guard failed — install did not stop cleanly/early:"; tail -30 /tmp/i.log
   fi
 '
 ```

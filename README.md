@@ -167,6 +167,7 @@ Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated hist
 ## Troubleshooting
 
 - **`npm install` fails on an old Node, or with a SQLite build error** — Flow needs **Node 22+**. `nvm install 22 && nvm use 22`, then `npm install` again. (On 22+, SQLite installs a prebuilt binary — no C/C++ toolchain required.)
+- **`flow up` says a dependency "was built for a different Node version"** (or the orchestrator log shows `NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`) — a leftover from an install attempt on another Node is shadowing the fresh install. Clean reinstall from the flow directory: `rm -rf node_modules orchestrator/node_modules graph-gateway/node_modules dashboard/node_modules && npm install`.
 - **`flow up` says Docker isn't installed / the daemon isn't running** — start Docker Desktop and re-run. Prefer no Docker? Run FalkorDB yourself and point Flow at it: `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
 - **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
 - **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.

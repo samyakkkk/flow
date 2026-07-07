@@ -244,6 +244,36 @@ function nodeBin(subdir, name) {
   return found;
 }
 
+// Probe the orchestrator's native module (better-sqlite3) the same way the
+// orchestrator will load it — from orchestratorDir, nearest-node_modules-first.
+// Catches the "pulled the fix but node_modules is poisoned" clone: an install
+// attempted on another Node leaves a nested copy built for the wrong ABI, which
+// SHADOWS the fresh root install and crashes the orchestrator at startup with a
+// cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
+// the exact fix, instead.
+function preflightNativeDeps() {
+  const probe = spawnSync(process.execPath, ["-e", "require('better-sqlite3')"], {
+    cwd: orchestratorDir(),
+    encoding: "utf8",
+  });
+  if (probe.status === 0) return;
+  const err = probe.stderr ?? "";
+  if (/NODE_MODULE_VERSION|ERR_DLOPEN_FAILED|was compiled against/.test(err)) {
+    die(
+      `A dependency (better-sqlite3) was built for a different Node version — usually a\n` +
+        `  leftover from an earlier install attempt on another Node. Fix it with a clean\n` +
+        `  reinstall from the flow directory:\n` +
+        `      rm -rf node_modules orchestrator/node_modules graph-gateway/node_modules dashboard/node_modules\n` +
+        `      npm install\n` +
+        `  then re-run  flow up`
+    );
+  }
+  if (/Cannot find module 'better-sqlite3'/.test(err)) {
+    die(`Dependencies aren't installed — run  npm install  in the flow directory first.`);
+  }
+  die(`better-sqlite3 failed to load:\n  ${err.trim().split("\n").slice(0, 3).join("\n  ")}`);
+}
+
 function spawnService({ cwd, cmd, env, logFile }) {
   const fd = openSync(logFile, "a");
   const child = spawn(cmd[0], cmd.slice(1), {
@@ -394,6 +424,7 @@ async function cmdUp(args) {
   }
 
   console.log(`\n${c.bold("Flow")}`);
+  preflightNativeDeps();
   const fk = await ensureFalkordb();
   if (fk === "launched") console.log(c.dim("  FalkorDB launched (first run)"));
   else if (fk === "started") console.log(c.dim("  FalkorDB started"));
