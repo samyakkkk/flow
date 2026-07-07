@@ -170,7 +170,7 @@ function ensureDashboardBuild() {
   }
   if (!stale) return false;
   console.log(c.dim("  building dashboard (first run ~30s)…"));
-  const res = spawnSync(join(dir, "node_modules/.bin/next"), ["build"], {
+  const res = spawnSync(nodeBin(dir, "next"), ["build"], {
     cwd: dir,
     stdio: ["ignore", "ignore", "inherit"],
     env: { ...process.env, NODE_ENV: "production" },
@@ -221,12 +221,27 @@ function spawnDashboardFor(name) {
   killPort(ports.dashboard);
   const pid = spawnService({
     cwd: dashboardDir(),
-    cmd: [join(dashboardDir(), "node_modules/.bin/next"), "start", "--port", String(ports.dashboard)],
+    cmd: [nodeBin(dashboardDir(), "next"), "start", "--port", String(ports.dashboard)],
     env: dashEnv,
     logFile: join(dir, "logs", "dashboard.log"),
   });
   writePids(name, { ...readPids(name), dashboard: pid });
   return pid;
+}
+
+// Resolve a dependency binary (tsx, next) from wherever npm put it: the
+// package's own node_modules, OR the hoisted root node_modules. npm workspaces
+// hoist shared deps to the root, so hardcoding `<subdir>/node_modules/.bin/x`
+// works on a per-package install but is missing on a clean root install —
+// which silently broke service startup on fresh clones ("didn't start").
+function nodeBin(subdir, name) {
+  const candidates = [
+    join(subdir, "node_modules", ".bin", name),
+    join(flowRoot(), "node_modules", ".bin", name),
+  ];
+  const found = candidates.find((p) => existsSync(p));
+  if (!found) die(`"${name}" not found — run  npm install  in the flow directory first.`);
+  return found;
 }
 
 function spawnService({ cwd, cmd, env, logFile }) {
@@ -476,7 +491,7 @@ async function upProject(name, { rebuilt = false } = {}) {
 
   const gwPid = spawnService({
     cwd: gatewayDir(),
-    cmd: [join(gatewayDir(), "node_modules/.bin/tsx"), "src/server.ts"],
+    cmd: [nodeBin(gatewayDir(), "tsx"), "src/server.ts"],
     env: gwEnv,
     logFile: gwLogFile,
   });
@@ -496,7 +511,7 @@ async function upProject(name, { rebuilt = false } = {}) {
 
   const orchPid = spawnService({
     cwd: orchestratorDir(),
-    cmd: [join(orchestratorDir(), "node_modules/.bin/tsx"), "src/index.ts"],
+    cmd: [nodeBin(orchestratorDir(), "tsx"), "src/index.ts"],
     env: orchEnv,
     logFile: orchLogFile,
   });
@@ -519,7 +534,7 @@ async function upProject(name, { rebuilt = false } = {}) {
   // runs `next start -p <port>` against it.
   const dashPid = spawnService({
     cwd: dashboardDir(),
-    cmd: [join(dashboardDir(), "node_modules/.bin/next"), "start", "--port", String(ports.dashboard)],
+    cmd: [nodeBin(dashboardDir(), "next"), "start", "--port", String(ports.dashboard)],
     env: dashEnv,
     logFile: dashLogFile,
   });

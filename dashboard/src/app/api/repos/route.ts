@@ -4,12 +4,17 @@ import { orcPost } from "@/lib/orchestrator";
 import fs from "node:fs";
 import path from "node:path";
 
-// Default resolves relative to the unified repo layout (flow/index-workspace).
-// Override with REPOS_JSON_PATH per workspace/deployment.
-const REPOS_JSON = path.resolve(
-  process.env.REPOS_JSON_PATH ??
-    path.join(process.cwd(), "..", "index-workspace", "repos.json")
-);
+export const runtime = "nodejs";
+
+// Resolved at request time (not module scope) so the bundler doesn't flag a
+// dynamic filesystem expression. REPOS_JSON_PATH is set per project by
+// `flow up`; the process.cwd() fallback is only for a bare single-workspace dev
+// layout.
+function reposJsonPath(): string {
+  const fromEnv = process.env.REPOS_JSON_PATH;
+  if (fromEnv) return path.resolve(fromEnv);
+  return path.resolve(process.cwd(), "..", "index-workspace", "repos.json");
+}
 
 interface RepoEntry {
   name: string;
@@ -26,7 +31,7 @@ interface ReposFile {
 
 function readRepos(): ReposFile {
   try {
-    const raw = fs.readFileSync(REPOS_JSON, "utf8");
+    const raw = fs.readFileSync(reposJsonPath(), "utf8");
     return JSON.parse(raw) as ReposFile;
   } catch {
     return { repos: [] };

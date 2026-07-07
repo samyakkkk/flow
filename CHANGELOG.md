@@ -9,6 +9,10 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Fixed — fresh-clone startup ("works on my machine")
+- **Orchestrator/gateway/dashboard now start on a clean `npm install`.** The CLI hardcoded `<package>/node_modules/.bin/tsx` (and `next`), but npm **workspaces hoist** shared binaries to the *root* `node_modules`, so on a fresh clone those per-package paths don't exist → services failed to spawn with an empty log ("orchestrator didn't start"). A new `nodeBin()` resolver finds the binary in the package OR the hoisted root, and gives a clear "run npm install" error if truly missing.
+- **`/api/repos` no longer trips the Turbopack "dynamic filesystem expression" warning.** The repos-file path was computed at module scope with `path.join(process.cwd(), …)`; it's now resolved at request time (and honors `REPOS_JSON_PATH`).
+
 ### Added — live "thinking" indicator in agent sessions
 - You now always know when an agent is working, and what it's doing: a pulsing indicator at the bottom of the transcript shows **Thinking… / Consulting the brain… / Running <tool>… / Writing the answer… / Planning…**, derived from the latest ACP activity. Hidden when idle or waiting on a permission prompt.
 
