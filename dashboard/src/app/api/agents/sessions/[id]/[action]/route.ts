@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
 import { orcFetch } from "@/lib/orchestrator";
 
-const ACTIONS = new Set(["prompt", "cancel", "permission", "mode", "config"]);
+const ACTIONS = new Set(["prompt", "cancel", "permission", "mode", "config", "open"]);
 
 // POST /api/agents/sessions/:id/(prompt|cancel|permission|mode)
 export async function POST(

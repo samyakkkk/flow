@@ -266,7 +266,8 @@ export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [archived, setArchived] = useState(false);
-  const [meta, setMeta] = useState<{ backend?: string; repo?: string; title?: string } | null>(null);
+  const [meta, setMeta] = useState<{ backend?: string; repo?: string; title?: string; cwd?: string } | null>(null);
+  const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -277,7 +278,7 @@ export function AgentSession({ id }: { id: string }) {
   useEffect(() => {
     fetch(`/api/agents/sessions/${id}`)
       .then((r) => r.json())
-      .then((d) => setMeta({ backend: d.backend, repo: d.repo, title: d.title }))
+      .then((d) => setMeta({ backend: d.backend, repo: d.repo, title: d.title, cwd: d.cwd }))
       .catch(() => {});
   }, [id]);
 
@@ -364,6 +365,29 @@ export function AgentSession({ id }: { id: string }) {
     [id]
   );
 
+  // Open the agent's repo checkout in Finder/Explorer or VS Code. Only works
+  // when the orchestrator is on this machine (local mode); surfaces a hint if
+  // the tool (e.g. the `code` CLI) isn't available.
+  const openIn = useCallback(
+    async (target: "finder" | "vscode") => {
+      setOpenHint("");
+      try {
+        const res = await fetch(`/api/agents/sessions/${id}/open`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ target }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          setOpenHint(d.error ?? "Couldn't open — is Flow running on this machine?");
+        }
+      } catch {
+        setOpenHint("Couldn't reach the server.");
+      }
+    },
+    [id]
+  );
+
   async function send() {
     const text = input.trim();
     if (!text) return;
@@ -391,8 +415,39 @@ export function AgentSession({ id }: { id: string }) {
           </p>
           <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
             {AGENT_NAMES[meta?.backend ?? ""] ?? meta?.backend} · {meta?.repo}
-            {!connected && " · reconnecting…"}
+            {!connected && !archived && " · reconnecting…"}
           </p>
+          {/* Where the agent is working — the cloned repo folder — with quick
+              openers so you can inspect the changes it's making. */}
+          {meta?.cwd && (
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <button
+                onClick={() => openIn("finder")}
+                className="inline-flex items-center gap-1 rounded-md border border-line bg-paper px-2 py-1 text-[10.5px] text-text hover:bg-cream transition"
+                style={{ fontFamily: "var(--font-mono)" }}
+                title={meta.cwd}
+              >
+                📁 Finder
+              </button>
+              <button
+                onClick={() => openIn("vscode")}
+                className="inline-flex items-center gap-1 rounded-md border border-line bg-paper px-2 py-1 text-[10.5px] text-text hover:bg-cream transition"
+                style={{ fontFamily: "var(--font-mono)" }}
+                title={meta.cwd}
+              >
+                VS Code
+              </button>
+              <button
+                onClick={() => { navigator.clipboard?.writeText(meta.cwd ?? ""); setOpenHint("Path copied"); }}
+                className="text-[10px] text-text-muted hover:text-ink transition truncate max-w-[280px]"
+                style={{ fontFamily: "var(--font-mono)" }}
+                title={`Copy path — ${meta.cwd}`}
+              >
+                {meta.cwd.replace(/^.*\/repos\//, "…/repos/")}
+              </button>
+              {openHint && <span className="text-[10px]" style={{ color: openHint.includes("copied") ? "var(--ok)" : "var(--danger)" }}>{openHint}</span>}
+            </div>
+          )}
         </div>
         {/* Model + other config selectors (model first) — the agent advertises
             these on session create; changing one calls setSessionConfigOption. */}

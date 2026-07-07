@@ -9,6 +9,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Added — open the agent's working folder
+- **Finder / VS Code / copy-path** in the session view — every agent session works in a cloned repo under `data/projects/…/repos/<repo>`, which nobody would find on their own. The session header now shows the path and one-click opens it in Finder (Explorer / xdg-open on Linux/Windows) or VS Code (`code`, with a macOS app-bundle fallback). Local-mode convenience; the orchestrator launches the app, the path comes from the session record (never the client).
+
 ### Added — model selection per agent session
 - **Pick the model** (and reasoning/effort level) from the session header, per ACP session config options: Claude Code (5 models + effort), Codex (2 models + reasoning effort), OpenCode (500+ models). Selecting one calls `session/set_config_option` live; the choice persists and survives reload. Required advertising the `session.configOptions` client capability at initialize — without it the agents don't send their model list.
 - **Fixed `flow down` leaving the orchestrator alive** — pids.json goes stale after manual restarts/crashes, so `down` now also kills whatever still holds each project port (the orchestrator surviving a restart meant the next `up` silently ran old code).

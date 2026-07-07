@@ -672,6 +672,64 @@ process.once("SIGTERM", killAdapters);
 process.once("SIGINT", killAdapters);
 process.once("exit", killAdapters);
 
+// Resolve a session's working directory (the repo checkout) from the live map
+// or the DB, so it works for finished/reloaded sessions too.
+function sessionCwd(id: string): string | null {
+  const live = sessions.get(id);
+  if (live) return live.cwd;
+  const row = db.prepare(`SELECT cwd FROM agent_sessions WHERE id = ?`).get(id) as { cwd?: string } | undefined;
+  return row?.cwd ?? null;
+}
+
+export function sessionLocation(id: string): { cwd: string } | null {
+  const cwd = sessionCwd(id);
+  return cwd ? { cwd } : null;
+}
+
+// Open the session's repo folder in the OS file manager or VS Code. Local-mode
+// convenience — the orchestrator runs on the user's machine, so it can launch
+// GUI apps. The path comes from the session record, never from the client, and
+// is passed as a spawn arg (no shell) so there's nothing to inject.
+export function openLocation(id: string, target: "finder" | "vscode"): { ok: true } | { error: string } {
+  const cwd = sessionCwd(id);
+  if (!cwd) return { error: "Unknown session" };
+  if (!existsSync(cwd)) return { error: `Folder not found: ${cwd}` };
+
+  let cmd: string;
+  let args: string[];
+  if (target === "vscode") {
+    cmd = "code";
+    args = [cwd];
+  } else if (process.platform === "darwin") {
+    cmd = "open";
+    args = [cwd];
+  } else if (process.platform === "win32") {
+    cmd = "explorer";
+    args = [cwd];
+  } else {
+    cmd = "xdg-open";
+    args = [cwd];
+  }
+
+  try {
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+    child.on("error", () => {
+      // `code` CLI not on PATH → fall back to the app bundle on macOS.
+      if (target === "vscode" && process.platform === "darwin") {
+        try {
+          spawn("open", ["-a", "Visual Studio Code", cwd], { stdio: "ignore", detached: true }).unref();
+        } catch {
+          /* nothing else to try */
+        }
+      }
+    });
+    child.unref();
+    return { ok: true };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
 export function subscribe(id: string, fn: (ev: SessionEvent) => void): (() => void) | null {
   const s = sessions.get(id);
   if (!s) return null;

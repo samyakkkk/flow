@@ -26,6 +26,7 @@ import {
   resolvePermission,
   setConfigOption,
   setSessionMode,
+  openLocation,
   steer,
   subscribe,
 } from "./runtime.js";
@@ -156,6 +157,19 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "configId and value required" });
     }
     const r = await setConfigOption(id, configId, value);
+    if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  // Open the session's repo folder in Finder/Explorer or VS Code (local-mode
+  // convenience — the orchestrator is on the user's machine).
+  app.post("/v1/agents/sessions/:id/open", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { target } = req.body as { target?: string };
+    if (target !== "finder" && target !== "vscode") {
+      return reply.code(400).send({ error: "target must be 'finder' or 'vscode'" });
+    }
+    const r = openLocation(id, target);
     if ("error" in r) return reply.code(400).send(r);
     return r;
   });
