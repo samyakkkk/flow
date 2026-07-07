@@ -9,6 +9,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Added — live "thinking" indicator in agent sessions
+- You now always know when an agent is working, and what it's doing: a pulsing indicator at the bottom of the transcript shows **Thinking… / Consulting the brain… / Running <tool>… / Writing the answer… / Planning…**, derived from the latest ACP activity. Hidden when idle or waiting on a permission prompt.
+
 ### Fixed — no more unstyled/stale dashboards + `flow doctor` + `soul.md`
 - **Root cause of the "unstyled page":** all project dashboards share one Next.js build, so rebuilding `.next` while a dashboard runs leaves it serving dead chunk hashes (CSS/JS 404/500). Now `flow up` **refreshes every running dashboard** after a rebuild, and always restarts a project's (stateless) dashboard even when "already running" — so a killed, crashed, or stale dashboard self-heals.
 - **`flow doctor`** — health-checks every project: services up, every page reachable, and the dashboard's CSS/JS assets actually load (the check that would have caught this). All-green or it tells you what's wrong.

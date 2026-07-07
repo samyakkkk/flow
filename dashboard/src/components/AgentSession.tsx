@@ -404,6 +404,27 @@ export function AgentSession({ id }: { id: string }) {
   const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
   const running = !archived && (view.status === "running" || view.status === "starting");
 
+  // Live "what's the agent doing right now" label, derived from the latest
+  // activity — so you always know it's alive and whether it's thinking, running
+  // a tool, consulting the graph, or writing the answer.
+  const liveLabel = (() => {
+    if (!running) return null;
+    if (view.status === "starting") return "Starting up…";
+    const activeTool = [...view.blocks]
+      .reverse()
+      .flatMap((b) => (b.type === "tools" ? b.calls : []))
+      .find((c) => c.status !== "completed" && c.status !== "failed");
+    if (activeTool) {
+      const t = activeTool.title.replace(/^mcp__|^flow-graph[_-]?/i, "");
+      return activeTool.isGraph ? "Consulting the brain…" : `Running ${t}…`;
+    }
+    const last = view.blocks[view.blocks.length - 1];
+    if (last?.type === "graph") return "Consulting the brain…";
+    if (last?.type === "agent") return "Writing the answer…";
+    if (last?.type === "plan") return "Planning…";
+    return "Thinking…";
+  })();
+
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 140px)" }}>
       {/* Header */}
@@ -632,6 +653,22 @@ export function AgentSession({ id }: { id: string }) {
                 </div>
               </div>
             ))}
+
+            {/* Live activity — you always know when the agent is working, and
+                what it's doing right now. Shown while running and not blocked
+                on a permission prompt. */}
+            {liveLabel && view.permissions.length === 0 && (
+              <div className="flex items-center gap-2.5 py-1" aria-live="polite">
+                <span className="flex gap-1" aria-hidden>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warn)] animate-pulse" style={{ animationDelay: "0ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warn)] animate-pulse" style={{ animationDelay: "150ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--warn)] animate-pulse" style={{ animationDelay: "300ms" }} />
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] uppercase tracking-wider text-text-muted">
+                  {liveLabel}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Steer bar */}
