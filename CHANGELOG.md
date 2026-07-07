@@ -9,6 +9,10 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Changed — no login step in local mode
+- **On your own machine you're no longer asked for a token.** Local mode is single-user on your own box, so the dashboard auto-authenticates from the admin token it already has in its env — open the URL and you're in. A stale or cross-project cookie is ignored locally (the machine's env token is authoritative), so you can never get stuck at a spurious login.
+- **Prod stays gated**: an exposed deployment (`--mode prod`) still requires a real login, and prod cookies remain project-specific (a cookie for one project is rejected by another). Verified both modes end to end.
+
 ### Fixed — bulletproof session auth (stale cookie no longer breaks pages)
 - **Root cause**: middleware only checked that a session cookie *existed*, not that it was *valid*. A stale/expired token then sailed past and 401'd on every page — the home page wrongly showed the "add your OpenRouter key" gate (even with a key set) and agent-session pages just failed to load.
 - **Central fix**: middleware now validates the token for real against **this project's own** orchestrator (via a Node `/api/auth/check` route, so per-project `ORCHESTRATOR_URL` is always correct even though all dashboards share one build) and redirects to login + clears the cookie on an actual 401. Fails **open** on a network blip so a momentary orchestrator hiccup never logs everyone out.

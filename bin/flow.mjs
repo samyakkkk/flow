@@ -400,6 +400,7 @@ async function upProject(name) {
     ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
     GATEWAY_URL: `http://localhost:${ports.gateway}`,
     FLOW_ADMIN_TOKEN: adminToken,
+    FLOW_MODE: mode, // local → dashboard auto-authenticates (no login step); prod → token required
     REPOS_JSON_PATH: reposJsonPath,
     PORT: String(ports.dashboard),
     NODE_ENV: "production",

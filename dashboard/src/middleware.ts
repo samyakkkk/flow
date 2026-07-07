@@ -36,14 +36,15 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const token = req.cookies.get(SESSION_COOKIE)?.value;
-  if (!token) return toLogin(req, false);
-
   // API routes forward the token to the orchestrator and enforce auth
   // themselves; don't double-validate (and don't add a round-trip to every
   // data call). Middleware guards the *page* navigations.
   if (pathname.startsWith("/api/")) return NextResponse.next();
 
+  // Single decision point: `/api/auth/check` (Node runtime) knows the mode.
+  // In LOCAL mode it authenticates from the env admin token even with no
+  // cookie, so there's no login step on your own machine. In PROD it requires
+  // a valid cookie. Either way, correctness lives in one place.
   try {
     const check = await fetch(new URL("/api/auth/check", req.nextUrl.origin), {
       headers: { cookie: req.headers.get("cookie") ?? "" },
