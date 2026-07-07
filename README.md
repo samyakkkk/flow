@@ -59,14 +59,13 @@ The graph is the center. Both you and your agents build from it.
 git clone <repo> && cd flow
 npm install && npm install -g .    # deps + `flow` on your PATH
 
-flow project create mycompany
-flow up mycompany                  # prints your dashboard URL
+flow up mycompany                  # creates it if new, then starts — prints your dashboard URL
 ```
 
 Then it's all in the browser:
 
-1. **Open the dashboard URL** and log in with the project's `FLOW_ADMIN_TOKEN` (printed at create time, and in the project's `.env` — the one secret that lives in a file).
-2. **Paste your OpenRouter key** in Settings (nothing else is reachable until the brain has a model).
+1. **Open the dashboard URL.** In local mode you're already signed in — no token to paste.
+2. **Add your OpenRouter key** (nothing else is reachable until the brain has a model).
 3. **Connect a repo** from the Home picker (uses your `gh` login, a PAT, or a public URL) and watch the graph build.
 4. **Ask a question** from the floating bar, or head to **Agents** to kick off a coding task.
 
@@ -75,10 +74,9 @@ Then it's all in the browser:
 ### CLI
 
 ```
-flow project create <name> [--mode local|prod]
-flow up   [name]     # start project(s); no name = all
-flow down [name]     # stop project(s); no name = all
-flow ls              # table of projects + status + URLs
+flow up   [name]     # start a project (creates it if new); no name = all
+flow down [name]     # stop a project; no name = all
+flow ls              # projects, status, and dashboard URLs
 ```
 
 Each project is a self-contained folder (`data/projects/<name>/`) with its own graph, database, secrets, and cloned repos. Multiple projects run side by side on separate port triplets, sharing FalkorDB via named graphs.

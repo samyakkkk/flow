@@ -9,6 +9,10 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Changed — friendlier `flow` CLI
+- **`flow up <name>` is the one command** — if the project doesn't exist it offers to create it (a typo-guard you can decline), then starts it. No more separate `flow project create` step (still available, plus `flow create` / `flow new` aliases that tolerate `flow create project x`).
+- **Clean, human-readable output** — replaced the wall of `pid=… port=… log=…` and per-service `HEALTHY` lines with one tidy line per project: `✓ ready   http://localhost:7610`, a one-line "local mode — you're already signed in" note, and (on failure) just the log path to check. `flow down` and the FalkorDB/Docker noise are quieted the same way.
+
 ### Changed — no login step in local mode
 - **On your own machine you're no longer asked for a token.** Local mode is single-user on your own box, so the dashboard auto-authenticates from the admin token it already has in its env — open the URL and you're in. A stale or cross-project cookie is ignored locally (the machine's env token is authoritative), so you can never get stuck at a spurious login.
 - **Prod stays gated**: an exposed deployment (`--mode prod`) still requires a real login, and prod cookies remain project-specific (a cookie for one project is rejected by another). Verified both modes end to end.

@@ -21,8 +21,9 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 
 import { portsForIndex } from "./lib/ports.mjs";
 import {
@@ -50,27 +51,50 @@ import { ensureFalkordb } from "./lib/docker.mjs";
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function die(msg) {
-  console.error(`\nError: ${msg}\n`);
+  console.error(`\n${c.red("✗")} ${msg}\n`);
   process.exit(1);
+}
+
+// ── Pretty output ────────────────────────────────────────────────────────────
+const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+const c = {
+  bold: paint("1"),
+  dim: paint("2"),
+  green: paint("32"),
+  red: paint("31"),
+  yellow: paint("33"),
+  cyan: paint("36"),
+};
+const OK = c.green("✓");
+const FAIL = c.red("✗");
+
+// Yes/no prompt. Non-interactive (no TTY) → false: never take a creative or
+// destructive action when there's no human to confirm.
+async function confirm(question, defaultYes = true) {
+  if (!process.stdin.isTTY) return false;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ans = (await rl.question(`${question} ${c.dim(defaultYes ? "[Y/n]" : "[y/N]")} `)).trim().toLowerCase();
+  rl.close();
+  if (ans === "") return defaultYes;
+  return ans === "y" || ans === "yes";
 }
 
 function printHelp() {
   console.log(`
-flow — Multi-project CLI for the Flow knowledge-graph agent system
+${c.bold("flow")} — run Flow projects (knowledge graph + coding agents)
 
-Usage:
-  flow project create <name> [--mode local|prod]
-  flow up [name]               Start project(s). No name = all.
-  flow down [name]             Stop project(s). No name = all.
-  flow ls                      Table of all projects + status.
-  flow --help
+${c.bold("Usage")}
+  flow up [name]        Start a project (creates it if new). No name = all projects.
+  flow down [name]      Stop a project. No name = all.
+  flow ls               List projects, status, and dashboard URLs.
 
-Options:
-  --mode <mode>    local (default) or prod
+${c.bold("Options")}
+  --mode local|prod     For a new project (default: local). Local needs no login.
 
-Examples:
-  flow project create acme
-  flow up acme
+${c.bold("Examples")}
+  flow up acme          ${c.dim("# start acme — offers to create it if it doesn't exist")}
+  flow up               ${c.dim("# start everything")}
   flow ls
   flow down
 `);
@@ -187,162 +211,174 @@ function printTable(headers, rows) {
 
 // ── COMMAND: project create ───────────────────────────────────────────────────
 
-async function cmdProjectCreate(args) {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      graph: { type: "string" },
-      mode: { type: "string", default: "local" },
-    },
-  });
-
-  const name = positionals[0];
-  if (!name) die("Usage: flow project create <name> [--graph <g>] [--mode local|prod]");
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) die(`Invalid project name "${name}" — use only letters, digits, _ and -`);
-
-  const mode = values.mode === "prod" ? "prod" : "local";
-  const graphName = values.graph ?? name;
-
-  // Determine project index for port assignment
-  const existingNames = listProjectNames();
-  if (existingNames.includes(name)) {
-    die(`Project "${name}" already exists at ${projectDir(name)}`);
+// Create a project on disk. Pure side-effect + return metadata; prints nothing
+// so callers (explicit create, or create-on-`up`) control their own output.
+function createProject(name, { mode = "local", graph } = {}) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    die(`Invalid project name "${name}" — use only letters, digits, _ and -`);
   }
+  const existingNames = listProjectNames();
+  if (existingNames.includes(name)) die(`Project "${name}" already exists at ${projectDir(name)}`);
 
-  // Check for port conflicts among existing projects
-  const allIdx = existingNames.length; // new project gets next index
-  const ports = portsForIndex(allIdx);
+  const graphName = graph ?? name;
+  const ports = portsForIndex(existingNames.length);
 
-  // Check port collision with existing projects
   for (const existing of listProjects()) {
     const ep = existing.project.ports;
-    if (
-      ep.gateway === ports.gateway ||
-      ep.orchestrator === ports.orchestrator ||
-      ep.dashboard === ports.dashboard
-    ) {
-      die(
-        `Port conflict with project "${existing.name}": ` +
-          `gateway=${ep.gateway}, orchestrator=${ep.orchestrator}, dashboard=${ep.dashboard}. ` +
-          `These overlap with the new project's ports (g=${ports.gateway}, o=${ports.orchestrator}, d=${ports.dashboard}).`
-      );
+    if (ep.gateway === ports.gateway || ep.orchestrator === ports.orchestrator || ep.dashboard === ports.dashboard) {
+      die(`Port conflict with project "${existing.name}" (${ep.dashboard}). Remove it or pick a different name.`);
     }
   }
 
   const dir = projectDir(name);
   const workspaceDir = join(dir, "workspace");
-  const logsDir = join(dir, "logs");
-
   mkdirSync(dir, { recursive: true });
   mkdirSync(workspaceDir, { recursive: true });
-  mkdirSync(logsDir, { recursive: true });
+  mkdirSync(join(dir, "logs"), { recursive: true });
 
-  // project.json
-  const projectData = {
-    name,
-    graph: graphName,
-    mode,
-    ports,
-    repos: [],
-  };
-  writeProject(name, projectData);
+  writeProject(name, { name, graph: graphName, mode, ports, repos: [] });
 
-  // .env — a strong admin token is generated per project (this is the dashboard
-  // login + API bearer). The rest are commented until the user adds them.
   const adminToken = randomBytes(24).toString("hex");
-  const envTemplate = `# Project: ${name}
+  writeFileSync(
+    join(dir, ".env"),
+    `# Project: ${name}
 # Secrets merged into the environment on "flow up ${name}". Never commit this file.
 #
-# Dashboard login + API bearer (auto-generated — keep it secret):
+# Dashboard login + API bearer (auto-generated — only needed in prod mode):
 FLOW_ADMIN_TOKEN=${adminToken}
 #
-# Add integration keys as you connect them:
+# Add integration keys as you connect them (or set them from the dashboard):
 # SLACK_BOT_TOKEN=        # prod-mode only
 # SLACK_APP_TOKEN=        # prod-mode only
 # LINEAR_API_KEY=
 # OPENROUTER_API_KEY=
 # GITHUB_TOKEN=
-`;
-  writeFileSync(join(dir, ".env"), envTemplate, { encoding: "utf-8", mode: 0o600 });
-
-  // workspace/.opencode — copy from index-workspace template
-  const templateOpencode = join(indexWorkspaceDir(), ".opencode");
-  const destOpencode = join(workspaceDir, ".opencode");
-  if (existsSync(templateOpencode)) {
-    cpSync(templateOpencode, destOpencode, { recursive: true });
-  } else {
-    mkdirSync(destOpencode, { recursive: true });
-    console.warn(`  [warn] index-workspace/.opencode not found — empty .opencode created`);
-  }
-
-  // workspace/AGENTS.md — copy from index-workspace template
-  const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
-  if (existsSync(templateAgentsMd)) {
-    const agentsMdContent = readFileSync(templateAgentsMd, "utf-8");
-    writeFileSync(join(workspaceDir, "AGENTS.md"), agentsMdContent, "utf-8");
-  }
-
-  // workspace/repos.json — empty registry
-  writeFileSync(
-    join(workspaceDir, "repos.json"),
-    JSON.stringify({ repos: [] }, null, 2) + "\n",
-    "utf-8"
+`,
+    { encoding: "utf-8", mode: 0o600 }
   );
 
-  console.log(`\nCreated project "${name}":`);
-  console.log(`  dir:          ${dir}`);
-  console.log(`  graph:        ${graphName}`);
-  console.log(`  mode:         ${mode}`);
-  console.log(`  ports:        gateway=${ports.gateway}  orchestrator=${ports.orchestrator}  dashboard=${ports.dashboard}`);
-  console.log(`  admin token:  ${adminToken}   ← dashboard login (also in ${join(dir, ".env")})`);
-  console.log(`\nNext: flow up ${name}`);
+  const templateOpencode = join(indexWorkspaceDir(), ".opencode");
+  if (existsSync(templateOpencode)) {
+    cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
+  } else {
+    mkdirSync(join(workspaceDir, ".opencode"), { recursive: true });
+  }
+  const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
+  if (existsSync(templateAgentsMd)) {
+    writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
+  }
+  writeFileSync(join(workspaceDir, "repos.json"), JSON.stringify({ repos: [] }, null, 2) + "\n", "utf-8");
+
+  return { name, dir, ports, adminToken, graph: graphName, mode };
+}
+
+async function cmdProjectCreate(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { graph: { type: "string" }, mode: { type: "string", default: "local" } },
+  });
+  const name = positionals[0];
+  if (!name) die("Usage: flow project create <name> [--mode local|prod]");
+  const p = createProject(name, { mode: values.mode === "prod" ? "prod" : "local", graph: values.graph });
+  console.log(`\n${OK} created ${c.bold(name)}  ${c.dim(`(${p.mode} mode)`)}`);
+  console.log(`  ${c.dim("start it with")}  flow up ${name}\n`);
 }
 
 // ── COMMAND: up ───────────────────────────────────────────────────────────────
 
 async function cmdUp(args) {
-  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { mode: { type: "string", default: "local" } },
+  });
   const targetName = positionals[0] ?? null;
 
-  const names = targetName ? [targetName] : listProjectNames();
-  if (names.length === 0) die("No projects found. Run: flow project create <name>");
-
-  // Validate all named projects exist
-  for (const n of names) {
-    if (!existsSync(projectJsonPath(n))) die(`Project "${n}" not found.`);
+  // No name → start every project. A name that doesn't exist → offer to create
+  // it (guards against typos: you can say no).
+  let names;
+  if (targetName) {
+    if (!existsSync(projectJsonPath(targetName))) {
+      const existing = listProjectNames();
+      const near = existing.find((n) => n.toLowerCase() === targetName.toLowerCase());
+      if (near) die(`No project "${targetName}". Did you mean "${near}"?  (project names are case-sensitive)`);
+      if (!process.stdin.isTTY) {
+        die(`No project "${targetName}". Create it with:  flow project create ${targetName}`);
+      }
+      console.log(`\n  No project named ${c.bold(targetName)} yet.`);
+      const yes = await confirm(`  Create it?`, true);
+      if (!yes) {
+        console.log(c.dim(existing.length ? `\n  Existing projects: ${existing.join(", ")}\n` : "\n"));
+        return;
+      }
+      const p = createProject(targetName, { mode: values.mode === "prod" ? "prod" : "local" });
+      console.log(`  ${OK} created ${c.bold(targetName)} ${c.dim(`(${p.mode} mode)`)}`);
+    }
+    names = [targetName];
+  } else {
+    names = listProjectNames();
+    if (names.length === 0) {
+      console.log(`\n  No projects yet. Create and start one with:  ${c.bold("flow up <name>")}\n`);
+      return;
+    }
   }
 
-  // Ensure FalkorDB is running
-  console.log("\n[flow up] Ensuring FalkorDB container is running...");
-  await ensureFalkordb();
+  console.log(`\n${c.bold("Flow")}`);
+  const fk = await ensureFalkordb();
+  if (fk !== "running") console.log(c.dim(`  FalkorDB ${fk === "launched" ? "launched (first run)" : "started"}`));
+  ensureDashboardBuild(); // shared build for all projects — only prints if it rebuilds
+  console.log("");
 
+  const results = [];
   for (const name of names) {
-    await upProject(name);
+    results.push(await upProject(name));
   }
+
+  // Summary: dashboards you can open, and how to get in.
+  const up = results.filter((r) => r.ok);
+  const failed = results.filter((r) => !r.ok);
+  if (up.length > 0) {
+    const anyLocal = up.some((r) => r.mode !== "prod");
+    const anyProd = up.some((r) => r.mode === "prod");
+    console.log("");
+    if (anyLocal && !anyProd) {
+      console.log(`  ${c.dim("Local mode — open a dashboard and you're already signed in.")}`);
+    } else if (anyProd) {
+      console.log(`  ${c.dim("Prod projects need the admin token from")} data/projects/<name>/.env`);
+    }
+  }
+  if (failed.length > 0) {
+    console.log(`\n  ${FAIL} ${failed.map((r) => r.name).join(", ")} didn't come up — check the logs above.`);
+    process.exitCode = 1;
+  }
+  console.log("");
 }
 
 async function upProject(name) {
-  console.log(`\n[flow up] ${name}`);
   const project = readProject(name);
   const dir = projectDir(name);
   const logsDir = join(dir, "logs");
   mkdirSync(logsDir, { recursive: true });
 
   const { ports, graph, mode } = project;
+  const dashUrl = `http://localhost:${ports.dashboard}`;
+  const label = c.bold(name.padEnd(16));
 
-  // Check if already running (pidfile + health check)
-  const pids = readPids(name);
-  if (pids.orchestrator && isAlive(pids.orchestrator)) {
-    const orchHealth = `http://localhost:${ports.orchestrator}/health`;
-    const healthy = await probe(orchHealth);
-    if (healthy) {
-      console.log(`  [${name}] Already running (orchestrator pid ${pids.orchestrator}). Use "flow down ${name}" first to restart.`);
-      return;
-    }
-    // Stale pidfile — clean up
-    console.log(`  [${name}] Stale pidfile detected — cleaning up...`);
+  // Already running? Trust a live health check over the pidfile (which can go
+  // stale). If the orchestrator answers, it's up — don't try to start a second
+  // one on the same port.
+  if (await probe(`http://localhost:${ports.orchestrator}/health`)) {
+    console.log(`  ${label} ${OK} ${c.dim("already running")}   ${c.cyan(dashUrl)}`);
+    return { name, ok: true, ports, mode, alreadyRunning: true };
   }
+
+  // Inline progress line (fills in on completion) when attached to a terminal.
+  if (useColor) process.stdout.write(`  ${label} ${c.dim("starting…")}`);
+  const finish = (text) => {
+    if (useColor) process.stdout.write("\r\x1b[K");
+    console.log(`  ${label} ${text}`);
+  };
 
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
@@ -369,7 +405,6 @@ async function upProject(name) {
     env: gwEnv,
     logFile: gwLogFile,
   });
-  console.log(`  [${name}] gateway  pid=${gwPid}  port=${ports.gateway}  log=${gwLogFile}`);
 
   // ── Orchestrator ───────────────────────────────────────────────────────────
   const orchLogFile = join(logsDir, "orchestrator.log");
@@ -390,7 +425,6 @@ async function upProject(name) {
     env: orchEnv,
     logFile: orchLogFile,
   });
-  console.log(`  [${name}] orchestrator  pid=${orchPid}  port=${ports.orchestrator}  log=${orchLogFile}`);
 
   // ── Dashboard ──────────────────────────────────────────────────────────────
   const dashLogFile = join(logsDir, "dashboard.log");
@@ -406,55 +440,35 @@ async function upProject(name) {
     NODE_ENV: "production",
   };
 
-  // Dashboards run `next start` against ONE shared production build: Next.js
-  // allows only a single `next dev` per directory, so dev mode cannot serve
-  // multiple projects side-by-side. Build once (or when the source changed),
-  // then any number of `next start -p <port>` instances share it.
-  ensureDashboardBuild();
+  // The shared production build was ensured once in cmdUp; each project just
+  // runs `next start -p <port>` against it.
   const dashPid = spawnService({
     cwd: dashboardDir(),
     cmd: [join(dashboardDir(), "node_modules/.bin/next"), "start", "--port", String(ports.dashboard)],
     env: dashEnv,
     logFile: dashLogFile,
   });
-  console.log(`  [${name}] dashboard  pid=${dashPid}  port=${ports.dashboard}  log=${dashLogFile}`);
 
-  // Write pids
   writePids(name, { gateway: gwPid, orchestrator: orchPid, dashboard: dashPid });
 
-  // ── Wait for health checks ─────────────────────────────────────────────────
-  console.log(`  [${name}] Waiting for services to be healthy...`);
-
-  const gwUrl = `http://localhost:${ports.gateway}/health`;
-  const orchUrl = `http://localhost:${ports.orchestrator}/health`;
-  const dashUrl = `http://localhost:${ports.dashboard}/login`;
-
+  // ── Wait for health ─────────────────────────────────────────────────────────
   const [gwOk, orchOk, dashOk] = await Promise.all([
-    waitForHealth(gwUrl, 25000),
-    waitForHealth(orchUrl, 25000),
-    waitForHealth(dashUrl, 45000),
+    waitForHealth(`http://localhost:${ports.gateway}/health`, 25000),
+    waitForHealth(`http://localhost:${ports.orchestrator}/health`, 25000),
+    waitForHealth(`http://localhost:${ports.dashboard}/login`, 45000),
   ]);
 
-  if (!gwOk) {
-    console.error(`  [${name}] WARNING: gateway did not become healthy (check ${gwLogFile})`);
-  } else {
-    console.log(`  [${name}] gateway  HEALTHY`);
+  if (gwOk && orchOk && dashOk) {
+    finish(`${OK} ${c.dim("ready")}       ${c.cyan(dashUrl)}`);
+    return { name, ok: true, ports, mode };
   }
 
-  if (!orchOk) {
-    console.error(`  [${name}] WARNING: orchestrator did not become healthy (check ${orchLogFile})`);
-  } else {
-    console.log(`  [${name}] orchestrator  HEALTHY`);
+  const failed = [!gwOk && "gateway", !orchOk && "orchestrator", !dashOk && "dashboard"].filter(Boolean);
+  finish(`${FAIL} ${c.red(failed.join(", ") + " didn't start")}`);
+  for (const svc of failed) {
+    console.log(`      ${c.dim("log:")} ${relative(process.cwd(), join(logsDir, `${svc}.log`))}`);
   }
-
-  if (!dashOk) {
-    console.error(`  [${name}] WARNING: dashboard did not become healthy (check ${dashLogFile})`);
-  } else {
-    console.log(`  [${name}] dashboard  HEALTHY`);
-  }
-
-  console.log(`\n  [${name}] Dashboard: http://localhost:${ports.dashboard}`);
-  console.log(`  [${name}] Orchestrator: http://localhost:${ports.orchestrator}`);
+  return { name, ok: false, ports, mode };
 }
 
 // ── COMMAND: down ─────────────────────────────────────────────────────────────
@@ -465,86 +479,69 @@ async function cmdDown(args) {
 
   const names = targetName ? [targetName] : listProjectNames();
   if (names.length === 0) {
-    console.log("No projects found.");
+    console.log(c.dim("\n  No projects.\n"));
     return;
   }
 
+  console.log(`\n${c.bold("Flow")} ${c.dim("· stopping")}`);
   for (const name of names) {
     await downProject(name);
   }
+  console.log("");
 }
 
 async function downProject(name) {
-  console.log(`\n[flow down] ${name}`);
   const pids = readPids(name);
-
   const services = ["gateway", "orchestrator", "dashboard"];
-  let anyKilled = false;
+  let touched = false;
 
-  for (const svc of services) {
-    const pid = pids[svc];
-    if (!pid) {
-      console.log(`  [${name}] ${svc} — no pid recorded`);
-      continue;
-    }
-    if (!isAlive(pid)) {
-      console.log(`  [${name}] ${svc} pid=${pid} — already stopped`);
-      continue;
-    }
-    // SIGTERM first
+  // SIGTERM tracked pids, then SIGKILL survivors after a grace period.
+  const alive = services.map((svc) => pids[svc]).filter((pid) => pid && isAlive(pid));
+  for (const pid of alive) {
     try {
       process.kill(pid, "SIGTERM");
-      console.log(`  [${name}] ${svc} pid=${pid} — SIGTERM sent`);
-      anyKilled = true;
-    } catch (e) {
-      console.log(`  [${name}] ${svc} pid=${pid} — could not kill: ${e.message}`);
+      touched = true;
+    } catch {
+      /* already gone */
     }
   }
-
-  if (anyKilled) {
-    // Give processes 3s to exit, then SIGKILL survivors
+  if (alive.length) {
     await new Promise((r) => setTimeout(r, 3000));
-    for (const svc of services) {
-      const pid = pids[svc];
-      if (!pid) continue;
+    for (const pid of alive) {
       if (isAlive(pid)) {
         try {
           process.kill(pid, "SIGKILL");
-          console.log(`  [${name}] ${svc} pid=${pid} — SIGKILL (didn't exit in time)`);
         } catch {
-          // Already gone
+          /* gone */
         }
       }
     }
   }
 
   // Port-based fallback: pids.json can go stale (manual restarts, crashes),
-  // leaving a service — most painfully the orchestrator — alive after `down`,
-  // so the next `up` reuses the old process with old code. Kill whatever still
-  // holds each project port.
+  // leaving a service alive so the next `up` reuses old code. Kill whatever
+  // still holds each project port.
   const project = readProject(name);
   if (project?.ports) {
-    for (const [svc, port] of Object.entries(project.ports)) {
+    for (const port of Object.values(project.ports)) {
       try {
-        const res = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
-        const out = (res.stdout ?? "").trim();
+        const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
         for (const p of out.split("\n").filter(Boolean)) {
           try {
             process.kill(Number(p), "SIGKILL");
-            console.log(`  [${name}] ${svc} port ${port} pid=${p} — killed (stale pidfile fallback)`);
+            touched = true;
           } catch {
-            /* already gone */
+            /* gone */
           }
         }
       } catch {
-        /* lsof unavailable — pid-based kill above is best effort */
+        /* lsof unavailable */
       }
     }
   }
 
-  // Clear pidfile
   writePids(name, {});
-  console.log(`  [${name}] pids cleared`);
+  console.log(`  ${c.bold(name.padEnd(16))} ${touched ? `${OK} ${c.dim("stopped")}` : c.dim("· not running")}`);
 }
 
 // ── COMMAND: ls ───────────────────────────────────────────────────────────────
@@ -605,21 +602,20 @@ async function main() {
   const rest = argv.slice(1);
 
   try {
-    if (cmd === "project") {
-      const sub = rest[0];
-      if (sub === "create") {
-        await cmdProjectCreate(rest.slice(1));
-      } else {
-        die(`Unknown subcommand: project ${sub ?? "(none)"}. Try: flow project create <name>`);
-      }
-    } else if (cmd === "up") {
+    if (cmd === "up") {
       await cmdUp(rest);
-    } else if (cmd === "down") {
+    } else if (cmd === "down" || cmd === "stop") {
       await cmdDown(rest);
-    } else if (cmd === "ls") {
+    } else if (cmd === "ls" || cmd === "list" || cmd === "ps") {
       await cmdLs();
+    } else if (cmd === "create" || cmd === "new" || cmd === "project") {
+      // Tolerate `flow create project X`, `flow new X`, `flow project create X`.
+      let a = rest;
+      if (a[0] === "project" || a[0] === "create") a = a.slice(1);
+      if (a.length === 0) die(`Usage: flow up <name>   ${c.dim("(creates and starts it)")}`);
+      await cmdProjectCreate(a);
     } else {
-      die(`Unknown command: "${cmd}". Run "flow --help" for usage.`);
+      die(`Unknown command "${cmd}". Try: flow up <name>   (or: flow --help)`);
     }
   } catch (err) {
     die(err.message);

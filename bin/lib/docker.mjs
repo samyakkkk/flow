@@ -20,26 +20,20 @@ export async function ensureFalkordb() {
     encoding: "utf-8",
   });
 
+  // Returns a status string so the caller controls output:
+  // "running" (already up), "started" (was stopped), "launched" (created).
   if (inspect.status === 0) {
     const status = inspect.stdout.trim();
-    if (status === "running") {
-      console.log(`  [docker] ${CONTAINER_NAME} already running`);
-      return true;
-    }
+    if (status === "running") return "running";
     if (status === "exited" || status === "stopped") {
-      console.log(`  [docker] starting existing container ${CONTAINER_NAME}...`);
-      execSync(`docker start ${CONTAINER_NAME}`, { stdio: "inherit" });
+      execSync(`docker start ${CONTAINER_NAME}`, { stdio: "ignore" });
       await new Promise((r) => setTimeout(r, 1500));
-      return true;
+      return "started";
     }
   }
 
   // Container doesn't exist — run it
-  console.log(`  [docker] launching ${CONTAINER_NAME} (${IMAGE})...`);
-  execSync(
-    `docker run -d --name ${CONTAINER_NAME} -p 6379:6379 ${IMAGE}`,
-    { stdio: "inherit" }
-  );
+  execSync(`docker run -d --name ${CONTAINER_NAME} -p 6379:6379 ${IMAGE}`, { stdio: "ignore" });
   await new Promise((r) => setTimeout(r, 2000));
-  return true;
+  return "launched";
 }
