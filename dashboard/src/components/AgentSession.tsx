@@ -277,8 +277,14 @@ export function AgentSession({ id }: { id: string }) {
   // Metadata once
   useEffect(() => {
     fetch(`/api/agents/sessions/${id}`)
-      .then((r) => r.json())
-      .then((d) => setMeta({ backend: d.backend, repo: d.repo, title: d.title, cwd: d.cwd }))
+      .then((r) => {
+        if (r.status === 401) {
+          window.location.href = `/login?from=${encodeURIComponent(`/agents/${id}`)}`;
+          return null;
+        }
+        return r.json();
+      })
+      .then((d) => d && setMeta({ backend: d.backend, repo: d.repo, title: d.title, cwd: d.cwd }))
       .catch(() => {});
   }, [id]);
 

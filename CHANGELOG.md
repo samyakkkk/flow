@@ -9,6 +9,12 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Fixed — bulletproof session auth (stale cookie no longer breaks pages)
+- **Root cause**: middleware only checked that a session cookie *existed*, not that it was *valid*. A stale/expired token then sailed past and 401'd on every page — the home page wrongly showed the "add your OpenRouter key" gate (even with a key set) and agent-session pages just failed to load.
+- **Central fix**: middleware now validates the token for real against **this project's own** orchestrator (via a Node `/api/auth/check` route, so per-project `ORCHESTRATOR_URL` is always correct even though all dashboards share one build) and redirects to login + clears the cookie on an actual 401. Fails **open** on a network blip so a momentary orchestrator hiccup never logs everyone out.
+- **Multi-project isolation verified**: a cookie for project A is rejected by project B and bounced to B's login; bad/stale cookies → login; each project's valid cookie renders its own dashboard (7-point test).
+- Defense in depth: home + agent-session pages also redirect to login on a 401 instead of degrading; session lifetime raised from 24h to 30 days (it's a tool you leave open).
+
 ### Added — open the agent's working folder
 - **Finder / VS Code / copy-path** in the session view — every agent session works in a cloned repo under `data/projects/…/repos/<repo>`, which nobody would find on their own. The session header now shows the path and one-click opens it in Finder (Explorer / xdg-open on Linux/Windows) or VS Code (`code`, with a macOS app-bundle fallback). Local-mode convenience; the orchestrator launches the app, the path comes from the session record (never the client).
 

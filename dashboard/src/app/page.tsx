@@ -1105,8 +1105,17 @@ export default function HomePage() {
 
   async function loadAll() {
     try {
+      // Settings is the auth gate. A 401 means the session cookie is stale or
+      // expired — send the user to log in, NOT to the "no brain" key gate
+      // (which would wrongly ask for the OpenRouter key even when it's set).
+      const settingsResp = await fetch("/api/settings");
+      if (settingsResp.status === 401) {
+        window.location.href = "/login?from=%2F";
+        return;
+      }
+
       const [settingsRes, ingestRes, reposRes, auditRes, graphRes] = await Promise.allSettled([
-        fetch("/api/settings").then((r) => r.json()) as Promise<SettingItem[]>,
+        settingsResp.json() as Promise<SettingItem[]>,
         fetch("/api/ingest/status").then((r) => r.json()) as Promise<{ sources: IngestSource[] }>,
         fetch("/api/repos").then((r) => r.json()) as Promise<{ repos: RepoEntry[] }>,
         fetch("/api/audit?limit=20").then((r) => r.json()) as Promise<{ rows: AuditRow[] }>,
