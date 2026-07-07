@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — agent sessions silently lost their flow-graph MCP tools
+An agent session came up with no `flow-graph` tools — the agent shrugged ("not connected in this session") and read the repo raw, defeating Flow's core promise. Root cause: the orchestrator resolved the MCP server's `tsx` path **once at module load**; a long-running orchestrator that predated a dependency reinstall kept injecting a command path that no longer existed, and the dead MCP spawn failed silently. Now the binary is resolved **per session** (a live orchestrator picks up the current layout), and if it's truly missing, session creation **fails loudly** with the fix (`npm install` + restart) instead of silently degrading. Verified with a live session: `list_schema` via the injected MCP, graph-activity event received.
+
 ### Fixed — local mode can no longer trap you on /login (engine-down UX)
 A fresh user's dashboard bounced every page to `/login` — in local mode, where login shouldn't even exist — with 500s in the console. Reproduced: it happens whenever the orchestrator is down/still starting. Root cause: `validateToken` conflated "orchestrator rejected this token" with "orchestrator unreachable", so `/api/auth/check` answered 401 and the proxy bounced to a login page that validates against the same dead orchestrator — a dead end by construction.
 - **Tri-state token validation** (`valid` / `invalid` / `unreachable`): `/api/auth/check` now returns 503 (proxy fails open) when the engine is unreachable, 401 only on a real rejection — and in **local mode it short-circuits to 200** (the env token is authoritative; a local user can never be sent to /login).

@@ -153,6 +153,13 @@ via named graphs. Each project is a self-contained `data/projects/<name>/`.
 - Scar tissue: Node `spawn` with a default stdin **pipe** hangs opencode
   forever — use `stdio: ["pipe","pipe","pipe"]` and let stdin close cleanly;
   the injected MCP exits on stdin close; adapters are killed on shutdown.
+- Scar tissue: **resolve spawn-command paths per use, never at module load.**
+  A long-running orchestrator once captured the MCP server's tsx path at load;
+  a later reinstall moved it (hoisting) and every new session injected a dead
+  command — the MCP failed SILENTLY, agents just had no flow-graph tools. If a
+  required binary is missing, session creation must throw a message with the
+  fix, not degrade. And after `rm -rf node_modules` + reinstall, RESTART all
+  projects — running services hold pre-reinstall paths.
 
 ---
 

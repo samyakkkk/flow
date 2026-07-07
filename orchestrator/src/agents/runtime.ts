@@ -27,12 +27,22 @@ const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 
 // npm workspaces hoist bins to the root node_modules; fall back to the
 // orchestrator's own node_modules for non-workspace installs.
+//
+// Resolved PER CALL, not at module load: a long-running orchestrator that
+// captured this path once kept serving a location that a later reinstall
+// removed — every new agent session then injected an MCP server with a dead
+// command, which failed SILENTLY (the agent just had no flow-graph tools).
 function binPath(name: string): string {
   const hoisted = path.join(FLOW_ROOT, "node_modules", ".bin", name);
   if (existsSync(hoisted)) return hoisted;
-  return path.join(FLOW_ROOT, "orchestrator", "node_modules", ".bin", name);
+  const local = path.join(FLOW_ROOT, "orchestrator", "node_modules", ".bin", name);
+  if (existsSync(local)) return local;
+  // A session without the graph is Flow failing its core promise — refuse to
+  // create one silently degraded. This error surfaces in the session API.
+  throw new Error(
+    `"${name}" not found in node_modules — run npm install in the flow directory, then restart this project (flow down <name> && flow up <name>).`
+  );
 }
-const TSX_BIN = binPath("tsx");
 
 interface BackendDescriptor {
   id: AgentBackend;
@@ -442,7 +452,7 @@ function flowGraphMcp(flowSessionId: string): acp.McpServer {
   ];
   if (process.env.FALKOR_HOST) env.push({ name: "FALKOR_HOST", value: process.env.FALKOR_HOST });
   if (process.env.FALKOR_PORT) env.push({ name: "FALKOR_PORT", value: process.env.FALKOR_PORT });
-  return { name: "flow-graph", command: TSX_BIN, args: [GATEWAY_MCP], env };
+  return { name: "flow-graph", command: binPath("tsx"), args: [GATEWAY_MCP], env };
 }
 
 export function recordGraphActivity(body: {
