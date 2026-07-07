@@ -11,7 +11,7 @@ claude-agent-acp, codex-acp, and opencode codebases.
 - **ACP** (Agent Client Protocol) drives an agent *from outside* (spawn,
   prompt, stream progress). Every major agent has an ACP face:
   `npx @agentclientprotocol/claude-agent-acp` (Apache-2.0),
-  `npx @zed-industries/codex-acp` (Apache-2.0), `opencode acp` (native).
+  `@agentclientprotocol/codex-acp` (Apache-2.0), `opencode acp` (native).
 - The bridge fact that makes zero-config possible: **ACP `session/new` accepts
   `mcpServers`**, and all three agents honor it — verified at
   claude-agent-acp `src/acp-agent.ts:3627`, codex-acp

@@ -19,7 +19,8 @@ function toLogin(req: NextRequest, clearCookie: boolean) {
   return res;
 }
 
-// Central auth gate. A cookie that merely *exists* is not enough — a stale or
+// Central auth gate (Next 16 `proxy` file convention — formerly middleware).
+// A cookie that merely *exists* is not enough — a stale or
 // expired token used to sail past and then 401 on every page (home wrongly
 // showed the key gate, session pages broke). Here we validate the token for
 // real, once, before any page renders.
@@ -29,7 +30,7 @@ function toLogin(req: NextRequest, clearCookie: boolean) {
 // cookie is only ever accepted by the project it belongs to — even though all
 // projects share one dashboard build. A valid cookie for project A is rejected
 // by project B and bounced to that project's login.
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {

@@ -14,12 +14,9 @@
   "dependencies": {
     "@falkordb/canvas": "^0.2.1",
     "@types/cytoscape": "^3.21.9",
-    "@types/dompurify": "^3.0.5",
-    "cookies": "^0.9.1",
     "dompurify": "^3.4.11",
     "marked": "^18.0.5",
     "next": "16.2.10",
-    "next-auth": "^4.24.14",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

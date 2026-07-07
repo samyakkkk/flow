@@ -112,10 +112,14 @@ via named graphs. Each project is a self-contained `data/projects/<name>/`.
   must be passed to the dashboard process (`flow up` does this).
 - **Prod mode:** real login required; cookies are project-specific (a cookie
   for one project is rejected by another).
-- Central gate: `middleware.ts` validates the session via `/api/auth/check`
-  (Node route → this project's own orchestrator, so multi-project stays
-  correct even with the shared build). 401 → login + clear cookie; fails **open**
-  on a network blip so a hiccup never mass-logs-out.
+- Central gate: `src/proxy.ts` (Next 16's renamed middleware convention)
+  validates the session via `/api/auth/check` (Node route → this project's own
+  orchestrator, so multi-project stays correct even with the shared build).
+  401 → login + clear cookie; fails **open** on a network blip so a hiccup
+  never mass-logs-out. NOTE: a registered proxy shows up in
+  `functions-config-manifest.json` — `middleware-manifest.json` stays empty by
+  design (edge-only). Behavioral check for auth changes: prod-mode project,
+  no cookie → 307 login, garbage cookie → 307 + cookie cleared, token → in.
 
 ---
 

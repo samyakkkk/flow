@@ -4,6 +4,13 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Changed — cleared every deprecation that was ours to clear
+A stranger's `npm install` and `next build` no longer print avoidable deprecation warnings:
+- **Codex ACP adapter migrated** from the deprecated `@zed-industries/codex-acp` to its official successor `@agentclientprotocol/codex-acp@1.1.0` (same bin name, drop-in). Verified with a real session through the orchestrator: ACP handshake, model/effort config options, flow-graph MCP injection, and event streaming all work (the test turn itself stopped at the account's OpenAI usage limit — an account condition that surfaced cleanly as an error).
+- **Dead dashboard dependencies removed**: `next-auth` (never imported — Flow has its own token auth; also the sole source of the deprecated `uuid@8` warning), `cookies` (never imported), and the deprecated `@types/dompurify` stub (dompurify ships its own types).
+- **`middleware.ts` → `proxy.ts`** (Next 16 renamed the convention; the auth gate is unchanged). Verified behaviorally with a throwaway prod-mode project: no cookie → 307 to login, garbage cookie → redirected + cookie cleared, valid token → in. Note: the proxy runs on the Node runtime and its registration lives in `functions-config-manifest.json` — the old `middleware-manifest.json` stays empty by design.
+- Still upstream (not ours to fix): better-sqlite3's internal `prebuild-install` deprecation warning.
+
 ### Fixed — three more install traps (found by the cold-install smoke test + a real user)
 - **Poisoned clones now self-diagnose.** A user who tried Flow before the sqlite fix, then pulled it, still crashed: their first attempt left a `better-sqlite3` built for another Node ABI in `orchestrator/node_modules`, which **shadows** the fresh root install (nearest `node_modules` wins) and kills the orchestrator with a `NODE_MODULE_VERSION` stack trace buried in a log. `flow up` now **preflights the native module exactly the way the orchestrator loads it** and, on an ABI mismatch, stops up front with the exact fix (clean reinstall command). Verified against a simulated poisoned clone.
 - **Node 20 is refused before anything confusing happens.** The smoke test proved the `preinstall` guard fires too late on npm 10 — dependency install scripts (native builds) run first and die in a node-gyp/Python wall. Added `.npmrc` with `engine-strict=true`, so npm itself refuses (`EBADENGINE`) before any dependency script runs; the preinstall guard stays as a second layer.
