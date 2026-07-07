@@ -11,6 +11,7 @@
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import db from "./db.js";
+import { readGlobalDefault, writeGlobalDefault } from "./global-settings.js";
 
 // ------------------------------------------------------------------
 // Setting registry entry
@@ -422,6 +423,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       for (const [key, value] of Object.entries(body)) {
         putSetting(key, value);
         auditSettingChange(key);
+        // Remember the OpenRouter key as the machine default so new projects
+        // can reuse it instead of re-entering it.
+        if (key === "OPENROUTER_API_KEY" && value) writeGlobalDefault(key, value);
         if (slackKeys.has(key)) slackChanged = true;
       }
 
@@ -451,4 +455,25 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       return reply.send({ ok: true, updated: Object.keys(body) });
     }
   );
+
+  // GET /v1/onboarding/suggested-key — this project has no OpenRouter key yet,
+  // but the machine has one saved from another project? Offer it (masked) so
+  // the user can reuse instead of re-entering.
+  app.get("/v1/onboarding/suggested-key", async () => {
+    const KEY = "OPENROUTER_API_KEY";
+    if (getSetting(KEY) !== undefined) return { available: false };
+    const def = readGlobalDefault(KEY);
+    if (!def) return { available: false };
+    return { available: true, hint: maskSecret(def) };
+  });
+
+  // POST /v1/onboarding/adopt-key — copy the machine default into this project.
+  app.post("/v1/onboarding/adopt-key", async (_req, reply) => {
+    const KEY = "OPENROUTER_API_KEY";
+    const def = readGlobalDefault(KEY);
+    if (!def) return reply.code(404).send({ ok: false, error: "No saved key to reuse." });
+    putSetting(KEY, def);
+    auditSettingChange(KEY);
+    return reply.send({ ok: true });
+  });
 }

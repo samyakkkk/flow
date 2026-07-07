@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Heading, Input, Kicker } from "@/components/ui";
 
 // State 0 — the first thing a new user sees. Nothing else exists until Flow has
@@ -8,6 +8,37 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
   const [key, setKey] = useState("");
   const [status, setStatus] = useState<"idle" | "checking" | "ok" | "error">("idle");
   const [error, setError] = useState("");
+
+  // If the machine already has an OpenRouter key (saved by another project),
+  // offer to reuse it instead of asking for a fresh one.
+  const [suggested, setSuggested] = useState<{ available: boolean; hint?: string } | null>(null);
+  const [enteringNew, setEnteringNew] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/onboarding/suggested-key")
+      .then((r) => (r.ok ? r.json() : { available: false }))
+      .then((d) => setSuggested(d))
+      .catch(() => setSuggested({ available: false }));
+  }, []);
+
+  async function reuse() {
+    setStatus("checking");
+    setError("");
+    try {
+      const res = await fetch("/api/onboarding/adopt-key", { method: "POST" });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (data.ok) {
+        setStatus("ok");
+        setTimeout(onReady, 900);
+      } else {
+        setStatus("error");
+        setError(data.error ?? "Couldn't reuse that key.");
+      }
+    } catch {
+      setStatus("error");
+      setError("Couldn't reach the server.");
+    }
+  }
 
   async function submit() {
     if (!key.trim()) return;
@@ -50,11 +81,44 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
           <p className="text-[16px] text-text-muted leading-relaxed max-w-sm mx-auto">
             {status === "ok"
               ? "Let's connect your first source."
+              : suggested?.available && !enteringNew
+              ? "You already gave Flow an OpenRouter key on another project. Reuse it, or use a different one for this project."
               : "Flow uses an LLM to understand your code and conversations. Paste your OpenRouter key to begin."}
           </p>
         </div>
 
-        {status !== "ok" && (
+        {/* Reuse the machine's existing key */}
+        {status !== "ok" && suggested?.available && !enteringNew && (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-line bg-paper px-4 py-3 flex items-center justify-between">
+              <div>
+                <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Existing OpenRouter key
+                </p>
+                <p style={{ fontFamily: "var(--font-mono)" }} className="text-[14px] text-ink">
+                  sk-or-•••• {suggested.hint?.replace(/^…/, "") ?? ""}
+                </p>
+              </div>
+              <span className="text-ok text-lg">✓</span>
+            </div>
+            {error && <p className="text-[13px] text-[color:var(--danger)] px-1">{error}</p>}
+            <div className="flex items-center justify-between pt-1">
+              <button
+                onClick={() => setEnteringNew(true)}
+                style={{ fontFamily: "var(--font-mono)" }}
+                className="text-[12px] uppercase tracking-wider text-text-muted hover:text-ink transition"
+              >
+                Use a different key
+              </button>
+              <Button onClick={reuse} disabled={status === "checking"} arrow>
+                {status === "checking" ? "Setting up…" : "Use this key"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Enter a fresh key (default when the machine has none, or after "use a different key") */}
+        {status !== "ok" && (!suggested?.available || enteringNew) && (
           <div className="space-y-4">
             <Input
               type="password"

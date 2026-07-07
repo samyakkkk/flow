@@ -9,6 +9,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Changed — reuse your OpenRouter key across projects
+- **No more re-entering the key for every project.** When you save an OpenRouter key it's remembered as a machine default (in `data/global.json`, 0600). A new project's key gate then shows *"You already gave Flow a key — reuse it?"* with the masked key and two choices: **Use this key** (one click, done) or **Use a different key** for this project. Verified end to end (save → new project offers it → adopt → set). Local-first convenience; each project still stores its own key, so you can diverge per project anytime.
+
 ### Changed — friendlier `flow` CLI
 - **`flow up <name>` is the one command** — if the project doesn't exist it offers to create it (a typo-guard you can decline), then starts it. No more separate `flow project create` step (still available, plus `flow create` / `flow new` aliases that tolerate `flow create project x`).
 - **Clean, human-readable output** — replaced the wall of `pid=… port=… log=…` and per-service `HEALTHY` lines with one tidy line per project: `✓ ready   http://localhost:7610`, a one-line "local mode — you're already signed in" note, and (on failure) just the log path to check. `flow down` and the FalkorDB/Docker noise are quieted the same way.
