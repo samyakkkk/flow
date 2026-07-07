@@ -267,8 +267,58 @@ function setStatus(s: LiveSession, status: SessionStatus, extra?: { stopReason?:
   emit(s, "status", { status, stopReason: s.stopReason, error: s.error });
 }
 
+const rehydrateRow = db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`);
+
+// Recreate a session's in-memory bookkeeping after an orchestrator restart —
+// the `sessions` map starts empty every process boot, but `acp_session_id`
+// is durable in SQLite. Without this, a restart permanently dead-ends every
+// prior session (SSE sends "eof", the dashboard locks it as "archived")
+// even though resumeConnection()/session-load could bring it right back.
+function rehydrate(id: string): LiveSession | undefined {
+  const row = rehydrateRow.get(id) as
+    | {
+        id: string;
+        backend: AgentBackend;
+        repo: string;
+        cwd: string;
+        title: string;
+        stop_reason: string | null;
+        acp_session_id: string | null;
+        created_at: number;
+        updated_at: number;
+      }
+    | undefined;
+  if (!row || !row.acp_session_id) return undefined; // nothing a session/load could reattach to
+
+  const transcript = readTranscript(id);
+  const s: LiveSession = {
+    id: row.id,
+    backend: row.backend,
+    repo: row.repo,
+    cwd: row.cwd,
+    title: row.title,
+    status: "error",
+    acpSessionId: row.acp_session_id,
+    stopReason: row.stop_reason ?? undefined,
+    error: "Orchestrator restarted — send a message to reconnect.",
+    seq: transcript.length ? transcript[transcript.length - 1].seq : 0,
+    turnActive: false,
+    queue: [],
+    pendingPermissions: new Map(),
+    subscribers: new Set(),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  sessions.set(id, s);
+  return s;
+}
+
+function liveSession(id: string): LiveSession | undefined {
+  return sessions.get(id) ?? rehydrate(id);
+}
+
 export function getSession(id: string): LiveSession | undefined {
-  return sessions.get(id);
+  return liveSession(id);
 }
 
 export function listSessions(): Array<Record<string, unknown>> {
@@ -621,7 +671,7 @@ function describeError(backend: AgentBackend, e: unknown): string {
 // Steering: when idle → new turn immediately. When a turn is active → cancel
 // the current turn and run the steer prompt next (the user changed their mind).
 export async function steer(id: string, text: string): Promise<{ ok: true } | { error: string }> {
-  const s = sessions.get(id);
+  const s = liveSession(id);
   if (!s || !s.acpSessionId) return { error: "Session is not live (reload-only or closed)" };
   let c: Connection;
   try {
@@ -788,7 +838,7 @@ export function openLocation(id: string, target: "finder" | "vscode"): { ok: tru
 }
 
 export function subscribe(id: string, fn: (ev: SessionEvent) => void): (() => void) | null {
-  const s = sessions.get(id);
+  const s = liveSession(id);
   if (!s) return null;
   s.subscribers.add(fn);
   return () => s.subscribers.delete(fn);
