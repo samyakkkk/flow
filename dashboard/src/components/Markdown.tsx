@@ -30,7 +30,7 @@ export function MarkdownContent({ md, className }: { md: string; className?: str
 
   return (
     <div
-      className={`prose prose-sm max-w-none text-text leading-relaxed ${className ?? ""}`}
+      className={`markdown-body ${className ?? ""}`}
       style={{ lineHeight: 1.7 }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
