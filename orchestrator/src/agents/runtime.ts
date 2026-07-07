@@ -430,12 +430,55 @@ async function ensureConnection(backend: AgentBackend): Promise<Connection> {
     for (const flowId of c.sessionsByAcpId.values()) {
       const s = sessions.get(flowId);
       if (s && s.status !== "closed" && s.status !== "error") {
+        // The turn (if any) died with the process — nothing will ever
+        // resolve it, so don't leave the session thinking one is in flight.
+        s.turnActive = false;
         setStatus(s, "error", { error: `${backend} adapter exited (code ${code})` });
       }
     }
   });
   connections.set(backend, c);
   return c;
+}
+
+// Re-attach a session to a live connection after its adapter process died (or
+// simply never had one, e.g. after an orchestrator restart). ACP's
+// session/load asks the (possibly freshly spawned) adapter to replay the
+// session's own history, so the conversation continues instead of dead-ending
+// in "error" forever. Only available if the backend advertises the
+// `loadSession` capability — Claude Code and Codex both do.
+async function resumeConnection(s: LiveSession): Promise<Connection> {
+  const acpSessionId = s.acpSessionId;
+  if (!acpSessionId) throw new Error("Session never started");
+
+  const existing = connections.get(s.backend);
+  if (existing && existing.sessionsByAcpId.get(acpSessionId) === s.id) return existing;
+
+  setStatus(s, "starting");
+  try {
+    const c = await ensureConnection(s.backend);
+    if (c.sessionsByAcpId.get(acpSessionId) === s.id) return c; // raced with another resume
+
+    if (!c.init.agentCapabilities?.loadSession) {
+      throw new Error(
+        `${BACKENDS[s.backend].name} doesn't support resuming a session after its process exits — start a new session to continue.`
+      );
+    }
+    const resp = await c.conn.loadSession({
+      sessionId: acpSessionId,
+      cwd: s.cwd,
+      mcpServers: [flowGraphMcp(s.id)],
+    });
+    s.modes = resp.modes ?? s.modes;
+    s.configOptions = resp.configOptions ?? s.configOptions;
+    s.error = undefined;
+    c.sessionsByAcpId.set(acpSessionId, s.id);
+    emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
+    return c;
+  } catch (e) {
+    setStatus(s, "error", { error: (e as Error).message });
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -580,8 +623,12 @@ function describeError(backend: AgentBackend, e: unknown): string {
 export async function steer(id: string, text: string): Promise<{ ok: true } | { error: string }> {
   const s = sessions.get(id);
   if (!s || !s.acpSessionId) return { error: "Session is not live (reload-only or closed)" };
-  const c = connections.get(s.backend);
-  if (!c) return { error: "Agent connection lost" };
+  let c: Connection;
+  try {
+    c = await resumeConnection(s);
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
   if (s.turnActive) {
     s.queue.push(text);
     await c.conn.cancel({ sessionId: s.acpSessionId });

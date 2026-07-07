@@ -269,6 +269,7 @@ export function AgentSession({ id }: { id: string }) {
   const [meta, setMeta] = useState<{ backend?: string; repo?: string; title?: string; cwd?: string } | null>(null);
   const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
+  const [sendError, setSendError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -398,7 +399,28 @@ export function AgentSession({ id }: { id: string }) {
     const text = input.trim();
     if (!text) return;
     setInput("");
-    await act("prompt", { text });
+    setSendError("");
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        // A dead adapter process is retried transparently server-side (via
+        // ACP session/load) before this fails — so an error here means the
+        // backend genuinely can't resume, not just a hiccup.
+        setSendError(d.error ?? "Couldn't send message.");
+        setInput(text);
+      }
+    } catch {
+      setSendError("Couldn't reach the server.");
+      setInput(text);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
@@ -672,10 +694,18 @@ export function AgentSession({ id }: { id: string }) {
           </div>
 
           {/* Steer bar */}
+          {sendError && (
+            <p className="px-4 pt-2 text-[11px]" style={{ color: "var(--danger)" }}>
+              {sendError}
+            </p>
+          )}
           <div className="border-t border-line px-4 py-3 flex gap-2 items-end" style={{ background: "var(--cream)" }}>
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (sendError) setSendError("");
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
