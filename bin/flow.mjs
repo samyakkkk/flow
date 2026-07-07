@@ -16,6 +16,7 @@ import {
   readFileSync,
   existsSync,
   cpSync,
+  rmSync,
   openSync,
   closeSync,
   readdirSync,
@@ -88,6 +89,8 @@ ${c.bold("Usage")}
   flow up [name]        Start a project (creates it if new). No name = all projects.
   flow down [name]      Stop a project. No name = all.
   flow ls               List projects, status, and dashboard URLs.
+  flow doctor           Health-check every project — pages load, assets load, services up.
+  flow rm <name>        Stop and delete a project and its data.
 
 ${c.bold("Options")}
   --mode local|prod     For a new project (default: local). Local needs no login.
@@ -165,14 +168,65 @@ function ensureDashboardBuild() {
   } catch {
     // no build yet
   }
-  if (!stale) return;
-  console.log("  [dashboard] building (shared across projects — first run takes ~30s)...");
+  if (!stale) return false;
+  console.log(c.dim("  building dashboard (first run ~30s)…"));
   const res = spawnSync(join(dir, "node_modules/.bin/next"), ["build"], {
     cwd: dir,
     stdio: ["ignore", "ignore", "inherit"],
     env: { ...process.env, NODE_ENV: "production" },
   });
   if (res.status !== 0) throw new Error("dashboard build failed — run `npm run build` in dashboard/ to see why");
+  return true; // rebuilt — callers must restart running dashboards (shared .next)
+}
+
+// Is anything listening on a TCP port? Deterministic (unlike a health probe
+// that can flake and trick us into starting a second process on a used port).
+function portInUse(port) {
+  try {
+    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Kill whatever holds a TCP port (best-effort).
+function killPort(port) {
+  try {
+    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
+    for (const p of out.split("\n").filter(Boolean)) {
+      try { process.kill(Number(p), "SIGKILL"); } catch { /* gone */ }
+    }
+  } catch { /* lsof missing */ }
+}
+
+// (Re)start just the dashboard for a project against the current shared build.
+// Kills any stale process on the port first so a rebuild can't leave a
+// dashboard serving dead chunk hashes (the "unstyled page" bug).
+function spawnDashboardFor(name) {
+  const project = readProject(name);
+  const dir = projectDir(name);
+  const { ports, mode } = project;
+  const projectEnv = parseEnvFile(join(dir, ".env"));
+  const dashEnv = {
+    ...projectEnv,
+    ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
+    GATEWAY_URL: `http://localhost:${ports.gateway}`,
+    FLOW_ADMIN_TOKEN: projectEnv.FLOW_ADMIN_TOKEN ?? "flow-dev-token",
+    FLOW_MODE: mode,
+    REPOS_JSON_PATH: join(dir, "workspace", "repos.json"),
+    PORT: String(ports.dashboard),
+    NODE_ENV: "production",
+  };
+  killPort(ports.dashboard);
+  const pid = spawnService({
+    cwd: dashboardDir(),
+    cmd: [join(dashboardDir(), "node_modules/.bin/next"), "start", "--port", String(ports.dashboard)],
+    env: dashEnv,
+    logFile: join(dir, "logs", "dashboard.log"),
+  });
+  writePids(name, { ...readPids(name), dashboard: pid });
+  return pid;
 }
 
 function spawnService({ cwd, cmd, env, logFile }) {
@@ -327,12 +381,27 @@ async function cmdUp(args) {
   console.log(`\n${c.bold("Flow")}`);
   const fk = await ensureFalkordb();
   if (fk !== "running") console.log(c.dim(`  FalkorDB ${fk === "launched" ? "launched (first run)" : "started"}`));
-  ensureDashboardBuild(); // shared build for all projects — only prints if it rebuilds
+  const rebuilt = ensureDashboardBuild(); // shared .next; only prints if it rebuilds
   console.log("");
 
   const results = [];
   for (const name of names) {
-    results.push(await upProject(name));
+    results.push(await upProject(name, { rebuilt }));
+  }
+
+  // The rebuild replaced chunk hashes on disk, so any dashboard we DIDN'T just
+  // start is now serving dead assets (the unstyled-page bug). Refresh them.
+  if (rebuilt) {
+    const starting = new Set(names);
+    for (const other of listProjectNames()) {
+      if (starting.has(other)) continue;
+      const p = readProject(other)?.ports?.dashboard;
+      if (p && (await probe(`http://localhost:${p}/login`, 1000))) {
+        spawnDashboardFor(other);
+        await waitForHealth(`http://localhost:${p}/login`, 30000);
+        console.log(c.dim(`  refreshed ${other} dashboard (new build)`));
+      }
+    }
   }
 
   // Summary: dashboards you can open, and how to get in.
@@ -355,7 +424,7 @@ async function cmdUp(args) {
   console.log("");
 }
 
-async function upProject(name) {
+async function upProject(name, { rebuilt = false } = {}) {
   const project = readProject(name);
   const dir = projectDir(name);
   const logsDir = join(dir, "logs");
@@ -365,12 +434,18 @@ async function upProject(name) {
   const dashUrl = `http://localhost:${ports.dashboard}`;
   const label = c.bold(name.padEnd(16));
 
-  // Already running? Trust a live health check over the pidfile (which can go
-  // stale). If the orchestrator answers, it's up — don't try to start a second
-  // one on the same port.
-  if (await probe(`http://localhost:${ports.orchestrator}/health`)) {
-    console.log(`  ${label} ${OK} ${c.dim("already running")}   ${c.cyan(dashUrl)}`);
-    return { name, ok: true, ports, mode, alreadyRunning: true };
+  // Already running? Use port-in-use, not a health probe — a flaky probe used
+  // to trick us into starting a SECOND orchestrator on the busy port (which
+  // then "didn't start"). If the orchestrator port is held, keep it (and any
+  // agent sessions) and just refresh the dashboard. The dashboard is stateless,
+  // and this is the thing that breaks invisibly: dead, or serving a stale
+  // shared build after a rebuild (the unstyled-page bug). Cheap insurance.
+  if (portInUse(ports.orchestrator)) {
+    void rebuilt; // dashboard is refreshed unconditionally below
+    spawnDashboardFor(name);
+    const dashOk = await waitForHealth(`${dashUrl}/login`, 30000);
+    console.log(`  ${label} ${dashOk ? OK : FAIL} ${c.dim(dashOk ? "ready" : "orchestrator up · dashboard failed")}   ${c.cyan(dashUrl)}`);
+    return { name, ok: dashOk, ports, mode, alreadyRunning: true };
   }
 
   // Inline progress line (fills in on completion) when attached to a terminal.
@@ -588,6 +663,102 @@ async function cmdLs() {
   console.log();
 }
 
+// ── COMMAND: doctor ───────────────────────────────────────────────────────────
+// Health-check every project: services up, every page reachable, and — the one
+// that bites — the dashboard's CSS/JS assets actually load (a stale shared build
+// leaves a running dashboard serving dead chunk hashes → unstyled page).
+
+const DOCTOR_PAGES = ["/", "/ask", "/agents", "/connections", "/permissions", "/activity", "/settings"];
+
+async function fetchStatus(url, opts = {}) {
+  try {
+    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(4000), ...opts });
+    return { status: res.status, text: opts.body === undefined && opts.wantText ? await res.text() : null };
+  } catch {
+    return { status: 0, text: null };
+  }
+}
+
+async function cmdDoctor() {
+  const projects = listProjects();
+  if (projects.length === 0) {
+    console.log(c.dim("\n  No projects.\n"));
+    return;
+  }
+  console.log(`\n${c.bold("Flow")} ${c.dim("· doctor")}\n`);
+  let anyFail = false;
+
+  for (const { name, project } of projects) {
+    const { ports } = project;
+    const base = `http://localhost:${ports.dashboard}`;
+    const problems = [];
+
+    if (!(await probe(`http://localhost:${ports.gateway}/health`, 2500))) problems.push("gateway down");
+    if (!(await probe(`http://localhost:${ports.orchestrator}/health`, 2500))) problems.push("orchestrator down");
+
+    // Dashboard home + asset check.
+    const home = await fetchStatus(`${base}/`, { wantText: true });
+    if (home.status === 0) {
+      problems.push("dashboard down");
+    } else if (home.status >= 500) {
+      problems.push(`home ${home.status}`);
+    } else if (home.text) {
+      const assets = [...home.text.matchAll(/\/_next\/static\/[^"']+\.(?:css|js)/g)].map((m) => m[0]).slice(0, 4);
+      if (assets.length === 0) {
+        problems.push("no CSS/JS referenced");
+      } else {
+        for (const a of assets) {
+          const r = await fetchStatus(`${base}${a}`);
+          if (r.status !== 200) {
+            problems.push(`asset ${r.status || "unreachable"} (stale build?)`);
+            break;
+          }
+        }
+      }
+    }
+
+    // Every page reachable (flag only crashes/unreachable — a 3xx auth redirect
+    // in prod is fine, not a failure).
+    for (const path of DOCTOR_PAGES) {
+      const r = await fetchStatus(`${base}${path}`);
+      if (r.status === 0 || r.status >= 500) problems.push(`${path} ${r.status || "unreachable"}`);
+    }
+
+    const label = c.bold(name.padEnd(16));
+    if (problems.length === 0) {
+      console.log(`  ${label} ${OK} ${c.dim("pages + assets OK")}   ${c.cyan(base)}`);
+    } else {
+      anyFail = true;
+      console.log(`  ${label} ${FAIL} ${c.red(problems.slice(0, 5).join(", "))}`);
+    }
+  }
+  console.log("");
+  if (anyFail) {
+    console.log(c.dim("  If assets are stale, run  flow up  — it now refreshes running dashboards after a rebuild.\n"));
+    process.exitCode = 1;
+  }
+}
+
+// ── COMMAND: rm ───────────────────────────────────────────────────────────────
+
+async function cmdRm(args) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const name = positionals[0];
+  if (!name) die("Usage: flow rm <name>");
+  if (!existsSync(projectJsonPath(name))) die(`No project "${name}".`);
+  if (process.stdin.isTTY) {
+    const yes = await confirm(`  Delete ${c.bold(name)} and all its data (graph, db, cloned repos)?`, false);
+    if (!yes) {
+      console.log(c.dim("  cancelled\n"));
+      return;
+    }
+  }
+  console.log(`\n${c.bold("Flow")} ${c.dim("· removing " + name)}`);
+  await downProject(name);
+  rmSync(projectDir(name), { recursive: true, force: true });
+  console.log(`  ${OK} removed ${c.bold(name)}\n`);
+}
+
 // ── Main dispatch ─────────────────────────────────────────────────────────────
 
 async function main() {
@@ -608,6 +779,10 @@ async function main() {
       await cmdDown(rest);
     } else if (cmd === "ls" || cmd === "list" || cmd === "ps") {
       await cmdLs();
+    } else if (cmd === "doctor" || cmd === "check" || cmd === "health") {
+      await cmdDoctor();
+    } else if (cmd === "rm" || cmd === "remove" || cmd === "delete") {
+      await cmdRm(rest);
     } else if (cmd === "create" || cmd === "new" || cmd === "project") {
       // Tolerate `flow create project X`, `flow new X`, `flow project create X`.
       let a = rest;

@@ -9,6 +9,13 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.
 - **Fixed a confusing key-onboarding error** — pasting a valid OpenRouter key while the project's orchestrator was still booting 500'd into a generic "couldn't reach the server"; the save step now catches the unreachable case and says "the key is valid, but this project is still starting up — try again."
 
+### Fixed — no more unstyled/stale dashboards + `flow doctor` + `soul.md`
+- **Root cause of the "unstyled page":** all project dashboards share one Next.js build, so rebuilding `.next` while a dashboard runs leaves it serving dead chunk hashes (CSS/JS 404/500). Now `flow up` **refreshes every running dashboard** after a rebuild, and always restarts a project's (stateless) dashboard even when "already running" — so a killed, crashed, or stale dashboard self-heals.
+- **`flow doctor`** — health-checks every project: services up, every page reachable, and the dashboard's CSS/JS assets actually load (the check that would have caught this). All-green or it tells you what's wrong.
+- **`flow rm <name>`** — stop and delete a project (no more hand-`rm` leaving a zombie dashboard on a port).
+- **"Already running" is now port-based, not a flaky health probe** — a slow probe used to trigger a second orchestrator on the busy port ("didn't start"); fixed.
+- **`soul.md`** — an always-reference operating manual (restart discipline, the shared-build footgun, verification via `flow doctor` + pixels, architecture/ports, auth + key model, agent runtime, shipping rules). Read + update it when procedures change.
+
 ### Changed — reuse your OpenRouter key across projects
 - **No more re-entering the key for every project.** When you save an OpenRouter key it's remembered as a machine default (in `data/global.json`, 0600). A new project's key gate then shows *"You already gave Flow a key — reuse it?"* with the masked key and two choices: **Use this key** (one click, done) or **Use a different key** for this project. Verified end to end (save → new project offers it → adopt → set). Local-first convenience; each project still stores its own key, so you can diverge per project anytime.
 
