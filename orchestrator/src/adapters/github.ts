@@ -45,6 +45,28 @@ if (process.env.FLOW_WATCHED_REPOS) {
   }
 }
 
+// Watch a repo's branch at runtime (dashboard repo_added flow).
+export function watchRepo(ownerRepo: string, branch: string): void {
+  registeredRepos.set(ownerRepo, branch);
+}
+
+// "owner/repo" from an https or ssh GitHub URL; null for non-GitHub URLs.
+export function ownerRepoFromUrl(url: string): string | null {
+  const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+// registeredRepos only lives in memory, so repos added via the dashboard
+// would stop being watched after a restart — re-seed from the workspace
+// registry (repos.json), which is the durable record of {url, branch}.
+export async function seedWatchedRepos(): Promise<void> {
+  const { listWorkspaceRepos } = await import("../opencode.js");
+  for (const r of listWorkspaceRepos()) {
+    const ownerRepo = r.url ? ownerRepoFromUrl(r.url) : null;
+    if (ownerRepo) registeredRepos.set(ownerRepo, r.branch || "main");
+  }
+}
+
 // ------------------------------------------------------------------
 // GitHub REST helpers
 // ------------------------------------------------------------------

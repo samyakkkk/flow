@@ -152,6 +152,11 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
     }
     const { registerRepo, enqueueJob } = await import("./opencode.js");
     const entry = registerRepo(p.url, p.branch ?? "main");
+    // Also watch this branch in the GitHub poller/webhook — registeredRepos
+    // is otherwise only seeded at boot (defaults/env/repos.json).
+    const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
+    const ownerRepo = ownerRepoFromUrl(p.url);
+    if (ownerRepo) watchRepo(ownerRepo, entry.branch);
     const job = await enqueueJob({
       type: "index_repo",
       input: { repo: entry.name, url: entry.url, branch: entry.branch },

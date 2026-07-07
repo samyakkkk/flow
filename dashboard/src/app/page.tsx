@@ -272,6 +272,7 @@ function RepoPickerPanel({ onConnected, onClose }: RepoPickerPanelProps) {
   const [repoSrc, setRepoSrc] = useState<"gh_cli" | "pat" | "none">("none");
   const [pat, setPat] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [branches, setBranches] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -313,7 +314,12 @@ function RepoPickerPanel({ onConnected, onClose }: RepoPickerPanelProps) {
     if (selected.size === 0) return;
     setSaving(true);
     setMsg("");
-    const toAdd = repos.filter((r) => selected.has(r.full_name));
+    const toAdd = repos
+      .filter((r) => selected.has(r.full_name))
+      .map((r) => ({
+        ...r,
+        branch: branches[r.full_name]?.trim() || r.default_branch,
+      }));
     try {
       const res = await fetch("/api/github/repos", {
         method: "POST",
@@ -386,6 +392,20 @@ function RepoPickerPanel({ onConnected, onClose }: RepoPickerPanelProps) {
                 >
                   {repo.full_name}
                 </span>
+                {selected.has(repo.full_name) && (
+                  <input
+                    type="text"
+                    value={branches[repo.full_name] ?? repo.default_branch}
+                    onChange={(e) =>
+                      setBranches((prev) => ({ ...prev, [repo.full_name]: e.target.value }))
+                    }
+                    onClick={(e) => e.preventDefault()}
+                    spellCheck={false}
+                    title="Branch to watch"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                    className="ml-auto w-32 rounded border border-line bg-cream px-2 py-0.5 text-[11px] text-text outline-none focus:border-ink/20"
+                  />
+                )}
               </label>
             ))}
           </div>

@@ -10,7 +10,7 @@ import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
 import { getJob, enqueueJob, recoverStalledJobs } from "./opencode.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
-import { registerGithubWebhook, registerGithubPoller } from "./adapters/github.js";
+import { registerGithubWebhook, registerGithubPoller, seedWatchedRepos } from "./adapters/github.js";
 import { registerMeetingRoutes, registerFirefliesPoller } from "./adapters/meetings.js";
 import { bootSlackAdapter } from "./adapters/slack.js";
 import { startDrainer, stopDrainer } from "./drainer.js";
@@ -199,6 +199,7 @@ const start = async (): Promise<void> => {
     }
 
     // Register all pollers with the engine (enabled() checks gating at tick time)
+    await seedWatchedRepos();
     registerGithubPoller();
     registerLinearPoller();
     registerFirefliesPoller();

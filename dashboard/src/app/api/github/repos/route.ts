@@ -4,12 +4,6 @@ import { readLocalConfig } from "@/lib/localConfig";
 import { orcFetch } from "@/lib/orchestrator";
 import { execSync } from "node:child_process";
 
-interface GhCliRepo {
-  nameWithOwner: string;
-  url: string;
-  defaultBranchRef?: { name: string } | null;
-}
-
 interface GitHubApiRepo {
   full_name: string;
   html_url: string;
@@ -20,6 +14,7 @@ interface RepoResult {
   full_name: string;
   url: string;
   default_branch: string;
+  branch?: string; // user-chosen branch override (add_repos POST only)
 }
 
 interface ReposResponse {
@@ -32,16 +27,17 @@ function tryGhCli(): RepoResult[] | null {
   try {
     // Check if gh is authenticated
     execSync("gh auth status", { stdio: "pipe", timeout: 5000 });
-    // List repos as JSON
+    // `gh repo list` only shows repos the user OWNS. Hit the API instead:
+    // /user/repos includes collaborator and org-member repos too.
     const out = execSync(
-      "gh repo list --json nameWithOwner,url,defaultBranchRef --limit 100",
+      'gh api "user/repos?per_page=100&sort=updated"',
       { stdio: "pipe", timeout: 15000 }
     ).toString("utf8");
-    const parsed = JSON.parse(out) as GhCliRepo[];
+    const parsed = JSON.parse(out) as GitHubApiRepo[];
     return parsed.map((r) => ({
-      full_name: r.nameWithOwner,
-      url: r.url,
-      default_branch: r.defaultBranchRef?.name ?? "main",
+      full_name: r.full_name,
+      url: r.html_url,
+      default_branch: r.default_branch ?? "main",
     }));
   } catch {
     return null;
@@ -140,7 +136,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             ts: Date.now(),
             payload: {
               url: repo.url,
-              branch: repo.default_branch ?? "main",
+              branch: repo.branch?.trim() || repo.default_branch || "main",
               localClone: false,
             },
           }),

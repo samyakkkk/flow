@@ -280,6 +280,7 @@ function RepoPicker({
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [branches, setBranches] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const [pat, setPat] = useState("");
   const [savingPat, setSavingPat] = useState(false);
@@ -321,7 +322,12 @@ function RepoPicker({
   async function handleAddSelected() {
     if (selected.size === 0) return;
     setAdding(true);
-    const reposToAdd = (ghData?.repos ?? []).filter((r) => selected.has(r.full_name));
+    const reposToAdd = (ghData?.repos ?? [])
+      .filter((r) => selected.has(r.full_name))
+      .map((r) => ({
+        ...r,
+        branch: branches[r.full_name]?.trim() || r.default_branch,
+      }));
     try {
       const res = await fetch("/api/github/repos", {
         method: "POST",
@@ -468,9 +474,35 @@ function RepoPicker({
                   <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", fontFamily: "monospace" }}>
                     {repo.full_name}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    branch: {repo.default_branch}
-                  </div>
+                  {isSelected && !isIndexed ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-muted)" }}>
+                      branch:
+                      <input
+                        type="text"
+                        value={branches[repo.full_name] ?? repo.default_branch}
+                        onChange={(e) =>
+                          setBranches((prev) => ({ ...prev, [repo.full_name]: e.target.value }))
+                        }
+                        onClick={(e) => e.preventDefault()}
+                        spellCheck={false}
+                        style={{
+                          fontSize: 11,
+                          fontFamily: "monospace",
+                          padding: "1px 6px",
+                          borderRadius: 4,
+                          border: "1px solid var(--border)",
+                          background: "var(--surface-2)",
+                          color: "var(--text-primary)",
+                          outline: "none",
+                          width: 140,
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      branch: {repo.default_branch}
+                    </div>
+                  )}
                 </div>
                 {isIndexed && (
                   <span

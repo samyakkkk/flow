@@ -119,6 +119,10 @@ function readRepoRegistry(): { repos: RepoEntry[] } {
   }
 }
 
+export function listWorkspaceRepos(): RepoEntry[] {
+  return readRepoRegistry().repos;
+}
+
 export function registerRepo(url: string, branch: string): RepoEntry {
   const name = url.replace(/\/+$/, "").split("/").pop()!.replace(/\.git$/, "");
   const registry = readRepoRegistry();
