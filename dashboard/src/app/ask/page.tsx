@@ -2,6 +2,7 @@
 import { Shell } from "@/components/Shell";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Heading, Chip, StatusPill } from "@/components/ui";
+import { MarkdownContent } from "@/components/Markdown";
 import { useState, FormEvent, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -42,41 +43,6 @@ function ConfidenceBadge({ value }: { value: number }) {
   const kind: "ok" | "warn" | "idle" =
     value >= 0.75 ? "ok" : value >= 0.5 ? "warn" : "idle";
   return <StatusPill kind={kind}>{phrase}</StatusPill>;
-}
-
-// ─── Markdown with DOMPurify ──────────────────────────────────────────────────
-
-function MarkdownContent({ md }: { md: string }) {
-  const [html, setHtml] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      import("marked"),
-      import("dompurify"),
-    ]).then(([{ marked }, { default: DOMPurify }]) => {
-      if (cancelled) return;
-      const result = marked.parse(md);
-      const resolve = (raw: string) => {
-        // DOMPurify works in browser only; on SSR-less env fallback to raw
-        const clean = typeof DOMPurify.sanitize === "function"
-          ? DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
-          : raw;
-        if (!cancelled) setHtml(clean);
-      };
-      if (typeof result === "string") resolve(result);
-      else result.then(resolve);
-    });
-    return () => { cancelled = true; };
-  }, [md]);
-
-  return (
-    <div
-      className="prose prose-sm max-w-none text-text leading-relaxed"
-      style={{ lineHeight: 1.7 }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
 }
 
 // ─── Citation chip ────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
+import { MarkdownContent } from "@/components/Markdown";
 
 // ---------------------------------------------------------------------------
 // Event → transcript reduction
@@ -571,8 +572,8 @@ export function AgentSession({ id }: { id: string }) {
                   );
                 case "agent":
                   return (
-                    <div key={b.key} className="max-w-[92%]">
-                      <p className="text-ink text-[13.5px] whitespace-pre-wrap break-words leading-relaxed">{b.text}</p>
+                    <div key={b.key} className="max-w-[92%] text-[13.5px]">
+                      <MarkdownContent md={b.text} />
                     </div>
                   );
                 case "thought":
