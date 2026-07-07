@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Kicker, Heading, Button, Card, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
+import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 
 interface DetectedAgent {
   id: string;
@@ -104,6 +105,16 @@ export function AgentsView() {
     return () => clearInterval(iv);
   }, [refresh]);
 
+  const fetchFiles = useCallback(
+    (q: string) => {
+      if (!repo) return Promise.resolve([]);
+      return fetch(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}`)
+        .then((r) => (r.ok ? r.json() : { entries: [] }))
+        .then((d: { entries?: FileEntry[] }) => d.entries ?? []);
+    },
+    [repo]
+  );
+
   async function start() {
     if (!backend || !repo || !prompt.trim()) return;
     setStarting(true);
@@ -194,10 +205,11 @@ export function AgentsView() {
             ))}
           </select>
         </div>
-        <textarea
+        <MentionTextarea
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="What should the agent do? It will consult the brain first, then work in the repo."
+          onChange={setPrompt}
+          fetchFiles={fetchFiles}
+          placeholder="What should the agent do? It will consult the brain first, then work in the repo. (@ to tag a file)"
           rows={3}
           className="w-full rounded-lg border border-line bg-cream px-3.5 py-3 text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none focus:border-black/20 resize-y mb-3"
         />

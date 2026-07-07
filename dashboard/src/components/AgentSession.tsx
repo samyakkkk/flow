@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
+import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 
 // ---------------------------------------------------------------------------
 // Event → transcript reduction
@@ -396,6 +397,14 @@ export function AgentSession({ id }: { id: string }) {
     [id]
   );
 
+  const fetchFiles = useCallback(
+    (q: string) =>
+      fetch(`/api/agents/sessions/${id}/files?q=${encodeURIComponent(q)}`)
+        .then((r) => (r.ok ? r.json() : { entries: [] }))
+        .then((d: { entries?: FileEntry[] }) => d.entries ?? []),
+    [id]
+  );
+
   async function send() {
     const text = input.trim();
     if (!text) return;
@@ -701,10 +710,10 @@ export function AgentSession({ id }: { id: string }) {
             </p>
           )}
           <div className="border-t border-line px-4 py-3 flex gap-2 items-end" style={{ background: "var(--cream)" }}>
-            <textarea
+            <MentionTextarea
               value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
+              onChange={(v) => {
+                setInput(v);
                 if (sendError) setSendError("");
               }}
               onKeyDown={(e) => {
@@ -713,16 +722,17 @@ export function AgentSession({ id }: { id: string }) {
                   send();
                 }
               }}
+              fetchFiles={fetchFiles}
               placeholder={
                 archived
                   ? "This session ended before the last restart — start a new one to continue."
                   : running
-                  ? "Steer the agent — this interrupts and redirects it…"
-                  : "Send a follow-up…"
+                  ? "Steer the agent — this interrupts and redirects it… (@ to tag a file)"
+                  : "Send a follow-up… (@ to tag a file)"
               }
               rows={1}
               disabled={archived}
-              className="flex-1 rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
+              className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
             />
             <Button onClick={send} disabled={archived || !input.trim() || busy}>
               {running ? "Steer" : "Send"}

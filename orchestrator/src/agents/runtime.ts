@@ -793,6 +793,101 @@ export function sessionLocation(id: string): { cwd: string } | null {
   return cwd ? { cwd } : null;
 }
 
+// ---------------------------------------------------------------------------
+// File/folder mentions (@-tagging) — lets the dashboard offer autocomplete
+// over a repo checkout's tracked + untracked-but-not-ignored paths, the same
+// way editor-integrated agent harnesses let you @-tag a file or folder.
+
+export interface FileEntry {
+  path: string;
+  type: "file" | "dir";
+}
+
+const filesCache = new Map<string, { at: number; entries: FileEntry[] }>();
+const FILES_CACHE_TTL = 15_000;
+
+function gitLsFiles(cwd: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["ls-files", "--cached", "--others", "--exclude-standard"],
+      { cwd, maxBuffer: 16 * 1024 * 1024, timeout: 5000 },
+      (err, stdout) => resolve(err ? [] : stdout.split("\n").filter(Boolean))
+    );
+  });
+}
+
+async function allEntries(cwd: string): Promise<FileEntry[]> {
+  const cached = filesCache.get(cwd);
+  if (cached && Date.now() - cached.at < FILES_CACHE_TTL) return cached.entries;
+  const files = await gitLsFiles(cwd);
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const parts = f.split("/");
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+  }
+  const entries: FileEntry[] = [
+    ...files.map((p) => ({ path: p, type: "file" as const })),
+    ...[...dirs].map((p) => ({ path: p, type: "dir" as const })),
+  ];
+  filesCache.set(cwd, { at: Date.now(), entries });
+  return entries;
+}
+
+// Case-insensitive match: basename-prefix and substring hits rank above a
+// scattered subsequence match. Good enough for @mention autocomplete — not a
+// full fuzzy-match engine.
+function matchScore(pathLower: string, query: string): number {
+  const idx = pathLower.indexOf(query);
+  if (idx >= 0) {
+    const base = pathLower.slice(pathLower.lastIndexOf("/") + 1);
+    if (base.startsWith(query)) return 0;
+    if (idx === 0) return 1;
+    return 2 + idx / pathLower.length;
+  }
+  let qi = 0;
+  for (let i = 0; i < pathLower.length && qi < query.length; i++) {
+    if (pathLower[i] === query[qi]) qi++;
+  }
+  return qi === query.length ? 10 + pathLower.length / 100 : -1;
+}
+
+async function filesUnder(cwd: string, query: string, limit: number): Promise<FileEntry[]> {
+  const entries = await allEntries(cwd);
+  const q = query.trim().toLowerCase();
+  if (!q) return entries.filter((e) => e.type === "file").slice(0, limit);
+  const scored = entries
+    .map((e) => ({ e, score: matchScore(e.path.toLowerCase(), q) }))
+    .filter((s) => s.score >= 0)
+    .sort((a, b) => a.score - b.score || a.e.path.length - b.e.path.length);
+  return scored.slice(0, limit).map((s) => s.e);
+}
+
+// List files/folders (for @mention autocomplete) in a live or archived
+// session's repo checkout.
+export async function listSessionFiles(
+  id: string,
+  query: string,
+  limit = 40
+): Promise<{ entries: FileEntry[] } | { error: string }> {
+  const cwd = sessionCwd(id);
+  if (!cwd) return { error: "Unknown session" };
+  if (!existsSync(cwd)) return { error: `Folder not found: ${cwd}` };
+  return { entries: await filesUnder(cwd, query, limit) };
+}
+
+// Same, but for the "start a new session" composer, which only has a repo
+// name selected (no session yet).
+export async function listRepoFiles(
+  repo: string,
+  query: string,
+  limit = 40
+): Promise<{ entries: FileEntry[] } | { error: string }> {
+  const repoOpt = listRepoOptions().find((r) => r.name === repo);
+  if (!repoOpt || !repoOpt.cloned) return { error: `Unknown repo "${repo}"` };
+  return { entries: await filesUnder(repoOpt.path, query, limit) };
+}
+
 // Open the session's repo folder in the OS file manager or VS Code. Local-mode
 // convenience — the orchestrator runs on the user's machine, so it can launch
 // GUI apps. The path comes from the session record, never from the client, and
