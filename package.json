@@ -8,6 +8,7 @@
     "flow": "bin/flow.mjs"
   },
   "scripts": {
+    "preinstall": "node scripts/check-node.mjs",
     "dev": "npm run --workspace orchestrator dev & npm run --workspace graph-gateway dev & npm run --workspace dashboard dev",
     "verify": "bash verify-all.sh"
   },
@@ -18,6 +19,7 @@
   ],
   "private": true,
   "engines": {
-    "node": ">=20"
+    "node": ">=22",
+    "npm": ">=9"
   }
 }

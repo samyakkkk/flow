@@ -4,6 +4,11 @@ Production deployment of Flow on AWS EC2.  Only the dashboard is exposed to the
 internet (via Caddy + HTTPS).  The gateway and orchestrator stay on the Docker
 network / localhost.
 
+> **Note:** the compose file lives in `deploy/docker-compose.yml`. Run every
+> `docker compose …` command below from the `deploy/` directory (`cd deploy`
+> first). Simpler alternative: run `flow up` directly on the box — same CLI as
+> local — and skip the container build entirely.
+
 ---
 
 ## Recommended instance

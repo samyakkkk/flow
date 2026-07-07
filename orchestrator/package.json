@@ -20,13 +20,17 @@
     "@slack/bolt": "^4.7.3",
     "@slack/web-api": "^7.18.0",
     "@zed-industries/codex-acp": "^0.16.0",
-    "better-sqlite3": "^9.6.0",
-    "fastify": "^4.28.0"
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^4.28.0",
+    "opencode-ai": "^1.17.14"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

@@ -53,7 +53,9 @@ The graph is the center. Both you and your agents build from it.
 
 ## Quickstart
 
-**Prerequisites:** Node 20+, Docker (runs FalkorDB), the [opencode](https://opencode.ai) CLI (the agent runtime), and an [OpenRouter](https://openrouter.ai) API key for the models. To run coding agents, install whichever you use — Claude Code, Codex, and/or OpenCode; Flow detects them.
+**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). You'll add an [OpenRouter](https://openrouter.ai) key in the dashboard on first run. **Nothing else to install** — the graph engine (opencode) is bundled.
+
+To *also* run coding agents from the dashboard, install any of Claude Code, Codex, or OpenCode; Flow detects whatever's already on your machine.
 
 ```bash
 git clone <repo> && cd flow
@@ -69,7 +71,7 @@ Then it's all in the browser:
 3. **Connect a repo** from the Home picker (uses your `gh` login, a PAT, or a public URL) and watch the graph build.
 4. **Ask a question** from the floating bar, or head to **Agents** to kick off a coding task.
 
-> A one-command installer (`curl … | bash`) that also provisions opencode + Docker is on the [roadmap](ROADMAP.md). The steps above are the current path.
+> A one-command installer (`curl … | bash`) that also provisions Node + Docker is on the [roadmap](ROADMAP.md). The steps above are the current path.
 
 ### CLI
 
@@ -159,6 +161,18 @@ Shipped and honest about what's next — see [`ROADMAP.md`](ROADMAP.md) for the 
 - **Project migration** (`flow export` / `import`) and **EC2 always-on** under systemd.
 
 Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated history.
+
+---
+
+## Troubleshooting
+
+- **`npm install` fails on an old Node, or with a SQLite build error** — Flow needs **Node 22+**. `nvm install 22 && nvm use 22`, then `npm install` again. (On 22+, SQLite installs a prebuilt binary — no C/C++ toolchain required.)
+- **`flow up` says Docker isn't installed / the daemon isn't running** — start Docker Desktop and re-run. Prefer no Docker? Run FalkorDB yourself and point Flow at it: `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
+- **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
+- **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.
+- **Connecting a repo fails** — cloning needs `git` on your PATH.
+- **"still starting up" when you save your key** — the orchestrator takes a few seconds on first boot; wait and retry.
+- **Don't `docker compose up` for local dev** — use `flow up`. The compose file under `deploy/` is an experimental full-container path, not the local one.
 
 ---
 

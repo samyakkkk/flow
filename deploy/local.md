@@ -1,136 +1,84 @@
-# Local Quickstart
+# Running Flow locally
 
-Two ways to run Flow locally. **Host mode is the default** and the only mode that
-supports real opencode indexing.
-
----
-
-## Host Mode (recommended — works today, supports opencode)
-
-In this mode FalkorDB runs in Docker; everything else runs directly on your
-machine with `npm`.  This is exactly how the nightly build agent runs Flow.
-
-### Prerequisites
-
-- Docker Desktop running
-- Node.js 22 (check: `node --version`)
-- `opencode` CLI on PATH (for index/answer jobs; skip if using
-  `FLOW_FAKE_OPENCODE=1`)
-
-### 1. Start FalkorDB
-
-```bash
-docker run -d \
-  --name flow-falkordb \
-  -p 6379:6379 \
-  -p 3000:3000 \
-  -v flow-falkordb-data:/data \
-  falkordb/falkordb:latest
-```
-
-FalkorDB browser UI: http://localhost:3000
-
-### 2. Start the graph gateway
-
-```bash
-cd graph-gateway
-GRAPH_NAME=acme-v1 npm start
-# Listening on :7433
-```
-
-### 3. Start the orchestrator
-
-```bash
-cd flow/orchestrator
-export FLOW_ADMIN_TOKEN=<your-token>
-export OPENROUTER_API_KEY=<your-key>
-export GATEWAY_URL=http://localhost:7433
-export GRAPH_NAME=acme-v1
-# Add Slack/Linear/GitHub vars as needed (see ../.env.example)
-npm start
-# Listening on :7500
-```
-
-### 4. Start the dashboard
-
-```bash
-cd flow/dashboard
-export ORCHESTRATOR_URL=http://localhost:7500
-export GATEWAY_URL=http://localhost:7433
-export FLOW_ADMIN_TOKEN=<your-token>
-npm run dev     # dev mode with HMR on :7600
-# OR
-npm run build && npm start   # production build
-```
-
-Dashboard: http://localhost:7600
-
-### 5. (Optional) Start Linear mock for offline testing
-
-```bash
-cd flow/simulators
-npm run linear-mock
-# Mock Linear API on :7509
-```
+There is **one** way to run Flow: the `flow` CLI. It starts FalkorDB (in Docker,
+for you), builds the dashboard once, and launches each project's services
+natively. Do **not** run `docker compose` for local dev — that's an experimental
+full-container path (see the bottom of this file).
 
 ---
 
-## Full Docker Mode (limited — no opencode)
+## Prerequisites
 
-All four services run in Docker via `docker compose`.
+- **Node 22+** — `nvm install 22 && nvm use 22` (there's an `.nvmrc`). The install
+  refuses older Node with a message, because the agent adapters need 22 and
+  SQLite ships prebuilt binaries for 22.
+- **Docker running** — Flow starts FalkorDB (its graph database) in a container.
+  Already run FalkorDB yourself? Point Flow at it and skip Docker:
+  `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
+- An **OpenRouter API key** — you'll paste it into the dashboard on first run
+  (not an env var). Nothing else to install: the graph engine (opencode) is
+  bundled as a dependency.
 
-### OpenCode limitation (v1)
+---
 
-The `opencode` CLI is **not bundled** in the orchestrator container.  When an
-`index_repo` or `answer` job is queued, the orchestrator will attempt to spawn
-`opencode run …` and fail with "command not found".
-
-**Workarounds:**
-
-| Option | Description |
-|--------|-------------|
-| `FLOW_FAKE_OPENCODE=1` | Use a deterministic fake (for demos, smoke tests). Set in `.env`. |
-| Hybrid mode | Run FalkorDB + gateway + dashboard via compose; run orchestrator on the host (see Host Mode). Point `GATEWAY_URL=http://localhost:7433`. |
-| Mount opencode | Mount the opencode binary into the container (`volumes: - /usr/local/bin/opencode:/usr/local/bin/opencode`) and set `OPENCODE_WORKSPACE_DIR` to a mounted index-workspace. Advanced; requires the container to have access to cloned repos. |
-
-### Quick start (docker compose)
+## Start it
 
 ```bash
-# 1. Clone repo and enter the flow/ directory
-cd flow-workspace/flow
+git clone <repo> && cd flow
+npm install && npm install -g .     # deps + `flow` on your PATH
 
-# 2. Set up environment
-cp .env.example .env
-# Edit .env: fill in FLOW_ADMIN_TOKEN and OPENROUTER_API_KEY at minimum
-
-# 3. Build and start
-docker compose up --build
-
-# Dashboard: http://localhost:7600
-# Gateway:   http://localhost:7433
-# Orchestrator: http://localhost:7500
-# FalkorDB browser: http://localhost:3000
+flow up mycompany                   # creates it if new, then starts
 ```
 
-Stop everything: `docker compose down`
+`flow up` prints your dashboard URL. In local mode you're already signed in — no
+token to paste. Then, in the browser:
 
-Destroy data volumes too: `docker compose down -v`
+1. Add your **OpenRouter key** (nothing else is reachable until the brain has a model).
+2. **Connect a repo** from the Home picker and watch the graph build.
+3. **Ask** from the floating bar, or head to **Agents** to run a coding task.
 
-### Environment variables
+### Everyday CLI
 
-Copy `.env.example` to `.env` and fill in values.  The compose file reads
-from `.env` automatically (Docker Compose default).
+```bash
+flow up   [name]     # start a project (creates it if new); no name = all
+flow down [name]     # stop a project; no name = all
+flow ls              # projects, status, dashboard URLs
+flow doctor          # health-check every project (pages + assets + services)
+flow rm   <name>     # stop and delete a project and its data
+```
+
+Each project is a self-contained `data/projects/<name>/` (its own graph, DB,
+secrets, cloned repos) on its own port triplet. Projects share one FalkorDB via
+named graphs.
 
 ---
 
 ## Verification
 
-From the repo root (any mode):
+```bash
+flow doctor          # all-green = pages, assets, and services are healthy
+
+bash verify-all.sh   # typecheck + orchestrator tests + scenarios + dashboard smoke
+```
+
+---
+
+## Under the hood (you don't need this)
+
+`flow up` does what you'd otherwise do by hand: start FalkorDB, then run the
+gateway (`:7433+`), orchestrator (`:7500+`), and dashboard (`:7600+`) for each
+project with the right env. If you're debugging one service, run it directly
+with `npm start` in `graph-gateway/`, `orchestrator/`, or `dashboard/` — but for
+normal use, always go through `flow up` (it manages ports, the shared dashboard
+build, and restarts).
+
+### Experimental: full-container deploy
+
+`deploy/docker-compose.yml` builds every service into an image (used for EC2).
+It is **not** the local path and boots slower. If you really want it:
 
 ```bash
-# Host mode — runs typecheck + unit tests + scenarios + dashboard smoke
-bash flow/verify-all.sh
-
-# Include real credential tests (Linear, GitHub, OpenRouter)
-FLOW_VERIFY_REAL=1 bash flow/verify-all.sh
+cd deploy
+cp ../.env.example .env   # fill in FLOW_ADMIN_TOKEN + OPENROUTER_API_KEY
+docker compose up --build
 ```

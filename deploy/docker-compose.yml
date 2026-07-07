@@ -1,3 +1,18 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️  This is NOT how you run Flow locally. Use the `flow` CLI:
+#
+#         npm install && npm install -g .
+#         flow up <name>
+#
+#   `flow up` runs the services natively (fast, per-project, hot dashboard) and
+#   starts ONLY FalkorDB in Docker for you. See the README quickstart.
+#
+#   This file is an EXPERIMENTAL full-container deploy (used for EC2). It builds
+#   every service into an image. Run it from THIS directory:
+#
+#         cd deploy && docker compose up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   # ── FalkorDB (graph store + browser UI) ──────────────────────────────────
   falkordb:
@@ -18,7 +33,7 @@ services:
   # ── Graph gateway (typed verb API over FalkorDB, port 7433) ──────────────
   gateway:
     build:
-      context: ./graph-gateway
+      context: ../graph-gateway
     ports:
       - "7433:7433"
     environment:
@@ -42,7 +57,7 @@ services:
   # ── Orchestrator (event bus, classifier, policy router, port 7500) ────────
   orchestrator:
     build:
-      context: ./orchestrator
+      context: ../orchestrator
     ports:
       - "7500:7500"
     environment:
@@ -51,9 +66,9 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GATEWAY_URL=http://gateway:7433
       - GRAPH_NAME=${GRAPH_NAME:-acme-v1}
-      # OpenCode limitation: the opencode CLI is NOT bundled in this container.
-      # Index/answer jobs will fail unless you mount opencode or use hybrid mode.
-      # Set FLOW_FAKE_OPENCODE=1 for smoke-testing without real opencode.
+      # opencode is bundled: the orchestrator depends on `opencode-ai`, which
+      # `npm ci` installs into the image — so index/answer jobs work in-container.
+      # Set FLOW_FAKE_OPENCODE=1 only to smoke-test without real model calls.
       - FLOW_FAKE_OPENCODE=${FLOW_FAKE_OPENCODE:-}
       # Optional — Slack Socket Mode
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
@@ -90,7 +105,7 @@ services:
   # ── Dashboard (Next.js UI, port 7600) ────────────────────────────────────
   dashboard:
     build:
-      context: ./dashboard
+      context: ../dashboard
     ports:
       - "7600:7600"
     environment:

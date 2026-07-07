@@ -137,6 +137,34 @@ via named graphs. Each project is a self-contained `data/projects/<name>/`.
 
 ---
 
+## Install prerequisites (the fresh-machine contract)
+
+The worst bug is "I handed it to someone and it didn't install." Keep these true:
+
+- **Node 22+ is the floor** — enforced by a `preinstall` guard
+  (`scripts/check-node.mjs`) + `engines` on every package + an `.nvmrc`. Two
+  independent reasons: the Claude Code ACP adapter needs 22, and
+  `better-sqlite3`'s prebuilt binaries cover 20/22/24 (below/outside that it
+  compiles from source and needs a C/C++ toolchain). Bumping a dep? Re-check its
+  Node floor **and** its prebuild coverage.
+- **No native compile on `npm install`.** `better-sqlite3` is on `^12`
+  specifically because it ships prebuilds for current Node — don't downgrade it.
+  If install starts running `node-gyp`, something regressed.
+- **opencode is bundled** (`opencode-ai` dependency), resolved in
+  `orchestrator/src/opencode.ts` from `node_modules` (PATH fallback). Users
+  install nothing for the brain. That package pulls only the current platform's
+  binary via optionalDependencies — no compile.
+- **FalkorDB/Docker is escape-hatched.** `ensureFalkordb()` skips Docker when the
+  port is already served or `FALKOR_HOST` is remote, and fails with *guidance*
+  (not a stack trace) when Docker is genuinely needed. Never make Docker a hard,
+  unexplained requirement.
+- **One run story: `flow up`.** Don't reintroduce a root `docker-compose.yml` or
+  docs that say "docker compose up" for local — that sends agents/users down a
+  competing, half-working path. The compose file lives in `deploy/`, labelled
+  experimental.
+
+---
+
 ## Shipping / public repo
 
 - Keep the source-of-truth changelog current; the public README leads with what

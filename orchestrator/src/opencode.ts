@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import db, { DB_DIR } from "./db.js";
@@ -23,6 +24,25 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 const WORKSPACE_DIR =
   process.env.OPENCODE_WORKSPACE_DIR ?? resolve(__dirname, "../../index-workspace");
+
+// The opencode runtime the graph builder + Ask shell out to. We bundle
+// `opencode-ai` (its platform binary arrives via optionalDependencies, like
+// esbuild), so users never install opencode themselves. Resolve the bundled
+// binary; fall back to a system `opencode` on PATH if resolution ever fails.
+const OPENCODE_BIN = ((): string => {
+  try {
+    const pkgPath = createRequire(import.meta.url).resolve("opencode-ai/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { bin?: string | Record<string, string> };
+    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.opencode;
+    if (binRel) {
+      const binAbs = resolve(pkgPath, "..", binRel);
+      if (existsSync(binAbs)) return binAbs;
+    }
+  } catch {
+    /* opencode-ai not resolvable — fall back to PATH */
+  }
+  return "opencode";
+})();
 
 // Read at call time via getSetting so DB/env changes take effect immediately.
 // The const below is only used as a fallback; runRealOpencode reads dynamically.
@@ -393,7 +413,7 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
   await acquireSpawnSlot();
 
   const t0 = Date.now();
-  const spawned = await spawnAsync("opencode", args, env, timeoutMs);
+  const spawned = await spawnAsync(OPENCODE_BIN, args, env, timeoutMs);
   const latencyMs = Date.now() - t0;
 
   // Persist the full transcript BEFORE any error handling — failed runs are

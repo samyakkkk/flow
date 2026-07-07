@@ -4,6 +4,19 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — installation that actually works on a fresh machine
+The worst failure is handing Flow to someone and the install breaking. A full audit found four traps and fixed each:
+- **SQLite no longer fails to install on modern Node.** `better-sqlite3` was pinned to `^9`, which has **no prebuilt binary for Node 22+** — so it compiled from source and died on any machine without a C/C++ toolchain (the reported "sqlite issue on Node far above 20"). Bumped to `^12`, which ships prebuilds for Node 20/22/24 → **no compiler needed**. Verified end to end: the orchestrator's real schema (WAL + FTS5 + triggers + migrations) opens clean under v12 on Node 22.
+- **opencode is now bundled — users install nothing.** The graph builder *and* Ask shell out to the `opencode` runtime, so it was a required manual install (`curl … | bash`) that failed silently if missing. It's now a dependency (`opencode-ai`, whose platform binary arrives via optionalDependencies like esbuild — no compile), resolved from `node_modules` with a PATH fallback. `npm install` brings it; the container image gets it too via `npm ci`.
+- **The real Node floor is honest and enforced.** `@agentclientprotocol/claude-agent-acp` requires Node **22+**, but `package.json` claimed `>=20`. Bumped `engines` to `>=22` across all packages, added an `.nvmrc`, and a **`preinstall` guard** that fails *loud and early* with the exact fix (`nvm install 22`) instead of a confusing native-build error midway through install.
+- **`flow up` explains Docker problems instead of dumping a stack trace.** `ensureFalkordb()` now preflights (Docker installed? daemon up?) with actionable messages, verifies the container actually became reachable, and — crucially — **skips Docker entirely when FalkorDB is already reachable or `FALKOR_HOST` points at your own instance**. So "do I even need Docker?" has an answer: not if you bring your own.
+
+### Fixed — one install story (no more agents reaching for `docker compose`)
+The repo told people to run Flow **three** contradictory ways — a root `docker-compose.yml`, a `deploy/local.md` titled *"Quick start (docker compose)"*, and landing-page copy saying *"docker compose up and you're running"* — so an agent setting Flow up naturally used Docker instead of `flow up`.
+- **Root `docker-compose.yml` moved to `deploy/`** so `docker compose up` at the repo root no longer auto-discovers it; it now carries a banner that points to `flow up` and is labelled experimental (and its "opencode not bundled" caveat is gone — see above).
+- **`deploy/local.md` rewritten** around `flow up` (it predated the CLI entirely). Landing-page snippets and `deploy/ec2.md` updated to match.
+- **README**: prerequisites corrected (Node 22+, Docker running *or bring-your-own FalkorDB*, opencode bundled), plus a new **Troubleshooting** section covering each failure mode above.
+
 ### Added — real brand icons + share-ready README
 - **Brand icons** — GitHub, Linear, Slack, Fireflies, and the coding agents (Anthropic/Claude Code, OpenAI/Codex, OpenCode) now render as proper monochrome inline SVG marks (Simple Icons paths where official; a drawn spark for Fireflies) instead of emoji/geometric glyphs. New `BrandIcon` component; no icon-library dependency.
 - **New developer-first README** with real dashboard screenshots (`docs/images/`), a copy-pasteable quickstart, and an honest shipped-vs-roadmap split. Positions Flow as a knowledge-graph + agent-runner that's useful for a solo developer and grows into a team brain.

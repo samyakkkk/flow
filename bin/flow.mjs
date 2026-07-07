@@ -395,7 +395,9 @@ async function cmdUp(args) {
 
   console.log(`\n${c.bold("Flow")}`);
   const fk = await ensureFalkordb();
-  if (fk !== "running") console.log(c.dim(`  FalkorDB ${fk === "launched" ? "launched (first run)" : "started"}`));
+  if (fk === "launched") console.log(c.dim("  FalkorDB launched (first run)"));
+  else if (fk === "started") console.log(c.dim("  FalkorDB started"));
+  // "running" / "external": already reachable — stay quiet.
   const rebuilt = ensureDashboardBuild(); // shared .next; only prints if it rebuilds
   console.log("");
 
