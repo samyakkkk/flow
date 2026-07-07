@@ -72,6 +72,14 @@ Related gotchas baked into the CLI:
      Kill orphaned MCP/adapter procs if memory is tight.
 3. **Real end-to-end** for behavior changes — actually run the flow (start an
    agent, save a key, etc.), don't just check a status code.
+4. **CLI changes (`bin/`) are verified by EXECUTING `flow up`**, never by
+   `node --check` or tsc — the CLI is plain JS that tsc never sees, and
+   parse-checking doesn't catch wrong call shapes. Scar tissue: `nodeBin()`
+   shipped calling `flowRoot()` (it's a const string, not a function) because
+   the change was "type-checked" but `flow up` was never re-run — every fresh
+   user's `flow up` then crashed with "flowRoot is not a function". If a
+   parallel-work freeze prevents running `flow up`, the change is NOT verified —
+   say so and hold the push until it can run.
 
 ---
 

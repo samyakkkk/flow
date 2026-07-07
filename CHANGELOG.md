@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — `flow up` crashed with "flowRoot is not a function"
+- The fresh-clone `nodeBin()` fix called `flowRoot()` as a function, but `bin/lib/paths.mjs` exports it as a **const path string** — so every `flow up` that reached service startup crashed. It shipped because that change was only type-checked (`tsc` doesn't cover the plain-JS CLI) and `flow up` wasn't re-run afterwards. Fixed and verified by actually running `flow up` (all projects + doctor green). Lesson recorded in `soul.md`: CLI changes are verified by *executing* `flow up`, never just parsing/type-checking.
+
 ### Fixed — installation that actually works on a fresh machine
 The worst failure is handing Flow to someone and the install breaking. A full audit found four traps and fixed each:
 - **SQLite no longer fails to install on modern Node.** `better-sqlite3` was pinned to `^9`, which has **no prebuilt binary for Node 22+** — so it compiled from source and died on any machine without a C/C++ toolchain (the reported "sqlite issue on Node far above 20"). Bumped to `^12`, which ships prebuilds for Node 20/22/24 → **no compiler needed**. Verified end to end: the orchestrator's real schema (WAL + FTS5 + triggers + migrations) opens clean under v12 on Node 22.

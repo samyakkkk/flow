@@ -237,7 +237,7 @@ function spawnDashboardFor(name) {
 function nodeBin(subdir, name) {
   const candidates = [
     join(subdir, "node_modules", ".bin", name),
-    join(flowRoot(), "node_modules", ".bin", name),
+    join(flowRoot, "node_modules", ".bin", name), // flowRoot is a const path, not a fn
   ];
   const found = candidates.find((p) => existsSync(p));
   if (!found) die(`"${name}" not found — run  npm install  in the flow directory first.`);
