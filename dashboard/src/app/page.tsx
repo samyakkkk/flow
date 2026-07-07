@@ -53,7 +53,7 @@ interface GhRepo {
   default_branch: string;
 }
 
-type HomeState = "loading" | "no-brain" | "empty" | "building" | "alive";
+type HomeState = "loading" | "engine-down" | "no-brain" | "empty" | "building" | "alive";
 
 // ─── Humanized translations ────────────────────────────────────────────────────
 
@@ -1113,6 +1113,13 @@ export default function HomePage() {
         window.location.href = "/login?from=%2F";
         return;
       }
+      // 5xx means the orchestrator (Flow's engine) is down/unreachable — a
+      // fixable ops condition, NOT "no key". Showing KeyGate here asks the
+      // user for a key that can't save; say what's actually wrong instead.
+      if (settingsResp.status >= 500) {
+        setState("engine-down");
+        return;
+      }
 
       const [settingsRes, ingestRes, reposRes, auditRes, graphRes] = await Promise.allSettled([
         settingsResp.json() as Promise<SettingItem[]>,
@@ -1153,7 +1160,9 @@ export default function HomePage() {
         setState("alive");
       }
     } catch {
-      setState("no-brain"); // conservative fallback
+      // Even the dashboard's own API didn't answer — engine/server trouble,
+      // never a missing key. (KeyGate here was the old, misleading fallback.)
+      setState("engine-down");
     }
   }
 
@@ -1161,6 +1170,17 @@ export default function HomePage() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // While the engine is down, retry quietly — the moment `flow up` brings the
+  // orchestrator back, the page heals itself without a manual refresh.
+  useEffect(() => {
+    if (state !== "engine-down") return;
+    const iv = setInterval(() => {
+      loadAll();
+    }, 3000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   // Poll during building state
   useEffect(() => {
@@ -1193,6 +1213,34 @@ export default function HomePage() {
   // ── Loading ────────────────────────────────────────────────────────────────
   if (state === "loading") {
     return <div className="min-h-screen bg-cream" />;
+  }
+
+  // ── Engine down: the dashboard is fine but the orchestrator isn't answering.
+  // Plain words + the exact command to run. Retries itself every 3s.
+  if (state === "engine-down") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 bg-cream">
+        <div className="w-full max-w-lg rise-in text-center">
+          <div className="inline-block w-2.5 h-2.5 rounded-full bg-accent animate-pulse mb-6" />
+          <h1 className="font-display text-[32px] leading-tight mb-3">
+            Flow&apos;s engine isn&apos;t reachable.
+          </h1>
+          <p className="text-text-muted text-[15px] leading-relaxed mb-6">
+            The dashboard is running, but this project&apos;s orchestrator isn&apos;t
+            answering — it may still be starting up, or it stopped.
+          </p>
+          <div className="text-left inline-block bg-paper border border-line rounded-lg px-5 py-4 font-mono text-[13px] leading-loose">
+            <div className="text-text-muted"># from your flow directory:</div>
+            <div>flow doctor</div>
+            <div className="text-text-muted"># or restart this project:</div>
+            <div>flow up</div>
+          </div>
+          <p className="text-text-muted text-[13px] mt-6">
+            This page checks again automatically — it&apos;ll come back on its own.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   // ── State 0: No brain ──────────────────────────────────────────────────────

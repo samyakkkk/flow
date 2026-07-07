@@ -503,6 +503,13 @@ async function upProject(name, { rebuilt = false } = {}) {
     console.log(`  ${label} ${text}`);
   };
 
+  // Full start: clear any survivors on OUR ports first. A half-dead project
+  // (e.g. orchestrator crashed, dashboard/gateway still up) otherwise makes the
+  // fresh spawn die with EADDRINUSE while the STALE process answers the health
+  // check — "ready", but serving old code.
+  killPort(ports.gateway);
+  killPort(ports.dashboard);
+
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
 

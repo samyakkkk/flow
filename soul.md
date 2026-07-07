@@ -112,6 +112,13 @@ via named graphs. Each project is a self-contained `data/projects/<name>/`.
   must be passed to the dashboard process (`flow up` does this).
 - **Prod mode:** real login required; cookies are project-specific (a cookie
   for one project is rejected by another).
+- **Auth errors are tri-state — never conflate "rejected" with "unreachable".**
+  `validateToken` returns valid/invalid/unreachable; `/api/auth/check` maps
+  unreachable → 503 (proxy fails open), invalid → 401 (login). Local mode
+  short-circuits to 200 without touching the orchestrator — a local user must
+  NEVER see /login (it validates against the same engine and can't help).
+  When the engine is down, the home page shows the "engine isn't reachable"
+  panel (flow doctor / flow up) and self-heals by polling.
 - Central gate: `src/proxy.ts` (Next 16's renamed middleware convention)
   validates the session via `/api/auth/check` (Node route → this project's own
   orchestrator, so multi-project stays correct even with the shared build).

@@ -1,5 +1,5 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
@@ -10,6 +10,18 @@ function LoginForm() {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Already authenticated → leave immediately. In local mode auth/check is
+  // always 200 (env token is authoritative), so a local user who lands here
+  // via bookmark or stale redirect can never get stuck on a login screen.
+  useEffect(() => {
+    fetch("/api/auth/check", { cache: "no-store" })
+      .then((r) => {
+        if (r.ok) router.replace(from);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

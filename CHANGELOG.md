@@ -4,6 +4,14 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — local mode can no longer trap you on /login (engine-down UX)
+A fresh user's dashboard bounced every page to `/login` — in local mode, where login shouldn't even exist — with 500s in the console. Reproduced: it happens whenever the orchestrator is down/still starting. Root cause: `validateToken` conflated "orchestrator rejected this token" with "orchestrator unreachable", so `/api/auth/check` answered 401 and the proxy bounced to a login page that validates against the same dead orchestrator — a dead end by construction.
+- **Tri-state token validation** (`valid` / `invalid` / `unreachable`): `/api/auth/check` now returns 503 (proxy fails open) when the engine is unreachable, 401 only on a real rejection — and in **local mode it short-circuits to 200** (the env token is authoritative; a local user can never be sent to /login).
+- **Honest "engine down" screen**: when the orchestrator isn't answering, the home page now says so plainly — with the `flow doctor` / `flow up` commands — instead of the old fallbacks (login bounce, or the KeyGate asking for a key that couldn't save). It retries every 3s and heals itself the moment the engine returns (verified by pixels: kill orchestrator → panel; `flow up` → recovers without a refresh).
+- **Login is never a trap**: `/login` auto-redirects when you're already authenticated (in local mode: always), and a login attempt while the engine is down says "wait a few seconds / flow doctor" instead of "Invalid token".
+- **`flow up` kills half-dead survivors first**: with the orchestrator dead but gateway/dashboard alive, a restart's fresh dashboard died on EADDRINUSE while the STALE one answered the health check — "ready", but serving old code. Full-start now clears the project's ports before spawning.
+- Prod regression verified: no cookie → login, garbage cookie → login + cookie cleared, valid token → in; engine down with a valid session → page loads (fail open), no logout.
+
 ### Fixed — first-run FalkorDB image pull: visible progress + the real error
 Two users hit "unable to find image 'falkordb/falkordb:latest' locally". That line is docker's *informational* preamble before it pulls — the actual failure (network, or Docker Hub's anonymous rate limit) was on the next line, which `flow up`'s error reporting cut off; and the ~300MB first-run pull ran silently inside the CLI, looking like a hang. Now `flow up` pulls the image explicitly **with visible progress**, and on failure reports the real cause — with a dedicated message for Docker Hub rate limiting (`docker login` or wait). Verified: no-op when the image is present, and the extraction filters the informational line on a real failing pull.
 

@@ -10,9 +10,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "token is required" }, { status: 400 });
   }
 
-  const valid = await validateToken(token);
-  if (!valid) {
-    return NextResponse.json({ error: "Invalid token or orchestrator unreachable" }, { status: 401 });
+  const check = await validateToken(token);
+  if (check === "invalid") {
+    return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+  }
+  if (check === "unreachable") {
+    return NextResponse.json(
+      { error: "Flow's engine isn't reachable right now — wait a few seconds and try again (or run `flow doctor`)." },
+      { status: 503 }
+    );
   }
 
   const res = NextResponse.json({ ok: true });

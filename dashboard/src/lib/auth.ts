@@ -4,17 +4,24 @@ import { SESSION_COOKIE, ORCHESTRATOR_URL, IS_LOCAL, FLOW_ADMIN_TOKEN } from "./
 
 /**
  * Validate a bearer token by hitting GET /v1/audit on the orchestrator.
- * Returns true if orchestrator responds 200.
+ * Tri-state ON PURPOSE: "the orchestrator rejected this token" and "the
+ * orchestrator can't be reached" must never be conflated — conflating them
+ * once sent local users to a login page that could not possibly help them
+ * (it validates against the same unreachable orchestrator).
  */
-export async function validateToken(token: string): Promise<boolean> {
+export type TokenCheck = "valid" | "invalid" | "unreachable";
+
+export async function validateToken(token: string): Promise<TokenCheck> {
   try {
     const res = await fetch(`${ORCHESTRATOR_URL}/v1/audit?limit=1`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    return res.status === 200;
+    if (res.status === 200) return "valid";
+    if (res.status === 401 || res.status === 403) return "invalid";
+    return "unreachable"; // 5xx etc. — orchestrator unhealthy, not an auth verdict
   } catch {
-    return false;
+    return "unreachable";
   }
 }
 
