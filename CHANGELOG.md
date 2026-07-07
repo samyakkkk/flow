@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — first-run FalkorDB image pull: visible progress + the real error
+Two users hit "unable to find image 'falkordb/falkordb:latest' locally". That line is docker's *informational* preamble before it pulls — the actual failure (network, or Docker Hub's anonymous rate limit) was on the next line, which `flow up`'s error reporting cut off; and the ~300MB first-run pull ran silently inside the CLI, looking like a hang. Now `flow up` pulls the image explicitly **with visible progress**, and on failure reports the real cause — with a dedicated message for Docker Hub rate limiting (`docker login` or wait). Verified: no-op when the image is present, and the extraction filters the informational line on a real failing pull.
+
 ### Changed — cleared every deprecation that was ours to clear
 A stranger's `npm install` and `next build` no longer print avoidable deprecation warnings:
 - **Codex ACP adapter migrated** from the deprecated `@zed-industries/codex-acp` to its official successor `@agentclientprotocol/codex-acp@1.1.0` (same bin name, drop-in). Verified with a real session through the orchestrator: ACP handshake, model/effort config options, flow-graph MCP injection, and event streaming all work (the test turn itself stopped at the account's OpenAI usage limit — an account condition that surfaced cleanly as an error).

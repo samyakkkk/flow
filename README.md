@@ -170,6 +170,7 @@ Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated hist
 - **`flow up` says a dependency "was built for a different Node version"** (or the orchestrator log shows `NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`) — a leftover from an install attempt on another Node is shadowing the fresh install. Clean reinstall from the flow directory: `rm -rf node_modules orchestrator/node_modules graph-gateway/node_modules dashboard/node_modules && npm install`.
 - **`flow up` says Docker isn't installed / the daemon isn't running** — start Docker Desktop and re-run. Prefer no Docker? Run FalkorDB yourself and point Flow at it: `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
 - **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
+- **"Unable to find image 'falkordb/falkordb:latest'" / image download fails** — the first-run image pull failed. `flow up` prints the real cause; if it mentions a rate limit, `docker login` (a free Docker Hub account raises the anonymous pull limit) or wait an hour. Otherwise check connectivity/VPN and re-run `flow up`.
 - **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.
 - **Connecting a repo fails** — cloning needs `git` on your PATH.
 - **"still starting up" when you save your key** — the orchestrator takes a few seconds on first boot; wait and retry.

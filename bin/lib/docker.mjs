@@ -63,6 +63,43 @@ async function waitForPort(host, port, timeoutMs) {
   return false;
 }
 
+// Pull the FalkorDB image if it isn't cached locally. Pull progress is shown
+// (stdout inherited); stderr is captured so a failure reports its REAL cause —
+// never the "Unable to find image … locally" informational line.
+async function ensureImage() {
+  const have = docker(["image", "inspect", IMAGE], { stdio: ["ignore", "ignore", "ignore"] });
+  if (have.status === 0) return;
+
+  console.log(`  downloading FalkorDB image (first run, a few hundred MB)…`);
+  const pull = spawnSync("docker", ["pull", IMAGE], {
+    encoding: "utf-8",
+    stdio: ["ignore", "inherit", "pipe"], // progress → terminal, errors → captured
+  });
+  if (pull.status === 0) return;
+
+  const err = (pull.stderr ?? "").trim();
+  const cause =
+    err
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !/unable to find image/i.test(l))
+      .pop() ?? "unknown error";
+  if (/toomanyrequests|rate limit/i.test(err)) {
+    throw new SetupError(
+      `Docker Hub refused the FalkorDB image pull — you've hit its anonymous rate limit.\n` +
+        `  Fix: run  docker login  (a free Docker Hub account raises the limit), or wait\n` +
+        `  an hour, then re-run  flow up.\n` +
+        `  (${cause})`
+    );
+  }
+  throw new SetupError(
+    `Couldn't download the FalkorDB image (docker pull ${IMAGE}):\n` +
+      `  ${cause}\n` +
+      `  Usually a network hiccup — check connectivity/VPN and re-run  flow up.\n` +
+      `  You can also pull it yourself to watch the full output:  docker pull ${IMAGE}`
+  );
+}
+
 function notReadyError() {
   // Container came up but never opened the port — surface why instead of a
   // silent 20s stall followed by "gateway didn't start".
@@ -109,8 +146,16 @@ export async function ensureFalkordb() {
     );
   }
 
-  // 4) Container already exists? inspect exits non-zero ONLY for "no such
-  //    container" now that we know the daemon is up.
+  // 4) Make sure the image is present BEFORE `docker run`. Two reasons:
+  //    (a) a first-run pull is ~hundreds of MB — inside a silent spawnSync the
+  //        user stares at nothing for minutes; an explicit pull shows progress.
+  //    (b) when a run-triggered pull fails, docker's stderr STARTS with the
+  //        informational "Unable to find image … locally" line — reporting that
+  //        first line hides the real cause (network, Docker Hub rate limit).
+  await ensureImage();
+
+  // Container already exists? inspect exits non-zero ONLY for "no such
+  // container" now that we know the daemon is up.
   const inspect = docker(["inspect", CONTAINER_NAME, "--format", "{{.State.Status}}"]);
   if (inspect.status === 0) {
     if (inspect.stdout.trim() === "running") return "running";
@@ -143,7 +188,10 @@ export async function ensureFalkordb() {
       const retry = docker(["run", "-d", "--name", CONTAINER_NAME, "-p", `${PORT}:6379`, IMAGE]);
       if (retry.status === 0 && (await waitForPort(HOST, PORT, 20000))) return "launched";
     }
-    throw new SetupError(`Couldn't start FalkorDB via Docker:\n  ${err.split("\n")[0] || "unknown error"}`);
+    const cause =
+      err.split("\n").map((l) => l.trim()).filter((l) => l && !/unable to find image/i.test(l)).pop() ??
+      "unknown error";
+    throw new SetupError(`Couldn't start FalkorDB via Docker:\n  ${cause}`);
   }
   if (!(await waitForPort(HOST, PORT, 20000))) throw notReadyError();
   return "launched";
