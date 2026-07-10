@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { getSetting } from "../settings.js";
+import { addNote } from "../notes.js";
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -213,6 +214,8 @@ export interface LiveSession {
   id: string;
   backend: AgentBackend;
   repo: string;
+  branch?: string; // git branch of the checkout at session create (WIP notes + note-verb defaults)
+  turnText: string; // agent message text accumulated over the current turn (rolling WIP note source)
   cwd: string;
   title: string;
   status: SessionStatus;
@@ -298,6 +301,7 @@ function rehydrate(id: string): LiveSession | undefined {
     id: row.id,
     backend: row.backend,
     repo: row.repo,
+    turnText: "",
     cwd: row.cwd,
     title: row.title,
     status: "error",
@@ -408,7 +412,7 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       // bash command whose free-text title mentions "flow-graph" must not
       // slip through this gate.
       const title = String(params.toolCall?.title ?? "");
-      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure)$/.test(title)) {
+      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure|note)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
@@ -435,9 +439,15 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       if (!s) return;
       // Keep the cached config in sync when the agent reports a change (e.g.
       // after the user picks a model), so a reload/replay reflects it.
-      const u = params.update as { sessionUpdate?: string; configOptions?: unknown };
+      const u = params.update as { sessionUpdate?: string; configOptions?: unknown; content?: { type?: string; text?: string } };
       if (u.sessionUpdate === "config_option_update" && u.configOptions) {
         s.configOptions = u.configOptions;
+      }
+      // Accumulate the agent's own words this turn — the free source for the
+      // rolling WIP note (the agent already summarizes what it did; harvest,
+      // don't re-derive). Capped; we only ever use the tail.
+      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text" && u.content.text) {
+        s.turnText = (s.turnText + u.content.text).slice(-4000);
       }
       emit(s, "update", params.update);
     },
@@ -524,10 +534,11 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
         `${BACKENDS[s.backend].name} doesn't support resuming a session after its process exits — start a new session to continue.`
       );
     }
+    if (!s.branch) s.branch = (await runGit(s.cwd, ["branch", "--show-current"])).trim() || undefined;
     const resp = await c.conn.loadSession({
       sessionId: acpSessionId,
       cwd: s.cwd,
-      mcpServers: [flowGraphMcp(s.id)],
+      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "")],
     });
     s.modes = resp.modes ?? s.modes;
     s.configOptions = resp.configOptions ?? s.configOptions;
@@ -544,12 +555,18 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 // ---------------------------------------------------------------------------
 // Flow graph MCP injection (read-only) + activity routing
 
-function flowGraphMcp(flowSessionId: string): acp.McpServer {
+function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const env: Array<{ name: string; value: string }> = [
     { name: "GATEWAY_MCP_READONLY", value: "1" },
     { name: "GRAPH_NAME", value: projectGraphName() },
     { name: "FLOW_AGENT_SESSION", value: flowSessionId },
+    // note-verb defaults: Flow runs this session, so it knows the checkout.
+    // External MCP consumers pass {repo, branch} explicitly instead (Flow may
+    // be remote — never assume a shared filesystem).
+    { name: "FLOW_REPO", value: repo },
+    { name: "FLOW_BRANCH", value: branch },
+    { name: "FLOW_NOTES_URL", value: `http://127.0.0.1:${orchPort}/v1/notes` },
     { name: "FLOW_ACTIVITY_URL", value: `http://127.0.0.1:${orchPort}/v1/agents/graph-activity` },
     // The EFFECTIVE bearer, matching auth.ts's fallback: an empty string here
     // means the MCP omits the Authorization header and every activity report
@@ -672,7 +689,8 @@ const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools — a know
 Two proposal tools let you contribute back — use them sparingly and precisely:
 - correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
 - propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.
-- propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.`;
+- propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.
+- note: save branch-scoped working memory freely (no approval) — discoveries, dead ends ("tried X, deadlocked"), constraints, decisions. Note what the next session on this branch would otherwise re-learn the hard way.`;
 
 export async function createSession(opts: {
   backend: AgentBackend;
@@ -690,6 +708,7 @@ export async function createSession(opts: {
     id,
     backend: opts.backend,
     repo: opts.repo,
+    turnText: "",
     cwd: repoOpt.path,
     title,
     status: "starting",
@@ -708,10 +727,11 @@ export async function createSession(opts: {
   // Async: connect, create ACP session, run the first turn.
   void (async () => {
     try {
+      s.branch = (await runGit(repoOpt.path, ["branch", "--show-current"])).trim() || undefined;
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
         cwd: repoOpt.path,
-        mcpServers: [flowGraphMcp(id)],
+        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "")],
       });
       s.acpSessionId = String(resp.sessionId);
       s.modes = resp.modes ?? null;
@@ -730,10 +750,36 @@ export async function createSession(opts: {
   return { id };
 }
 
+// Rolling WIP note — the free tier of branch memory. Assembled from what the
+// session already produced (title + the agent's own latest words + diff
+// stat); zero LLM, zero agent discipline. kind='wip' supersedes this
+// session's previous note, so the branch always carries its CURRENT state
+// for the next session's injection. Fire-and-forget: never blocks a turn.
+async function writeWipNote(s: LiveSession): Promise<void> {
+  if (!s.branch || !s.turnText.trim()) return;
+  try {
+    const diff = await sessionDiff(s.id);
+    const files = "files" in diff ? diff.files.map((f) => f.path) : [];
+    const fileLine =
+      files.length > 0 ? `\nChanged: ${files.slice(0, 12).join(", ")}${files.length > 12 ? ` (+${files.length - 12} more)` : ""}` : "";
+    await addNote({
+      repo: s.repo,
+      branch: s.branch,
+      kind: "wip",
+      text: `WIP — ${s.title}\n${s.turnText.slice(-1200).trim()}${fileLine}`,
+      actor: "flow:auto-wip",
+      session: s.id,
+    });
+  } catch {
+    /* working memory is best-effort */
+  }
+}
+
 async function runTurn(s: LiveSession, text: string): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
+  s.turnText = "";
   setStatus(s, "running");
   emit(s, "user_prompt", { text });
   try {
@@ -742,6 +788,7 @@ async function runTurn(s: LiveSession, text: string): Promise<void> {
       prompt: [{ type: "text", text }],
     });
     s.turnActive = false;
+    void writeWipNote(s);
     // Steering queued during the turn? Run it next.
     const next = s.queue.shift();
     if (next !== undefined && s.status !== "closed") {

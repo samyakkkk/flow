@@ -84,6 +84,28 @@ export const MIGRATIONS: Migration[] = [
         )
       `),
   },
+  {
+    id: 6,
+    name: "branch_notes: Flow-side working memory scoped to repo+branch",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS branch_notes (
+          id          TEXT PRIMARY KEY,
+          repo        TEXT NOT NULL,
+          branch      TEXT NOT NULL,
+          kind        TEXT NOT NULL DEFAULT 'note',
+          text        TEXT NOT NULL,
+          anchor_hint TEXT,
+          actor       TEXT,
+          session     TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          embedding   BLOB,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_branch_notes_repo_branch ON branch_notes(repo, branch, status);
+      `),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);

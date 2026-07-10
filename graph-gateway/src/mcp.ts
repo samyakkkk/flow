@@ -28,6 +28,8 @@ const SESSION_VERBS = new Set([
   "propose_procedure",
   "propose_retire_procedure",
   "correct_graph",
+  // Ungated branch-scoped working memory.
+  "note",
 ]);
 
 const ACTIVITY_URL = process.env.FLOW_ACTIVITY_URL ?? "";

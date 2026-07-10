@@ -733,6 +733,58 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 }
 
 // ---------------------------------------------------------------------------
+// note — ungated branch-scoped working memory ("memory must not need
+// maintaining"). The note never touches the graph here: it lands in the
+// orchestrator's branch_notes store, scoped to (repo, branch), surfaced by
+// injection into sessions on that branch, and promoted to the graph only
+// after the base branch is reindexed. {repo, branch} are EXPLICIT args —
+// Flow may run remotely (EC2) and never assumes the agent's filesystem;
+// for Flow-run sessions the runtime injects defaults via env.
+
+const noteInput = {
+  text: z.string().min(1).describe("The note — a discovery, dead end, constraint, decision, or worry, written for whoever works on this branch next"),
+  kind: z.enum(["wip", "note", "caution", "decision"]).default("note").describe("'wip' = rolling state of current work (replaces your previous wip note); others accumulate and get promoted to the graph on merge"),
+  anchor_hint: z.string().optional().describe("Name or id of the entity this is about, if any — resolved at promotion time"),
+  repo: z.string().optional().describe("Repository name (defaults from the session's env when Flow runs the session)"),
+  branch: z.string().optional().describe("Branch name (defaults from the session's env)"),
+  provenance: z.object(provenanceShape),
+};
+
+async function noteVerb(input: z.infer<z.ZodObject<typeof noteInput>>) {
+  const repo = input.repo || process.env.FLOW_REPO || "";
+  const branch = input.branch || process.env.FLOW_BRANCH || "";
+  if (!repo || !branch) {
+    return { status: "error", error: "repo and branch are required (no session defaults available here) — pass them explicitly." };
+  }
+  const url =
+    process.env.FLOW_NOTES_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  if (!url) return { status: "error", error: "No orchestrator configured for notes (FLOW_NOTES_URL unset)." };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({
+        repo,
+        branch,
+        kind: input.kind,
+        text: input.text,
+        anchor_hint: input.anchor_hint ?? null,
+        actor: input.provenance.actor,
+        session: process.env.FLOW_AGENT_SESSION ?? null,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+    if (!res.ok) return { status: "error", error: `Notes dispatch failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "noted", id: body.id, hint: "Saved to this branch's working memory. It will surface for future sessions on this branch." };
+  } catch (err) {
+    return { status: "error", error: `Notes dispatch failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 const listSchemaInput = {};
 
@@ -801,6 +853,12 @@ export const verbs = {
       "Flag graph content that looks wrong or unclear (stale description, missing/incorrect relationship). Advisory: the indexer verifies your flag against the repo's base branch and applies or rejects it — you do not edit the graph. Include the node ids, what's wrong, and file:line evidence.",
     shape: correctGraphInput,
     handler: correctGraph,
+  },
+  note: {
+    description:
+      "Save a branch-scoped working note — discoveries, dead ends ('tried X, deadlocked'), constraints, decisions, or current WIP state (kind 'wip' replaces your previous wip note). Free to use, no approval needed; it surfaces automatically for future sessions on this branch. Note things the next session would otherwise re-learn the hard way.",
+    shape: noteInput,
+    handler: noteVerb,
   },
 } as const;
 
