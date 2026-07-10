@@ -62,6 +62,28 @@ export const MIGRATIONS: Migration[] = [
     name: "jobs: add session_id column",
     up: (db) => addColumn(db, "ALTER TABLE jobs ADD COLUMN session_id TEXT"),
   },
+  {
+    id: 5,
+    name: "corrections: agent-flagged graph inaccuracies awaiting indexer verification",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS corrections (
+          id          TEXT PRIMARY KEY,
+          target_ids  TEXT NOT NULL,
+          reason      TEXT NOT NULL,
+          evidence    TEXT,
+          repo        TEXT,
+          actor       TEXT,
+          session     TEXT,
+          graph_name  TEXT,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          job_id      TEXT,
+          resolution  TEXT,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);

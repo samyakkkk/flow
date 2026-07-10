@@ -53,11 +53,19 @@ interface ScoredRow extends EntityRow {
 
 const clampLimit = (limit: number) => Math.max(1, Math.min(50, Math.floor(limit)));
 
-async function findSimilar(graph: string, q: string, type?: string, limit = 10): Promise<EntityRow[]> {
+// Proposed-but-unblessed procedures are invisible to normal retrieval — they
+// only enter circulation once a human approves them. Label-scoped to Procedure:
+// other node types may legitimately carry a status prop (cleanProps allows it)
+// and must not vanish from search. Dedup paths opt back in (includeProposed)
+// so a second agent proposing the same rule sees the pending one instead of
+// creating a duplicate.
+const HIDE_PROPOSED = `AND NOT (labels(n)[0] = 'Procedure' AND coalesce(n.status, '') = 'proposed')`;
+
+async function findSimilar(graph: string, q: string, type?: string, limit = 10, includeProposed = false): Promise<EntityRow[]> {
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
-    `MATCH (n) WHERE (toLower(n.id) CONTAINS $ql OR toLower(n.name) CONTAINS $ql OR toLower(coalesce(n.aliases, '')) CONTAINS $ql) ${typeFilter}
+    `MATCH (n) WHERE (toLower(n.id) CONTAINS $ql OR toLower(n.name) CONTAINS $ql OR toLower(coalesce(n.aliases, '')) CONTAINS $ql) ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description
      LIMIT ${clampLimit(limit)}`,
     { ql: q.toLowerCase(), ...(type ? { type } : {}) },
@@ -71,13 +79,13 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10):
 // over nodes carrying an embedding — exact (no HNSW recall loss) and instant at
 // the hundreds-to-thousands of nodes a project graph holds. Returns [] when
 // embeddings are unconfigured or the query can't be embedded.
-async function findByVector(graph: string, q: string, type: string | undefined, limit: number): Promise<ScoredRow[]> {
+async function findByVector(graph: string, q: string, type: string | undefined, limit: number, includeProposed = false): Promise<ScoredRow[]> {
   const vec = await embedText(q);
   if (!vec) return [];
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
-    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter}
+    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
      WITH n, vec.cosineDistance(n.embedding, vecf32($vec)) AS d
      WHERE d <= $maxDistance
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, d AS distance
@@ -147,6 +155,12 @@ async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>
   if (!isNodeType(input.type)) {
     return { status: "error", error: `Unknown node type '${input.type}'. Allowed: ${NODE_TYPES.join(", ")}` };
   }
+  // The bless lifecycle is enforced HERE, not by prompt discipline: if upsert
+  // could create or update Procedures, any writer could mint a fake-blessed
+  // insert-mode procedure and have it auto-injected into future sessions.
+  if (input.type === "Procedure") {
+    return { status: "error", error: "Procedures enter through propose_procedure (and are edited via human review), never upsert_entity." };
+  }
   const props = cleanProps(input.props);
   const aliases = input.aliases?.join(", ");
   const existing = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type`, { id: input.id });
@@ -176,7 +190,7 @@ async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>
     // Dedup gate: same thing under a different id is the failure mode that
     // rots auto-built graphs. Similar candidates block the write unless the
     // caller confirms it is genuinely new.
-    candidates = (await findSimilar(input.graph, input.name, input.type, 5)).filter((c) => c.id !== input.id);
+    candidates = (await findSimilar(input.graph, input.name, input.type, 5, true)).filter((c) => c.id !== input.id);
     if (candidates.length > 0 && !input.confirm) {
       return {
         status: "similar_exists",
@@ -215,13 +229,13 @@ async function embedNode(graph: string, id: string): Promise<void> {
   try {
     const cur = await run(
       graph,
-      `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.name AS name, n.description AS description, n.aliases AS aliases`,
+      `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.name AS name, n.description AS description, n.aliases AS aliases, n.trigger AS trigger`,
       { id },
     );
     const row = cur[0];
     if (!row) return;
     const vec = await embedText(
-      entityText(String(row.type), String(row.name ?? ""), row.description as string, row.aliases as string),
+      entityText(String(row.type), String(row.name ?? ""), row.description as string, row.aliases as string, row.trigger as string),
     );
     if (!vec) return;
     await run(graph, `MATCH (n {id: $id}) SET n.embedding = vecf32($vec)`, { id, vec });
@@ -383,6 +397,273 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
 }
 
 // ---------------------------------------------------------------------------
+// Procedures — prescriptive, human-blessed knowledge ("when you do X, do Y").
+// Unlike code-derived nodes they cannot be verified by reindexing, so they
+// carry a bless lifecycle: agents PROPOSE fully-drafted procedures (status
+// "proposed", invisible to normal retrieval until blessed), humans review in
+// the dashboard inbox and APPROVE (status "blessed") or REJECT (delete; the
+// journal keeps the record). The proposing agent drafts the complete artifact
+// because it alone holds the conversational context the procedure came from.
+
+const procedureSlug = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+
+// Partition ids into existing/missing with ONE query instead of one per id.
+async function partitionByExistence(graph: string, ids: string[]): Promise<{ found: string[]; missing: string[] }> {
+  if (ids.length === 0) return { found: [], missing: [] };
+  const rows = await run(graph, `MATCH (n) WHERE n.id IN $ids RETURN n.id AS id`, { ids });
+  const found = new Set(rows.map((r) => String(r.id)));
+  return { found: ids.filter((id) => found.has(id)), missing: ids.filter((id) => !found.has(id)) };
+}
+
+const proposeProcedureInput = {
+  name: z.string().min(1).describe("Short imperative title, e.g. 'Run migrations against a prod snapshot before deploy'"),
+  description: z.string().min(1).describe("Why this rule exists — 2-3 sentences a teammate could learn from"),
+  trigger: z.string().min(1).describe("When-clause for retrieval, phrased like a task: 'when adding or changing a DB migration'"),
+  steps: z.array(z.string().min(1)).min(1).describe("The ordered steps, complete enough to act on without asking"),
+  scope: z.enum(["repo", "project"]).default("repo").describe("'repo' = applies to one repository, 'project' = team-wide"),
+  mode: z.enum(["insert", "retrieve"]).default("retrieve").describe("'insert' = Flow pushes this into sessions when the task matches (safety-critical rules); 'retrieve' = found on demand (the default)"),
+  governs: z.array(z.string()).optional().describe("Node ids this procedure governs — ONLY nodes where 'if you touch this, read me first' holds, not everything the text mentions"),
+  source_quote: z.string().optional().describe("What the human actually said, verbatim — the provenance of the rule"),
+  repo: z.string().optional().describe("Repository name this applies to (for scope 'repo')"),
+  provenance: z.object(provenanceShape),
+  confirm: z.boolean().default(false).describe("Set true to propose anyway after reviewing similar_exists candidates"),
+  graph: z.string().default(DEFAULT_GRAPH),
+};
+
+async function proposeProcedure(input: z.infer<z.ZodObject<typeof proposeProcedureInput>>) {
+  const id = `proc:${procedureSlug(input.name)}`;
+  const existing = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type`, { id });
+  if (existing.length > 0) {
+    return {
+      status: "error",
+      error: `'${id}' already exists. Procedures are edited through human review (dashboard inbox), not re-proposed — pick a different name if this is genuinely a new rule.`,
+    };
+  }
+  // Dedup: lexical CONTAINS alone misses near-identical names ("…before
+  // deploy" vs "…before deploying"), so also match semantically on name +
+  // trigger. The two passes are independent — run them concurrently.
+  // (findByVector self-noops to [] when embeddings are unconfigured.)
+  const [lexical, vector] = await Promise.all([
+    findSimilar(input.graph, input.name, "Procedure", 5, true),
+    findByVector(input.graph, `${input.name}\n${input.trigger}`, "Procedure", 5, true),
+  ]);
+  const candidates = [
+    ...lexical,
+    ...vector.filter((v) => !lexical.some((l) => l.id === v.id)),
+  ].filter((c) => c.id !== id);
+  if (candidates.length > 0 && !input.confirm) {
+    return {
+      status: "similar_exists",
+      candidates,
+      hint: "A similar procedure may already cover this. If it does, stop. If genuinely new, retry with confirm: true.",
+    };
+  }
+
+  // Validate GOVERNS targets now (the proposer should hear about typos), but
+  // store them as a pending prop — edges materialize only on approval, so an
+  // unblessed proposal never ambushes agents reading a governed node.
+  const { found: valid, missing } = await partitionByExistence(input.graph, input.governs ?? []);
+
+  // Steps are stored as plain newline-joined lines; numbering is a rendering
+  // concern (UI / injection), not storage format.
+  const steps = input.steps.join("\n");
+  await run(
+    input.graph,
+    `CREATE (n:Procedure {
+       id: $id, name: $name, description: $description, trigger: $trigger, steps: $steps,
+       scope: $scope, mode: $mode, status: 'proposed', governs_pending: $governs,
+       created_by: $actor, created_at: $ts
+     })
+     ${input.source_quote !== undefined ? "SET n.source_quote = $source_quote" : ""}
+     ${input.repo !== undefined ? "SET n.repo = $repo" : ""}
+     ${input.provenance.evidence !== undefined ? "SET n.evidence = $evidence" : ""}
+     ${input.provenance.confidence !== undefined ? "SET n.confidence = $confidence" : ""}`,
+    {
+      id, name: input.name, description: input.description, trigger: input.trigger, steps,
+      scope: input.scope, mode: input.mode, governs: JSON.stringify(valid),
+      actor: input.provenance.actor, ts: new Date().toISOString(),
+      source_quote: input.source_quote ?? null, repo: input.repo ?? null,
+      evidence: input.provenance.evidence ?? null, confidence: input.provenance.confidence ?? null,
+    },
+  );
+
+  await embedNode(input.graph, id);
+  await record({ graph: input.graph, actor: input.provenance.actor, verb: "propose_procedure", input: { id, name: input.name, mode: input.mode, scope: input.scope, governs: valid }, status: "proposed" });
+  return {
+    status: "proposed",
+    id,
+    governs_pending: valid,
+    governs_missing: missing,
+    hint: "Awaiting human review in the dashboard inbox. Tell the user what you proposed so they can confirm or edit it.",
+  };
+}
+
+const reviewProcedureInput = {
+  id: z.string().min(1).describe("Procedure node id, e.g. 'proc:run-migrations-before-deploy'"),
+  action: z.enum(["approve", "reject"]),
+  edits: z
+    .object({
+      name: z.string().min(1).optional(),
+      description: z.string().min(1).optional(),
+      trigger: z.string().min(1).optional(),
+      steps: z.array(z.string().min(1)).min(1).optional(),
+      scope: z.enum(["repo", "project"]).optional(),
+      mode: z.enum(["insert", "retrieve"]).optional(),
+      governs: z.array(z.string()).optional(),
+    })
+    .optional()
+    .describe("Reviewer edits applied on approve — what is blessed is exactly what was reviewed"),
+  provenance: z.object(provenanceShape),
+  graph: z.string().default(DEFAULT_GRAPH),
+};
+
+async function reviewProcedure(input: z.infer<z.ZodObject<typeof reviewProcedureInput>>) {
+  const rows = await run(
+    input.graph,
+    `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.governs_pending AS pending`,
+    { id: input.id },
+  );
+  if (rows.length === 0) return { status: "error", error: `No node with id '${input.id}'` };
+  if (rows[0].type !== "Procedure") return { status: "error", error: `'${input.id}' is a ${rows[0].type}, not a Procedure` };
+
+  if (input.action === "reject") {
+    // The journal keeps the record; the graph drops the node so rejected
+    // proposals never pollute retrieval.
+    await run(input.graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id: input.id });
+    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "reject" }, status: "rejected" });
+    return { status: "rejected", id: input.id };
+  }
+
+  const e = input.edits ?? {};
+  const steps = e.steps ? e.steps.join("\n") : undefined;
+  await run(
+    input.graph,
+    `MATCH (n {id: $id})
+     SET n.status = 'blessed', n.governs_pending = '', n.blessed_by = $actor, n.blessed_at = $ts, n.updated_by = $actor, n.updated_at = $ts
+     ${e.name !== undefined ? ", n.name = $name" : ""}
+     ${e.description !== undefined ? ", n.description = $description" : ""}
+     ${e.trigger !== undefined ? ", n.trigger = $trigger" : ""}
+     ${steps !== undefined ? ", n.steps = $steps" : ""}
+     ${e.scope !== undefined ? ", n.scope = $scope" : ""}
+     ${e.mode !== undefined ? ", n.mode = $mode" : ""}`,
+    {
+      id: input.id, actor: input.provenance.actor, ts: new Date().toISOString(),
+      name: e.name ?? null, description: e.description ?? null, trigger: e.trigger ?? null,
+      steps: steps ?? null, scope: e.scope ?? null, mode: e.mode ?? null,
+    },
+  );
+
+  // Materialize GOVERNS edges now — approval is the moment the procedure
+  // enters circulation. Targets: reviewer override, else what the proposer
+  // staged in governs_pending (JSON array; comma-split fallback for any
+  // pre-JSON rows). Nodes deleted since proposal drop out of the MATCH.
+  let targets = e.governs;
+  if (!targets) {
+    const pendingRaw = String(rows[0].pending ?? "");
+    try {
+      targets = JSON.parse(pendingRaw) as string[];
+    } catch {
+      targets = pendingRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  let linked: string[] = [];
+  if (targets.length > 0) {
+    const linkedRows = await run(
+      input.graph,
+      `MATCH (a {id: $from}) MATCH (b) WHERE b.id IN $targets
+       MERGE (a)-[r:GOVERNS]->(b) SET r.updated_by = $actor, r.updated_at = $ts
+       RETURN b.id AS id`,
+      { from: input.id, targets, actor: input.provenance.actor, ts: new Date().toISOString() },
+    );
+    linked = linkedRows.map((r) => String(r.id));
+  }
+
+  await embedNode(input.graph, input.id);
+  await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "approve", edited: Object.keys(e), governs: linked }, status: "blessed" });
+  return { status: "blessed", id: input.id, governs_linked: linked };
+}
+
+// ---------------------------------------------------------------------------
+// correct_graph — a coding agent flags graph content that looks wrong or
+// unclear. ADVISORY, never a write: the flag is journaled and forwarded to the
+// orchestrator, which verifies it against the repo's registered base-branch
+// checkout (never the flagging agent's working copy — that checkout is the
+// ground truth that filters out branch-local and plain-wrong flags) and only
+// then applies a correction through the normal indexer path.
+
+const correctGraphInput = {
+  target_ids: z.array(z.string().min(1)).min(1).max(10).describe("Node ids that look wrong or unclear"),
+  reason: z.string().min(1).describe("What looks wrong — be specific about the field/edge and why"),
+  evidence: z.string().optional().describe("file:line or other evidence that triggered the flag"),
+  repo: z.string().optional().describe("Repository name whose base branch can verify this"),
+  provenance: z.object(provenanceShape),
+  graph: z.string().default(DEFAULT_GRAPH),
+};
+
+async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>>) {
+  const { found, missing } = await partitionByExistence(input.graph, input.target_ids);
+  if (found.length === 0) {
+    return { status: "error", error: `None of the target ids exist: ${missing.join(", ")}. Check ids with find_entity first.` };
+  }
+
+  // One evidence expression everywhere — the journal and the corrections
+  // queue must agree on what was filed.
+  const evidence = input.evidence ?? input.provenance.evidence ?? null;
+
+  await record({
+    graph: input.graph, actor: input.provenance.actor, verb: "correct_graph",
+    input: { target_ids: found, reason: input.reason, evidence, repo: input.repo },
+    status: "flagged",
+  });
+
+  // "Journaled but not queued" — the flag is never lost, but nothing will
+  // verify it. All three failure paths share this shape.
+  const recorded = (hint: string) => ({ status: "recorded", dispatched: false, missing_targets: missing, hint: `Flag journaled; ${hint}` });
+
+  // Forward to the orchestrator's corrections queue. Env is injected by the
+  // ACP runtime for agent sessions; the standalone HTTP gateway can point
+  // FLOW_CORRECTIONS_URL (or ORCHESTRATOR_URL) at its project's orchestrator.
+  // `||` not `??`: the runtime injects empty-string tokens when unset, and an
+  // empty string must fall through to the next candidate.
+  const url =
+    process.env.FLOW_CORRECTIONS_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/corrections` : "");
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  if (!url) {
+    return recorded("no orchestrator configured to verify it (FLOW_CORRECTIONS_URL unset).");
+  }
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({
+        target_ids: found,
+        reason: input.reason,
+        evidence,
+        repo: input.repo ?? null,
+        actor: input.provenance.actor,
+        session: process.env.FLOW_AGENT_SESSION ?? null,
+        graph: input.graph,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = (await res.json().catch(() => ({}))) as { id?: string; status?: string };
+    if (!res.ok) {
+      return recorded(`orchestrator dispatch failed (${res.status}).`);
+    }
+    return {
+      status: body.status === "duplicate" ? "duplicate" : "accepted",
+      correction_id: body.id,
+      missing_targets: missing,
+      hint: "The indexer will verify this against the repo's base branch and apply or reject it. You can move on.",
+    };
+  } catch (err) {
+    return recorded(`orchestrator dispatch failed (${err instanceof Error ? err.message : String(err)}).`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 const listSchemaInput = {};
 
@@ -427,6 +708,23 @@ export const verbs = {
     description: "List the node and edge types the gateway accepts.",
     shape: listSchemaInput,
     handler: listSchema,
+  },
+  propose_procedure: {
+    description:
+      "Propose a Procedure — a durable 'when you do X, do Y' rule a human stated. Draft it COMPLETELY (you hold the context): trigger, steps, scope, mode. It lands as a pending proposal for human review; show the user what you proposed. Use for general rules, NOT branch-/task-local instructions.",
+    shape: proposeProcedureInput,
+    handler: proposeProcedure,
+  },
+  review_procedure: {
+    description: "Approve (with optional edits) or reject a proposed procedure. Human review surface — approval blesses exactly the reviewed text.",
+    shape: reviewProcedureInput,
+    handler: reviewProcedure,
+  },
+  correct_graph: {
+    description:
+      "Flag graph content that looks wrong or unclear (stale description, missing/incorrect relationship). Advisory: the indexer verifies your flag against the repo's base branch and applies or rejects it — you do not edit the graph. Include the node ids, what's wrong, and file:line evidence.",
+    shape: correctGraphInput,
+    handler: correctGraph,
   },
 } as const;
 

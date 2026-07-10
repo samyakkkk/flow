@@ -192,6 +192,29 @@ db.exec(`
   );
 
   -- ------------------------------------------------------------------
+  -- Corrections: advisory flags from coding agents ("this graph content
+  -- looks wrong"), verified by the indexer against the repo's registered
+  -- base-branch checkout before anything changes in the graph. The flag
+  -- is a work item, not knowledge — hence SQLite, not the graph.
+  -- ------------------------------------------------------------------
+
+  CREATE TABLE IF NOT EXISTS corrections (
+    id          TEXT PRIMARY KEY,
+    target_ids  TEXT NOT NULL,   -- JSON array of graph node ids
+    reason      TEXT NOT NULL,
+    evidence    TEXT,
+    repo        TEXT,
+    actor       TEXT,
+    session     TEXT,            -- flow agent session that flagged it, if any
+    graph_name  TEXT,
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending|verifying|applied|rejected|unclear|failed
+    job_id      TEXT,
+    resolution  TEXT,            -- indexer verdict summary
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  -- ------------------------------------------------------------------
   -- LLM observability: one row per live model interaction, so wrong
   -- classifications and misbehaving agent runs are debuggable after the
   -- fact. prompt/response are size-capped at write time. Full opencode

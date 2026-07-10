@@ -1,4 +1,4 @@
-// opencode.ts — Job queue for opencode sessions: index_repo | enrich | answer | continue.
+// opencode.ts — Job queue for opencode sessions: index_repo | enrich | answer | continue | correct_graph.
 //
 // Real runs spawn `opencode run --format json` so we can parse the sessionID from the
 // emitted event stream and store it for session-per-chat continuity (G10).
@@ -79,7 +79,7 @@ const upsertThreadSession = db.prepare(`
 `);
 
 export interface JobInput {
-  type: "index_repo" | "enrich" | "answer" | "continue";
+  type: "index_repo" | "enrich" | "answer" | "continue" | "correct_graph";
   input: Record<string, unknown>;
   repo?: string;
 }
@@ -176,6 +176,24 @@ export function recoverStalledJobs(): void {
   for (const row of reindex) {
     void enqueueJob({ type: "index_repo", input: JSON.parse(row.input) as Record<string, unknown>, repo: row.repo ?? undefined });
   }
+  // Corrections whose verification job died with the process: mark the row
+  // failed so it doesn't sit in 'verifying' forever (the inbox shows it).
+  // Parse defensively — one corrupt input row must not abort the whole
+  // recovery pass for the other stalled jobs.
+  for (const row of stalled.filter((r) => r.type === "correct_graph")) {
+    let correctionId: string | undefined;
+    try {
+      correctionId = (JSON.parse(row.input) as { correction_id?: string }).correction_id;
+    } catch {
+      continue;
+    }
+    if (correctionId) {
+      const cid = correctionId;
+      void import("./corrections.js").then(({ resolveFromJobResult }) =>
+        resolveFromJobResult(cid, "stalled:process_restart", true)
+      );
+    }
+  }
   if (stalled.length > 0) {
     console.warn(`[opencode] recovered ${stalled.length} stalled job(s); re-queued ${reindex.length} index job(s)`);
   }
@@ -251,6 +269,15 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
 
     updateJob.run({ id, status: "done", result_json: JSON.stringify(result) });
 
+    // Resolve the corrections row from the agent's trailing verdict JSON.
+    if (opts.type === "correct_graph") {
+      const correctionId = (opts.input as { correction_id?: string }).correction_id;
+      if (correctionId) {
+        const { resolveFromJobResult } = await import("./corrections.js");
+        resolveFromJobResult(correctionId, String((result as { raw?: string }).raw ?? ""), false);
+      }
+    }
+
     // Deliver answer/continuation to the originating thread via outbox
     const replyTo = (opts.input as { reply_to?: { channel: string; thread_ts?: string } }).reply_to;
     if ((opts.type === "answer" || opts.type === "continue") && replyTo?.channel) {
@@ -281,6 +308,13 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       status: "failed",
       result_json: JSON.stringify({ error: String(err) }),
     });
+    if (opts.type === "correct_graph") {
+      const correctionId = (opts.input as { correction_id?: string }).correction_id;
+      if (correctionId) {
+        const { resolveFromJobResult } = await import("./corrections.js");
+        resolveFromJobResult(correctionId, String(err), true);
+      }
+    }
   } finally {
     if (opts.type === "index_repo" && repo) {
       runningRepos.delete(repo);
@@ -310,6 +344,33 @@ function buildPrompt(opts: JobInput): BuiltPrompt {
         agent: "graph-builder",
         prompt: `Enrich the knowledge graph with: ${JSON.stringify(opts.input)}`,
       };
+    case "correct_graph": {
+      // Advisory-flag verification. THE INVARIANT: verify only against the
+      // checkouts under repos/ — single-branch clones of each repo's
+      // registered base branch. The flagging agent may be working on some
+      // other branch; its claim is evidence to consider, never a command.
+      const c = opts.input as {
+        target_ids?: string[];
+        reason?: string;
+        evidence?: string | null;
+        repo?: string | null;
+      };
+      return {
+        agent: "graph-builder",
+        prompt: [
+          `A coding agent flagged possible inaccuracies in the knowledge graph. The flag is ADVISORY — it may be wrong, or describe unmerged work on the agent's own branch.`,
+          ``,
+          `Flagged node(s): ${(c.target_ids ?? []).join(", ")}`,
+          `Reason given: ${c.reason ?? "(none)"}`,
+          `Evidence offered: ${c.evidence ?? "(none)"}`,
+          c.repo ? `Repo hint: repos/${c.repo}` : `Repo hint: none — infer the repo from each node's evidence field.`,
+          ``,
+          `Verify the flag ONLY against the repository checkouts under repos/ — these are the registered base branches and the ground truth. For each flagged node: read it (graph_get), read the code it claims to describe, and check its 1-hop neighborhood. If the flag is confirmed by the checkout, apply the MINIMAL correction via the graph_* tools with file:line evidence. If it cannot be confirmed from the checkout (branch-local work, or simply wrong), change nothing.`,
+          ``,
+          `Finish your answer with exactly one JSON object: {"verdict": "applied" | "rejected", "summary": "<one paragraph: what you changed, or why you rejected the flag>"}. Use "applied" only if you actually modified the graph.`,
+        ].join("\n"),
+      };
+    }
     case "answer":
       return {
         agent: "answerer",

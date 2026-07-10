@@ -1,9 +1,11 @@
 // Agents v1 — ACP runtime. The orchestrator is the ACP client for every
 // coding agent on this machine (Claude Code, Codex, OpenCode): it spawns the
 // agent's ACP adapter as a subprocess, creates sessions in connected-repo
-// checkouts, injects Flow's read-only graph MCP into each session, streams
-// every session update to subscribers (SSE), and relays steering (follow-up
-// prompts, cancel, permission replies, mode changes).
+// checkouts, injects Flow's graph MCP into each session (read verbs plus the
+// two governed proposal verbs — propose_procedure and correct_graph — which
+// file proposals but never mutate knowledge directly), streams every session
+// update to subscribers (SSE), and relays steering (follow-up prompts,
+// cancel, permission replies, mode changes).
 //
 // Cloud shape: nothing in here is reachable except through the orchestrator's
 // HTTP API — the dashboard never spawns agents itself. Later, "cloud mode" is
@@ -395,9 +397,12 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
         const opt = params.options.find((o) => o.kind !== "reject_once" && o.kind !== "reject_always") ?? params.options[0];
         return { outcome: { outcome: "selected", optionId: opt.optionId } };
       }
-      // Flow's own graph MCP is read-only by construction — auto-approve it
-      // so consulting the brain never stalls a session. Humans still gate
-      // file edits, shell commands, and every other tool.
+      // Flow's own graph MCP never mutates knowledge directly — reads are
+      // read-only and the two proposal verbs (propose_procedure,
+      // correct_graph) only file governed proposals (human bless inbox /
+      // indexer verification). Auto-approve so consulting the brain never
+      // stalls a session. Humans still gate file edits, shell commands, and
+      // every other tool.
       const title = String(params.toolCall?.title ?? "");
       if (title.includes("flow-graph")) {
         const opt =
@@ -542,7 +547,13 @@ function flowGraphMcp(flowSessionId: string): acp.McpServer {
     { name: "GRAPH_NAME", value: projectGraphName() },
     { name: "FLOW_AGENT_SESSION", value: flowSessionId },
     { name: "FLOW_ACTIVITY_URL", value: `http://127.0.0.1:${orchPort}/v1/agents/graph-activity` },
-    { name: "FLOW_ACTIVITY_TOKEN", value: process.env.FLOW_ADMIN_TOKEN ?? "" },
+    // The EFFECTIVE bearer, matching auth.ts's fallback: an empty string here
+    // means the MCP omits the Authorization header and every activity report
+    // and correction dispatch 401s silently in tokenless dev setups.
+    { name: "FLOW_ACTIVITY_TOKEN", value: process.env.FLOW_ADMIN_TOKEN ?? "dev-token" },
+    // correct_graph dispatch target — flags land in the corrections queue and
+    // get verified against the base-branch checkout by the indexer.
+    { name: "FLOW_CORRECTIONS_URL", value: `http://127.0.0.1:${orchPort}/v1/corrections` },
   ];
   if (process.env.FALKOR_HOST) env.push({ name: "FALKOR_HOST", value: process.env.FALKOR_HOST });
   if (process.env.FALKOR_PORT) env.push({ name: "FALKOR_PORT", value: process.env.FALKOR_PORT });
@@ -573,9 +584,89 @@ export function recordGraphActivity(body: {
 }
 
 // ---------------------------------------------------------------------------
+// Insert-mode procedures — blessed rules whose author asked Flow to push them
+// into sessions when the task matches. v1 injects at session start (the first
+// turn boundary): semantic-match the prompt against Procedure nodes via the
+// gateway, then one read_query fetches the matched candidates' fields and
+// filters to blessed insert-mode server-side. Exactly two bounded round-trips
+// and strictly best-effort: a gateway hiccup degrades to retrieve-mode
+// behaviour, it never blocks or fails the session.
+
+const MAX_INJECTED_PROCEDURES = 2;
+// Wider than the injection budget on purpose: insert-mode rules are the rare
+// minority and must not lose their candidate slots to retrieve-mode matches.
+const PROCEDURE_MATCH_POOL = 20;
+
+async function gatewayVerb(name: string, input: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const base = process.env.GATEWAY_URL ?? "http://127.0.0.1:7433";
+  try {
+    const res = await fetch(`${base}/v1/verbs/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(3500),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+interface ProcedureCandidate {
+  id: string;
+  name: string;
+  trigger: string;
+  steps: string;
+  scope: string;
+  repo: string | null;
+}
+
+async function insertModeProcedures(prompt: string, repo: string): Promise<string> {
+  const graph = projectGraphName();
+  const found = await gatewayVerb("find_entity", {
+    q: prompt.slice(0, 500),
+    type: "Procedure",
+    limit: PROCEDURE_MATCH_POOL,
+    graph,
+  });
+  const ids = ((found?.matches ?? []) as Array<{ id?: string }>)
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === "string" && /^[\w:./ -]+$/.test(id));
+  if (ids.length === 0) return "";
+
+  // read_query takes no params — inline the id list. Ids come from our own
+  // graph and are shape-checked above; quotes are escaped regardless.
+  const idList = ids.map((id) => `'${id.replace(/'/g, "\\'")}'`).join(", ");
+  const detail = await gatewayVerb("read_query", {
+    graph,
+    cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status = 'blessed' AND n.mode = 'insert'
+             RETURN n.id AS id, n.name AS name, n.trigger AS trigger, n.steps AS steps, n.scope AS scope, n.repo AS repo`,
+  });
+  const rows = ((detail?.rows ?? []) as ProcedureCandidate[])
+    .filter((r) => !(r.scope === "repo" && r.repo && r.repo !== repo))
+    // Preserve the semantic-match ranking from find_entity.
+    .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
+    .slice(0, MAX_INJECTED_PROCEDURES);
+  if (rows.length === 0) return "";
+
+  const blocks = rows.map(
+    (r) =>
+      `- ${r.name} (${r.id})\n  When: ${r.trigger ?? ""}\n  ${String(r.steps ?? "")
+        .split("\n")
+        .map((s, i) => `${i + 1}. ${s}`)
+        .join("\n  ")}`
+  );
+  return `\n\nTeam procedures flagged as relevant to this task (human-blessed; cite the id if you follow one):\n${blocks.join("\n")}`;
+}
+
+// ---------------------------------------------------------------------------
 // Session lifecycle
 
-const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools (find_entity, get_entity, read_query, list_schema) — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (services, capabilities, APIs, resources and how they connect) before diving into files. It is read-only.`;
+const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
+Two proposal tools let you contribute back — use them sparingly and precisely:
+- correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
+- propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.`;
 
 export async function createSession(opts: {
   backend: AgentBackend;
@@ -623,7 +714,8 @@ export async function createSession(opts: {
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
       emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
-      await runTurn(s, `${GRAPH_PREAMBLE}\n\n${opts.prompt}`);
+      const procedures = await insertModeProcedures(opts.prompt, opts.repo);
+      await runTurn(s, `${GRAPH_PREAMBLE}${procedures}\n\n${opts.prompt}`);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
     }

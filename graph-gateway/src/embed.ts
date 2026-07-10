@@ -31,6 +31,7 @@ const TYPE_WORDS: Record<string, string> = {
   UsageContract: "integration contract",
   Concept: "concept",
   Workflow: "workflow",
+  Procedure: "procedure",
   ExternalService: "external service",
   Database: "database",
   DatabaseTable: "database table",
@@ -51,8 +52,13 @@ export function entityText(
   name: string,
   description?: string | null,
   aliases?: string | null,
+  trigger?: string | null,
 ): string {
   const parts = [`${TYPE_WORDS[type] ?? type}: ${name}`];
+  // Procedures carry a when-clause ("when adding a DB migration") — it's the
+  // retrieval hook, phrased the way task prompts are phrased, so it belongs in
+  // the embedded document right after the name.
+  if (trigger) parts.push(`applies ${String(trigger)}`);
   if (description) parts.push(String(description));
   if (aliases) parts.push(`aka ${aliases}`);
   return parts.join("\n");

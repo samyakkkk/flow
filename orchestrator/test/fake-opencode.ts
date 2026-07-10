@@ -71,6 +71,15 @@ export async function run(
         sessionId,
       };
 
+    case "correct_graph": {
+      // Mirrors the real runner's shape: raw text ending in the verdict JSON
+      // that resolveFromJobResult parses. Test hook: input.simulate_verdict
+      // ("applied" | "rejected") picks the outcome; default applied.
+      const verdict = (opts.input.simulate_verdict as string | undefined) ?? "applied";
+      const raw = `Verified against the base checkout.\n\n{"verdict": "${verdict}", "summary": "fake-opencode ${verdict} the flag on ${(opts.input.target_ids as string[] | undefined)?.join(", ") ?? "?"}"}`;
+      return { result: { status: "ok", raw }, sessionId };
+    }
+
     default:
       return { result: { status: "ok" }, sessionId };
   }
