@@ -767,6 +767,19 @@ export function AgentSession({ id }: { id: string }) {
                   <span style={{ color: "var(--warn)" }}>Agent asks permission</span>
                 </p>
                 <p className="text-ink text-[13px] mb-2.5">{p.toolCall?.title ?? "Run a tool"}</p>
+                {/* The payload IS the consent: for proposal verbs especially,
+                    the user must see what would be filed before allowing. */}
+                {p.toolCall?.rawInput !== undefined && (
+                  <pre
+                    className="text-[11px] mb-2.5 rounded-md border border-line bg-paper px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words"
+                    style={{ maxHeight: 180, overflowY: "auto", color: "var(--text-secondary, #555)" }}
+                  >
+                    {(() => {
+                      const s = JSON.stringify(p.toolCall.rawInput, null, 2) ?? "";
+                      return s.length > 1200 ? s.slice(0, 1200) + "\n…(truncated)" : s;
+                    })()}
+                  </pre>
+                )}
                 <div className="flex gap-2 flex-wrap">
                   {p.options.map((o) => (
                     <button

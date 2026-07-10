@@ -124,10 +124,11 @@ const GATEWAY = () => (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").repla
 const GRAPH = () => process.env.GRAPH_NAME ?? "memory";
 
 async function gwVerb(name: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   try {
     const res = await fetch(`${GATEWAY()}/v1/verbs/${name}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ ...body, graph: GRAPH() }),
       signal: AbortSignal.timeout(8000),
     });

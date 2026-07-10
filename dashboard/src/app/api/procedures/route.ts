@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { GATEWAY_URL } from "@/lib/config";
+import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
 
 // GET  /api/procedures — list Procedure nodes (proposed first) for the inbox.
 // POST /api/procedures {action: "approve"|"reject", id, edits?} — human review,
@@ -34,7 +34,7 @@ interface ProcedureRow {
 async function gatewayVerb(name: string, body: Record<string, unknown>) {
   const res = await fetch(`${GATEWAY_URL}/v1/verbs/${name}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(8000),
   });

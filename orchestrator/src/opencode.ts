@@ -486,6 +486,16 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
     FLOW_JOB_TOKEN: jobScopedToken(jobId),
     FLOW_JOB_ID: jobId,
     ...(openrouterKey ? { OPENROUTER_API_KEY: openrouterKey } : {}),
+    // Graph tools authenticate to the (now bearer-authed) gateway. The
+    // subprocess already had full gateway write access by construction; the
+    // token gates OTHER local processes, not this one.
+    GRAPH_GATEWAY_TOKEN: process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "",
+    // Correction verification writes are scoped to the flagged nodes — the
+    // job's prompt embeds agent-authored text (prompt-injection surface), so
+    // the graph tools refuse writes outside this set (S106-adjacent).
+    ...(opts.type === "correct_graph"
+      ? { FLOW_WRITE_SCOPE: ((opts.input as { target_ids?: string[] }).target_ids ?? []).join(",") }
+      : {}),
   };
   delete env.FLOW_ADMIN_TOKEN; // never expose the root token to the session
 

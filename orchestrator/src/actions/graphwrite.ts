@@ -70,9 +70,10 @@ export async function findNodes(q: string, type?: string, limit = 10): Promise<u
 }
 
 async function gatewayVerb(verb: string, body: unknown): Promise<unknown> {
+  const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   const response = await fetch(`${GATEWAY_URL}/v1/verbs/${verb}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
   });
 
