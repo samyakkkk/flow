@@ -51,7 +51,43 @@ insert-mode injection at session start. Open follow-ups, priority order:
 7. **Surfaced-vs-followed analytics** for injected procedures (activity stream
    records surfacing; nothing measures follow-through).
 
-## Next — memory system v2: notes, decisions, retrieval modes (designed 2026-07-10)
+## Next — memory system v2: FINAL decisions (2026-07-10, supersedes the section below where they differ)
+
+- **Retrieval stays `find_entity` → `get_entity(id)`** — the question-lens /
+  brain() variants are shelved ("let's see how big it gets"); revisit when
+  get_entity responses visibly bloat. (Bug fixed en route: get_entity was
+  shipping each node's 1536-float embedding vector in props.)
+- **Memory is not maintained by users.** Notes/decisions/cautions are UNGATED
+  (attributed utterances, free lane); procedures stay gated for now but the
+  direction is ungating them too. No approval queues for memory.
+- **Branch notes live in flow.db** (`branch_notes`, keyed repo+branch), NOT
+  in-repo md files (would tangle notes into the user's diff), NOT graph tags.
+  Portable to EC2 via export/import. Kinds: `wip` (rolling state, supersedes
+  itself, SWEPT at promotion — merged code carries that info) vs
+  note/caution/decision (accumulate, PROMOTE to graph Note nodes).
+- **Writers, three tiers by cost**: (1) FREE auto: rolling WIP note per
+  session assembled from title + agent's latest message + session diff — zero
+  LLM, zero discipline; (2) FREE agent-initiated `note` verb for in-the-moment
+  discoveries/dead-ends/decisions; (3) LLM distillation deferred to MERGE
+  time: hand the branch's session transcripts to the indexer agent during the
+  merge reindex — one cheap pass per merge, not per session.
+- **Promotion trigger = base-branch reindex**, not merge events: after every
+  successful `index_repo`, promote base-branch notes + merge-marked branch
+  notes (anchors resolve then — the entities exist post-reindex). Covers
+  direct-push-to-base. Unpushed/abandoned notes decay.
+- **Topology rule (first-class)**: agents may run LOCAL while Flow runs on
+  EC2 over MCP — Flow never assumes a shared filesystem; `{repo, branch}`
+  arrive as explicit tool args (runtime supplies them for dashboard sessions).
+- **Auto-injection is the product** (dashboard-first; direct CLI is
+  second-class by design): at session start AND every turn boundary, embed
+  the user message once, match procedures (graph) + notes (flow.db, local
+  cosine), inject top 2-3 one-line pointers in a marked block, per-session
+  dedup, hard threshold, NO LLM in the path. MCP lane gets piggyback memory
+  tails on tool responses (later).
+- **Security LAST by explicit priority call**: verifier write-scoping,
+  gateway bearer auth, permission-card payloads — after the memory work.
+
+## Design record — memory system v2 exploration (2026-07-10)
 Design record from the 2026-07-10 session — the rationale matters as much as
 the items; don't re-derive, supersede deliberately.
 

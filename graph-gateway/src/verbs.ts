@@ -295,9 +295,18 @@ const getEntityInput = {
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
+// The stored vector is retrieval machinery, not knowledge — never ship ~1536
+// floats back to a caller.
+function stripEmbedding<T extends { props?: unknown }>(row: T): T {
+  const props = row.props as Record<string, unknown> | undefined;
+  if (props && typeof props === "object") delete props.embedding;
+  return row;
+}
+
 async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
   const node = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id: input.id });
   if (node.length === 0) return { status: "not_found" };
+  stripEmbedding(node[0] as { props?: unknown });
   const out = await run(
     input.graph,
     `MATCH ({id: $id})-[r]->(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
