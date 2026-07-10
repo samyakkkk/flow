@@ -19,7 +19,8 @@ import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { getSetting } from "../settings.js";
-import { addNote } from "../notes.js";
+import { addNote, matchNotes } from "../notes.js";
+import { embedText } from "../embed.js";
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -216,6 +217,7 @@ export interface LiveSession {
   repo: string;
   branch?: string; // git branch of the checkout at session create (WIP notes + note-verb defaults)
   turnText: string; // agent message text accumulated over the current turn (rolling WIP note source)
+  injectedIds: Set<string>; // memory items already injected this session — never repeat
   cwd: string;
   title: string;
   status: SessionStatus;
@@ -302,6 +304,7 @@ function rehydrate(id: string): LiveSession | undefined {
     backend: row.backend,
     repo: row.repo,
     turnText: "",
+    injectedIds: new Set(),
     cwd: row.cwd,
     title: row.title,
     status: "error",
@@ -643,7 +646,7 @@ interface ProcedureCandidate {
   repo: string | null;
 }
 
-async function insertModeProcedures(prompt: string, repo: string): Promise<string> {
+async function insertModeProcedures(prompt: string, repo: string): Promise<Array<{ id: string; block: string }>> {
   const graph = projectGraphName();
   const found = await gatewayVerb("find_entity", {
     q: prompt.slice(0, 500),
@@ -654,7 +657,7 @@ async function insertModeProcedures(prompt: string, repo: string): Promise<strin
   const ids = ((found?.matches ?? []) as Array<{ id?: string }>)
     .map((m) => m.id)
     .filter((id): id is string => typeof id === "string" && /^[\w:./ -]+$/.test(id));
-  if (ids.length === 0) return "";
+  if (ids.length === 0) return [];
 
   // read_query takes no params — inline the id list. Ids come from our own
   // graph and are shape-checked above; quotes are escaped regardless.
@@ -665,21 +668,70 @@ async function insertModeProcedures(prompt: string, repo: string): Promise<strin
     cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status IN ['blessed', 'retire_proposed'] AND n.mode = 'insert'
              RETURN n.id AS id, n.name AS name, n.trigger AS trigger, n.steps AS steps, n.scope AS scope, n.repo AS repo`,
   });
-  const rows = ((detail?.rows ?? []) as ProcedureCandidate[])
+  return ((detail?.rows ?? []) as ProcedureCandidate[])
     .filter((r) => !(r.scope === "repo" && r.repo && r.repo !== repo))
     // Preserve the semantic-match ranking from find_entity.
     .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
-    .slice(0, MAX_INJECTED_PROCEDURES);
-  if (rows.length === 0) return "";
-
-  const blocks = rows.map(
-    (r) =>
-      `- ${r.name} (${r.id})\n  When: ${r.trigger ?? ""}\n  ${String(r.steps ?? "")
+    .slice(0, MAX_INJECTED_PROCEDURES)
+    .map((r) => ({
+      id: r.id,
+      block: `- PROCEDURE (human-blessed) ${r.name} (${r.id})\n  When: ${r.trigger ?? ""}\n  ${String(r.steps ?? "")
         .split("\n")
         .map((s, i) => `${i + 1}. ${s}`)
-        .join("\n  ")}`
-  );
-  return `\n\nTeam procedures flagged as relevant to this task (human-blessed; cite the id if you follow one):\n${blocks.join("\n")}`;
+        .join("\n  ")}`,
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Turn-boundary memory injection — the Claude-style recall lane, no LLM in
+// the path: one local embedding of the user's message (procedure matching
+// embeds server-side in parallel), cosine over the branch's notes in-process,
+// top items as a clearly-marked block. Per-session dedup (never re-inject the
+// same item), hard overall time bound, strictly best-effort.
+
+const INJECTION_BUDGET = 3; // total items per turn across procedures + notes
+const INJECTION_TIMEOUT_MS = 4000;
+
+async function buildMemoryInjection(s: LiveSession, userText: string): Promise<string> {
+  try {
+    const gather = (async () => {
+      const [procedures, noteVec] = await Promise.all([
+        insertModeProcedures(userText, s.repo),
+        embedLocal(userText.slice(0, 2000)),
+      ]);
+      const notes =
+        noteVec && s.branch
+          ? matchNotes(noteVec, s.repo, s.branch, { limit: 2, minSimilarity: 0.35 }).map((n) => ({
+              id: n.id,
+              block: `- NOTE (${n.kind}, this branch): ${n.text.length > 500 ? n.text.slice(0, 500) + "…" : n.text}`,
+            }))
+          : [];
+      return [...procedures, ...notes];
+    })();
+    const items = (await Promise.race([
+      gather,
+      new Promise<[]>((r) => setTimeout(() => r([]), INJECTION_TIMEOUT_MS)),
+    ])) as Array<{ id: string; block: string }>;
+
+    const fresh = items.filter((i) => !s.injectedIds.has(i.id)).slice(0, INJECTION_BUDGET);
+    if (fresh.length === 0) return "";
+    for (const i of fresh) s.injectedIds.add(i.id);
+    // Visible in the session view as brain activity (same channel as MCP reads).
+    emit(s, "graph", { verb: "memory_inject", args: "", nodeIds: fresh.map((i) => i.id), ok: true });
+    return `[flow memory — auto-retrieved for this turn; weigh it, it may be stale]\n${fresh
+      .map((i) => i.block)
+      .join("\n")}\n[/flow memory]\n\n`;
+  } catch {
+    return "";
+  }
+}
+
+async function embedLocal(text: string): Promise<Float32Array | null> {
+  try {
+    return await embedText(text);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +761,7 @@ export async function createSession(opts: {
     backend: opts.backend,
     repo: opts.repo,
     turnText: "",
+    injectedIds: new Set(),
     cwd: repoOpt.path,
     title,
     status: "starting",
@@ -740,8 +793,7 @@ export async function createSession(opts: {
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
       emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
-      const procedures = await insertModeProcedures(opts.prompt, opts.repo);
-      await runTurn(s, `${GRAPH_PREAMBLE}${procedures}\n\n${opts.prompt}`);
+      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
     }
@@ -775,17 +827,23 @@ async function writeWipNote(s: LiveSession): Promise<void> {
   }
 }
 
-async function runTurn(s: LiveSession, text: string): Promise<void> {
+// Every turn — first prompt and steers alike — passes through here, so this
+// is where memory arrives: preamble (first turn only) + auto-retrieved memory
+// block + the user's text. Injection matches against the USER's words only,
+// never the preamble.
+async function runTurn(s: LiveSession, text: string, preamble = ""): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
   s.turnText = "";
   setStatus(s, "running");
-  emit(s, "user_prompt", { text });
+  const memory = await buildMemoryInjection(s, text);
+  const finalText = `${preamble}${memory}${text}`;
+  emit(s, "user_prompt", { text: finalText });
   try {
     const result = await c.conn.prompt({
       sessionId: s.acpSessionId,
-      prompt: [{ type: "text", text }],
+      prompt: [{ type: "text", text: finalText }],
     });
     s.turnActive = false;
     void writeWipNote(s);
