@@ -397,14 +397,17 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
         const opt = params.options.find((o) => o.kind !== "reject_once" && o.kind !== "reject_always") ?? params.options[0];
         return { outcome: { outcome: "selected", optionId: opt.optionId } };
       }
-      // Flow's own graph MCP never mutates knowledge directly — reads are
-      // read-only and the two proposal verbs (propose_procedure,
-      // correct_graph) only file governed proposals (human bless inbox /
-      // indexer verification). Auto-approve so consulting the brain never
-      // stalls a session. Humans still gate file edits, shell commands, and
-      // every other tool.
+      // Flow's graph reads — and the advisory correct_graph flag, whose
+      // effect is verified downstream against the base branch — are
+      // auto-approved so consulting the brain never stalls a session.
+      // propose_procedure is deliberately NOT on this list: the permission
+      // prompt is the user's save/discard moment, shown with the full drafted
+      // procedure BEFORE the proposal is created (allow → pending in the
+      // Inbox; reject → nothing ever exists). Exact-match on the MCP tool
+      // title — a bash command whose free-text title mentions "flow-graph"
+      // must not slip through this gate.
       const title = String(params.toolCall?.title ?? "");
-      if (title.includes("flow-graph")) {
+      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
