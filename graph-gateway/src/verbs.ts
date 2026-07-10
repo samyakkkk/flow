@@ -344,13 +344,19 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
   const nodes = await run(
     input.graph,
     `OPTIONAL MATCH (a {id: $keep}) OPTIONAL MATCH (b {id: $remove})
-     RETURN properties(a) AS keepProps, properties(b) AS removeProps`,
+     RETURN properties(a) AS keepProps, properties(b) AS removeProps, labels(a)[0] AS keepType, labels(b)[0] AS removeType`,
     { keep: input.keep, remove: input.remove },
   );
   const keepProps = nodes[0]?.keepProps as Record<string, unknown> | null;
   const removeProps = nodes[0]?.removeProps as Record<string, unknown> | null;
   if (!keepProps || !removeProps) {
     return { status: "error", error: `Missing nodes: ${[!keepProps && input.keep, !removeProps && input.remove].filter(Boolean).join(", ")}` };
+  }
+  // merge deletes the `remove` node — which would be a back door around the
+  // human-only procedure lifecycle (delete = review_procedure reject, via the
+  // Inbox). Same enforcement rationale as the Procedure check in upsert.
+  if (nodes[0]?.keepType === "Procedure" || nodes[0]?.removeType === "Procedure") {
+    return { status: "error", error: "Procedures cannot be merged — their lifecycle (including deletion) is human-only via review_procedure." };
   }
 
   const out = await run(input.graph, `MATCH ({id: $id})-[r]->(m) RETURN type(r) AS t, properties(r) AS props, m.id AS other`, { id: input.remove });
