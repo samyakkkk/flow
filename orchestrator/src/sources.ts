@@ -32,6 +32,7 @@ import {
   enqueueJob,
   listWorkspaceRepos,
   registerSource,
+  type RepoEntry,
 } from "./opencode.js";
 
 // ------------------------------------------------------------------
@@ -177,8 +178,29 @@ function expandHome(p: string): string {
   return p;
 }
 
-function isRegistered(name: string): boolean {
-  return listWorkspaceRepos().some((r) => r.name === name);
+// "Already connected" means THIS source, not this name: match the normalized
+// remote URL, or the local path, before ever falling back to the bare name.
+// Name-only matching would false-positive on two different owners' `web`
+// repos — and since the registry is keyed by name, /add also uses this to
+// refuse clobbering a different source that happens to share the name.
+function findRegistered(id: { name: string; url?: string | null; path?: string | null }): RepoEntry | undefined {
+  const url = id.url ? normalizeRemote(id.url).toLowerCase() : "";
+  return listWorkspaceRepos().find((r) => {
+    if (url && r.url && normalizeRemote(r.url).toLowerCase() === url) return true;
+    if (id.path && (r.localPath === id.path || r.path === id.path)) return true;
+    // Last resort: same name on an entry with no comparable identity.
+    return r.name === id.name && !r.url && !r.localPath && !r.path;
+  });
+}
+
+// registerSource updates-by-name, so adding `owner2/web` after `owner1/web`
+// would silently overwrite. Refuse instead, naming what holds the slot.
+function assertNameFree(id: { name: string; url?: string | null; path?: string | null }): void {
+  const existing = listWorkspaceRepos().find((r) => r.name === id.name);
+  if (!existing) return;
+  if (findRegistered(id)?.name === id.name) return; // same source re-added → harmless update
+  const held = existing.url || existing.localPath || existing.path || "another source";
+  throw new Error(`a source named "${id.name}" is already connected (${held}) — remove it first or rename this one`);
 }
 
 // Project mode: prefer project.json (what `flow project create --mode` writes,
@@ -343,7 +365,7 @@ async function inspectGitRepo(repoPath: string): Promise<GitRepoResult> {
     defaultBranch,
     currentBranch,
     dirty,
-    alreadyConnected: isRegistered(name),
+    alreadyConnected: !!findRegistered({ name, url: remoteUrl, path: repoPath }),
   };
   // A GitHub remote → git_repo (has a BRAIN via the managed clone). No remote,
   // or a non-GitHub remote → local_only tier (we keep remoteUrl for display).
@@ -421,7 +443,7 @@ export async function inspectSource(input: string): Promise<InspectResult> {
           owner: gh.owner,
           name: gh.name,
           defaultBranch: await githubDefaultBranch(gh.owner, gh.name),
-          alreadyConnected: isRegistered(gh.name),
+          alreadyConnected: !!findRegistered({ name: gh.name, url: gh.url }),
         },
       };
     }
@@ -436,6 +458,11 @@ export async function inspectSource(input: string): Promise<InspectResult> {
   const expanded = expandHome(trimmed);
   if (!isAbsolute(expanded)) {
     throw new Error(`"${trimmed}" is not an absolute path — paste a full path like /Users/you/project.`);
+  }
+  // A bare "~" (or the literal home dir) would scan the user's entire home —
+  // slow, and a wall of private folders nobody meant to connect.
+  if (expanded === homedir()) {
+    throw new Error("that's your whole home folder — point Flow at a specific project or docs folder inside it");
   }
   if (!existsSync(expanded)) throw new Error(`No such folder: ${expanded}`);
   return inspectPath(expanded);
@@ -487,6 +514,7 @@ export async function addSources(sources: AddSource[]): Promise<AddResult> {
         // Docs always live on the local filesystem.
         if (prod) throw new Error("local paths aren't available on a remote Flow — connect GitHub repos or upload files");
         if (!src.path || !src.name) throw new Error("docs source needs a name and a path");
+        assertNameFree({ name: src.name, path: src.path });
         registerSource({ kind: "docs", name: src.name, path: src.path, status: "pending_ingestion" });
         auditSource("docs_registered", src.name, { path: src.path });
         out.added.push({ name: src.name, kind: "docs" });
@@ -504,6 +532,7 @@ export async function addSources(sources: AddSource[]): Promise<AddResult> {
         if (url) {
           // GitHub repo — BRAIN is Flow's managed clone; localPath (if any) is
           // the WORK surface. Same path the dashboard repo_added button uses.
+          assertNameFree({ name: src.name, url, path: localPath || undefined });
           const { entry, jobId } = await connectGithubRepo(url, src.branch, localPath || undefined);
           auditSource("index_job", entry.name, { job: jobId, branch: entry.branch, url });
           out.added.push({ name: entry.name, kind: "code", jobId });
@@ -514,6 +543,7 @@ export async function addSources(sources: AddSource[]): Promise<AddResult> {
           // Local-only (no remote) repo — index in place from the user's
           // folder (the local tier). runJob's ensureRepoClone resolves the
           // localPath from the registry.
+          assertNameFree({ name: src.name, path: localPath });
           registerSource({ kind: "code", name: src.name, url: "", localPath, branch: src.branch });
           const job = await enqueueJob({
             type: "index_repo",

@@ -18,9 +18,17 @@ process.env.FLOW_ADMIN_TOKEN = "test-admin-token-sources";
 process.env.FLOW_FAKE_OPENCODE = "1";
 process.env.FLOW_DRAIN_DISABLE = "1";
 process.env.FLOW_POLL_DISABLE = "1";
+// Registry writes (already-connected / collision tests) go to a temp
+// workspace, never the real index-workspace.
+const WSTMP = mkdtempSync(join(tmpdir(), "flow-sources-ws-"));
+process.env.OPENCODE_WORKSPACE_DIR = WSTMP;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let inspectSource: (input: string) => Promise<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let addSources: (sources: any[]) => Promise<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let registerSource: (entry: any) => any;
 let TMP: string;
 const realFetch = globalThis.fetch;
 
@@ -36,11 +44,14 @@ before(async () => {
   TMP = mkdtempSync(join(tmpdir(), "flow-sources-"));
   const mod = await import("../src/sources.js");
   inspectSource = mod.inspectSource;
+  addSources = mod.addSources;
+  registerSource = (await import("../src/opencode.js")).registerSource;
 });
 
 after(() => {
   globalThis.fetch = realFetch;
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { rmSync(WSTMP, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
 
 describe("inspectSource", () => {
@@ -166,5 +177,46 @@ describe("inspectSource", () => {
 
   test("non-absolute path is rejected", async () => {
     await assert.rejects(() => inspectSource("./relative/path"), /absolute/);
+  });
+
+  test("bare ~ (whole home folder) is rejected with a hint", async () => {
+    await assert.rejects(() => inspectSource("~"), /whole home folder/);
+  });
+});
+
+// alreadyConnected must mean THIS source, not this name — and /add must refuse
+// to clobber a different source holding the same name (the registry is keyed
+// by name, so registerSource would otherwise silently overwrite).
+describe("already-connected identity + name collisions", () => {
+  test("same name, different owner is NOT alreadyConnected", async () => {
+    registerSource({ kind: "code", name: "colwidgets", url: "https://github.com/acme/colwidgets", branch: "main" });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ default_branch: "main" }), { status: 200 })) as typeof fetch;
+    try {
+      const same = await inspectSource("https://github.com/acme/colwidgets");
+      assert.equal(same.github.alreadyConnected, true, "same url → connected");
+      const other = await inspectSource("https://github.com/other/colwidgets");
+      assert.equal(other.github.alreadyConnected, false, "same name, different owner → NOT connected");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("add refuses a name collision with a different source", async () => {
+    const docsDir = join(TMP, "col-docs");
+    mkdirSync(docsDir, { recursive: true });
+    const r = await addSources([{ type: "docs", path: docsDir, name: "colwidgets" }]);
+    assert.equal(r.added.length, 0);
+    assert.equal(r.errors.length, 1);
+    assert.match(r.errors[0].error, /already connected/);
+  });
+
+  test("re-adding the same identity is a harmless update, not an error", async () => {
+    const docsDir = join(TMP, "col-notes");
+    mkdirSync(docsDir, { recursive: true });
+    registerSource({ kind: "docs", name: "col-notes", path: docsDir, status: "pending_ingestion" });
+    const r = await addSources([{ type: "docs", path: docsDir, name: "col-notes" }]);
+    assert.equal(r.errors.length, 0);
+    assert.equal(r.added.length, 1);
   });
 });

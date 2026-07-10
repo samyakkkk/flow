@@ -663,8 +663,9 @@ export default function ConnectionsPage() {
         <AddSource mode={mode} onAdded={refresh} />
       </Section>
 
-      {/* ── Repo Picker ───────────────────────────────────────────────────── */}
-      <Section title="Add Repositories">
+      {/* ── Repo Picker — the secondary door: browse the GitHub account's repo
+          list. Adding by URL or local path happens in AddSource above. ── */}
+      <Section title="Browse your GitHub repos">
         <RepoPicker indexedUrls={indexedUrls} onMsg={setMsg} />
       </Section>
 

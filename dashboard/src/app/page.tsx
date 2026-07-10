@@ -5,9 +5,10 @@ import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Heading, Button, StatusPill, Card } from "@/components/ui";
 import { useEffect, useState, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { useMode } from "@/lib/useMode";
+import { useMode, type FlowMode } from "@/lib/useMode";
 import Link from "next/link";
 import { BrandIcon } from "@/components/BrandIcon";
+import { SourcesFrontDoor } from "@/components/SourcesFrontDoor";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,10 @@ interface RepoEntry {
   lastIndexedAt?: string;
   lastIndexedCommit?: string;
   addedAt?: string;
+  // Present when the source was registered as a local folder or docs set via
+  // the sources front door; drives the compact strip's chip.
+  localPath?: string | null;
+  kind?: string;
 }
 
 interface AuditRow {
@@ -136,18 +141,6 @@ function lagLabel(lag: number | null): string {
   if (lag < 60) return "up to date";
   if (lag < 3600) return `${Math.round(lag / 60)}m behind`;
   return `${Math.round(lag / 3600)}h behind`;
-}
-
-// Derives per-repo indexing status.
-// Signal: lastIndexedCommit === null/undefined → the repo has been registered
-// but hasn't completed its first index pass yet → "indexing" or "queued".
-// This is orchestrator-free and reads directly from repos.json via /api/repos.
-function repoIndexStatus(repo: RepoEntry): "indexing" | "indexed" | "queued" {
-  if (!repo.lastIndexedCommit) {
-    // No commit recorded yet — treat as queued/indexing
-    return "queued";
-  }
-  return "indexed";
 }
 
 // ─── Now-Indexing Panel ───────────────────────────────────────────────────────
@@ -636,142 +629,31 @@ function MeetingNotesCard({ onConnected }: { onConnected: () => void }) {
   );
 }
 
-// ─── Home GitHub Management Card (State 2/3) ──────────────────────────────────
-// Shows connected repos by name with per-repo status, plus "Add repositories" affordance.
-
-function HomeGitHubCard({
-  repos,
-  onRepoAdded,
-}: {
-  repos: RepoEntry[];
-  onRepoAdded: () => void;
-}) {
-  const [showPicker, setShowPicker] = useState(false);
-
-  return (
-    <div
-      className="rounded-xl border border-line bg-paper p-5 flex flex-col gap-4"
-      data-testid="home-github-card"
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <BrandIcon name="github" size={18} className="text-ink" />
-          <div>
-            <div style={{ fontFamily: "var(--font-display)" }} className="text-ink text-[15px] font-medium">
-              GitHub
-            </div>
-            <div className="text-text-muted text-[11px] mt-0.5">
-              {repos.length === 0
-                ? "No repositories connected"
-                : `${repos.length} repositor${repos.length === 1 ? "y" : "ies"} connected`}
-            </div>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowPicker((v) => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-dashed border-line text-text-muted text-[11px] hover:border-ink/20 hover:text-ink transition-colors"
-          style={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em" }}
-          data-testid="add-repos-affordance"
-        >
-          {showPicker ? "Close" : "+ Add repositories"}
-        </button>
-      </div>
-
-      {/* Connected repos list */}
-      {repos.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          {repos.map((repo, i) => {
-            const status = repoIndexStatus(repo);
-            return (
-              <div
-                key={i}
-                className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg"
-                style={{ background: "var(--sand)", border: "1px solid var(--line)" }}
-                data-testid="repo-item"
-              >
-                <span
-                  style={{ fontFamily: "var(--font-mono)" }}
-                  className="text-[12px] text-text truncate"
-                >
-                  {repo.name}
-                </span>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {status === "indexed" ? (
-                    <StatusPill kind="ok">Indexed</StatusPill>
-                  ) : status === "queued" ? (
-                    <StatusPill kind="live">Indexing</StatusPill>
-                  ) : (
-                    <StatusPill kind="warn">Failed</StatusPill>
-                  )}
-                  {repo.lastIndexedAt && status === "indexed" && (
-                    <span
-                      style={{ fontFamily: "var(--font-mono)" }}
-                      className="text-[10px] text-text-muted hidden sm:inline"
-                    >
-                      {timeAgo(new Date(repo.lastIndexedAt).getTime())}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Repo picker inline expansion */}
-      {showPicker && (
-        <div
-          className="border-t border-line pt-4"
-          data-testid="repo-picker-expanded"
-        >
-          <p
-            style={{ fontFamily: "var(--font-mono)" }}
-            className="text-[10px] uppercase tracking-wider text-text-muted mb-3"
-          >
-            Select repositories to add
-          </p>
-          <RepoPickerPanel
-            onConnected={() => {
-              setShowPicker(false);
-              onRepoAdded();
-            }}
-            onClose={() => setShowPicker(false)}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Home Source Management (State 2/3) ───────────────────────────────────────
-// Replaces old SourcesRail. Full source management lives here.
+// The sources front door (paste a GitHub URL or a local folder path) leads;
+// the integration cards below cover the key-based sources.
 
 interface HomeSourcesProps {
   repos: RepoEntry[];
   settings: SettingItem[];
+  mode: FlowMode;
   onSourceChanged: () => void;
 }
 
-function HomeSourcesPanel({ repos, settings, onSourceChanged }: HomeSourcesProps) {
+function HomeSourcesPanel({ repos, settings, mode, onSourceChanged }: HomeSourcesProps) {
   const linearSet = settings.some((s) => s.key === "LINEAR_API_KEY" && s.set);
   const firefliesSet = settings.some((s) => s.key === "FIREFLIES_API_KEY" && s.set);
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <Kicker>Sources</Kicker>
-        <Link
-          href="/connections"
-          className="text-[10px] text-text-muted hover:text-ink transition-colors"
-          style={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em" }}
-        >
-          Manage all ↗
-        </Link>
-      </div>
-
-      {/* GitHub repos management card */}
-      <HomeGitHubCard repos={repos} onRepoAdded={onSourceChanged} />
+      {/* Sources front door — paste a GitHub URL or a local folder path — plus
+          the compact list of what's already connected. */}
+      <SourcesFrontDoor
+        variant="strip"
+        repos={repos}
+        mode={mode}
+        onChanged={onSourceChanged}
+      />
 
       {/* Linear */}
       <InlineKeySourceCard
@@ -1273,17 +1155,19 @@ export default function HomePage() {
     return (
       <Shell>
         <div className="max-w-2xl mx-auto py-8 rise-in">
-          <div className="mb-10">
-            <Kicker>Getting started</Kicker>
-            <Heading as="h1" className="text-[36px] mt-3 mb-2">
-              Your brain is empty.
-            </Heading>
-            <p className="text-text-muted text-[16px] leading-relaxed">
-              Connect a source to start building your knowledge graph.
-            </p>
-          </div>
+          {/* Front door leads: paste a GitHub URL or a local folder path. */}
+          <SourcesFrontDoor
+            variant="hero"
+            repos={repos}
+            mode={mode}
+            onChanged={() => { loadAll(); setState("building"); }}
+          />
 
-          <div className="grid gap-4">
+          {/* Everything below is de-emphasized — other ways to connect. */}
+          <div className="mt-10 opacity-80">
+            <Kicker>Other ways to connect</Kicker>
+          </div>
+          <div className="grid gap-4 mt-3">
             <GitHubCard onConnected={() => { loadAll(); setState("building"); }} />
 
             <ApiKeyCard
@@ -1342,6 +1226,14 @@ export default function HomePage() {
 
           {/* Brain graph — polls during build — with indexing overlay */}
           <BrainGraph pollInterval={5000} height={380} isIndexing={true} />
+
+          {/* Sources front door — reachable even mid-build */}
+          <SourcesFrontDoor
+            variant="strip"
+            repos={repos}
+            mode={mode}
+            onChanged={() => loadAll()}
+          />
 
           {/* Activity */}
           {auditRows.length > 0 && (
@@ -1407,6 +1299,7 @@ export default function HomePage() {
         <HomeSourcesPanel
           repos={repos}
           settings={settings}
+          mode={mode}
           onSourceChanged={() => loadAll()}
         />
 
