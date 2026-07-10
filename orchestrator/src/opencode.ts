@@ -269,6 +269,29 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
 
     updateJob.run({ id, status: "done", result_json: JSON.stringify(result) });
 
+    // Base branch reindexed → the entities notes anchor to now exist: run the
+    // branch-notes promotion pass. Merge-commit subjects from the checkout
+    // tell us which feature branches landed. Best-effort, never fails the job.
+    if (opts.type === "index_repo" && repo) {
+      void (async () => {
+        try {
+          const input = opts.input as { branch?: string };
+          const base = input.branch ?? "main";
+          const dest = resolve(WORKSPACE_DIR, "repos", repo);
+          const merges = await spawnAsync(
+            "git",
+            ["-C", dest, "log", "--merges", "--since=60 days ago", "--format=%s"],
+            process.env,
+            10_000,
+          );
+          const { promoteNotesForRepo } = await import("./notes.js");
+          await promoteNotesForRepo(repo, base, merges.stdout ?? "");
+        } catch (err) {
+          console.warn(`[notes] promotion pass failed for ${repo}: ${err}`);
+        }
+      })();
+    }
+
     // Resolve the corrections row from the agent's trailing verdict JSON.
     if (opts.type === "correct_graph") {
       const correctionId = (opts.input as { correction_id?: string }).correction_id;

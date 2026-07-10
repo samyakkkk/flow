@@ -19,6 +19,7 @@ export const NODE_TYPES = [
   "Workflow",
   "Concept",
   "Procedure",
+  "Note",
 ] as const;
 
 export const EDGE_TYPES = [
@@ -42,6 +43,7 @@ export const EDGE_TYPES = [
   "DISPATCHES_TO",
   "RELATES_TO",
   "GOVERNS",
+  "ANNOTATES",
 ] as const;
 
 export type NodeType = (typeof NODE_TYPES)[number];

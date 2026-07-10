@@ -109,6 +109,98 @@ export function matchNotes(
 }
 
 // ---------------------------------------------------------------------------
+// Promotion — runs after every successful index_repo (the entities a note
+// anchors to exist once the base branch is reindexed). Kind decides fate:
+// wip is swept (the merged code carries that information now); note/caution/
+// decision become graph Note nodes with an optional ANNOTATES edge to the
+// anchor. Feature-branch notes promote when the base checkout's merge-commit
+// subjects mention their branch (squash merges defeat this — those notes age
+// out via decay instead). Gateway failures leave rows active for retry on
+// the next reindex.
+
+const DECAY_SECONDS = 30 * 24 * 3600;
+
+const GATEWAY = () => (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/$/, "");
+const GRAPH = () => process.env.GRAPH_NAME ?? "memory";
+
+async function gwVerb(name: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${GATEWAY()}/v1/verbs/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...body, graph: GRAPH() }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+const setStatus = db.prepare(`UPDATE branch_notes SET status = ?, updated_at = unixepoch() WHERE id = ?`);
+
+export async function promoteNotesForRepo(
+  repo: string,
+  baseBranch: string,
+  mergedBranchSubjects: string,
+): Promise<{ promoted: number; swept: number }> {
+  // Decay: stale non-base-branch notes age out (abandoned work).
+  db.prepare(
+    `UPDATE branch_notes SET status = 'swept', updated_at = unixepoch()
+     WHERE repo = ? AND status = 'active' AND branch != ? AND updated_at < unixepoch() - ?`,
+  ).run(repo, baseBranch, DECAY_SECONDS);
+
+  const rows = db
+    .prepare(`SELECT id, branch, kind, text, anchor_hint, actor, session FROM branch_notes WHERE repo = ? AND status IN ('active','ready')`)
+    .all(repo) as Array<Pick<BranchNote, "id" | "branch" | "kind" | "text" | "anchor_hint" | "actor" | "session"> & { status?: string }>;
+
+  let promoted = 0;
+  let swept = 0;
+  for (const row of rows) {
+    const merged =
+      row.branch === baseBranch ||
+      (row.branch && mergedBranchSubjects.includes(row.branch));
+    if (!merged) continue;
+
+    if (row.kind === "wip") {
+      setStatus.run("swept", row.id);
+      swept++;
+      continue;
+    }
+
+    const nodeId = `note:${row.id.slice(0, 8)}`;
+    const created = await gwVerb("upsert_entity", {
+      type: "Note",
+      id: nodeId,
+      name: row.text.length > 70 ? row.text.slice(0, 70) + "…" : row.text,
+      description: row.text,
+      props: { kind: row.kind, repo, branch: row.branch, noted_by: row.actor ?? "", session: row.session ?? "" },
+      provenance: { actor: "flow:notes-promotion", evidence: `branch_notes ${row.id}`, confidence: "medium" },
+      confirm: true, // notes are attributed utterances; similar ones may coexist
+    });
+    if (!created || created.status === "error") continue; // retry next reindex
+
+    if (row.anchor_hint) {
+      const found = await gwVerb("find_entity", { q: row.anchor_hint, limit: 1 });
+      const target = ((found?.matches ?? []) as Array<{ id?: string }>)[0]?.id;
+      if (target && target !== nodeId) {
+        await gwVerb("upsert_relation", {
+          type: "ANNOTATES",
+          from: nodeId,
+          to: target,
+          provenance: { actor: "flow:notes-promotion", evidence: `anchor_hint '${row.anchor_hint}'` },
+        });
+      }
+    }
+    setStatus.run("promoted", row.id);
+    promoted++;
+  }
+  if (promoted + swept > 0) console.log(`[notes] ${repo}: promoted ${promoted}, swept ${swept}`);
+  return { promoted, swept };
+}
+
+// ---------------------------------------------------------------------------
 // Routes. POST is the gateway `note` verb's dispatch target; GET feeds the
 // dashboard's notes strip; DELETE is human cleanup (the one curation act).
 

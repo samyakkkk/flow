@@ -32,6 +32,7 @@ const TYPE_WORDS: Record<string, string> = {
   Concept: "concept",
   Workflow: "workflow",
   Procedure: "procedure",
+  Note: "note",
   ExternalService: "external service",
   Database: "database",
   DatabaseTable: "database table",
