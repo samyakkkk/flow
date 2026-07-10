@@ -328,6 +328,16 @@ export function AgentSession({ id }: { id: string }) {
           setConnected(true); // not an error — just a finished recording
           return;
         }
+        // A proposal verb just fired in this session — poke the Shell's
+        // proposal dialog so it appears immediately, not on the next poll.
+        // (Replayed events poke too; harmless — the dialog only shows items
+        // that are still pending.)
+        if (ev.kind === "graph") {
+          const verb = String((ev.data as { verb?: string } | null)?.verb ?? "");
+          if (verb === "propose_procedure" || verb === "propose_retire_procedure") {
+            window.dispatchEvent(new CustomEvent("flow:proposals-changed"));
+          }
+        }
         buffer.push(ev);
       } catch {
         /* skip */

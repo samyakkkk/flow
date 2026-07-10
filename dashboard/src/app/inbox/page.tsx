@@ -24,6 +24,10 @@ interface ProcedureRow {
   created_at?: string | null;
   blessed_by?: string | null;
   blessed_at?: string | null;
+  retire_reason?: string | null;
+  retire_quote?: string | null;
+  retire_proposed_by?: string | null;
+  retire_proposed_at?: string | null;
 }
 
 interface CorrectionRow {
@@ -288,6 +292,7 @@ function ProposalCard({
 export default function InboxPage() {
   const [proposed, setProposed] = useState<ProcedureRow[]>([]);
   const [blessed, setBlessed] = useState<ProcedureRow[]>([]);
+  const [retireProposed, setRetireProposed] = useState<ProcedureRow[]>([]);
   const [corrections, setCorrections] = useState<CorrectionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [retiring, setRetiring] = useState<Record<string, boolean>>({});
@@ -298,9 +303,10 @@ export default function InboxPage() {
       fetch("/api/procedures").then((r) => r.json()).catch(() => ({ proposed: [], blessed: [] })),
       fetch("/api/corrections").then((r) => r.json()).catch(() => ({ rows: [] })),
     ]).then(([p, c]) => {
-      const pd = p as { proposed?: ProcedureRow[]; blessed?: ProcedureRow[] };
+      const pd = p as { proposed?: ProcedureRow[]; blessed?: ProcedureRow[]; retireProposed?: ProcedureRow[] };
       setProposed(pd.proposed ?? []);
       setBlessed(pd.blessed ?? []);
+      setRetireProposed(pd.retireProposed ?? []);
       setCorrections(((c as { rows?: CorrectionRow[] }).rows ?? []));
       setLoading(false);
     });
@@ -310,14 +316,14 @@ export default function InboxPage() {
     load();
   }, [load]);
 
-  async function retire(id: string) {
+  async function review(id: string, action: "reject" | "confirm_retire" | "dismiss_retire") {
     setRetiring((r) => ({ ...r, [id]: true }));
     setRetireMsgs((m) => ({ ...m, [id]: "" }));
     try {
       const res = await fetch("/api/procedures", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, action: "reject" }),
+        body: JSON.stringify({ id, action }),
       });
       if (res.ok) {
         load();
@@ -362,6 +368,56 @@ export default function InboxPage() {
             )}
           </section>
 
+          {/* Retirement requests */}
+          {retireProposed.length > 0 && (
+            <section>
+              <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+                Retirement requests <span style={{ color: "var(--text-muted)" }}>({retireProposed.length})</span>
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {retireProposed.map((p) => (
+                  <div
+                    key={p.id}
+                    style={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: "12px 16px",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{p.name}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-primary)", margin: "4px 0" }}>{p.retire_reason}</div>
+                    {p.retire_quote && (
+                      <blockquote style={{ margin: "0 0 6px", padding: "4px 10px", borderLeft: "3px solid var(--border)", fontSize: 11, fontStyle: "italic", color: "var(--text-secondary)" }}>
+                        “{p.retire_quote}”
+                      </blockquote>
+                    )}
+                    <div style={{ fontFamily: "monospace", fontSize: 10, color: "var(--text-muted)", marginBottom: 8 }}>
+                      nominated by {p.retire_proposed_by ?? "unknown"} {timeAgo(p.retire_proposed_at)} · stays active until you decide
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        onClick={() => review(p.id, "confirm_retire")}
+                        disabled={retiring[p.id]}
+                        style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--accent)", color: "var(--ink)", fontSize: 12, fontWeight: 600, cursor: retiring[p.id] ? "not-allowed" : "pointer" }}
+                      >
+                        Retire it
+                      </button>
+                      <button
+                        onClick={() => review(p.id, "dismiss_retire")}
+                        disabled={retiring[p.id]}
+                        style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text-secondary)", fontSize: 12, fontWeight: 600, cursor: retiring[p.id] ? "not-allowed" : "pointer" }}
+                      >
+                        Keep it
+                      </button>
+                      {retireMsgs[p.id] && <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{retireMsgs[p.id]}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Blessed procedures */}
           <section>
             <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
@@ -396,7 +452,7 @@ export default function InboxPage() {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                       <button
-                        onClick={() => retire(p.id)}
+                        onClick={() => review(p.id, "reject")}
                         disabled={retiring[p.id]}
                         style={{
                           padding: "6px 12px",

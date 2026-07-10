@@ -13,12 +13,14 @@ import { GATEWAY_URL } from "@/lib/config";
 // Explicit field list — properties(n) would drag the embedding vector along.
 const LIST_CYPHER = `
 MATCH (n:Procedure)
-WHERE n.status IN ['proposed', 'blessed']
+WHERE n.status IN ['proposed', 'blessed', 'retire_proposed']
 RETURN n.id AS id, n.name AS name, n.description AS description, n.trigger AS trigger,
        n.steps AS steps, n.scope AS scope, n.mode AS mode, n.status AS status,
        n.repo AS repo, n.source_quote AS source_quote, n.governs_pending AS governs_pending,
        n.created_by AS created_by, n.created_at AS created_at,
-       n.blessed_by AS blessed_by, n.blessed_at AS blessed_at
+       n.blessed_by AS blessed_by, n.blessed_at AS blessed_at,
+       n.retire_reason AS retire_reason, n.retire_quote AS retire_quote,
+       n.retire_proposed_by AS retire_proposed_by, n.retire_proposed_at AS retire_proposed_at
 ORDER BY n.created_at DESC
 LIMIT 200
 `.trim();
@@ -52,6 +54,7 @@ export async function GET() {
     return NextResponse.json({
       proposed: rows.filter((r) => r.status === "proposed"),
       blessed: rows.filter((r) => r.status === "blessed"),
+      retireProposed: rows.filter((r) => r.status === "retire_proposed"),
     });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Gateway unreachable", proposed: [], blessed: [] }, { status: 502 });
@@ -67,8 +70,9 @@ export async function POST(req: Request) {
     id?: string;
     edits?: Record<string, unknown>;
   };
-  if (!payload.id || (payload.action !== "approve" && payload.action !== "reject")) {
-    return NextResponse.json({ error: "id and action (approve|reject) are required" }, { status: 400 });
+  const ACTIONS = new Set(["approve", "reject", "confirm_retire", "dismiss_retire"]);
+  if (!payload.id || !ACTIONS.has(payload.action ?? "")) {
+    return NextResponse.json({ error: "id and action (approve|reject|confirm_retire|dismiss_retire) are required" }, { status: 400 });
   }
 
   try {

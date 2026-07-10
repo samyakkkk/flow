@@ -397,17 +397,18 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
         const opt = params.options.find((o) => o.kind !== "reject_once" && o.kind !== "reject_always") ?? params.options[0];
         return { outcome: { outcome: "selected", optionId: opt.optionId } };
       }
-      // Flow's graph reads — and the advisory correct_graph flag, whose
-      // effect is verified downstream against the base branch — are
-      // auto-approved so consulting the brain never stalls a session.
-      // propose_procedure is deliberately NOT on this list: the permission
-      // prompt is the user's save/discard moment, shown with the full drafted
-      // procedure BEFORE the proposal is created (allow → pending in the
-      // Inbox; reject → nothing ever exists). Exact-match on the MCP tool
-      // title — a bash command whose free-text title mentions "flow-graph"
-      // must not slip through this gate.
+      // Flow's graph verbs are auto-approved so consulting the brain never
+      // stalls a session. That includes the proposal verbs: filing a
+      // proposal is harmless by construction (invisible until blessed,
+      // journaled, one-click discard) and the user's real accept/reject
+      // moment is the dashboard's proposal dialog, which pops immediately —
+      // they're on the session page when it happens. External MCP consumers
+      // (Claude Code CLI etc.) gate these calls through their own
+      // permission prompts instead. Exact-match on the MCP tool title — a
+      // bash command whose free-text title mentions "flow-graph" must not
+      // slip through this gate.
       const title = String(params.toolCall?.title ?? "");
-      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph)$/.test(title)) {
+      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
@@ -643,7 +644,8 @@ async function insertModeProcedures(prompt: string, repo: string): Promise<strin
   const idList = ids.map((id) => `'${id.replace(/'/g, "\\'")}'`).join(", ");
   const detail = await gatewayVerb("read_query", {
     graph,
-    cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status = 'blessed' AND n.mode = 'insert'
+    // retire_proposed stays in force until a human confirms the retirement.
+    cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status IN ['blessed', 'retire_proposed'] AND n.mode = 'insert'
              RETURN n.id AS id, n.name AS name, n.trigger AS trigger, n.steps AS steps, n.scope AS scope, n.repo AS repo`,
   });
   const rows = ((detail?.rows ?? []) as ProcedureCandidate[])
@@ -669,7 +671,8 @@ async function insertModeProcedures(prompt: string, repo: string): Promise<strin
 const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
 Two proposal tools let you contribute back — use them sparingly and precisely:
 - correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
-- propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.`;
+- propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.
+- propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.`;
 
 export async function createSession(opts: {
   backend: AgentBackend;

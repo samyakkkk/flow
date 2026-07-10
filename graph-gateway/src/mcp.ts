@@ -23,8 +23,10 @@ const SESSION_VERBS = new Set([
   "get_entity",
   "read_query",
   "list_schema",
-  // Governed proposal surface — neither mutates existing knowledge directly.
+  // Governed proposal surface — none of these mutate existing knowledge
+  // directly; procedures enter, change, and leave only through human review.
   "propose_procedure",
+  "propose_retire_procedure",
   "correct_graph",
 ]);
 

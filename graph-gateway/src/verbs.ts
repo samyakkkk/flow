@@ -505,9 +505,51 @@ async function proposeProcedure(input: z.infer<z.ZodObject<typeof proposeProcedu
   };
 }
 
+// Agents can nominate a blessed procedure for retirement when a discussion
+// reveals it no longer holds ("we don't do that anymore"). The nomination
+// NEVER removes the procedure — it stays in circulation, marked
+// retire_proposed, until a human confirms (review_procedure confirm_retire)
+// or dismisses (dismiss_retire). Deletion remains human-only.
+const proposeRetireProcedureInput = {
+  id: z.string().min(1).describe("Procedure node id to nominate for retirement"),
+  reason: z.string().min(1).describe("Why this procedure no longer applies — be specific"),
+  source_quote: z.string().optional().describe("What the human said that invalidated it, verbatim"),
+  provenance: z.object(provenanceShape),
+  graph: z.string().default(DEFAULT_GRAPH),
+};
+
+async function proposeRetireProcedure(input: z.infer<z.ZodObject<typeof proposeRetireProcedureInput>>) {
+  const rows = await run(
+    input.graph,
+    `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.status AS status`,
+    { id: input.id },
+  );
+  if (rows.length === 0) return { status: "error", error: `No node with id '${input.id}'` };
+  if (rows[0].type !== "Procedure") return { status: "error", error: `'${input.id}' is a ${rows[0].type}, not a Procedure` };
+  if (rows[0].status === "proposed") {
+    return { status: "error", error: "This procedure is still a pending proposal — the user can simply reject it in the Inbox." };
+  }
+  if (rows[0].status === "retire_proposed") {
+    return { status: "already_proposed", id: input.id, hint: "Retirement is already awaiting human review." };
+  }
+  await run(
+    input.graph,
+    `MATCH (n {id: $id})
+     SET n.status = 'retire_proposed', n.retire_reason = $reason, n.retire_proposed_by = $actor, n.retire_proposed_at = $ts
+     ${input.source_quote !== undefined ? ", n.retire_quote = $quote" : ""}`,
+    { id: input.id, reason: input.reason, actor: input.provenance.actor, ts: new Date().toISOString(), quote: input.source_quote ?? null },
+  );
+  await record({ graph: input.graph, actor: input.provenance.actor, verb: "propose_retire_procedure", input: { id: input.id, reason: input.reason }, status: "retire_proposed" });
+  return {
+    status: "retire_proposed",
+    id: input.id,
+    hint: "The procedure STAYS ACTIVE until a human confirms the retirement in the dashboard. Tell the user what you nominated and why.",
+  };
+}
+
 const reviewProcedureInput = {
   id: z.string().min(1).describe("Procedure node id, e.g. 'proc:run-migrations-before-deploy'"),
-  action: z.enum(["approve", "reject"]),
+  action: z.enum(["approve", "reject", "confirm_retire", "dismiss_retire"]),
   edits: z
     .object({
       name: z.string().min(1).optional(),
@@ -533,12 +575,24 @@ async function reviewProcedure(input: z.infer<z.ZodObject<typeof reviewProcedure
   if (rows.length === 0) return { status: "error", error: `No node with id '${input.id}'` };
   if (rows[0].type !== "Procedure") return { status: "error", error: `'${input.id}' is a ${rows[0].type}, not a Procedure` };
 
-  if (input.action === "reject") {
+  if (input.action === "reject" || input.action === "confirm_retire") {
     // The journal keeps the record; the graph drops the node so rejected
-    // proposals never pollute retrieval.
+    // proposals / confirmed retirements never pollute retrieval.
     await run(input.graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id: input.id });
-    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "reject" }, status: "rejected" });
-    return { status: "rejected", id: input.id };
+    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: input.action }, status: input.action === "reject" ? "rejected" : "retired" });
+    return { status: input.action === "reject" ? "rejected" : "retired", id: input.id };
+  }
+
+  if (input.action === "dismiss_retire") {
+    await run(
+      input.graph,
+      `MATCH (n {id: $id})
+       SET n.status = 'blessed', n.retire_reason = '', n.retire_quote = '', n.retire_proposed_by = '', n.retire_proposed_at = '',
+           n.updated_by = $actor, n.updated_at = $ts`,
+      { id: input.id, actor: input.provenance.actor, ts: new Date().toISOString() },
+    );
+    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "dismiss_retire" }, status: "blessed" });
+    return { status: "blessed", id: input.id, hint: "Retirement dismissed — the procedure stays in force." };
   }
 
   const e = input.edits ?? {};
@@ -722,9 +776,16 @@ export const verbs = {
     handler: proposeProcedure,
   },
   review_procedure: {
-    description: "Approve (with optional edits) or reject a proposed procedure. Human review surface — approval blesses exactly the reviewed text.",
+    description:
+      "Human review surface. approve (with optional edits) blesses a proposal; reject deletes it; confirm_retire deletes a retire-nominated procedure; dismiss_retire restores it to blessed.",
     shape: reviewProcedureInput,
     handler: reviewProcedure,
+  },
+  propose_retire_procedure: {
+    description:
+      "Nominate a blessed procedure for retirement when the user indicates it no longer applies ('we don't do that anymore'). The procedure STAYS ACTIVE until a human confirms in the dashboard — tell the user what you nominated and why.",
+    shape: proposeRetireProcedureInput,
+    handler: proposeRetireProcedure,
   },
   correct_graph: {
     description:
