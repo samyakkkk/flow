@@ -269,7 +269,22 @@ export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [archived, setArchived] = useState(false);
-  const [meta, setMeta] = useState<{ backend?: string; repo?: string; title?: string; cwd?: string } | null>(null);
+  const [meta, setMeta] = useState<{
+    backend?: string;
+    repo?: string;
+    title?: string;
+    cwd?: string;
+    separateCopy?: boolean;
+    worktreePath?: string | null;
+    worktreeGithub?: boolean;
+  } | null>(null);
+  // Exit banner state (separate-copy sessions). Applied/pushed results and any
+  // server error render inline; dismiss hides it for this pageview only.
+  const [exitDismissed, setExitDismissed] = useState(false);
+  const [exitBusy, setExitBusy] = useState(false);
+  const [exitError, setExitError] = useState("");
+  const [exitApplied, setExitApplied] = useState(false);
+  const [exitCompareUrl, setExitCompareUrl] = useState("");
   const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState("");
@@ -278,8 +293,12 @@ export function AgentSession({ id }: { id: string }) {
   // Optimistically-shown messages: rendered the instant you hit send, before
   // the SSE stream round-trips the user_prompt event back. Reconciled by text.
   const [pending, setPending] = useState<string[]>([]);
-  // Session diff (what the agent changed in its checkout).
-  const [diff, setDiff] = useState<{ files: DiffFile[]; diff: string; truncated: boolean } | null>(null);
+  // Session diff (what the agent changed in its checkout). Two scopes:
+  // "session" (since this session started) and "base" (branch vs its base
+  // branch). baseInfo tracks whether a base comparison is available + its name.
+  const [diff, setDiff] = useState<{ files: DiffFile[]; diff: string; truncated: boolean; scope?: string; base?: string | null } | null>(null);
+  const [diffScope, setDiffScope] = useState<"session" | "base">("session");
+  const [baseInfo, setBaseInfo] = useState<{ available: boolean; name: string | null }>({ available: false, name: null });
   const [showDiff, setShowDiff] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -295,7 +314,19 @@ export function AgentSession({ id }: { id: string }) {
         }
         return r.json();
       })
-      .then((d) => d && setMeta({ backend: d.backend, repo: d.repo, title: d.title, cwd: d.cwd }))
+      .then(
+        (d) =>
+          d &&
+          setMeta({
+            backend: d.backend,
+            repo: d.repo,
+            title: d.title,
+            cwd: d.cwd,
+            separateCopy: d.separateCopy,
+            worktreePath: d.worktreePath ?? null,
+            worktreeGithub: Boolean(d.worktreeGithub),
+          })
+      )
       .catch(() => {});
   }, [id]);
 
@@ -407,13 +438,32 @@ export function AgentSession({ id }: { id: string }) {
     if (visiblePending.length !== pending.length) setPending(visiblePending);
   }, [visiblePending, pending.length]);
 
-  // Poll the session diff: promptly while the agent works, lazily once idle,
-  // never when archived. Cheap for the small diffs these sessions produce.
+  // Is a base-branch comparison available? One probe (per session) decides
+  // whether the scope toggle shows and what it's labelled — the server tells us
+  // by echoing scope:"base" + a base name when it can resolve the base branch.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/agents/sessions/${id}/diff?scope=base`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        if (d.scope === "base" && d.base) setBaseInfo({ available: true, name: d.base });
+        else setBaseInfo({ available: false, name: null });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Poll the session diff for the selected scope: promptly while the agent
+  // works, lazily once idle, never when archived. Cheap for the small diffs
+  // these sessions produce.
   useEffect(() => {
     if (archived) return;
     let cancelled = false;
     const load = () => {
-      fetch(`/api/agents/sessions/${id}/diff`)
+      fetch(`/api/agents/sessions/${id}/diff?scope=${diffScope}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (!cancelled && d && Array.isArray(d.files)) setDiff(d);
@@ -427,7 +477,7 @@ export function AgentSession({ id }: { id: string }) {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [id, archived, view.status]);
+  }, [id, archived, view.status, diffScope]);
 
   const act = useCallback(
     async (action: string, body: unknown = {}) => {
@@ -517,6 +567,38 @@ export function AgentSession({ id }: { id: string }) {
     }
   }
 
+  // Exit actions for a separate-copy session — same endpoints as the copies
+  // list, targeting this session's own worktree path.
+  async function exitAct(action: "apply" | "push") {
+    const path = meta?.worktreePath;
+    if (!path) return;
+    setExitBusy(true);
+    setExitError("");
+    try {
+      const res = await fetch(`/api/agents/worktrees/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setExitError(data.error ?? `Couldn't ${action} — status ${res.status}`);
+        return;
+      }
+      if (action === "apply") setExitApplied(true);
+      if (action === "push" && data.compareUrl) setExitCompareUrl(data.compareUrl);
+    } catch {
+      setExitError("Couldn't reach the server.");
+    } finally {
+      setExitBusy(false);
+    }
+  }
+
+  // The banner appears once a separate-copy session has settled (idle), so the
+  // user is prompted to bring the work home rather than leaving it stranded.
+  const showExitBanner =
+    !archived && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
+
   const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
   const running = !archived && (view.status === "running" || view.status === "starting");
 
@@ -558,6 +640,12 @@ export function AgentSession({ id }: { id: string }) {
           </p>
           <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
             {AGENT_NAMES[meta?.backend ?? ""] ?? meta?.backend} · {meta?.repo}
+            {/* Runs on an isolated copy of the branch, not the user's checkout. */}
+            {meta?.separateCopy && (
+              <span className="ml-1.5 rounded border border-line bg-cream px-1.5 py-0.5 normal-case tracking-normal text-text-muted">
+                separate copy
+              </span>
+            )}
             {!connected && !archived && " · reconnecting…"}
           </p>
           {/* Where the agent is working — the cloned repo folder — with quick
@@ -817,30 +905,108 @@ export function AgentSession({ id }: { id: string }) {
               default; the header shows a live +/- summary so you notice edits. */}
           {diff && diff.files.length > 0 && (
             <div className="border-t border-line" style={{ background: "var(--paper)" }}>
-              <button
-                onClick={() => setShowDiff((s) => !s)}
-                className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-cream transition"
-              >
-                <span className="text-text-muted text-[10px]">{showDiff ? "▾" : "▸"}</span>
-                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
-                  Changes
-                </span>
-                <span className="text-[11.5px] text-text">
-                  {diff.files.length} {diff.files.length === 1 ? "file" : "files"}
-                </span>
-                <span className="text-[11.5px]" style={{ color: "rgb(60,120,70)", fontFamily: "var(--font-mono)" }}>
-                  +{diff.files.reduce((n, f) => n + f.additions, 0)}
-                </span>
-                <span className="text-[11.5px]" style={{ color: "rgb(168,80,70)", fontFamily: "var(--font-mono)" }}>
-                  −{diff.files.reduce((n, f) => n + f.deletions, 0)}
-                </span>
-              </button>
+              <div className="w-full flex items-center gap-2 px-4 py-2">
+                <button
+                  onClick={() => setShowDiff((s) => !s)}
+                  className="flex items-center gap-2 text-left flex-1 min-w-0 hover:opacity-80 transition"
+                >
+                  <span className="text-text-muted text-[10px]">{showDiff ? "▾" : "▸"}</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
+                    Changes
+                  </span>
+                  <span className="text-[11.5px] text-text">
+                    {diff.files.length} {diff.files.length === 1 ? "file" : "files"}
+                  </span>
+                  <span className="text-[11.5px]" style={{ color: "rgb(60,120,70)", fontFamily: "var(--font-mono)" }}>
+                    +{diff.files.reduce((n, f) => n + f.additions, 0)}
+                  </span>
+                  <span className="text-[11.5px]" style={{ color: "rgb(168,80,70)", fontFamily: "var(--font-mono)" }}>
+                    −{diff.files.reduce((n, f) => n + f.deletions, 0)}
+                  </span>
+                </button>
+                {/* Scope toggle — only when a base comparison is available.
+                    "This session" (since the session started) vs the base branch. */}
+                {baseInfo.available && (
+                  <div className="flex items-center gap-0.5 flex-shrink-0" style={{ fontFamily: "var(--font-mono)" }}>
+                    {(["session", "base"] as const).map((sc) => (
+                      <button
+                        key={sc}
+                        onClick={() => setDiffScope(sc)}
+                        className="px-2 py-0.5 rounded text-[10.5px] transition"
+                        style={
+                          diffScope === sc
+                            ? { background: "var(--accent)", color: "var(--ink)" }
+                            : { background: "transparent", color: "var(--text-muted)" }
+                        }
+                      >
+                        {sc === "session" ? "This session" : `vs ${baseInfo.name ?? "base"}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {showDiff && (
                 <div className="px-4 pb-3 max-h-[45vh] overflow-y-auto">
                   <DiffView diff={diff.diff} truncated={diff.truncated} />
                 </div>
               )}
             </div>
+          )}
+
+          {/* Exit banner — the changes live on a separate copy; offer to bring
+              them home (or push), so a finished session isn't a dead end. */}
+          {showExitBanner && (
+            <div className="border-t border-line px-4 py-2.5 flex items-center gap-3 flex-wrap" style={{ background: "var(--cream)" }}>
+              {exitApplied ? (
+                <span className="text-[12.5px]" style={{ color: "var(--ok)" }}>
+                  Applied to your folder ✓
+                </span>
+              ) : (
+                <>
+                  <span className="text-[12.5px] text-text">These changes live on a separate copy.</span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => exitAct("apply")}
+                    disabled={exitBusy}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Apply to my folder
+                  </button>
+                  {meta?.worktreeGithub && (
+                    <button
+                      onClick={() => exitAct("push")}
+                      disabled={exitBusy}
+                      className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                    >
+                      Push
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setExitDismissed(true)}
+                    className="text-[11px] text-text-muted hover:text-ink transition"
+                  >
+                    Dismiss
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {showExitBanner && exitCompareUrl && (
+            <div className="px-4 pt-1" style={{ background: "var(--cream)" }}>
+              <a
+                href={exitCompareUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11.5px] text-ink underline hover:opacity-80"
+              >
+                Open pull request ↗
+              </a>
+            </div>
+          )}
+          {showExitBanner && exitError && (
+            <p className="px-4 pt-1 text-[11.5px]" style={{ background: "var(--cream)", color: "var(--danger)" }}>
+              {exitError}
+            </p>
           )}
 
           {/* Steer bar */}

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Kicker, Heading, Button, Card, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
+import { DiffView, type DiffFile } from "@/components/DiffView";
 
 interface DetectedAgent {
   id: string;
@@ -82,6 +83,10 @@ export function AgentsView() {
   const [prompt, setPrompt] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  // Set when the target folder is already in use by a live session — the
+  // create call comes back {collision} instead of starting. The user chooses:
+  // run on a separate copy, or share the same folder anyway.
+  const [collision, setCollision] = useState<{ id: string; title: string; status: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -115,18 +120,27 @@ export function AgentsView() {
     [repo]
   );
 
-  async function start() {
+  // `placement` is passed only after the user answers a collision prompt:
+  // "separate_copy" runs on an isolated copy, "in_place" shares the folder.
+  async function start(placement?: "in_place" | "separate_copy") {
     if (!backend || !repo || !prompt.trim()) return;
     setStarting(true);
     setError("");
+    setCollision(null);
     try {
       const res = await fetch("/api/agents/sessions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend, repo, prompt }),
+        body: JSON.stringify({ backend, repo, prompt, ...(placement ? { placement } : {}) }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `status ${res.status}`);
+      // The folder's already in use — ask, don't start.
+      if (data.collision) {
+        setCollision(data.active);
+        setStarting(false);
+        return;
+      }
       router.push(`/agents/${data.id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -214,10 +228,46 @@ export function AgentsView() {
           className="w-full rounded-lg border border-line bg-cream px-3.5 py-3 text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none focus:border-black/20 resize-y mb-3"
         />
         {error && <p className="text-[12px] mb-3" style={{ color: "#b3261e" }}>{error}</p>}
-        <Button onClick={start} disabled={starting || !prompt.trim() || !backend || !repo} arrow>
-          {starting ? "Starting…" : "Start agent"}
-        </Button>
+
+        {/* Collision prompt — another live session is already working in this
+            folder. Offer a separate copy (primary) so they don't overwrite each
+            other, or sharing the same folder anyway. Never says "worktree". */}
+        {collision ? (
+          <div className="rounded-lg border border-line bg-cream/60 px-4 py-3 mb-1">
+            <p className="text-[13px] text-ink mb-3">
+              Session “{collision.title}” is already working in this folder. Run this one on a separate
+              copy of the branch so they don’t overwrite each other?
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => start("separate_copy")} disabled={starting} arrow>
+                {starting ? "Starting…" : "Separate copy"}
+              </Button>
+              <button
+                onClick={() => start("in_place")}
+                disabled={starting}
+                className="rounded-lg border border-line bg-paper px-3.5 py-2 text-[13px] text-text hover:bg-cream transition disabled:opacity-50"
+              >
+                Same folder anyway
+              </button>
+              <button
+                onClick={() => setCollision(null)}
+                disabled={starting}
+                className="text-[12px] text-text-muted hover:text-ink transition ml-1"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <Button onClick={() => start()} disabled={starting || !prompt.trim() || !backend || !repo} arrow>
+            {starting ? "Starting…" : "Start agent"}
+          </Button>
+        )}
       </Card>
+
+      {/* Separate copies — only rendered when at least one exists, so it stays
+          invisible until the collision flow actually creates one. */}
+      <SeparateCopies onNavigate={(sid) => router.push(`/agents/${sid}`)} />
 
       {/* Sessions */}
       <Kicker>Sessions</Kicker>
@@ -243,6 +293,269 @@ export function AgentsView() {
             <StatusPill kind={statusKind(s.status)}>{statusLabel(s.status)}</StatusPill>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Separate copies — the isolated branch checkouts the collision flow creates.
+// Visibility + exits: see the diff, apply back into your folder, push to
+// GitHub, or remove. Progressive disclosure: the whole section is absent until
+// at least one copy exists. UI copy never says "worktree".
+
+interface WorktreeSession {
+  id: string;
+  title: string;
+  status: string;
+}
+interface Worktree {
+  repo: string;
+  path: string;
+  branch: string | null;
+  base: string;
+  aheadCount: number;
+  dirty: boolean;
+  merged: boolean;
+  health: "ok" | "broken";
+  sessions: WorktreeSession[];
+  github: boolean;
+}
+
+function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => void }) {
+  const [trees, setTrees] = useState<Worktree[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  // Per-copy UI state, keyed by the copy's path.
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [confirmRemove, setConfirmRemove] = useState<Record<string, boolean>>({});
+  const [pushed, setPushed] = useState<Record<string, string>>({}); // path → compareUrl
+  const [applied, setApplied] = useState<Record<string, string>>({}); // path → "merged into <branch>"
+  const [openDiff, setOpenDiff] = useState<Record<string, boolean>>({});
+  const [diffs, setDiffs] = useState<Record<string, { files: DiffFile[]; diff: string; truncated: boolean } | null>>({});
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch("/api/agents/worktrees");
+      const d = await r.json();
+      if (Array.isArray(d.worktrees)) setTrees(d.worktrees);
+    } catch {
+      /* leave the last-known list */
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const iv = setInterval(refresh, 8000);
+    return () => clearInterval(iv);
+  }, [refresh]);
+
+  const setError = (path: string, msg: string) => setErrors((e) => ({ ...e, [path]: msg }));
+  const clearError = (path: string) => setErrors((e) => ({ ...e, [path]: "" }));
+
+  async function act(path: string, action: "apply" | "push" | "remove", body: Record<string, unknown> = {}) {
+    setBusy((b) => ({ ...b, [path]: true }));
+    clearError(path);
+    try {
+      const res = await fetch(`/api/agents/worktrees/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, ...body }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(path, data.error ?? `Couldn't ${action} — status ${res.status}`);
+        return;
+      }
+      if (action === "apply") setApplied((a) => ({ ...a, [path]: `Applied to your folder ✓` }));
+      if (action === "push" && data.compareUrl) setPushed((p) => ({ ...p, [path]: data.compareUrl }));
+      if (action === "remove") setConfirmRemove((c) => ({ ...c, [path]: false }));
+      await refresh();
+    } catch {
+      setError(path, "Couldn't reach the server.");
+    } finally {
+      setBusy((b) => ({ ...b, [path]: false }));
+    }
+  }
+
+  async function toggleDiff(path: string) {
+    const next = !openDiff[path];
+    setOpenDiff((o) => ({ ...o, [path]: next }));
+    if (next && diffs[path] === undefined) {
+      try {
+        const r = await fetch(`/api/agents/worktrees/diff?path=${encodeURIComponent(path)}`);
+        const d = r.ok ? await r.json() : null;
+        setDiffs((m) => ({ ...m, [path]: d && Array.isArray(d.files) ? d : null }));
+      } catch {
+        setDiffs((m) => ({ ...m, [path]: null }));
+      }
+    }
+  }
+
+  // Invisible until a copy exists (progressive disclosure).
+  if (!loaded || trees.length === 0) return null;
+
+  return (
+    <div className="mb-10">
+      <Kicker>Separate copies</Kicker>
+      <p className="text-text-muted text-[12.5px] mt-1 mb-3 max-w-xl">
+        Isolated copies of a branch, made when two agents would otherwise share one folder. Bring their
+        work back into your folder, push it, or clear the copy away.
+      </p>
+      <div className="flex flex-col gap-2">
+        {trees.map((wt) => {
+          const b = busy[wt.path];
+          const err = errors[wt.path];
+          const compareUrl = pushed[wt.path];
+          const appliedMsg = applied[wt.path];
+
+          // Broken: the folder is gone. Offer only a way to clean it up.
+          if (wt.health === "broken") {
+            return (
+              <div key={wt.path} className="rounded-lg border border-line bg-paper px-4 py-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[12px] text-text-muted line-through">
+                    {wt.branch ?? "(unknown branch)"}
+                  </span>
+                  <span className="text-[11.5px] text-text-muted">folder missing — clean up</span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => act(wt.path, "remove", { force: true })}
+                    disabled={b}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+                {err && <p className="text-[11.5px] mt-2" style={{ color: "var(--danger)" }}>{err}</p>}
+              </div>
+            );
+          }
+
+          return (
+            <div key={wt.path} className="rounded-lg border border-line bg-paper px-4 py-3">
+              {/* Row header — branch, repo, ahead/merged pill, dirty dot, sessions. */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[12px] text-ink truncate max-w-[240px]" title={wt.branch ?? ""}>
+                  {wt.branch ?? "(detached)"}
+                </span>
+                <span className="text-[11px] uppercase tracking-wider text-text-muted" style={{ fontFamily: "var(--font-mono)" }}>
+                  {wt.repo}
+                </span>
+                {wt.merged ? (
+                  <StatusPill kind="ok">merged</StatusPill>
+                ) : (
+                  <StatusPill kind="idle">
+                    {wt.aheadCount} {wt.aheadCount === 1 ? "commit ahead" : "commits ahead"}
+                  </StatusPill>
+                )}
+                {wt.dirty && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-text-muted" title="Uncommitted changes in this copy">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warn)" }} />
+                    uncommitted
+                  </span>
+                )}
+                <div className="flex-1" />
+                {wt.sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => onNavigate(s.id)}
+                    className="text-[11px] text-text-muted hover:text-ink transition truncate max-w-[180px]"
+                    title={s.title}
+                  >
+                    {s.title}
+                  </button>
+                ))}
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2 flex-wrap mt-2.5">
+                <button
+                  onClick={() => toggleDiff(wt.path)}
+                  className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition"
+                >
+                  {openDiff[wt.path] ? "Hide changes" : "View changes"}
+                </button>
+                <button
+                  onClick={() => act(wt.path, "apply")}
+                  disabled={b || wt.dirty || Boolean(appliedMsg)}
+                  title={wt.dirty ? "Commit or discard changes in the copy first" : "Merge this copy back into your folder"}
+                  className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                >
+                  Apply to my folder
+                </button>
+                {wt.github && (
+                  <button
+                    onClick={() => act(wt.path, "push")}
+                    disabled={b}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Push
+                  </button>
+                )}
+                {/* Remove — inline confirm when the copy has uncommitted work. */}
+                {confirmRemove[wt.path] ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="text-[11.5px] text-text-muted">
+                      This copy has uncommitted changes. Remove anyway?
+                    </span>
+                    <button
+                      onClick={() => act(wt.path, "remove", { force: true })}
+                      disabled={b}
+                      className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] hover:bg-cream transition disabled:opacity-50"
+                      style={{ color: "var(--danger)" }}
+                    >
+                      Remove anyway
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemove((c) => ({ ...c, [wt.path]: false }))}
+                      className="text-[11px] text-text-muted hover:text-ink transition"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => (wt.dirty ? setConfirmRemove((c) => ({ ...c, [wt.path]: true })) : act(wt.path, "remove"))}
+                    disabled={b}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text-muted hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {/* Results / errors — rendered verbatim. */}
+              {appliedMsg && <p className="text-[11.5px] mt-2" style={{ color: "var(--ok)" }}>{appliedMsg}</p>}
+              {compareUrl && (
+                <a
+                  href={compareUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-[11.5px] mt-2 text-ink underline hover:opacity-80"
+                >
+                  Open pull request ↗
+                </a>
+              )}
+              {err && <p className="text-[11.5px] mt-2" style={{ color: "var(--danger)" }}>{err}</p>}
+
+              {/* Inline diff */}
+              {openDiff[wt.path] && (
+                <div className="mt-3 max-h-[45vh] overflow-y-auto">
+                  {diffs[wt.path] === undefined ? (
+                    <p className="text-text-muted text-[12px]">Loading changes…</p>
+                  ) : diffs[wt.path] && diffs[wt.path]!.files.length > 0 ? (
+                    <DiffView diff={diffs[wt.path]!.diff} truncated={diffs[wt.path]!.truncated} />
+                  ) : (
+                    <p className="text-text-muted text-[12px]">No changes against {wt.base}.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -106,6 +106,39 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_branch_notes_repo_branch ON branch_notes(repo, branch, status);
       `),
   },
+  {
+    id: 7,
+    name: "agent_sessions: session-diff snapshot columns (start_sha, start_untracked, worktree_id)",
+    up: (db) => {
+      // SEQUENCING HAZARD: agent_sessions is NOT in db.ts's baseline — it's
+      // created at runtime.ts module load, which happens AFTER migrations run
+      // (db.ts → migrate() at import). So a DB that predates the agents feature
+      // has no agent_sessions table yet, and bare ALTERs would crash boot.
+      // Create the CURRENT (pre-change) shape first: a no-op when the table
+      // already exists (older agents DB), and the owner of its creation when it
+      // doesn't. Either way the ALTERs below then land on a real table with the
+      // new columns absent, so they succeed strictly (no duplicate-column
+      // tolerance needed — migrations 5+ are strict; see header).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          id TEXT PRIMARY KEY,
+          backend TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          cwd TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          acp_session_id TEXT,
+          stop_reason TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN start_sha TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN start_untracked TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN worktree_id TEXT");
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);
