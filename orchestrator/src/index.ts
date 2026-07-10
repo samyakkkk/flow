@@ -20,6 +20,7 @@ import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
 import { registerNoteRoutes } from "./notes.js";
+import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
 
@@ -73,6 +74,7 @@ registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerCorrectionRoutes(app);
 registerNoteRoutes(app);
+registerSourceRoutes(app);
 
 // ------------------------------------------------------------------
 // Adapter webhook routes

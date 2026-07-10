@@ -1,5 +1,6 @@
 "use client";
 import { Shell } from "@/components/Shell";
+import { AddSource } from "@/components/AddSource";
 import { useState, FormEvent, useEffect, useCallback } from "react";
 import { useMode } from "@/lib/useMode";
 
@@ -579,7 +580,7 @@ export default function ConnectionsPage() {
   const [meetingText, setMeetingText] = useState("");
   const [meetingLoading, setMeetingLoading] = useState(false);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     fetch("/api/connections")
       .then((r) => r.json())
       .then((d) => setStatus(d as ConnStatus))
@@ -589,6 +590,10 @@ export default function ConnectionsPage() {
       .then((d) => setIndexedRepos((d as ReposData).repos ?? []))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const indexedUrls = new Set([
     ...indexedRepos.map((r) => r.url),
@@ -651,6 +656,11 @@ export default function ConnectionsPage() {
       {/* ── Ingest Status Panel ───────────────────────────────────────────── */}
       <Section title="Ingest Status">
         <CatchingUpPanel />
+      </Section>
+
+      {/* ── Add a source (front door) ─────────────────────────────────────── */}
+      <Section title="Add a source">
+        <AddSource mode={mode} onAdded={refresh} />
       </Section>
 
       {/* ── Repo Picker ───────────────────────────────────────────────────── */}

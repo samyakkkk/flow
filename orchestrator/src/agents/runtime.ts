@@ -149,10 +149,19 @@ export function listRepoOptions(): RepoOption[] {
   if (reposJson && existsSync(reposJson)) {
     try {
       const parsed = JSON.parse(readFileSync(reposJson, "utf8")) as {
-        repos?: Array<{ name: string }>;
+        repos?: Array<{ name: string; kind?: string; localPath?: string }>;
       };
       const reposDir = path.join(path.dirname(reposJson), "repos");
       for (const r of parsed.repos ?? []) {
+        // Docs sources are not session targets — sessions run in code repos.
+        if (r.kind === "docs") continue;
+        // WORK surface: when the user connected their own checkout, sessions
+        // run in-place there (the in-place default) rather than in Flow's
+        // managed clone.
+        if (r.localPath && existsSync(r.localPath)) {
+          out.push({ name: r.name, path: r.localPath, cloned: true });
+          continue;
+        }
         const p = path.join(reposDir, r.name);
         out.push({ name: r.name, path: p, cloned: existsSync(p) });
       }

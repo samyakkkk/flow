@@ -21,8 +21,24 @@ if (targets.length === 0) {
 await assertGatewayUp();
 
 for (const repo of targets) {
-  const dir = join(REPOS_DIR, repo.name);
   console.log(`\n=== ${repo.name} ===`);
+  // Sources front door: docs folders have no git surface to pull/index here,
+  // and local-only repos (a user's own checkout, no remote url) have nothing
+  // to pull from — both are skipped by the cron. Local-only repos reindex only
+  // via an explicit reindex_request; docs go through the ingestion pipeline.
+  if (repo.kind === "docs") {
+    console.log("Docs source — skipped by the update cron (ingestion pipeline handles it).");
+    continue;
+  }
+  if (!repo.url && repo.localPath) {
+    console.log("Local-only repo (no remote) — skipped by the update cron; reindex explicitly.");
+    continue;
+  }
+  if (!repo.url) {
+    console.log("No url and no local checkout — nothing to update.");
+    continue;
+  }
+  const dir = join(REPOS_DIR, repo.name);
   git(dir, "fetch", "origin", repo.branch);
   git(dir, "checkout", "-q", repo.branch);
   git(dir, "reset", "--hard", `origin/${repo.branch}`);

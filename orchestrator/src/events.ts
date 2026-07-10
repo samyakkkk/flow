@@ -150,23 +150,15 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
       ).run(event.id, JSON.stringify({ error: "missing url" }));
       return;
     }
-    const { registerRepo, enqueueJob } = await import("./opencode.js");
-    const entry = registerRepo(p.url, p.branch ?? "main");
-    // Also watch this branch in the GitHub poller/webhook — registeredRepos
-    // is otherwise only seeded at boot (defaults/env/repos.json).
-    const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
-    const ownerRepo = ownerRepoFromUrl(p.url);
-    if (ownerRepo) watchRepo(ownerRepo, entry.branch);
-    const job = await enqueueJob({
-      type: "index_repo",
-      input: { repo: entry.name, url: entry.url, branch: entry.branch },
-      repo: entry.name,
-    });
+    // Register + watch + queue the index job via the shared connection path
+    // (also used by the sources front door), then audit.
+    const { connectGithubRepo } = await import("./opencode.js");
+    const { entry, jobId } = await connectGithubRepo(p.url, p.branch ?? "main");
     // target = the human-facing repo name (the dashboard shows it verbatim);
     // the job id lives in detail for debugging.
     db.prepare(
       `INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail) VALUES (?, 'repo_added', 1.0, 'index_job', ?, 'ok', ?)`
-    ).run(event.id, entry.name, JSON.stringify({ job: job.id, branch: entry.branch }));
+    ).run(event.id, entry.name, JSON.stringify({ job: jobId, branch: entry.branch }));
     return;
   }
 
