@@ -201,6 +201,16 @@ function maybeSelfUpdate() {
   process.exit(child.status ?? 0);
 }
 
+// Commit the running code identifies as. Services load source at spawn (tsx),
+// so `flow up` compares this against the stamp written when a project's
+// services started to decide whether "already running" is good enough or the
+// code moved underneath them (self-update, branch switch) and they must
+// restart to pick up migrations/reconcilers. null on non-git installs.
+function codeHead() {
+  const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd: flowRoot, encoding: "utf8", timeout: 5000 });
+  return r.status === 0 ? (r.stdout ?? "").trim() || null : null;
+}
+
 // ── Pid / process state helpers ──────────────────────────────────────────────
 
 /** Return true if a process with the given pid is alive. */
@@ -564,16 +574,34 @@ async function upProject(name, { rebuilt = false } = {}) {
 
   // Already running? Use port-in-use, not a health probe — a flaky probe used
   // to trick us into starting a SECOND orchestrator on the busy port (which
-  // then "didn't start"). If the orchestrator port is held, keep it (and any
-  // agent sessions) and just refresh the dashboard. The dashboard is stateless,
-  // and this is the thing that breaks invisibly: dead, or serving a stale
-  // shared build after a rebuild (the unstyled-page bug). Cheap insurance.
+  // then "didn't start"). If the orchestrator port is held AND it was spawned
+  // from the code we'd spawn now, keep it (and any agent sessions) and just
+  // refresh the dashboard. The dashboard is stateless, and this is the thing
+  // that breaks invisibly: dead, or serving a stale shared build after a
+  // rebuild (the unstyled-page bug). Cheap insurance.
+  //
+  // But if the checkout moved since the services were spawned (self-update
+  // pulled, or a branch switch), keeping them would silently run OLD code —
+  // services load source at spawn (tsx), so migrations and reconcilers in the
+  // new code would never fire. Compare git HEAD against the stamp written at
+  // spawn time and fall through to a full restart on mismatch. A missing
+  // stamp (pre-stamp install) also restarts, once, to converge. Uncommitted
+  // edits don't move HEAD — dev checkouts restart manually, as ever.
   if (portInUse(ports.orchestrator)) {
-    void rebuilt; // dashboard is refreshed unconditionally below
-    spawnDashboardFor(name);
-    const dashOk = await waitForHealth(`${dashUrl}/login`, 30000);
-    console.log(`  ${label} ${dashOk ? OK : FAIL} ${c.dim(dashOk ? "ready" : "orchestrator up · dashboard failed")}   ${c.cyan(dashUrl)}`);
-    return { name, ok: dashOk, ports, mode, alreadyRunning: true };
+    const head = codeHead();
+    const stampFile = join(dir, "code-head");
+    const stamp = existsSync(stampFile) ? readFileSync(stampFile, "utf-8").trim() : null;
+    if (!head || head === stamp) {
+      void rebuilt; // dashboard is refreshed unconditionally below
+      spawnDashboardFor(name);
+      const dashOk = await waitForHealth(`${dashUrl}/login`, 30000);
+      console.log(`  ${label} ${dashOk ? OK : FAIL} ${c.dim(dashOk ? "ready" : "orchestrator up · dashboard failed")}   ${c.cyan(dashUrl)}`);
+      return { name, ok: dashOk, ports, mode, alreadyRunning: true };
+    }
+    console.log(
+      `  ${label} ${c.dim(`code changed (${(stamp ?? "unstamped").slice(0, 7)} → ${head.slice(0, 7)}) — restarting services`)}`,
+    );
+    killPort(ports.orchestrator);
   }
 
   // Inline progress line (fills in on completion) when attached to a terminal.
@@ -589,6 +617,14 @@ async function upProject(name, { rebuilt = false } = {}) {
   // check — "ready", but serving old code.
   killPort(ports.gateway);
   killPort(ports.dashboard);
+
+  // Stamp the code these services are spawned from (see the already-running
+  // check above). Written before the spawns so a crash mid-start re-runs a
+  // full start next time rather than trusting half-started services.
+  {
+    const head = codeHead();
+    if (head) writeFileSync(join(dir, "code-head"), head + "\n");
+  }
 
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
