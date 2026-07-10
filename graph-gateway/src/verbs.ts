@@ -2,6 +2,14 @@ import { z } from "zod";
 import { DEFAULT_GRAPH, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
+import { embedText, embeddingsEnabled, entityText } from "./embed.js";
+
+// Cosine-distance ceiling for semantic matches. Tuned on the flow graph (156
+// nodes) by sweeping a 24-query labelled set: recall climbs steeply up to ~0.65
+// (hit@3 88%, 0 regressions) then flattens while noise keeps rising, so 0.65 is
+// the knee. text-embedding-3-small puts genuinely related items in ~0.40–0.65
+// and unrelated ones past ~0.72. Tunable via env for re-tuning on other graphs.
+const VECTOR_MAX_DISTANCE = Number(process.env.FLOW_VECTOR_MAX_DISTANCE ?? 0.65);
 
 // Typed verbs are the only way anything mutates the graph. Every write
 // requires provenance and lands in the journal. Node/edge types are validated
@@ -34,16 +42,54 @@ interface EntityRow {
   description: unknown;
 }
 
+// A found row plus optional retrieval metadata: `via` says which pass surfaced
+// it (lexical substring vs. semantic vector) and `distance` is the cosine
+// distance for vector hits (lower = closer). Both are additive — existing
+// callers that only read type/id/name/description are unaffected.
+interface ScoredRow extends EntityRow {
+  via?: "lexical" | "vector";
+  distance?: number;
+}
+
+const clampLimit = (limit: number) => Math.max(1, Math.min(50, Math.floor(limit)));
+
 async function findSimilar(graph: string, q: string, type?: string, limit = 10): Promise<EntityRow[]> {
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
     `MATCH (n) WHERE (toLower(n.id) CONTAINS $ql OR toLower(n.name) CONTAINS $ql OR toLower(coalesce(n.aliases, '')) CONTAINS $ql) ${typeFilter}
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description
-     LIMIT ${Math.max(1, Math.min(50, Math.floor(limit)))}`,
+     LIMIT ${clampLimit(limit)}`,
     { ql: q.toLowerCase(), ...(type ? { type } : {}) },
   );
   return rows as unknown as EntityRow[];
+}
+
+// Semantic search: embed the query, then rank nodes by cosine distance to their
+// stored embedding. This is what rescues queries whose words appear nowhere in
+// the graph ("worktree" → the repo-checkout / agent-session nodes). Brute-force
+// over nodes carrying an embedding — exact (no HNSW recall loss) and instant at
+// the hundreds-to-thousands of nodes a project graph holds. Returns [] when
+// embeddings are unconfigured or the query can't be embedded.
+async function findByVector(graph: string, q: string, type: string | undefined, limit: number): Promise<ScoredRow[]> {
+  const vec = await embedText(q);
+  if (!vec) return [];
+  const typeFilter = type ? `AND labels(n)[0] = $type` : "";
+  const rows = await run(
+    graph,
+    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter}
+     WITH n, vec.cosineDistance(n.embedding, vecf32($vec)) AS d
+     WHERE d <= $maxDistance
+     RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, d AS distance
+     ORDER BY d ASC
+     LIMIT ${clampLimit(limit)}`,
+    { vec, maxDistance: VECTOR_MAX_DISTANCE, ...(type ? { type } : {}) },
+  );
+  return (rows as unknown as ScoredRow[]).map((r) => ({
+    ...r,
+    via: "vector",
+    distance: typeof r.distance === "number" ? Math.round(r.distance * 1000) / 1000 : r.distance,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -62,8 +108,25 @@ async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
     { q: input.q },
   );
   if (exact.length > 0) return { status: "exact", matches: exact };
-  const similar = await findSimilar(input.graph, input.q, input.type, input.limit);
-  return { status: similar.length > 0 ? "similar" : "none", matches: similar };
+
+  // Lexical substring first — it's a high-precision signal when the caller
+  // already knows a name/id fragment. Then augment with semantic matches the
+  // substring scan can't reach. Lexical hits keep their rank; vector hits fill
+  // the remaining slots, deduped by id.
+  const lexical: ScoredRow[] = (await findSimilar(input.graph, input.q, input.type, input.limit)).map(
+    (r) => ({ ...r, via: "lexical" }),
+  );
+  const vector = embeddingsEnabled() ? await findByVector(input.graph, input.q, input.type, input.limit) : [];
+
+  const seen = new Set(lexical.map((r) => String(r.id)));
+  const matches: ScoredRow[] = [...lexical];
+  for (const v of vector) {
+    if (matches.length >= input.limit) break;
+    if (seen.has(String(v.id))) continue;
+    seen.add(String(v.id));
+    matches.push(v);
+  }
+  return { status: matches.length > 0 ? "similar" : "none", matches };
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +201,33 @@ async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>
     status = "created";
   }
 
+  await embedNode(input.graph, input.id);
   await record({ graph: input.graph, actor: input.provenance.actor, verb: "upsert_entity", input: { type: input.type, id: input.id, name: input.name }, status });
   return { status, id: input.id };
+}
+
+// Compute and store the semantic vector for a node. Best-effort: never throws,
+// never blocks a write. Reads the node back first so the embedding always
+// reflects what was actually persisted (an update may leave description/aliases
+// unchanged, so we can't rely on the input alone).
+async function embedNode(graph: string, id: string): Promise<void> {
+  if (!embeddingsEnabled()) return;
+  try {
+    const cur = await run(
+      graph,
+      `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.name AS name, n.description AS description, n.aliases AS aliases`,
+      { id },
+    );
+    const row = cur[0];
+    if (!row) return;
+    const vec = await embedText(
+      entityText(String(row.type), String(row.name ?? ""), row.description as string, row.aliases as string),
+    );
+    if (!vec) return;
+    await run(graph, `MATCH (n {id: $id}) SET n.embedding = vecf32($vec)`, { id, vec });
+  } catch (err) {
+    console.warn(`[embed] node ${id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
