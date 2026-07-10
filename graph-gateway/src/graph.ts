@@ -27,6 +27,14 @@ export async function run(
   return (reply.data ?? []) as Record<string, unknown>[];
 }
 
+// Raw redis connection (FalkorDB is a redis module). Used for gateway
+// bookkeeping like the per-graph migration version stamp — plain keys, so
+// nothing leaks into graph query results.
+export async function raw() {
+  const conn = await connect();
+  return conn.connection;
+}
+
 export async function close(): Promise<void> {
   if (db) {
     await db.close();

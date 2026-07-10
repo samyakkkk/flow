@@ -125,6 +125,82 @@ function parseEnvFile(filePath) {
   return env;
 }
 
+// The OpenRouter key powers the gateway's semantic find_entity + embed-on-write.
+// It usually isn't in the project .env — it's saved once as a machine default in
+// <data>/global.json (see orchestrator/src/global-settings.ts). Read it from
+// there so the gateway gets the same key everything else uses. projectDir is
+// <data>/projects/<name>, so ../../global.json is <data>/global.json.
+function readGlobalKey(projectDir, key) {
+  try {
+    const p = join(projectDir, "..", "..", "global.json");
+    if (!existsSync(p)) return undefined;
+    const v = JSON.parse(readFileSync(p, "utf-8"))?.[key];
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ── Self-update ──────────────────────────────────────────────────────────────
+//
+// `flow up` fast-forwards the checkout before starting services, so "update
+// flow" is just "flow up" — migrations and reconcilers run at service boot
+// with the new code. Deliberately conservative: ff-only, and skipped entirely
+// when this looks like a dev checkout (dirty worktree or non-default branch),
+// when offline, or when opted out (--no-update / FLOW_NO_UPDATE=1). An update
+// failure never blocks boot.
+//
+// After a successful pull the CLI re-execs itself (with updates disabled) so
+// the rest of the invocation runs the NEW cli code too — otherwise this
+// process would keep executing the old flow.mjs from memory while spawning
+// new-source services.
+
+function maybeSelfUpdate() {
+  if (process.env.FLOW_NO_UPDATE === "1") return;
+  if (!existsSync(join(flowRoot, ".git"))) return; // not a git install
+
+  const git = (args, timeout = 15000) =>
+    spawnSync("git", args, { cwd: flowRoot, encoding: "utf8", timeout });
+
+  const branch = (git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout ?? "").trim();
+  if (branch !== "main" && branch !== "master") return; // dev checkout on a feature branch
+  if ((git(["status", "--porcelain"]).stdout ?? "").trim()) return; // dirty — dev checkout
+  if (git(["rev-parse", "--abbrev-ref", "@{u}"]).status !== 0) return; // no upstream
+
+  if (git(["fetch", "--quiet"], 10000).status !== 0) return; // offline / remote unreachable
+  const behind = Number((git(["rev-list", "--count", "HEAD..@{u}"]).stdout ?? "0").trim());
+  if (!behind) return;
+
+  const oldHead = (git(["rev-parse", "--short", "HEAD"]).stdout ?? "").trim();
+  const lockBefore = (git(["rev-parse", "HEAD:package-lock.json"]).stdout ?? "").trim();
+  if (git(["pull", "--ff-only", "--quiet"], 60000).status !== 0) {
+    console.log(c.dim("  update available but not fast-forwardable — skipped (git pull manually)"));
+    return;
+  }
+  const newHead = (git(["rev-parse", "--short", "HEAD"]).stdout ?? "").trim();
+  console.log(`  ${OK} flow updated ${c.dim(`${oldHead} → ${newHead} (${behind} commit${behind === 1 ? "" : "s"})`)}`);
+
+  const lockAfter = (git(["rev-parse", "HEAD:package-lock.json"]).stdout ?? "").trim();
+  if (lockBefore !== lockAfter) {
+    console.log(c.dim("  dependencies changed — running npm install…"));
+    const res = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
+      cwd: flowRoot,
+      stdio: ["ignore", "ignore", "inherit"],
+      timeout: 300000,
+    });
+    if (res.status !== 0) {
+      console.log(`  ${FAIL} npm install failed — continuing with existing deps (run it manually if boot fails)`);
+    }
+  }
+
+  // Re-exec the updated CLI; FLOW_NO_UPDATE stops recursion.
+  const child = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], {
+    stdio: "inherit",
+    env: { ...process.env, FLOW_NO_UPDATE: "1" },
+  });
+  process.exit(child.status ?? 0);
+}
+
 // ── Pid / process state helpers ──────────────────────────────────────────────
 
 /** Return true if a process with the given pid is alive. */
@@ -390,8 +466,12 @@ async function cmdUp(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { mode: { type: "string", default: "local" } },
+    options: {
+      mode: { type: "string", default: "local" },
+      "no-update": { type: "boolean", default: false },
+    },
   });
+  if (!values["no-update"]) maybeSelfUpdate(); // may re-exec and not return
   const targetName = positionals[0] ?? null;
 
   // No name → start every project. A name that doesn't exist → offer to create
@@ -528,6 +608,12 @@ async function upProject(name, { rebuilt = false } = {}) {
     JOURNAL_PATH: journalPath,
     NODE_ENV: "production",
   };
+  // Embeddings (semantic find_entity + embed-on-write) need the OpenRouter key.
+  // Fall back to the machine default / ambient env when it isn't in the .env.
+  if (!gwEnv.OPENROUTER_API_KEY) {
+    const k = readGlobalKey(dir, "OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
+    if (k) gwEnv.OPENROUTER_API_KEY = k;
+  }
 
   const gwPid = spawnService({
     cwd: gatewayDir(),

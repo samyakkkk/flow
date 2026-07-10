@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { callVerb, verbs } from "./verbs.js";
 import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
+import { runBootTasks } from "./reconcile.js";
 
 // HTTP face of the gateway. No auth in v1 — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON
@@ -50,4 +51,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
+  // Converge this graph in the background: versioned migrations, then
+  // reconcilers (e.g. embedding backfill). See reconcile.ts.
+  runBootTasks(DEFAULT_GRAPH);
 });

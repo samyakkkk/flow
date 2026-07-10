@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { migrate } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -23,6 +24,12 @@ export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
+// Fresh DB = no tables yet. The baseline schema below creates the latest shape
+// directly, so migrate() just stamps it; existing DBs walk pending migrations
+// (see migrations.ts). Must be checked before the baseline runs.
+const freshDb =
+  (db.prepare("SELECT count(*) AS c FROM sqlite_master WHERE type = 'table'").get() as { c: number }).c === 0;
+
 db.exec(`
   -- ------------------------------------------------------------------
   -- Core event + job tables
@@ -40,14 +47,16 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT PRIMARY KEY,
-    type        TEXT NOT NULL,   -- index_repo | enrich | answer
-    input       TEXT NOT NULL,   -- JSON
-    status      TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed
-    result_json TEXT,
-    repo        TEXT,            -- for per-repo mutex
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+    id           TEXT PRIMARY KEY,
+    type         TEXT NOT NULL,   -- index_repo | enrich | answer
+    input        TEXT NOT NULL,   -- JSON
+    status       TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed
+    result_json  TEXT,
+    repo         TEXT,            -- for per-repo mutex
+    notify_count INTEGER NOT NULL DEFAULT 0,  -- notify-budget consumed by this job
+    session_id   TEXT,            -- opencode session bound to this job, if any
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   -- ------------------------------------------------------------------
@@ -178,6 +187,7 @@ db.exec(`
     cursor       TEXT NOT NULL DEFAULT '',
     last_poll_at INTEGER NOT NULL DEFAULT 0,
     status       TEXT NOT NULL DEFAULT 'idle',
+    detail       TEXT,  -- freeform: last-run info or error message
     PRIMARY KEY (source, resource)
   );
 
@@ -258,49 +268,16 @@ db.exec(`
   END;
 `);
 
-// ------------------------------------------------------------------
-// poll_cursors: one row per (source, resource), project-scoped by DB file.
-// resource is "" for source-level pollers (github, linear, fireflies).
-// status: ok | error | catching_up | disabled | idle
-// detail: freeform string for last-run information or error message.
-// ------------------------------------------------------------------
+// poll_cursors is defined in the baseline block above (one row per
+// (source, resource); resource is "" for source-level pollers; status:
+// ok | error | catching_up | disabled | idle). A second, drifted CREATE
+// TABLE IF NOT EXISTS used to live here — it silently no-op'd because the
+// first definition wins, which is exactly how the baseline lost columns.
+// Keep one canonical definition only.
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS poll_cursors (
-    source       TEXT NOT NULL,
-    resource     TEXT NOT NULL DEFAULT '',
-    cursor       TEXT NOT NULL DEFAULT '',
-    last_poll_at INTEGER NOT NULL DEFAULT 0,
-    status       TEXT NOT NULL DEFAULT 'ok',
-    detail       TEXT,
-    PRIMARY KEY (source, resource)
-  );
-`);
-
-// Migration: add detail column if it doesn't exist (existing DBs may lack it)
-try {
-  db.exec("ALTER TABLE poll_cursors ADD COLUMN detail TEXT");
-} catch {
-  // column already exists
-}
-
-// Lightweight migrations for databases created before these columns existed.
-try {
-  db.exec("ALTER TABLE events ADD COLUMN classification_json TEXT");
-} catch {
-  // column already exists
-}
-
-try {
-  db.exec("ALTER TABLE jobs ADD COLUMN notify_count INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // column already exists
-}
-
-try {
-  db.exec("ALTER TABLE jobs ADD COLUMN session_id TEXT");
-} catch {
-  // column already exists
-}
+// Versioned migrations (PRAGMA user_version). Fresh DBs were just created at
+// the latest shape by the baseline above and only get stamped; existing DBs
+// run everything pending. See migrations.ts for the rules.
+migrate(db, { fresh: freshDb });
 
 export default db;
