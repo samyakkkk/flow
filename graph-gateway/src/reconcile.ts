@@ -66,13 +66,13 @@ export async function reconcileEmbeddings(
   const rows = await run(
     graph,
     `MATCH (n) ${filter}
-     RETURN n.id AS id, labels(n)[0] AS type, n.name AS name, n.description AS description, n.aliases AS aliases`,
+     RETURN n.id AS id, labels(n)[0] AS type, n.name AS name, n.description AS description, n.aliases AS aliases, n.trigger AS trigger`,
   );
   if (rows.length === 0) return { total: 0, embedded: 0, failed: 0 };
 
   log(`[reconcile] graph='${graph}': embedding ${rows.length} node(s)${opts.force ? " (force)" : ""}`);
   const texts = rows.map((r) =>
-    entityText(String(r.type), String(r.name ?? ""), r.description as string, r.aliases as string),
+    entityText(String(r.type), String(r.name ?? ""), r.description as string, r.aliases as string, r.trigger as string),
   );
   const vectors = await embedBatch(texts);
 

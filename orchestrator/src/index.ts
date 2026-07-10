@@ -18,6 +18,8 @@ import { registerNotifyRoute } from "./notify.js";
 import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
+import { registerCorrectionRoutes } from "./corrections.js";
+import { registerNoteRoutes } from "./notes.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
 
@@ -69,6 +71,8 @@ registerModeRoute(app);
 registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
+registerCorrectionRoutes(app);
+registerNoteRoutes(app);
 
 // ------------------------------------------------------------------
 // Adapter webhook routes

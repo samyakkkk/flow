@@ -7,16 +7,30 @@ import { callVerb, verbs } from "./verbs.js";
 //
 // Two modes:
 // - Full (default): all verbs, for Flow's own graph builders.
-// - Read-only (GATEWAY_MCP_READONLY=1): query verbs only. This is what gets
-//   injected into coding-agent sessions — agents consult the brain, they
-//   don't rewrite it. The graph changes through normal ingestion instead.
+// - Session (GATEWAY_MCP_READONLY=1): query verbs plus the two governed
+//   proposal verbs (propose_procedure, correct_graph). This is what gets
+//   injected into coding-agent sessions — agents consult the brain and may
+//   PROPOSE (a pending procedure awaiting human bless; a correction flag the
+//   indexer verifies against the base branch), but never edit it directly.
 //
 // Agent-session observability: when FLOW_ACTIVITY_URL is set, every tool call
 // is reported (fire-and-forget) so the dashboard can highlight the graph
 // nodes an agent is reading, live. Never blocks or fails the tool call.
 
 const READONLY = process.env.GATEWAY_MCP_READONLY === "1";
-const READ_VERBS = new Set(["find_entity", "get_entity", "read_query", "list_schema"]);
+const SESSION_VERBS = new Set([
+  "find_entity",
+  "get_entity",
+  "read_query",
+  "list_schema",
+  // Governed proposal surface — none of these mutate existing knowledge
+  // directly; procedures enter, change, and leave only through human review.
+  "propose_procedure",
+  "propose_retire_procedure",
+  "correct_graph",
+  // Ungated branch-scoped working memory.
+  "note",
+]);
 
 const ACTIVITY_URL = process.env.FLOW_ACTIVITY_URL ?? "";
 const ACTIVITY_TOKEN = process.env.FLOW_ACTIVITY_TOKEN ?? "";
@@ -66,7 +80,7 @@ const server = new McpServer({
 });
 
 for (const [name, verb] of Object.entries(verbs)) {
-  if (READONLY && !READ_VERBS.has(name)) continue;
+  if (READONLY && !SESSION_VERBS.has(name)) continue;
   server.registerTool(
     name,
     { description: verb.description, inputSchema: verb.shape },

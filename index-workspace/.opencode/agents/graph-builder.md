@@ -30,6 +30,8 @@ Every write must carry `evidence` (repo + file:line, e.g. `api-acme apis/scrapes
 Durable human service context, NOT code positions:
 
 - **Service, Repository, APIEndpoint, Capability, UsageContract**, and resources (DatabaseTable, Database, S3Bucket, Queue, Cache, AWSResource, ExternalService). Workflow only for major lifecycles humans talk about.
+- **Procedure** nodes are human-blessed rules that enter through a separate proposal lane — NEVER create, edit, or delete them (or their `GOVERNS` edges) while indexing. They describe how humans want work done, not what the code does; reindexing cannot verify them.
+- **Note** nodes are Flow-promoted working memory (attributed utterances from sessions) — never create or edit them while indexing either; they enter via the branch-notes promotion pass.
 - Files and line numbers go in `evidence` properties only — never as nodes. Teams refactor constantly; a moved file is not a changed behavior.
 - Do not model every function, import graphs, or secrets. If code contains hardcoded sensitive values, model only the abstract resource.
 

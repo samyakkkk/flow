@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { GATEWAY_URL } from "@/lib/config";
+import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
 
 // GET /api/graph/overview
 // Calls the graph-gateway POST /v1/verbs/read_query with a safe read-only Cypher
@@ -63,7 +63,7 @@ export async function GET() {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/verbs/read_query`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
       body: JSON.stringify({ cypher: CYPHER }),
       signal: AbortSignal.timeout(8000),
     });

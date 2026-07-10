@@ -13,6 +13,7 @@ const PRIMARY_ITEMS = [
 
 // Secondary nav cluster (quieter — power-user surfaces)
 const SECONDARY_ITEMS = [
+  { href: "/inbox", label: "Inbox" },
   { href: "/connections", label: "Sources" },
   { href: "/permissions", label: "Automations" },
   { href: "/activity", label: "Activity" },

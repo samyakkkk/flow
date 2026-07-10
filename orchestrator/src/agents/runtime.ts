@@ -1,9 +1,11 @@
 // Agents v1 — ACP runtime. The orchestrator is the ACP client for every
 // coding agent on this machine (Claude Code, Codex, OpenCode): it spawns the
 // agent's ACP adapter as a subprocess, creates sessions in connected-repo
-// checkouts, injects Flow's read-only graph MCP into each session, streams
-// every session update to subscribers (SSE), and relays steering (follow-up
-// prompts, cancel, permission replies, mode changes).
+// checkouts, injects Flow's graph MCP into each session (read verbs plus the
+// two governed proposal verbs — propose_procedure and correct_graph — which
+// file proposals but never mutate knowledge directly), streams every session
+// update to subscribers (SSE), and relays steering (follow-up prompts,
+// cancel, permission replies, mode changes).
 //
 // Cloud shape: nothing in here is reachable except through the orchestrator's
 // HTTP API — the dashboard never spawns agents itself. Later, "cloud mode" is
@@ -17,6 +19,8 @@ import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { getSetting } from "../settings.js";
+import { addNote, matchNotes } from "../notes.js";
+import { embedText } from "../embed.js";
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -211,6 +215,9 @@ export interface LiveSession {
   id: string;
   backend: AgentBackend;
   repo: string;
+  branch?: string; // git branch of the checkout at session create (WIP notes + note-verb defaults)
+  turnText: string; // agent message text accumulated over the current turn (rolling WIP note source)
+  injectedIds: Set<string>; // memory items already injected this session — never repeat
   cwd: string;
   title: string;
   status: SessionStatus;
@@ -296,6 +303,8 @@ function rehydrate(id: string): LiveSession | undefined {
     id: row.id,
     backend: row.backend,
     repo: row.repo,
+    turnText: "",
+    injectedIds: new Set(),
     cwd: row.cwd,
     title: row.title,
     status: "error",
@@ -395,11 +404,18 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
         const opt = params.options.find((o) => o.kind !== "reject_once" && o.kind !== "reject_always") ?? params.options[0];
         return { outcome: { outcome: "selected", optionId: opt.optionId } };
       }
-      // Flow's own graph MCP is read-only by construction — auto-approve it
-      // so consulting the brain never stalls a session. Humans still gate
-      // file edits, shell commands, and every other tool.
+      // Flow's graph verbs are auto-approved so consulting the brain never
+      // stalls a session. That includes the proposal verbs: filing a
+      // proposal is harmless by construction (invisible until blessed,
+      // journaled, one-click discard) and the user's real accept/reject
+      // moment is the dashboard's proposal dialog, which pops immediately —
+      // they're on the session page when it happens. External MCP consumers
+      // (Claude Code CLI etc.) gate these calls through their own
+      // permission prompts instead. Exact-match on the MCP tool title — a
+      // bash command whose free-text title mentions "flow-graph" must not
+      // slip through this gate.
       const title = String(params.toolCall?.title ?? "");
-      if (title.includes("flow-graph")) {
+      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure|note)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
@@ -426,9 +442,15 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       if (!s) return;
       // Keep the cached config in sync when the agent reports a change (e.g.
       // after the user picks a model), so a reload/replay reflects it.
-      const u = params.update as { sessionUpdate?: string; configOptions?: unknown };
+      const u = params.update as { sessionUpdate?: string; configOptions?: unknown; content?: { type?: string; text?: string } };
       if (u.sessionUpdate === "config_option_update" && u.configOptions) {
         s.configOptions = u.configOptions;
+      }
+      // Accumulate the agent's own words this turn — the free source for the
+      // rolling WIP note (the agent already summarizes what it did; harvest,
+      // don't re-derive). Capped; we only ever use the tail.
+      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text" && u.content.text) {
+        s.turnText = (s.turnText + u.content.text).slice(-4000);
       }
       emit(s, "update", params.update);
     },
@@ -515,10 +537,11 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
         `${BACKENDS[s.backend].name} doesn't support resuming a session after its process exits — start a new session to continue.`
       );
     }
+    if (!s.branch) s.branch = (await runGit(s.cwd, ["branch", "--show-current"])).trim() || undefined;
     const resp = await c.conn.loadSession({
       sessionId: acpSessionId,
       cwd: s.cwd,
-      mcpServers: [flowGraphMcp(s.id)],
+      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "")],
     });
     s.modes = resp.modes ?? s.modes;
     s.configOptions = resp.configOptions ?? s.configOptions;
@@ -535,14 +558,26 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 // ---------------------------------------------------------------------------
 // Flow graph MCP injection (read-only) + activity routing
 
-function flowGraphMcp(flowSessionId: string): acp.McpServer {
+function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const env: Array<{ name: string; value: string }> = [
     { name: "GATEWAY_MCP_READONLY", value: "1" },
     { name: "GRAPH_NAME", value: projectGraphName() },
     { name: "FLOW_AGENT_SESSION", value: flowSessionId },
+    // note-verb defaults: Flow runs this session, so it knows the checkout.
+    // External MCP consumers pass {repo, branch} explicitly instead (Flow may
+    // be remote — never assume a shared filesystem).
+    { name: "FLOW_REPO", value: repo },
+    { name: "FLOW_BRANCH", value: branch },
+    { name: "FLOW_NOTES_URL", value: `http://127.0.0.1:${orchPort}/v1/notes` },
     { name: "FLOW_ACTIVITY_URL", value: `http://127.0.0.1:${orchPort}/v1/agents/graph-activity` },
-    { name: "FLOW_ACTIVITY_TOKEN", value: process.env.FLOW_ADMIN_TOKEN ?? "" },
+    // The EFFECTIVE bearer, matching auth.ts's fallback: an empty string here
+    // means the MCP omits the Authorization header and every activity report
+    // and correction dispatch 401s silently in tokenless dev setups.
+    { name: "FLOW_ACTIVITY_TOKEN", value: process.env.FLOW_ADMIN_TOKEN ?? "dev-token" },
+    // correct_graph dispatch target — flags land in the corrections queue and
+    // get verified against the base-branch checkout by the indexer.
+    { name: "FLOW_CORRECTIONS_URL", value: `http://127.0.0.1:${orchPort}/v1/corrections` },
   ];
   if (process.env.FALKOR_HOST) env.push({ name: "FALKOR_HOST", value: process.env.FALKOR_HOST });
   if (process.env.FALKOR_PORT) env.push({ name: "FALKOR_PORT", value: process.env.FALKOR_PORT });
@@ -573,9 +608,142 @@ export function recordGraphActivity(body: {
 }
 
 // ---------------------------------------------------------------------------
+// Insert-mode procedures — blessed rules whose author asked Flow to push them
+// into sessions when the task matches. v1 injects at session start (the first
+// turn boundary): semantic-match the prompt against Procedure nodes via the
+// gateway, then one read_query fetches the matched candidates' fields and
+// filters to blessed insert-mode server-side. Exactly two bounded round-trips
+// and strictly best-effort: a gateway hiccup degrades to retrieve-mode
+// behaviour, it never blocks or fails the session.
+
+const MAX_INJECTED_PROCEDURES = 2;
+// Wider than the injection budget on purpose: insert-mode rules are the rare
+// minority and must not lose their candidate slots to retrieve-mode matches.
+const PROCEDURE_MATCH_POOL = 20;
+
+async function gatewayVerb(name: string, input: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const base = process.env.GATEWAY_URL ?? "http://127.0.0.1:7433";
+  const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(`${base}/v1/verbs/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(3500),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+interface ProcedureCandidate {
+  id: string;
+  name: string;
+  trigger: string;
+  steps: string;
+  scope: string;
+  repo: string | null;
+}
+
+async function insertModeProcedures(prompt: string, repo: string): Promise<Array<{ id: string; block: string }>> {
+  const graph = projectGraphName();
+  const found = await gatewayVerb("find_entity", {
+    q: prompt.slice(0, 500),
+    type: "Procedure",
+    limit: PROCEDURE_MATCH_POOL,
+    graph,
+  });
+  const ids = ((found?.matches ?? []) as Array<{ id?: string }>)
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === "string" && /^[\w:./ -]+$/.test(id));
+  if (ids.length === 0) return [];
+
+  // read_query takes no params — inline the id list. Ids come from our own
+  // graph and are shape-checked above; quotes are escaped regardless.
+  const idList = ids.map((id) => `'${id.replace(/'/g, "\\'")}'`).join(", ");
+  const detail = await gatewayVerb("read_query", {
+    graph,
+    // retire_proposed stays in force until a human confirms the retirement.
+    cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status IN ['blessed', 'retire_proposed'] AND n.mode = 'insert'
+             RETURN n.id AS id, n.name AS name, n.trigger AS trigger, n.steps AS steps, n.scope AS scope, n.repo AS repo`,
+  });
+  return ((detail?.rows ?? []) as ProcedureCandidate[])
+    .filter((r) => !(r.scope === "repo" && r.repo && r.repo !== repo))
+    // Preserve the semantic-match ranking from find_entity.
+    .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
+    .slice(0, MAX_INJECTED_PROCEDURES)
+    .map((r) => ({
+      id: r.id,
+      block: `- PROCEDURE (human-blessed) ${r.name} (${r.id})\n  When: ${r.trigger ?? ""}\n  ${String(r.steps ?? "")
+        .split("\n")
+        .map((s, i) => `${i + 1}. ${s}`)
+        .join("\n  ")}`,
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Turn-boundary memory injection — the Claude-style recall lane, no LLM in
+// the path: one local embedding of the user's message (procedure matching
+// embeds server-side in parallel), cosine over the branch's notes in-process,
+// top items as a clearly-marked block. Per-session dedup (never re-inject the
+// same item), hard overall time bound, strictly best-effort.
+
+const INJECTION_BUDGET = 3; // total items per turn across procedures + notes
+const INJECTION_TIMEOUT_MS = 4000;
+
+async function buildMemoryInjection(s: LiveSession, userText: string): Promise<string> {
+  try {
+    const gather = (async () => {
+      const [procedures, noteVec] = await Promise.all([
+        insertModeProcedures(userText, s.repo),
+        embedLocal(userText.slice(0, 2000)),
+      ]);
+      const notes =
+        noteVec && s.branch
+          ? matchNotes(noteVec, s.repo, s.branch, { limit: 2, minSimilarity: 0.35 }).map((n) => ({
+              id: n.id,
+              block: `- NOTE (${n.kind}, this branch): ${n.text.length > 500 ? n.text.slice(0, 500) + "…" : n.text}`,
+            }))
+          : [];
+      return [...procedures, ...notes];
+    })();
+    const items = (await Promise.race([
+      gather,
+      new Promise<[]>((r) => setTimeout(() => r([]), INJECTION_TIMEOUT_MS)),
+    ])) as Array<{ id: string; block: string }>;
+
+    const fresh = items.filter((i) => !s.injectedIds.has(i.id)).slice(0, INJECTION_BUDGET);
+    if (fresh.length === 0) return "";
+    for (const i of fresh) s.injectedIds.add(i.id);
+    // Visible in the session view as brain activity (same channel as MCP reads).
+    emit(s, "graph", { verb: "memory_inject", args: "", nodeIds: fresh.map((i) => i.id), ok: true });
+    return `[flow memory — auto-retrieved for this turn; weigh it, it may be stale]\n${fresh
+      .map((i) => i.block)
+      .join("\n")}\n[/flow memory]\n\n`;
+  } catch {
+    return "";
+  }
+}
+
+async function embedLocal(text: string): Promise<Float32Array | null> {
+  try {
+    return await embedText(text);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Session lifecycle
 
-const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools (find_entity, get_entity, read_query, list_schema) — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (services, capabilities, APIs, resources and how they connect) before diving into files. It is read-only.`;
+const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
+Two proposal tools let you contribute back — use them sparingly and precisely:
+- correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
+- propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.
+- propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.
+- note: save branch-scoped working memory freely (no approval) — discoveries, dead ends ("tried X, deadlocked"), constraints, decisions. Note what the next session on this branch would otherwise re-learn the hard way.`;
 
 export async function createSession(opts: {
   backend: AgentBackend;
@@ -593,6 +761,8 @@ export async function createSession(opts: {
     id,
     backend: opts.backend,
     repo: opts.repo,
+    turnText: "",
+    injectedIds: new Set(),
     cwd: repoOpt.path,
     title,
     status: "starting",
@@ -611,10 +781,11 @@ export async function createSession(opts: {
   // Async: connect, create ACP session, run the first turn.
   void (async () => {
     try {
+      s.branch = (await runGit(repoOpt.path, ["branch", "--show-current"])).trim() || undefined;
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
         cwd: repoOpt.path,
-        mcpServers: [flowGraphMcp(id)],
+        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "")],
       });
       s.acpSessionId = String(resp.sessionId);
       s.modes = resp.modes ?? null;
@@ -623,7 +794,7 @@ export async function createSession(opts: {
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
       emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
-      await runTurn(s, `${GRAPH_PREAMBLE}\n\n${opts.prompt}`);
+      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
     }
@@ -632,18 +803,51 @@ export async function createSession(opts: {
   return { id };
 }
 
-async function runTurn(s: LiveSession, text: string): Promise<void> {
+// Rolling WIP note — the free tier of branch memory. Assembled from what the
+// session already produced (title + the agent's own latest words + diff
+// stat); zero LLM, zero agent discipline. kind='wip' supersedes this
+// session's previous note, so the branch always carries its CURRENT state
+// for the next session's injection. Fire-and-forget: never blocks a turn.
+async function writeWipNote(s: LiveSession): Promise<void> {
+  if (!s.branch || !s.turnText.trim()) return;
+  try {
+    const diff = await sessionDiff(s.id);
+    const files = "files" in diff ? diff.files.map((f) => f.path) : [];
+    const fileLine =
+      files.length > 0 ? `\nChanged: ${files.slice(0, 12).join(", ")}${files.length > 12 ? ` (+${files.length - 12} more)` : ""}` : "";
+    await addNote({
+      repo: s.repo,
+      branch: s.branch,
+      kind: "wip",
+      text: `WIP — ${s.title}\n${s.turnText.slice(-1200).trim()}${fileLine}`,
+      actor: "flow:auto-wip",
+      session: s.id,
+    });
+  } catch {
+    /* working memory is best-effort */
+  }
+}
+
+// Every turn — first prompt and steers alike — passes through here, so this
+// is where memory arrives: preamble (first turn only) + auto-retrieved memory
+// block + the user's text. Injection matches against the USER's words only,
+// never the preamble.
+async function runTurn(s: LiveSession, text: string, preamble = ""): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
+  s.turnText = "";
   setStatus(s, "running");
-  emit(s, "user_prompt", { text });
+  const memory = await buildMemoryInjection(s, text);
+  const finalText = `${preamble}${memory}${text}`;
+  emit(s, "user_prompt", { text: finalText });
   try {
     const result = await c.conn.prompt({
       sessionId: s.acpSessionId,
-      prompt: [{ type: "text", text }],
+      prompt: [{ type: "text", text: finalText }],
     });
     s.turnActive = false;
+    void writeWipNote(s);
     // Steering queued during the turn? Run it next.
     const next = s.queue.shift();
     if (next !== undefined && s.status !== "closed") {

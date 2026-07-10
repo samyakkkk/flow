@@ -4,12 +4,23 @@ import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
 import { runBootTasks } from "./reconcile.js";
 
-// HTTP face of the gateway. No auth in v1 — bind to localhost only.
-//   POST /v1/verbs/<name>   body: verb input JSON
-//   GET  /v1/journal?limit=50
-//   GET  /health
+// HTTP face of the gateway — bind to localhost only.
+//   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
+//   GET  /v1/journal?limit=50                        (bearer-authed)
+//   GET  /health                                     (open)
+//
+// Auth: when GATEWAY_TOKEN or FLOW_ADMIN_TOKEN is in the env (flow up passes
+// the project .env), every non-/health request must carry it as a bearer.
+// This closes the local self-bless hole (any process could call
+// review_procedure) and is the prerequisite for exposing the gateway to
+// remote MCP clients (EC2 topology). No token in env → open, as before —
+// dev fallback only.
 
 const port = Number(process.env.GATEWAY_PORT ?? 7433);
+const TOKEN = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+if (!TOKEN) {
+  console.warn("[gateway] no GATEWAY_TOKEN/FLOW_ADMIN_TOKEN in env — HTTP verbs are UNAUTHENTICATED (dev mode)");
+}
 
 function json(res: import("node:http").ServerResponse, code: number, body: unknown) {
   res.writeHead(code, { "content-type": "application/json" });
@@ -21,6 +32,12 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, verbs: Object.keys(verbs) });
+    }
+    if (TOKEN) {
+      const auth = String(req.headers.authorization ?? "");
+      if (auth !== `Bearer ${TOKEN}`) {
+        return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token." });
+      }
     }
     if (req.method === "GET" && url.pathname === "/v1/journal") {
       const limit = Number(url.searchParams.get("limit") ?? 50);

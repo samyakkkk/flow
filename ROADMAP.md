@@ -3,6 +3,144 @@
 What's shipped, what's next. See `CHANGELOG.md` for dated change history and
 `docs/ARCHITECTURE.md` for the design.
 
+## Notes & cautions — decided-for-now, revisit deliberately
+
+Concerns a human flagged as "keep this in mind" — not rules (procedures), not
+tasks (roadmap items). Each entry: the concern, who raised it, when, and what
+triggers the revisit. Remove when resolved (note the resolution in the
+changelog).
+
+- **External-CLI procedure proposals: inbox vs direct accept** (Samyak,
+  2026-07-10). A proposal from an external MCP client (Claude Code CLI etc.)
+  is gated only by that client's own yes/no tool prompt, then waits in the
+  Inbox/dialog as `proposed`; dashboard sessions get the instant dialog. The
+  two lanes carry different consent strengths for the same outcome. Revisit
+  after dogfooding: if pending proposals pile up unreviewed, or double-approval
+  annoys, pick one strong consent moment per lane.
+- **Corpus exposure to sessions widens exfiltration** (2026-07-10). When
+  `search_corpus`/ticket reads land on the session MCP, a prompt-injected
+  agent can read Slack history, not just code+graph. Fine local/single-user;
+  must be a per-project policy toggle before any shared deployment.
+- **Question-driven retrieval must not recurse** (2026-07-10). If an
+  answerer-style tool is ever exposed inside sessions, answerer sessions get
+  quick-mode tools only — no nested deep calls.
+
+## Shipped 2026-07-10 — Procedures + graph corrections (see CHANGELOG)
+Governed proposal lanes for coding agents: `propose_procedure` /
+`propose_retire_procedure` (human bless/retire via Inbox + instant dashboard
+dialog; deletion human-only, enforced in the gateway — upsert/merge reject
+Procedures) and `correct_graph` (flags verified by the indexer against the
+repo's base-branch checkout; verdicts to the Inbox; unparsable = `unclear`,
+never silently applied). Retrieval: GOVERNS ambush, semantic trigger match,
+insert-mode injection at session start. Open follow-ups, priority order:
+1. **Scope the correction verifier's writes** to the flagged node ids — today
+   it's a full-write graph-builder fed agent-authored text (prompt-injection
+   escalation path).
+2. **Tests**: corrections lifecycle + procedure verbs into the orchestrator
+   suite / a simulator scenario (currently hand-run smokes only).
+3. **Gateway auth**: localhost HTTP gateway serves `review_procedure`
+   unauthenticated — any local process can self-bless; matters more now that
+   blessing gates auto-injection.
+4. **Render proposal payloads in the ACP permission card** (external-lane
+   consent is title-only today; ties into the CLI-consent caution above).
+5. **`supersedes` on propose** — "the rule changed" should be one action, not
+   retire + re-propose fighting the dedup gate.
+6. **Turn-boundary insert injection** (today session-start only; a mid-session
+   steer into governed territory doesn't re-match) + trigger-threshold tuning
+   (0.65 was tuned on entity lookups, not triggers).
+7. **Surfaced-vs-followed analytics** for injected procedures (activity stream
+   records surfacing; nothing measures follow-through).
+
+## Next — memory system v2: FINAL decisions (2026-07-10, supersedes the section below where they differ)
+
+- **Retrieval stays `find_entity` → `get_entity(id)`** — the question-lens /
+  brain() variants are shelved ("let's see how big it gets"); revisit when
+  get_entity responses visibly bloat. (Bug fixed en route: get_entity was
+  shipping each node's 1536-float embedding vector in props.)
+- **Memory is not maintained by users.** Notes/decisions/cautions are UNGATED
+  (attributed utterances, free lane); procedures stay gated for now but the
+  direction is ungating them too. No approval queues for memory.
+- **Branch notes live in flow.db** (`branch_notes`, keyed repo+branch), NOT
+  in-repo md files (would tangle notes into the user's diff), NOT graph tags.
+  Portable to EC2 via export/import. Kinds: `wip` (rolling state, supersedes
+  itself, SWEPT at promotion — merged code carries that info) vs
+  note/caution/decision (accumulate, PROMOTE to graph Note nodes).
+- **Writers, three tiers by cost**: (1) FREE auto: rolling WIP note per
+  session assembled from title + agent's latest message + session diff — zero
+  LLM, zero discipline; (2) FREE agent-initiated `note` verb for in-the-moment
+  discoveries/dead-ends/decisions; (3) LLM distillation deferred to MERGE
+  time: hand the branch's session transcripts to the indexer agent during the
+  merge reindex — one cheap pass per merge, not per session.
+- **Promotion trigger = base-branch reindex**, not merge events: after every
+  successful `index_repo`, promote base-branch notes + merge-marked branch
+  notes (anchors resolve then — the entities exist post-reindex). Covers
+  direct-push-to-base. Unpushed/abandoned notes decay.
+- **Topology rule (first-class)**: agents may run LOCAL while Flow runs on
+  EC2 over MCP — Flow never assumes a shared filesystem; `{repo, branch}`
+  arrive as explicit tool args (runtime supplies them for dashboard sessions).
+- **Auto-injection is the product** (dashboard-first; direct CLI is
+  second-class by design): at session start AND every turn boundary, embed
+  the user message once, match procedures (graph) + notes (flow.db, local
+  cosine), inject top 2-3 one-line pointers in a marked block, per-session
+  dedup, hard threshold, NO LLM in the path. MCP lane gets piggyback memory
+  tails on tool responses (later).
+- **Security LAST by explicit priority call**: verifier write-scoping,
+  gateway bearer auth, permission-card payloads — after the memory work.
+
+## Design record — memory system v2 exploration (2026-07-10)
+Design record from the 2026-07-10 session — the rationale matters as much as
+the items; don't re-derive, supersede deliberately.
+
+- **Unified Note layer** (cautions + decision-rationale as ONE kind). A note
+  is an *attributed utterance, not a truth claim* ("Samyak worried X on date
+  D" is true even if the worry is wrong) — which is what makes it safe to
+  **auto-write with no per-item approval**. WHY: consent priced by blast
+  radius — procedures command agents (human-blessed, rare), corrections
+  mutate shared truth (machine-verified against base branch), notes only
+  color judgment (free lane). A human approval on every memory write turns
+  memory into a chore queue and then it simply doesn't get used.
+  Mechanics: ONE anchor link to whatever it concerns (semantic search covers
+  the rest — links are a precision optimization, not a requirement; the kind
+  determines edge semantics so agents only nominate targets, never relation
+  types), decay by default (unconfirmed notes fade; wrong ones die on their
+  own), gardening not gatekeeping (periodic digest review, usage-ranked
+  trust from the activity stream), write-side hygiene (dedup-at-write,
+  per-session budget). Decisions get a SUPERSEDES chain (ADR-style) and often
+  anchor to a Concept (an area), not implementation nodes.
+- **Branch-aware notes**: every note auto-carries {repo, branch, session} —
+  tagged mechanically by the runtime (it spawned the checkout), never
+  classified by agent or human. Retrieval scopes branch-tagged notes to
+  sessions on that branch; on `github_merge` (pipeline already ingests it)
+  promote or sweep; abandoned branches decay fast. This collapses the
+  branch-scratch problem to two fields + a rank rule *for notes* (facts still
+  need the full scratch design, deferred with worktrees).
+- **Corpus + systems-of-record on the brain MCP**: sessions can see distilled
+  claims but not the evidence behind them. Add read-only `search_corpus`
+  (proxies the existing /v1/corpus/search), use provenance fields as the join
+  key (graph node → corpus doc → Slack permalink / Linear URL), and proxy any
+  freshness-critical live reads (ticket status) through the orchestrator so
+  agents never hold credentials. See exfiltration caution above.
+- **Retrieval modes — A/B, deliberately undecided** (Samyak: try both). Arm A
+  = today's find_entity → get_entity chains. Arm B = question-driven
+  `brain(question)` → budgeted BRIEFING (not an answer: entity cards, edge
+  one-liners, top-3 ranked memory items with ids, labeled truncation) +
+  `brain_detail(id, facet)` for full payloads when acting. NO LLM in the
+  retrieval path (embed once + Cypher hops, ~200-400ms — the answerer's
+  synthesis stays out of sessions for latency). Old verbs remain as aliases.
+  The briefing RANKER is where memory policy lives: blessed > notes,
+  recency/confirmation, branch scoping, hard caps with labeled truncation —
+  "write freely, rank ruthlessly". Quick mode must return signposts (counts +
+  one-liners), never bodies, or note-bloat kills the ambush pattern.
+- **Sessions as an ingestion source (decision distillation)**: design
+  conversations in agent sessions currently die with the transcript. Reuse
+  the classify → policy → graphwrite pipeline (meeting `decision`s already
+  become Concepts): session-end job distills decisions-with-rationale from
+  agent-sessions/<id>.jsonl (actor `session:<id>`, policy-controlled).
+  External-CLI sessions have no transcript inside Flow — needs a session-safe
+  note/decision proposal verb (today sessions can only propose Procedures).
+  All writes through the consent table above — nothing self-blessed (learned
+  the hard way, same day).
+
 ## In progress — polish pass on the new UX
 Core UX overhaul SHIPPED (see changelog): state-machine home, brain-graph hero, floating Ask bar, humanized activity. Remaining polish: state-detection nuances (sources vs repos), middleware→proxy rename (Next 16 deprecation), real end-to-end walkthrough with a fresh user.
 

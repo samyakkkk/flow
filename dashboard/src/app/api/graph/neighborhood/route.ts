@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { GATEWAY_URL } from "@/lib/config";
+import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
 
 // GET /api/graph/neighborhood?nodeId=xxx[&graph=yyy]
 // Calls graph-gateway POST /v1/verbs/get_entity ({id, graph?}) and flattens
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/verbs/get_entity`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
       body: JSON.stringify(graph ? { id: nodeId, graph } : { id: nodeId }),
       signal: AbortSignal.timeout(5000),
     });

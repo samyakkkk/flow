@@ -328,6 +328,16 @@ export function AgentSession({ id }: { id: string }) {
           setConnected(true); // not an error — just a finished recording
           return;
         }
+        // A proposal verb just fired in this session — poke the Shell's
+        // proposal dialog so it appears immediately, not on the next poll.
+        // (Replayed events poke too; harmless — the dialog only shows items
+        // that are still pending.)
+        if (ev.kind === "graph") {
+          const verb = String((ev.data as { verb?: string } | null)?.verb ?? "");
+          if (verb === "propose_procedure" || verb === "propose_retire_procedure") {
+            window.dispatchEvent(new CustomEvent("flow:proposals-changed"));
+          }
+        }
         buffer.push(ev);
       } catch {
         /* skip */
@@ -757,6 +767,19 @@ export function AgentSession({ id }: { id: string }) {
                   <span style={{ color: "var(--warn)" }}>Agent asks permission</span>
                 </p>
                 <p className="text-ink text-[13px] mb-2.5">{p.toolCall?.title ?? "Run a tool"}</p>
+                {/* The payload IS the consent: for proposal verbs especially,
+                    the user must see what would be filed before allowing. */}
+                {p.toolCall?.rawInput !== undefined && (
+                  <pre
+                    className="text-[11px] mb-2.5 rounded-md border border-line bg-paper px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words"
+                    style={{ maxHeight: 180, overflowY: "auto", color: "var(--text-secondary, #555)" }}
+                  >
+                    {(() => {
+                      const s = JSON.stringify(p.toolCall.rawInput, null, 2) ?? "";
+                      return s.length > 1200 ? s.slice(0, 1200) + "\n…(truncated)" : s;
+                    })()}
+                  </pre>
+                )}
                 <div className="flex gap-2 flex-wrap">
                   {p.options.map((o) => (
                     <button

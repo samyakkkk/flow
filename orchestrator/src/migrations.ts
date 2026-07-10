@@ -62,6 +62,50 @@ export const MIGRATIONS: Migration[] = [
     name: "jobs: add session_id column",
     up: (db) => addColumn(db, "ALTER TABLE jobs ADD COLUMN session_id TEXT"),
   },
+  {
+    id: 5,
+    name: "corrections: agent-flagged graph inaccuracies awaiting indexer verification",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS corrections (
+          id          TEXT PRIMARY KEY,
+          target_ids  TEXT NOT NULL,
+          reason      TEXT NOT NULL,
+          evidence    TEXT,
+          repo        TEXT,
+          actor       TEXT,
+          session     TEXT,
+          graph_name  TEXT,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          job_id      TEXT,
+          resolution  TEXT,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `),
+  },
+  {
+    id: 6,
+    name: "branch_notes: Flow-side working memory scoped to repo+branch",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS branch_notes (
+          id          TEXT PRIMARY KEY,
+          repo        TEXT NOT NULL,
+          branch      TEXT NOT NULL,
+          kind        TEXT NOT NULL DEFAULT 'note',
+          text        TEXT NOT NULL,
+          anchor_hint TEXT,
+          actor       TEXT,
+          session     TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          embedding   BLOB,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_branch_notes_repo_branch ON branch_notes(repo, branch, status);
+      `),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);
