@@ -51,6 +51,30 @@ insert-mode injection at session start. Open follow-ups, priority order:
 7. **Surfaced-vs-followed analytics** for injected procedures (activity stream
    records surfacing; nothing measures follow-through).
 
+## UNDER REVIEW — turn-boundary memory injection (DISABLED 2026-07-10, Samyak)
+The auto-injection of memory into every turn (procedures + branch notes as a
+`[flow memory]` block) is BUILT and shipped but **disabled by default**
+(`FLOW_MEMORY_INJECTION=1` to enable) pending Samyak's review — he has
+thoughts on what should be injected and how it's ranked. Dogfooding surfaced
+the concern immediately: it fired on his own working session and surfaced
+half-relevant WIP notes (the rolling WIP notes are noisy injection candidates
+by nature — they're state, not insight).
+
+What to decide before re-enabling:
+- **What's eligible to inject** — should `wip` notes inject at all, or only
+  note/caution/decision + procedures? (wip is arguably pull-only: useful when
+  a NEW session resumes a branch, noise when injected into the same session
+  that wrote it.)
+- **Ranking / threshold** — 0.35 cosine was a guess; tune on real data, and
+  weight blessed procedures + cautions above wip.
+- **Dedup across a session's own output** — don't inject a note back into the
+  session that just wrote it.
+- **Push vs pull** — maybe injection is only for session-START (resume
+  context) and every other turn is pull-only. Samyak's call.
+Nothing else in the memory system depends on this being on — procedures,
+corrections, notes, and promotion all work; only the automatic per-turn push
+is paused.
+
 ## Next — memory system v2: FINAL decisions (2026-07-10, supersedes the section below where they differ)
 
 - **Retrieval stays `find_entity` → `get_entity(id)`** — the question-lens /

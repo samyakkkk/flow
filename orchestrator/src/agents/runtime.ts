@@ -693,7 +693,16 @@ async function insertModeProcedures(prompt: string, repo: string): Promise<Array
 const INJECTION_BUDGET = 3; // total items per turn across procedures + notes
 const INJECTION_TIMEOUT_MS = 4000;
 
+// Turn-boundary injection is DISABLED by default pending design review (see
+// ROADMAP — Samyak wants to rethink what gets injected and how it's ranked
+// before it runs against real sessions). Opt in with FLOW_MEMORY_INJECTION=1.
+// Note: this only gates the automatic per-turn PUSH; agents can still PULL
+// procedures/notes explicitly via the graph tools, and insert-mode procedures
+// remain available on demand.
+const INJECTION_ENABLED = process.env.FLOW_MEMORY_INJECTION === "1";
+
 async function buildMemoryInjection(s: LiveSession, userText: string): Promise<string> {
+  if (!INJECTION_ENABLED) return "";
   try {
     const gather = (async () => {
       const [procedures, noteVec] = await Promise.all([
