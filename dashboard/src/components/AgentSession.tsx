@@ -299,18 +299,21 @@ export function AgentSession({ id }: { id: string }) {
     repo?: string;
     title?: string;
     cwd?: string;
-    separateCopy?: boolean;
-    worktreePath?: string | null;
-    worktreeGithub?: boolean;
-  } | null>(null);
-  // Exit banner state (separate-copy sessions). Applied/pushed results and any
-  // server error render inline; dismiss hides it for this pageview only.
-  const [exitDismissed, setExitDismissed] = useState(false);
-  const [exitBusy, setExitBusy] = useState(false);
-  const [exitError, setExitError] = useState("");
-  const [exitApplied, setExitApplied] = useState(false);
-  const [exitCompareUrl, setExitCompareUrl] = useState("");
-  const [openHint, setOpenHint] = useState("");
+	    separateCopy?: boolean;
+	    worktreePath?: string | null;
+	    worktreeGithub?: boolean;
+	    worktreeBase?: string;
+	  } | null>(null);
+	  // Exit banner state (separate-copy sessions). PR result/conflict/server
+	  // errors render inline; dismiss hides it for this pageview only.
+	  const [exitDismissed, setExitDismissed] = useState(false);
+	  const [exitBusy, setExitBusy] = useState(false);
+	  const [exitError, setExitError] = useState("");
+	  const [exitNotice, setExitNotice] = useState("");
+	  const [exitTargetBranch, setExitTargetBranch] = useState("");
+	  const [exitPrUrl, setExitPrUrl] = useState("");
+	  const [exitConflict, setExitConflict] = useState<{ targetBranch: string; files: string[] } | null>(null);
+	  const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [sendError, setSendError] = useState("");
@@ -341,19 +344,20 @@ export function AgentSession({ id }: { id: string }) {
         }
         return r.json();
       })
-      .then(
-        (d) =>
-          d &&
-          setMeta({
-            backend: d.backend,
-            repo: d.repo,
-            title: d.title,
-            cwd: d.cwd,
-            separateCopy: d.separateCopy,
-            worktreePath: d.worktreePath ?? null,
-            worktreeGithub: Boolean(d.worktreeGithub),
-          })
-      )
+	      .then((d) => {
+	        if (!d) return;
+	        setMeta({
+	          backend: d.backend,
+	          repo: d.repo,
+	          title: d.title,
+	          cwd: d.cwd,
+	          separateCopy: d.separateCopy,
+	          worktreePath: d.worktreePath ?? null,
+	          worktreeGithub: Boolean(d.worktreeGithub),
+	          worktreeBase: String(d.worktreeBase ?? "main"),
+	        });
+	        setExitTargetBranch((prev) => prev || String(d.worktreeBase ?? "main"));
+	      })
       .catch(() => {});
   }, [id]);
 
@@ -606,32 +610,96 @@ export function AgentSession({ id }: { id: string }) {
     }
   }
 
-  // Exit actions for a separate-copy session — same endpoints as the copies
-  // list, targeting this session's own worktree path.
-  async function exitAct(action: "apply" | "push") {
-    const path = meta?.worktreePath;
-    if (!path) return;
-    setExitBusy(true);
-    setExitError("");
-    try {
-      const res = await fetch(`/api/agents/worktrees/${action}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setExitError(data.error ?? `Couldn't ${action} — status ${res.status}`);
-        return;
-      }
-      if (action === "apply") setExitApplied(true);
-      if (action === "push" && data.compareUrl) setExitCompareUrl(data.compareUrl);
-    } catch {
-      setExitError("Couldn't reach the server.");
-    } finally {
-      setExitBusy(false);
-    }
-  }
+	  // Exit action for a separate-copy session: open a PR to the selected target
+	  // branch. The server packages dirty work into a commit before pushing, so the
+	  // PR never opens as an empty diff just because the agent left edits unstaged.
+	  async function openExitPr() {
+	    const path = meta?.worktreePath;
+	    if (!path) return;
+	    setExitBusy(true);
+	    setExitError("");
+	    setExitNotice("");
+	    setExitConflict(null);
+	    try {
+	      const res = await fetch("/api/agents/worktrees/pr", {
+	        method: "POST",
+	        headers: { "content-type": "application/json" },
+	        body: JSON.stringify({ path, targetBranch: exitTargetBranch || meta?.worktreeBase || "main" }),
+	      });
+	      const data = await res.json().catch(() => ({}));
+	      if (res.status === 409 && data.conflict) {
+	        const fallbackTarget = exitTargetBranch || meta?.worktreeBase || "main";
+	        setExitConflict({
+	          targetBranch: String(data.targetBranch ?? fallbackTarget),
+	          files: Array.isArray(data.files) ? data.files.map(String) : [],
+	        });
+	        return;
+	      }
+	      if (!res.ok) {
+	        setExitError(data.error ?? `Couldn't open PR — status ${res.status}`);
+	        return;
+	      }
+	      if (data.compareUrl) {
+	        setExitPrUrl(data.compareUrl);
+	        window.open(data.compareUrl, "_blank", "noopener,noreferrer");
+	      }
+	    } catch {
+	      setExitError("Couldn't reach the server.");
+	    } finally {
+	      setExitBusy(false);
+	    }
+	  }
+
+	  async function openExitCopyInVsCode() {
+	    const path = meta?.worktreePath;
+	    if (!path) return;
+	    setExitBusy(true);
+	    setExitError("");
+	    try {
+	      const res = await fetch("/api/agents/worktrees/open", {
+	        method: "POST",
+	        headers: { "content-type": "application/json" },
+	        body: JSON.stringify({ path, target: "vscode" }),
+	      });
+	      const data = await res.json().catch(() => ({}));
+	      if (!res.ok) setExitError(data.error ?? `Couldn't open VS Code — status ${res.status}`);
+	    } catch {
+	      setExitError("Couldn't reach the server.");
+	    } finally {
+	      setExitBusy(false);
+	    }
+	  }
+
+	  async function resolveExitConflictWithAi() {
+	    const target = exitConflict?.targetBranch || exitTargetBranch || meta?.worktreeBase || "main";
+	    const text =
+	      `Resolve the merge conflicts blocking this worktree from opening a PR into ${target}.\n\n` +
+	      `Work in the current checkout only. Fetch the target branch, inspect the conflict, edit the conflicting files, commit the resolution, and then tell me when it is ready to open the PR again.`;
+	    setExitBusy(true);
+	    setExitError("");
+	    setExitNotice("");
+	    stickToBottom.current = true;
+	    setPending((p) => [...p, text]);
+	    try {
+	      const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
+	        method: "POST",
+	        headers: { "content-type": "application/json" },
+	        body: JSON.stringify({ text }),
+	      });
+	      const data = await res.json().catch(() => ({}));
+	      if (!res.ok) {
+	        setExitError(data.error ?? `Couldn't ask the agent — status ${res.status}`);
+	        setPending((p) => p.filter((x) => x !== text));
+	        return;
+	      }
+	      setExitNotice("Asked the agent to resolve the conflicts in this copy.");
+	    } catch {
+	      setExitError("Couldn't reach the server.");
+	      setPending((p) => p.filter((x) => x !== text));
+	    } finally {
+	      setExitBusy(false);
+	    }
+	  }
 
   // The banner appears once a separate-copy session has settled (idle), so the
   // user is prompted to bring the work home rather than leaving it stranded.
@@ -986,59 +1054,84 @@ export function AgentSession({ id }: { id: string }) {
           </div>
 
 
-          {/* Exit banner — the changes live on a separate copy; offer to bring
-              them home (or push), so a finished session isn't a dead end. */}
-          {showExitBanner && (
-            <div className="border-t border-line px-4 py-2.5 flex items-center gap-3 flex-wrap" style={{ background: "var(--cream)" }}>
-              {exitApplied ? (
-                <span className="text-[12.5px]" style={{ color: "var(--ok)" }}>
-                  Applied to your folder ✓
-                </span>
-              ) : (
-                <>
-                  <span className="text-[12.5px] text-text">These changes live on a separate copy.</span>
-                  <div className="flex-1" />
-                  <button
-                    onClick={() => exitAct("apply")}
-                    disabled={exitBusy}
-                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
-                  >
-                    Apply to my folder
-                  </button>
-                  {meta?.worktreeGithub && (
-                    <button
-                      onClick={() => exitAct("push")}
-                      disabled={exitBusy}
-                      className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
-                    >
-                      Push
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setExitDismissed(true)}
-                    className="text-[11px] text-text-muted hover:text-ink transition"
-                  >
-                    Dismiss
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-          {showExitBanner && exitCompareUrl && (
-            <div className="px-4 pt-1" style={{ background: "var(--cream)" }}>
-              <a
-                href={exitCompareUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[11.5px] text-ink underline hover:opacity-80"
-              >
-                Open pull request ↗
-              </a>
-            </div>
-          )}
-          {showExitBanner && exitError && (
-            <p className="px-4 pt-1 text-[11.5px]" style={{ background: "var(--cream)", color: "var(--danger)" }}>
-              {exitError}
+	          {/* Exit banner — the changes live on a separate copy; open a PR from
+	              that branch instead of merging into the user's folder. */}
+	          {showExitBanner && (
+	            <div className="border-t border-line px-4 py-2.5 flex items-center gap-3 flex-wrap" style={{ background: "var(--cream)" }}>
+	              <span className="text-[12.5px] text-text">These changes live on a separate copy.</span>
+	              <div className="flex-1" />
+	              {meta?.worktreeGithub ? (
+	                <>
+	                  <label className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
+	                    PR to
+	                    <input
+	                      value={exitTargetBranch}
+	                      onChange={(e) => setExitTargetBranch(e.target.value)}
+	                      className="w-[110px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
+	                      style={{ fontFamily: "var(--font-mono)" }}
+	                    />
+	                  </label>
+	                  <button
+	                    onClick={openExitPr}
+	                    disabled={exitBusy || !exitTargetBranch.trim()}
+	                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+	                  >
+	                    Open PR to {exitTargetBranch || meta?.worktreeBase || "base"}
+	                  </button>
+	                </>
+	              ) : (
+	                <span className="text-[11.5px] text-text-muted">This repo is not connected to GitHub.</span>
+	              )}
+	              <button
+	                onClick={() => setExitDismissed(true)}
+	                className="text-[11px] text-text-muted hover:text-ink transition"
+	              >
+	                Dismiss
+	              </button>
+	            </div>
+	          )}
+	          {showExitBanner && exitPrUrl && (
+	            <div className="px-4 pt-1" style={{ background: "var(--cream)" }}>
+	              <a
+	                href={exitPrUrl}
+	                target="_blank"
+	                rel="noopener noreferrer"
+	                className="text-[11.5px] text-ink underline hover:opacity-80"
+	              >
+	                Pull request page opened ↗
+	              </a>
+	            </div>
+	          )}
+	          {showExitBanner && exitConflict && (
+	            <div className="px-4 pt-2 flex items-center gap-2 flex-wrap" style={{ background: "var(--cream)" }}>
+	              <span className="text-[11.5px]" style={{ color: "var(--danger)" }}>
+	                Merge conflicts against {exitConflict.targetBranch}
+	                {exitConflict.files.length ? `: ${exitConflict.files.slice(0, 3).join(", ")}${exitConflict.files.length > 3 ? "…" : ""}` : "."}
+	              </span>
+	              <button
+	                onClick={openExitCopyInVsCode}
+	                disabled={exitBusy}
+	                className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11px] text-text hover:bg-cream transition disabled:opacity-50"
+	              >
+	                Review in VS Code
+	              </button>
+	              <button
+	                onClick={resolveExitConflictWithAi}
+	                disabled={exitBusy}
+	                className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11px] text-text hover:bg-cream transition disabled:opacity-50"
+	              >
+	                Resolve using AI
+	              </button>
+	            </div>
+	          )}
+	          {showExitBanner && exitNotice && (
+	            <p className="px-4 pt-1 text-[11.5px]" style={{ background: "var(--cream)", color: "var(--ok)" }}>
+	              {exitNotice}
+	            </p>
+	          )}
+	          {showExitBanner && exitError && (
+	            <p className="px-4 pt-1 text-[11.5px]" style={{ background: "var(--cream)", color: "var(--danger)" }}>
+	              {exitError}
             </p>
           )}
 

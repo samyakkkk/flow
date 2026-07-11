@@ -12,7 +12,7 @@
 // the same API in front of containers instead of local processes.
 
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,7 @@ import {
   removeWorktree,
   applyWorktree,
   pushWorktree,
+  openPullRequestWorktree,
 } from "./worktrees.js";
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,9 @@ interface BackendDescriptor {
   name: string;
   executable: string; // the agent CLI users install/authenticate
   spawn: { command: string; args: string[]; bundled?: boolean };
+  localCli?:
+    | { mode: "env"; envVar: string } // run the bundled ACP adapter, pointing it at the local CLI
+    | { mode: "command" }; // run the local CLI itself as the ACP adapter
   installHint: string;
 }
 
@@ -82,6 +86,7 @@ export const BACKENDS: Record<AgentBackend, BackendDescriptor> = {
     executable: "claude",
     // Bundled adapters (installed as orchestrator deps) — no npx cold start.
     spawn: { command: "claude-agent-acp", args: [], bundled: true },
+    localCli: { mode: "env", envVar: "CLAUDE_CODE_EXECUTABLE" },
     installHint: "npm i -g @anthropic-ai/claude-code",
   },
   codex: {
@@ -89,6 +94,7 @@ export const BACKENDS: Record<AgentBackend, BackendDescriptor> = {
     name: "Codex",
     executable: "codex",
     spawn: { command: "codex-acp", args: [], bundled: true },
+    localCli: { mode: "env", envVar: "CODEX_PATH" },
     installHint: "npm i -g @openai/codex",
   },
   opencode: {
@@ -96,9 +102,182 @@ export const BACKENDS: Record<AgentBackend, BackendDescriptor> = {
     name: "OpenCode",
     executable: "opencode",
     spawn: { command: "opencode", args: ["acp"] },
+    localCli: { mode: "command" },
     installHint: "curl -fsSL https://opencode.ai/install | bash",
   },
 };
+
+export type RuntimeSource = "explicit" | "local" | "bundled";
+
+interface SpawnAttempt {
+  source: RuntimeSource;
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  localPath?: string;
+  envVar?: string;
+}
+
+const FLOW_MANAGED_DIRS = [path.join(FLOW_ROOT, "node_modules"), path.join(FLOW_ROOT, "orchestrator", "node_modules")];
+
+function isUnder(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function isExecutable(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandNames(command: string): string[] {
+  if (process.platform !== "win32" || path.extname(command)) return [command];
+  const exts = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
+  return [command, ...exts.map((ext) => `${command}${ext}`)];
+}
+
+function executableCandidates(command: string): string[] {
+  if (path.isAbsolute(command) || command.includes(path.sep) || command.includes(path.win32.sep)) {
+    return [command];
+  }
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    for (const name of commandNames(command)) {
+      const candidate = path.join(dir, name);
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      out.push(candidate);
+    }
+  }
+  return out;
+}
+
+function isFlowManagedExecutable(file: string): boolean {
+  let realFile: string;
+  try {
+    realFile = realpathSync(file);
+  } catch {
+    return false;
+  }
+  for (const dir of FLOW_MANAGED_DIRS) {
+    try {
+      if (existsSync(dir) && isUnder(realpathSync(dir), realFile)) return true;
+    } catch {
+      /* try next managed dir */
+    }
+  }
+  return false;
+}
+
+function localExecutableCandidates(command: string): string[] {
+  const out: string[] = [];
+  for (const candidate of executableCandidates(command)) {
+    if (isExecutable(candidate) && !isFlowManagedExecutable(candidate)) {
+      out.push(candidate);
+    }
+  }
+  return out;
+}
+
+function parseVersionText(version: string | null): number[] | null {
+  const match = version?.match(/(\d+)\.(\d+)\.(\d+)(?:[.-](\d+))?/);
+  return match ? match.slice(1).filter(Boolean).map(Number) : null;
+}
+
+function compareVersionParts(a: number[] | null, b: number[] | null): number {
+  if (!a && !b) return 0;
+  if (a && !b) return 1;
+  if (!a && b) return -1;
+  for (let i = 0; i < Math.max(a!.length, b!.length); i++) {
+    const diff = (a![i] ?? 0) - (b![i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+async function resolveLocalExecutable(command: string): Promise<string | null> {
+  const candidates = localExecutableCandidates(command);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  const scored = await Promise.all(
+    candidates.map(async (candidate, index) => ({
+      candidate,
+      index,
+      version: parseVersionText(await execVersion(candidate)),
+    }))
+  );
+  scored.sort((a, b) => compareVersionParts(b.version, a.version) || a.index - b.index);
+  return scored[0]?.candidate ?? null;
+}
+
+function bundledSpawn(desc: BackendDescriptor): Omit<SpawnAttempt, "source" | "env"> | null {
+  if (!desc.spawn.bundled) return null;
+  try {
+    return {
+      command: binPath(desc.spawn.command),
+      args: desc.spawn.args,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function requireBundledSpawn(desc: BackendDescriptor): SpawnAttempt {
+  const spawnConfig = bundledSpawn(desc);
+  if (!spawnConfig) {
+    throw new Error(`${desc.name} is not installed. Install it with: ${desc.installHint}`);
+  }
+  return { source: "bundled", ...spawnConfig, env: { ...process.env } };
+}
+
+async function spawnAttempts(desc: BackendDescriptor): Promise<SpawnAttempt[]> {
+  const local = desc.localCli;
+  if (!local) return [requireBundledSpawn(desc)];
+
+  if (local.mode === "env") {
+    const explicit = process.env[local.envVar]?.trim();
+    if (explicit) {
+      const bundled = requireBundledSpawn(desc);
+      return [{ ...bundled, source: "explicit", envVar: local.envVar }];
+    }
+
+    const localPath = await resolveLocalExecutable(desc.executable);
+    if (!localPath) return [requireBundledSpawn(desc)];
+    return [
+      {
+        ...requireBundledSpawn(desc),
+        source: "local",
+        env: { ...process.env, [local.envVar]: localPath },
+        localPath,
+        envVar: local.envVar,
+      },
+      requireBundledSpawn(desc),
+    ];
+  }
+
+  const localPath = await resolveLocalExecutable(desc.executable);
+  if (localPath) {
+    return [
+      {
+        source: "local",
+        command: localPath,
+        args: desc.spawn.args,
+        env: { ...process.env },
+        localPath,
+      },
+    ];
+  }
+  const bundled = bundledSpawn(desc);
+  if (bundled) return [{ source: "bundled", ...bundled, env: { ...process.env } }];
+  throw new Error(`${desc.name} is not installed. Install it with: ${desc.installHint}`);
+}
 
 // ---------------------------------------------------------------------------
 // Detection — which agents are installed on this machine
@@ -108,6 +287,7 @@ export interface DetectedAgent {
   name: string;
   installed: boolean;
   version?: string;
+  source?: RuntimeSource;
   installHint: string;
 }
 
@@ -125,12 +305,18 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
   if (detectCache && Date.now() - detectCache.at < 60_000) return detectCache.agents;
   const agents = await Promise.all(
     Object.values(BACKENDS).map(async (b) => {
-      const version = await execVersion(b.executable);
+      const explicitEnv = b.localCli?.mode === "env" ? process.env[b.localCli.envVar]?.trim() : undefined;
+      const localPath = explicitEnv || (await resolveLocalExecutable(b.executable));
+      const version = localPath ? await execVersion(localPath) : null;
+      const bundled = bundledSpawn(b) !== null;
+      const installed = explicitEnv ? version !== null : version !== null || bundled;
+      const source: RuntimeSource | undefined = explicitEnv ? "explicit" : version !== null ? "local" : bundled ? "bundled" : undefined;
       return {
         id: b.id,
         name: b.name,
-        installed: version !== null,
-        version: version ?? undefined,
+        installed,
+        version: version ?? (bundled && !explicitEnv ? "Bundled fallback" : undefined),
+        source,
         installHint: b.installHint,
       };
     })
@@ -481,10 +667,30 @@ interface Connection {
   process: ChildProcessWithoutNullStreams;
   conn: acp.ClientSideConnection;
   init: acp.InitializeResponse;
+  source: RuntimeSource;
+  command: string;
+  localPath?: string;
   sessionsByAcpId: Map<string, string>; // acp session id → flow session id
 }
 
 const connections = new Map<AgentBackend, Connection>();
+
+function adapterLog(backend: AgentBackend, message: string): void {
+  try {
+    mkdirSync(SESSIONS_DIR, { recursive: true });
+    appendFileSync(path.join(SESSIONS_DIR, `adapter-${backend}.stderr.log`), `[${new Date().toISOString()}] ${message}\n`);
+  } catch {
+    /* best-effort */
+  }
+}
+
+function runtimeInfo(c: Connection): Record<string, unknown> {
+  return {
+    source: c.source,
+    command: c.command,
+    ...(c.localPath ? { localPath: c.localPath } : {}),
+  };
+}
 
 function makeClientHandler(backend: AgentBackend): acp.Client {
   return {
@@ -549,17 +755,22 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
   };
 }
 
-async function ensureConnection(backend: AgentBackend): Promise<Connection> {
-  const existing = connections.get(backend);
-  if (existing && existing.process.exitCode === null) return existing;
-  connections.delete(backend);
-
+async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttempt): Promise<Connection> {
   const desc = BACKENDS[backend];
   mkdirSync(SESSIONS_DIR, { recursive: true });
-  const command = desc.spawn.bundled ? binPath(desc.spawn.command) : desc.spawn.command;
-  const proc = spawn(command, desc.spawn.args, {
+  const via =
+    attempt.source === "local" && attempt.envVar
+      ? `${attempt.envVar}=${attempt.localPath}`
+      : attempt.source === "local"
+        ? attempt.localPath
+        : attempt.source === "explicit" && attempt.envVar
+          ? `${attempt.envVar}=<env>`
+          : "bundled";
+  adapterLog(backend, `starting ${desc.name} ACP adapter via ${attempt.source}: ${attempt.command} ${attempt.args.join(" ")} (${via})`);
+
+  const proc = spawn(attempt.command, attempt.args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
+    env: attempt.env,
   });
   proc.stderr.on("data", (chunk: Buffer) => {
     try {
@@ -575,21 +786,57 @@ async function ensureConnection(backend: AgentBackend): Promise<Connection> {
   );
   const conn = new acp.ClientSideConnection(() => makeClientHandler(backend), stream);
 
-  const init = await Promise.race([
-    conn.initialize({
-      protocolVersion: acp.PROTOCOL_VERSION,
-      // Advertise session config-option support so agents send their model
-      // selector (and thought-level toggles) as configOptions we can drive.
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-        session: { configOptions: { boolean: {} } },
-      },
-    }),
-    new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${backend} adapter did not initialize in 60s`)), 60_000)),
-  ]);
+  const initializePromise = conn.initialize({
+    protocolVersion: acp.PROTOCOL_VERSION,
+    // Advertise session config-option support so agents send their model
+    // selector (and thought-level toggles) as configOptions we can drive.
+    clientCapabilities: {
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: false,
+      session: { configOptions: { boolean: {} } },
+    },
+  });
+  initializePromise.catch(() => {
+    /* handled by the race below */
+  });
 
-  const c: Connection = { backend, process: proc, conn, init, sessionsByAcpId: new Map() };
+  let onProcError: ((err: Error) => void) | undefined;
+  let onEarlyExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+  const procError = new Promise<never>((_, reject) => {
+    onProcError = reject;
+    onEarlyExit = (code, signal) => {
+      reject(new Error(`${backend} adapter exited before initialize (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""})`));
+    };
+    proc.once("error", onProcError);
+    proc.once("exit", onEarlyExit);
+  });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${backend} adapter did not initialize in 60s`)), 60_000);
+  });
+
+  let init: acp.InitializeResponse;
+  try {
+    init = await Promise.race([initializePromise, procError, timeout]);
+  } catch (e) {
+    if (proc.exitCode === null) proc.kill();
+    throw e;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (onProcError) proc.off("error", onProcError);
+    if (onEarlyExit) proc.off("exit", onEarlyExit);
+  }
+
+  const c: Connection = {
+    backend,
+    process: proc,
+    conn,
+    init,
+    source: attempt.source,
+    command: attempt.command,
+    localPath: attempt.localPath,
+    sessionsByAcpId: new Map(),
+  };
   proc.on("exit", (code) => {
     connections.delete(backend);
     for (const flowId of c.sessionsByAcpId.values()) {
@@ -602,8 +849,34 @@ async function ensureConnection(backend: AgentBackend): Promise<Connection> {
       }
     }
   });
-  connections.set(backend, c);
   return c;
+}
+
+async function ensureConnection(backend: AgentBackend): Promise<Connection> {
+  const existing = connections.get(backend);
+  if (existing && existing.process.exitCode === null) return existing;
+  connections.delete(backend);
+
+  const attempts = await spawnAttempts(BACKENDS[backend]);
+  let lastError: unknown;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    try {
+      const c = await startConnectionAttempt(backend, attempt);
+      connections.set(backend, c);
+      return c;
+    } catch (e) {
+      lastError = e;
+      const canFallback = attempt.source === "local" && i < attempts.length - 1;
+      adapterLog(
+        backend,
+        `${attempt.source} ACP adapter failed to initialize: ${(e as Error).message}${canFallback ? "; retrying bundled fallback" : ""}`
+      );
+      if (!canFallback) break;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`${backend} adapter failed to initialize`);
 }
 
 // Re-attach a session to a live connection after its adapter process died (or
@@ -639,7 +912,7 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
     s.configOptions = resp.configOptions ?? s.configOptions;
     s.error = undefined;
     c.sessionsByAcpId.set(acpSessionId, s.id);
-    emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
+    emit(s, "status", { modes: s.modes, configOptions: s.configOptions, runtime: runtimeInfo(c) });
     return c;
   } catch (e) {
     setStatus(s, "error", { error: (e as Error).message });
@@ -947,7 +1220,7 @@ export async function createSession(opts: {
       // any thought/reasoning-level toggles — surfaced to the UI verbatim.
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
-      emit(s, "status", { modes: s.modes, configOptions: s.configOptions });
+      emit(s, "status", { modes: s.modes, configOptions: s.configOptions, runtime: runtimeInfo(c) });
       await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
@@ -1532,7 +1805,7 @@ export function subscribe(id: string, fn: (ev: SessionEvent) => void): (() => vo
 // the "no live session attached" remove guard.
 
 // The repo's GitHub owner/repo parsed from its registry url (null for
-// local-only repos). Push and the compare URL depend on this.
+// local-only repos). PR opening and compare URLs depend on this.
 function repoGithub(repoName: string): { owner: string; repo: string } | null {
   const reposJson = process.env.REPOS_JSON_PATH;
   if (!reposJson || !existsSync(reposJson)) return null;
@@ -1547,10 +1820,14 @@ function repoGithub(repoName: string): { owner: string; repo: string } | null {
   }
 }
 
-// Does this repo have a GitHub url? Gates the Push action in the UI (the
-// session exit banner and the copies list both ask).
+// Does this repo have a GitHub url? Gates PR actions in the UI (the session
+// exit banner and the copies list both ask).
 export function repoHasGithubUrl(repo: string): boolean {
   return repoGithub(repo) !== null;
+}
+
+export function repoBaseBranch(repo: string): string {
+  return listRepoOptions().find((r) => r.name === repo)?.branch ?? "main";
 }
 
 // Sessions recorded against a worktree path (worktree_id). Realpath both sides:
@@ -1580,7 +1857,7 @@ export interface ManagedWorktree {
   merged: boolean;
   health: "ok" | "broken";
   sessions: Array<{ id: string; title: string; status: SessionStatus }>;
-  github: boolean; // repo has a GitHub url → Push is available
+  github: boolean; // repo has a GitHub url → PR action is available
 }
 
 // Every flow-managed separate copy (optionally filtered to one repo). For each
@@ -1664,6 +1941,63 @@ export async function pushManagedWorktree(
   const gh = repoGithub(t.repo);
   if (!gh) return { error: "This repository isn't connected to GitHub." };
   return pushWorktree({ treePath, branch: t.branch, base: t.base, owner: gh.owner, repo: gh.repo });
+}
+
+export async function openPullRequestForManagedWorktree(
+  treePath: string,
+  targetBranch?: string
+): Promise<
+  | { ok: true; compareUrl: string; branch: string; targetBranch: string; committed: boolean }
+  | { conflict: true; branch: string; targetBranch: string; files: string[] }
+  | { error: string }
+> {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  const t = await resolveTree(treePath);
+  if (!t || !t.branch) return { error: "Couldn't find the branch for this copy." };
+  const gh = repoGithub(t.repo);
+  if (!gh) return { error: "This repository isn't connected to GitHub." };
+  return openPullRequestWorktree({
+    treePath,
+    branch: t.branch,
+    targetBranch: targetBranch?.trim() || t.base,
+    owner: gh.owner,
+    repo: gh.repo,
+  });
+}
+
+export function openWorktreeLocation(
+  treePath: string,
+  target: "finder" | "vscode"
+): { ok: true } | { error: string } {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  if (!existsSync(treePath)) return { error: `Folder not found: ${treePath}` };
+
+  let cmd: string;
+  let args: string[];
+  if (target === "vscode") {
+    cmd = "code";
+    args = [treePath];
+  } else {
+    cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
+    args = [treePath];
+  }
+
+  try {
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+    child.on("error", () => {
+      if (target === "vscode" && process.platform === "darwin") {
+        try {
+          spawn("open", ["-a", "Visual Studio Code", treePath], { stdio: "ignore", detached: true }).unref();
+        } catch {
+          /* best-effort fallback */
+        }
+      }
+    });
+    child.unref();
+    return { ok: true };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
 }
 
 // Diff a managed tree that has NO session of its own: working dir vs the

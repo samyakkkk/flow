@@ -13,6 +13,7 @@ interface DetectedAgent {
   name: string;
   installed: boolean;
   version?: string;
+  source?: "explicit" | "local" | "bundled";
   installHint: string;
 }
 interface RepoOption {
@@ -300,9 +301,9 @@ export function AgentsView() {
 
 // ---------------------------------------------------------------------------
 // Separate copies — the isolated branch checkouts the collision flow creates.
-// Visibility + exits: see the diff, apply back into your folder, push to
-// GitHub, or remove. Progressive disclosure: the whole section is absent until
-// at least one copy exists. UI copy never says "worktree".
+// Visibility + exits: see the diff, open a PR, review conflicts, or remove.
+// Progressive disclosure: the whole section is absent until at least one copy
+// exists. UI copy never says "worktree".
 
 interface WorktreeSession {
   id: string;
@@ -328,9 +329,11 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
   // Per-copy UI state, keyed by the copy's path.
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [notices, setNotices] = useState<Record<string, string>>({});
   const [confirmRemove, setConfirmRemove] = useState<Record<string, boolean>>({});
-  const [pushed, setPushed] = useState<Record<string, string>>({}); // path → compareUrl
-  const [applied, setApplied] = useState<Record<string, string>>({}); // path → "merged into <branch>"
+  const [prUrls, setPrUrls] = useState<Record<string, string>>({}); // path → compareUrl
+  const [targetBranches, setTargetBranches] = useState<Record<string, string>>({});
+  const [conflicts, setConflicts] = useState<Record<string, { targetBranch: string; files: string[] } | undefined>>({});
   const [openDiff, setOpenDiff] = useState<Record<string, boolean>>({});
   const [diffs, setDiffs] = useState<Record<string, { files: DiffFile[]; diff: string; truncated: boolean } | null>>({});
 
@@ -354,10 +357,13 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
 
   const setError = (path: string, msg: string) => setErrors((e) => ({ ...e, [path]: msg }));
   const clearError = (path: string) => setErrors((e) => ({ ...e, [path]: "" }));
+  const setNotice = (path: string, msg: string) => setNotices((n) => ({ ...n, [path]: msg }));
+  const clearNotice = (path: string) => setNotices((n) => ({ ...n, [path]: "" }));
 
-  async function act(path: string, action: "apply" | "push" | "remove", body: Record<string, unknown> = {}) {
+  async function act(path: string, action: "remove", body: Record<string, unknown> = {}) {
     setBusy((b) => ({ ...b, [path]: true }));
     clearError(path);
+    clearNotice(path);
     try {
       const res = await fetch(`/api/agents/worktrees/${action}`, {
         method: "POST",
@@ -369,14 +375,101 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
         setError(path, data.error ?? `Couldn't ${action} — status ${res.status}`);
         return;
       }
-      if (action === "apply") setApplied((a) => ({ ...a, [path]: `Applied to your folder ✓` }));
-      if (action === "push" && data.compareUrl) setPushed((p) => ({ ...p, [path]: data.compareUrl }));
       if (action === "remove") setConfirmRemove((c) => ({ ...c, [path]: false }));
       await refresh();
     } catch {
       setError(path, "Couldn't reach the server.");
     } finally {
       setBusy((b) => ({ ...b, [path]: false }));
+    }
+  }
+
+  async function openPr(path: string, targetBranch: string) {
+    setBusy((b) => ({ ...b, [path]: true }));
+    clearError(path);
+    clearNotice(path);
+    setConflicts((c) => ({ ...c, [path]: undefined }));
+    try {
+      const res = await fetch("/api/agents/worktrees/pr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, targetBranch }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.conflict) {
+        setConflicts((c) => ({
+          ...c,
+          [path]: {
+            targetBranch: String(data.targetBranch ?? targetBranch),
+            files: Array.isArray(data.files) ? data.files.map(String) : [],
+          },
+        }));
+        return;
+      }
+      if (!res.ok) {
+        setError(path, data.error ?? `Couldn't open PR — status ${res.status}`);
+        return;
+      }
+      if (data.compareUrl) {
+        setPrUrls((p) => ({ ...p, [path]: data.compareUrl }));
+        window.open(data.compareUrl, "_blank", "noopener,noreferrer");
+      }
+      await refresh();
+    } catch {
+      setError(path, "Couldn't reach the server.");
+    } finally {
+      setBusy((b) => ({ ...b, [path]: false }));
+    }
+  }
+
+  async function openCopyInVsCode(path: string) {
+    setBusy((b) => ({ ...b, [path]: true }));
+    clearError(path);
+    try {
+      const res = await fetch("/api/agents/worktrees/open", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, target: "vscode" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) setError(path, data.error ?? `Couldn't open VS Code — status ${res.status}`);
+    } catch {
+      setError(path, "Couldn't reach the server.");
+    } finally {
+      setBusy((b) => ({ ...b, [path]: false }));
+    }
+  }
+
+  async function resolveConflictWithAi(wt: Worktree) {
+    const session = wt.sessions.find((s) => s.status !== "closed" && s.status !== "error") ?? wt.sessions[0];
+    if (!session) {
+      setError(wt.path, "No session is attached to this copy. Open it in VS Code to resolve manually.");
+      return;
+    }
+    const target = conflicts[wt.path]?.targetBranch ?? targetBranches[wt.path] ?? wt.base;
+    setBusy((b) => ({ ...b, [wt.path]: true }));
+    clearError(wt.path);
+    clearNotice(wt.path);
+    try {
+      const text =
+        `Resolve the merge conflicts blocking this worktree from opening a PR into ${target}.\n\n` +
+        `Work in the current checkout only. Fetch the target branch, inspect the conflict, edit the conflicting files, commit the resolution, and then tell me when it is ready to open the PR again.`;
+      const res = await fetch(`/api/agents/sessions/${session.id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(wt.path, data.error ?? `Couldn't ask the agent — status ${res.status}`);
+        return;
+      }
+      setNotice(wt.path, "Asked the agent to resolve the conflicts in this copy.");
+      onNavigate(session.id);
+    } catch {
+      setError(wt.path, "Couldn't reach the server.");
+    } finally {
+      setBusy((b) => ({ ...b, [wt.path]: false }));
     }
   }
 
@@ -401,15 +494,17 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     <div className="mb-10">
       <Kicker>Separate copies</Kicker>
       <p className="text-text-muted text-[12.5px] mt-1 mb-3 max-w-xl">
-        Isolated copies of a branch, made when two agents would otherwise share one folder. Bring their
-        work back into your folder, push it, or clear the copy away.
+        Isolated copies of a branch, made when two agents would otherwise share one folder. Open a PR
+        from the copy, review conflicts, or clear the copy away.
       </p>
       <div className="flex flex-col gap-2">
         {trees.map((wt) => {
           const b = busy[wt.path];
           const err = errors[wt.path];
-          const compareUrl = pushed[wt.path];
-          const appliedMsg = applied[wt.path];
+          const notice = notices[wt.path];
+          const compareUrl = prUrls[wt.path];
+          const targetBranch = targetBranches[wt.path] ?? wt.base;
+          const conflict = conflicts[wt.path];
 
           // Broken: the folder is gone. Offer only a way to clean it up.
           if (wt.health === "broken") {
@@ -478,22 +573,25 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                 >
                   {openDiff[wt.path] ? "Hide changes" : "View changes"}
                 </button>
-                <button
-                  onClick={() => act(wt.path, "apply")}
-                  disabled={b || wt.dirty || Boolean(appliedMsg)}
-                  title={wt.dirty ? "Commit or discard changes in the copy first" : "Merge this copy back into your folder"}
-                  className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
-                >
-                  Apply to my folder
-                </button>
                 {wt.github && (
-                  <button
-                    onClick={() => act(wt.path, "push")}
-                    disabled={b}
-                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
-                  >
-                    Push
-                  </button>
+                  <>
+                    <label className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
+                      PR to
+                      <input
+                        value={targetBranch}
+                        onChange={(e) => setTargetBranches((m) => ({ ...m, [wt.path]: e.target.value }))}
+                        className="w-[110px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
+                        style={{ fontFamily: "var(--font-mono)" }}
+                      />
+                    </label>
+                    <button
+                      onClick={() => openPr(wt.path, targetBranch)}
+                      disabled={b || !targetBranch.trim()}
+                      className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11.5px] text-text hover:bg-cream transition disabled:opacity-50"
+                    >
+                      Open PR to {targetBranch || wt.base}
+                    </button>
+                  </>
                 )}
                 {/* Remove — inline confirm when the copy has uncommitted work. */}
                 {confirmRemove[wt.path] ? (
@@ -528,7 +626,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
               </div>
 
               {/* Results / errors — rendered verbatim. */}
-              {appliedMsg && <p className="text-[11.5px] mt-2" style={{ color: "var(--ok)" }}>{appliedMsg}</p>}
               {compareUrl && (
                 <a
                   href={compareUrl}
@@ -536,9 +633,32 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                   rel="noopener noreferrer"
                   className="inline-block text-[11.5px] mt-2 text-ink underline hover:opacity-80"
                 >
-                  Open pull request ↗
+                  Pull request page opened ↗
                 </a>
               )}
+              {conflict && (
+                <div className="flex items-center gap-2 flex-wrap mt-2">
+                  <span className="text-[11.5px]" style={{ color: "var(--danger)" }}>
+                    Merge conflicts against {conflict.targetBranch}
+                    {conflict.files.length ? `: ${conflict.files.slice(0, 3).join(", ")}${conflict.files.length > 3 ? "…" : ""}` : "."}
+                  </span>
+                  <button
+                    onClick={() => openCopyInVsCode(wt.path)}
+                    disabled={b}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11px] text-text hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Review in VS Code
+                  </button>
+                  <button
+                    onClick={() => resolveConflictWithAi(wt)}
+                    disabled={b}
+                    className="rounded-md border border-line bg-paper px-2.5 py-1 text-[11px] text-text hover:bg-cream transition disabled:opacity-50"
+                  >
+                    Resolve using AI
+                  </button>
+                </div>
+              )}
+              {notice && <p className="text-[11.5px] mt-2" style={{ color: "var(--ok)" }}>{notice}</p>}
               {err && <p className="text-[11.5px] mt-2" style={{ color: "var(--danger)" }}>{err}</p>}
 
               {/* Inline diff */}

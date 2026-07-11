@@ -27,6 +27,7 @@ let listWorktrees: typeof import("../src/agents/worktrees.js").listWorktrees;
 let inspectWorktree: typeof import("../src/agents/worktrees.js").inspectWorktree;
 let removeWorktree: typeof import("../src/agents/worktrees.js").removeWorktree;
 let applyWorktree: typeof import("../src/agents/worktrees.js").applyWorktree;
+let openPullRequestWorktree: typeof import("../src/agents/worktrees.js").openPullRequestWorktree;
 let isManagedWorktree: typeof import("../src/agents/worktrees.js").isManagedWorktree;
 let managedRepoOf: typeof import("../src/agents/worktrees.js").managedRepoOf;
 let collidingSession: typeof import("../src/agents/runtime.js").collidingSession;
@@ -56,6 +57,15 @@ function makeCheckout(): string {
   return dir;
 }
 
+function makeCheckoutWithOrigin(): { src: string; remote: string } {
+  const src = makeCheckout();
+  const remote = join(TMP, `remote-${++counter}.git`);
+  execFileSync("git", ["init", "--bare", "-q", remote]);
+  git(src, ["remote", "add", "origin", remote]);
+  git(src, ["push", "-u", "origin", "main"]);
+  return { src, remote };
+}
+
 // Point REPOS_JSON_PATH at a temp file so worktrees land under
 // dirname(REPOS_JSON_PATH)/worktrees/<repo>/<slug> — i.e. inside TMP.
 function setWorkspace(): void {
@@ -73,6 +83,7 @@ before(async () => {
   inspectWorktree = wt.inspectWorktree;
   removeWorktree = wt.removeWorktree;
   applyWorktree = wt.applyWorktree;
+  openPullRequestWorktree = wt.openPullRequestWorktree;
   isManagedWorktree = wt.isManagedWorktree;
   managedRepoOf = wt.managedRepoOf;
   const rt = await import("../src/agents/runtime.js");
@@ -441,5 +452,63 @@ describe("applyWorktree — merge back into the user's folder", () => {
     // The user's folder is exactly as we found it: clean, on their own version.
     assert.equal(git(src, ["status", "--porcelain"]).trim(), "", "src clean after abort");
     assert.equal(readFileSync(join(src, "README.md"), "utf8"), "changed-by-user\n", "src content preserved");
+  });
+});
+
+describe("openPullRequestWorktree — PR-first handoff", () => {
+  test("dirty copy is committed and pushed to the exact origin branch", async () => {
+    const { src, remote } = makeCheckoutWithOrigin();
+    const r = await createSessionWorktree({ repoName: "prrepo", srcCheckout: src, baseBranch: "main", title: "open pr dirty copy" });
+    assert.ok(!("error" in r), "error" in r ? r.error : "");
+    if ("error" in r) return;
+
+    writeFileSync(join(r.path, "feature.txt"), "ready for review\n");
+    const pr = await openPullRequestWorktree({
+      treePath: r.path,
+      branch: r.branch,
+      targetBranch: "main",
+      owner: "acme",
+      repo: "prrepo",
+    });
+
+    assert.ok(!("error" in pr) && !("conflict" in pr), JSON.stringify(pr));
+    if ("error" in pr || "conflict" in pr) return;
+    assert.equal(pr.committed, true);
+    assert.match(pr.compareUrl, /github\.com\/acme\/prrepo\/compare\/main\.\.\.flow\/open-pr-dirty-copy-/);
+    assert.equal(git(r.path, ["status", "--porcelain"]).trim(), "", "copy is clean after auto-commit");
+    assert.ok(git(r.path, ["log", "--oneline", "-1"]).includes("Flow agent changes"), "auto-commit created");
+    assert.ok(
+      execFileSync("git", ["ls-remote", "--heads", remote, r.branch], { encoding: "utf8" }).includes(`refs/heads/${r.branch}`),
+      "remote branch exists after push"
+    );
+  });
+
+  test("merge conflicts are reported before opening a PR", async () => {
+    const { src, remote } = makeCheckoutWithOrigin();
+    const r = await createSessionWorktree({ repoName: "conflictrepo", srcCheckout: src, baseBranch: "main", title: "conflict pr" });
+    assert.ok(!("error" in r), "error" in r ? r.error : "");
+    if ("error" in r) return;
+
+    writeFileSync(join(r.path, "README.md"), "changed-by-copy\n");
+    commit(src, "README.md", "changed-by-main\n", "main edits readme");
+    git(src, ["push", "origin", "main"]);
+
+    const pr = await openPullRequestWorktree({
+      treePath: r.path,
+      branch: r.branch,
+      targetBranch: "main",
+      owner: "acme",
+      repo: "conflictrepo",
+    });
+
+    assert.ok("conflict" in pr, JSON.stringify(pr));
+    if (!("conflict" in pr)) return;
+    assert.equal(pr.targetBranch, "main");
+    assert.ok(pr.files.length === 0 || pr.files.includes("README.md"), `conflict files: ${pr.files.join(", ")}`);
+    assert.equal(
+      execFileSync("git", ["ls-remote", "--heads", remote, r.branch], { encoding: "utf8" }).trim(),
+      "",
+      "conflicting branch is not pushed before resolution"
+    );
   });
 });
