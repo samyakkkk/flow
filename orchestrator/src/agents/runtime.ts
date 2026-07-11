@@ -1112,7 +1112,8 @@ async function embedLocal(text: string): Promise<Float32Array | null> {
 // ---------------------------------------------------------------------------
 // Session lifecycle
 
-const GRAPH_PREAMBLE = `You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
+const GRAPH_PREAMBLE = `Call the flow-graph "orient" tool FIRST — before anything else — for your bearings (learned project rules, repo summary, procedures, this branch's notes); call it again after context compaction or whenever you feel lost.
+You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
 Two proposal tools let you contribute back — use them sparingly and precisely:
 - correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
 - propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.

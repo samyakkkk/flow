@@ -785,6 +785,158 @@ async function noteVerb(input: z.infer<z.ZodObject<typeof noteInput>>) {
 }
 
 // ---------------------------------------------------------------------------
+// orient — the front desk. One call returns a compact, always-current
+// orientation text: what this repo is, learned rules to follow (insert-mode
+// procedures), on-demand procedures, and this branch's notes. It is the
+// CLAUDE.md replacement: nothing is authored or synced to agent machines; the
+// text is rendered fresh from the graph + note store on every call, so an
+// agent can re-orient at any time (e.g. after context compaction).
+//
+// Size is fixed by construction: one line per entry, ORIENT_CAP entries per
+// section, overflow shown as an explicit count — the store can grow without
+// the front page growing.
+
+const ORIENT_CAP = 5;
+
+const oneLine = (s: unknown, max = 220): string => {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+};
+
+const orientInput = {
+  repo: z.string().optional().describe("Repository name (defaults from the session's env when Flow runs the session — pass explicitly otherwise)"),
+  branch: z.string().optional().describe("Branch name (defaults from the session's env — pass explicitly otherwise)"),
+  graph: z.string().default(DEFAULT_GRAPH),
+};
+
+interface OrientNote {
+  id: string;
+  kind: string;
+  text: string;
+}
+
+async function fetchBranchNotes(repo: string, branch: string): Promise<OrientNote[] | null> {
+  const url =
+    process.env.FLOW_NOTES_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
+  if (!url || !repo || !branch) return null;
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&limit=50`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { rows?: OrientNote[] };
+    return body.rows ?? [];
+  } catch {
+    return null;
+  }
+}
+
+interface OrientProc {
+  id: string;
+  name: string;
+  trigger: string;
+  mode: string;
+  scope: string;
+  repo: string | null;
+}
+
+async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
+  const repo = input.repo || process.env.FLOW_REPO || "";
+  const branch = input.branch || process.env.FLOW_BRANCH || "";
+
+  const [repoRows, counts, procRows, notes] = await Promise.all([
+    run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
+    run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
+    run(
+      input.graph,
+      `MATCH (p:Procedure) WHERE coalesce(p.status, '') <> 'proposed'
+       RETURN p.id AS id, p.name AS name, p.trigger AS trigger,
+              coalesce(p.mode, 'retrieve') AS mode, coalesce(p.scope, 'project') AS scope, p.repo AS repo
+       ORDER BY p.created_at DESC`,
+    ) as Promise<unknown> as Promise<OrientProc[]>,
+    fetchBranchNotes(repo, branch),
+  ]);
+
+  // Repo identity: match by name when the caller told us which repo; otherwise
+  // whatever the graph holds (single-repo projects). Missing node ≠ error —
+  // the graph may simply not be indexed yet.
+  const repoRow =
+    (repoRows as Array<{ id: string; name: string; description: string }>).find((r) => r.name === repo) ??
+    (repoRows as Array<{ id: string; name: string; description: string }>)[0];
+
+  // Procedures scoped to another repo are someone else's rules.
+  const relevant = procRows.filter((p) => p.scope === "project" || !p.repo || !repo || p.repo === repo);
+  const behavior = relevant.filter((p) => p.mode === "insert");
+  const onDemand = relevant.filter((p) => p.mode !== "insert");
+
+  const procLine = (p: OrientProc) => `- ${oneLine(p.name, 120)} — trigger: ${oneLine(p.trigger, 140)} [${p.id}]`;
+  const section = <T>(items: T[], render: (item: T) => string, more: string): string[] => {
+    const lines = items.slice(0, ORIENT_CAP).map(render);
+    if (items.length > ORIENT_CAP) lines.push(`…${items.length - ORIENT_CAP} more — ${more}`);
+    return lines;
+  };
+
+  const countMap = new Map((counts as Array<{ type: string; count: number }>).map((c) => [c.type, c.count]));
+  const total = [...countMap.values()].reduce((a, b) => a + b, 0);
+  const MAP_LABELS: Array<[type: string, singular: string, plural: string]> = [
+    ["Service", "service", "services"],
+    ["APIEndpoint", "API endpoint", "API endpoints"],
+    ["Workflow", "workflow", "workflows"],
+    ["UsageContract", "usage contract", "usage contracts"],
+    ["Capability", "capability", "capabilities"],
+  ];
+  const mapBits = MAP_LABELS.filter(([t]) => countMap.has(t)).map(
+    ([t, one, many]) => `${countMap.get(t)} ${countMap.get(t) === 1 ? one : many}`,
+  );
+  // Most-connected services are the best entry points into the graph.
+  const serviceIds = await run(
+    input.graph,
+    `MATCH (s:Service) OPTIONAL MATCH (s)-[r]-() RETURN s.id AS id, count(r) AS deg ORDER BY deg DESC LIMIT 6`,
+  );
+
+  const out: string[] = [];
+  out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
+  out.push("");
+  out.push("BEHAVIOR (learned project rules — follow these):");
+  out.push(...(behavior.length ? section(behavior, procLine, "find_entity type 'Procedure'") : ["(nothing learned yet)"]));
+  out.push("");
+  if (repoRow) {
+    out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 500)} [${repoRow.id}]`);
+  } else {
+    out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
+  }
+  out.push("");
+  out.push(
+    `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
+      ((serviceIds as Array<{ id: string }>).length
+        ? ` Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(", ")}.`
+        : ""),
+  );
+  out.push("");
+  out.push(`PROCEDURES${onDemand.length ? ` (${onDemand.length})` : ""}:`);
+  out.push(...(onDemand.length ? section(onDemand, procLine, "find_entity type 'Procedure'") : ["(none yet)"]));
+  out.push("");
+  out.push(`THIS BRANCH${notes && notes.length ? ` (${notes.length} ${notes.length === 1 ? "note" : "notes"})` : ""}:`);
+  if (notes === null) {
+    out.push(repo && branch ? "(notes unavailable right now)" : "(pass repo + branch to see this branch's notes)");
+  } else if (notes.length === 0) {
+    out.push("(no notes yet)");
+  } else {
+    out.push(...section(notes, (n) => `- [${n.kind}] ${oneLine(n.text, 260)}`, "they continue in this branch's note store"));
+  }
+  out.push("");
+  out.push(
+    "HOW TO USE: drill into any [id] with get_entity; search with find_entity; traverse with read_query. " +
+      "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
+      "Store back as you work: note (branch findings, free, no approval), propose_procedure (durable rules — when the user states one, draft it completely), correct_graph (when the graph contradicts the code).",
+  );
+  return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 
 const listSchemaInput = {};
 
@@ -795,6 +947,12 @@ async function listSchema() {
 // ---------------------------------------------------------------------------
 
 export const verbs = {
+  orient: {
+    description:
+      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: learned project rules to follow, what this repo is, a map of the knowledge graph, procedures, and this branch's notes. Pass {repo, branch} explicitly when Flow doesn't run your session.",
+    shape: orientInput,
+    handler: orient,
+  },
   find_entity: {
     description: "Look up graph entities by id, name, or alias. Always check here before creating.",
     shape: findEntityInput,
