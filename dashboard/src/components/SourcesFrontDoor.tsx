@@ -1,14 +1,16 @@
 "use client";
-// SourcesFrontDoor — puts the "sources front door" (AddSource) on the home page.
-// Two shapes share one component so the paste-a-URL-or-folder flow is reachable
-// the moment someone lands, not buried on /connections:
-//   • variant="hero"  — first run (no sources yet): a calm welcome + AddSource
-//     mounted full width, front and centre.
+// SourcesFrontDoor — the "sources front door" on the home page. Two doors,
+// never one ambiguous box: an "Add a folder" input (local mode only — point
+// Flow at a project folder or a folder of docs) stacked above the GitHub
+// picker (the checklist of your account's repos). Two shapes share the doors:
+//   • variant="hero"  — first run (no sources yet): a calm welcome, then the
+//     two doors, front and centre.
 //   • variant="strip" — returning: a compact list of connected sources plus an
-//     always-visible "+ Add a source" that expands the same AddSource inline.
+//     always-visible "+ Add a source" that expands the same two doors inline.
 import { useState } from "react";
 import Link from "next/link";
-import { AddSource } from "@/components/AddSource";
+import { AddFolder } from "@/components/AddFolder";
+import { RepoPicker } from "@/components/RepoPicker";
 import { Kicker, Heading, StatusPill } from "@/components/ui";
 import type { FlowMode } from "@/lib/useMode";
 
@@ -61,6 +63,56 @@ function SourceRow({ s }: { s: SourceEntry }) {
   );
 }
 
+// ── The two doors, shared by hero and strip ─────────────────────────────────
+function TwoDoors({
+  repos,
+  mode,
+  onChanged,
+}: {
+  repos: SourceEntry[];
+  mode: FlowMode;
+  onChanged: () => void;
+}) {
+  const [msg, setMsg] = useState("");
+  // Repos already connected — so the GitHub checklist shows them as indexed.
+  const indexedUrls = new Set<string>([
+    ...repos.map((r) => r.url).filter((u): u is string => !!u),
+    ...repos.map((r) => r.name),
+  ]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Folder door — local mode only. */}
+      {mode !== "prod" && (
+        <div
+          className="rounded-xl border p-5"
+          style={{ background: "var(--paper)", borderColor: "var(--line)" }}
+        >
+          <AddFolder mode={mode} onAdded={onChanged} />
+        </div>
+      )}
+
+      {/* GitHub door — pick from your account's repos. */}
+      <div
+        className="rounded-xl border p-5"
+        style={{ background: "var(--paper)", borderColor: "var(--line)" }}
+      >
+        <div
+          style={{ fontFamily: "var(--font-mono)" }}
+          className="text-[13px] font-semibold text-ink mb-1"
+        >
+          GitHub repos
+        </div>
+        <p className="text-text-muted text-[12.5px] leading-relaxed mb-3">
+          Pick repositories to understand.
+        </p>
+        <RepoPicker indexedUrls={indexedUrls} onMsg={setMsg} onConnected={onChanged} />
+        {msg && <p className="text-[12px] text-text-muted mt-2">{msg}</p>}
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   variant: "hero" | "strip";
   repos: SourceEntry[];
@@ -71,7 +123,7 @@ interface Props {
 export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
   const [open, setOpen] = useState(false);
 
-  // ── First run: welcome + the front door, full width ────────────────────────
+  // ── First run: welcome + the two doors, full width ─────────────────────────
   if (variant === "hero") {
     return (
       <section data-testid="sources-hero" className="flex flex-col gap-5">
@@ -81,16 +133,11 @@ export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
             Connect a source.
           </Heading>
           <p className="text-text-muted text-[15px] leading-relaxed max-w-xl">
-            Connect a source — Flow builds a knowledge graph from it and your coding
-            agents use it as their brain.
+            Flow builds a knowledge graph from it, and your coding agents use it
+            as their brain.
           </p>
         </div>
-        <div
-          className="rounded-xl border p-5"
-          style={{ background: "var(--paper)", borderColor: "var(--line)" }}
-        >
-          <AddSource mode={mode} onAdded={onChanged} />
-        </div>
+        <TwoDoors repos={repos} mode={mode} onChanged={onChanged} />
       </section>
     );
   }
@@ -120,7 +167,9 @@ export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
       <div className="rounded-xl border border-line bg-paper p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-text-muted text-[12px]">
-            Paste a GitHub URL or a local folder path to add another source.
+            {mode === "prod"
+              ? "Pick another GitHub repo to add a source."
+              : "Point Flow at a folder or pick a GitHub repo to add another source."}
           </span>
           <button
             onClick={() => setOpen((v) => !v)}
@@ -133,12 +182,7 @@ export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
         </div>
         {open && (
           <div className="border-t border-line pt-4">
-            <AddSource
-              mode={mode}
-              onAdded={() => {
-                onChanged();
-              }}
-            />
+            <TwoDoors repos={repos} mode={mode} onChanged={onChanged} />
           </div>
         )}
       </div>

@@ -1,178 +1,41 @@
 "use client";
-// AddSource — the "sources front door". One input accepts either a GitHub URL
-// or a local filesystem path; the server classifies it and returns a verdict,
-// which we render as a card with sensible, editable defaults. The user confirms
-// and the source(s) register. Plain language only.
-import { useState, useCallback, FormEvent } from "react";
+// AddFolder — the folder door. Point Flow at a project folder or a folder of
+// docs; the server classifies the path and we render ONE confirm surface with
+// sensible, editable defaults. If the folder turns out to hold GitHub repos we
+// prefill each one's base branch and, on confirm, fold them into the GitHub
+// option as normal GitHub-connected repos (with your folder as the work
+// surface). Paths only — pasting a repo URL lives in the GitHub door.
+import { useState, FormEvent } from "react";
 import type { FlowMode } from "@/lib/useMode";
+import {
+  mono,
+  money,
+  branchInputStyle,
+  ownerName,
+  Kicker,
+  Card,
+  ConfirmBtn,
+  ErrorBox,
+  AddResultBox,
+  inspectInput,
+  useSourceAdd,
+  type Inspect,
+  type RepoInfo,
+  type DocsInfo,
+  type SkippedCounts,
+  type ChildRepo,
+  type Children,
+  type AddPayload,
+} from "@/components/sources/kit";
 
-// ─── Contract types (mirror POST /v1/sources/inspect + /add) ─────────────────
-
-type Kind =
-  | "github_url"
-  | "git_repo"
-  | "git_repo_local_only"
-  | "folder"
-  | "container"
-  | "unsupported";
-
-interface GithubInfo {
-  url: string;
-  owner: string;
-  name: string;
-  defaultBranch: string;
-  alreadyConnected: boolean;
-}
-
-interface RepoInfo {
-  path: string;
-  name: string;
-  remoteUrl: string | null;
-  defaultBranch: string;
-  currentBranch: string;
-  dirty: boolean;
-  alreadyConnected: boolean;
-}
-
-interface SkippedCounts {
-  hidden: number;
-  deps: number;
-  oversize: number;
-  binary: number;
-}
-
-interface DocsInfo {
-  path: string;
-  name: string;
-  fileCount: number;
-  totalBytes: number;
-  skipped: SkippedCounts;
-}
-
-type ChildRepo = RepoInfo & { thirdParty: boolean; checkedDefault: boolean };
-
-interface Children {
-  repos: ChildRepo[];
-  docs: DocsInfo;
-}
-
-interface Inspect {
-  input: string;
-  kind: Kind;
-  github?: GithubInfo;
-  repo?: RepoInfo;
-  docs?: DocsInfo;
-  children?: Children;
-  error?: string;
-}
-
-type AddPayload =
-  | { type: "repo"; url?: string | null; localPath?: string | null; branch: string; name: string }
-  | { type: "docs"; path: string; name: string };
-
-interface AddResult {
-  added: Array<{ name: string; kind: string; jobId?: string }>;
-  errors: Array<{ name: string; error: string }>;
-}
-
-// ─── Small shared styles (match the Connections page's inline language) ───────
-
-const mono = { fontFamily: "var(--font-mono)" } as const;
-
-function money(bytes: number): string {
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1000) return `${(bytes / 1000).toFixed(0)} KB`;
-  return `${bytes} B`;
-}
-
-function branchInputStyle(): React.CSSProperties {
-  return {
-    ...mono,
-    fontSize: 12,
-    padding: "4px 8px",
-    borderRadius: 4,
-    border: "1px solid var(--line)",
-    background: "var(--cream)",
-    color: "var(--ink)",
-    outline: "none",
-    width: 200,
-    boxSizing: "border-box",
-  };
-}
-
-function Kicker({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        ...mono,
-        fontSize: 10.5,
-        textTransform: "uppercase",
-        letterSpacing: "0.10em",
-        color: "var(--text-muted)",
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        marginTop: 14,
-        padding: "16px 18px",
-        background: "var(--cream)",
-        border: "1px solid var(--line)",
-        borderRadius: 8,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function ConfirmBtn({
-  loading,
-  disabled,
-  label,
-  onClick,
-}: {
-  loading: boolean;
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  const off = loading || disabled;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={off}
-      style={{
-        padding: "8px 18px",
-        borderRadius: 6,
-        border: "none",
-        background: off ? "var(--sand)" : "var(--accent)",
-        color: off ? "var(--text-muted)" : "var(--ink)",
-        fontSize: 13,
-        fontWeight: 600,
-        cursor: off ? "not-allowed" : "pointer",
-      }}
-    >
-      {loading ? "Adding..." : label}
-    </button>
-  );
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export function AddSource({
+export function AddFolder({
   mode,
   onAdded,
+  hideLabel = false,
 }: {
   mode: FlowMode;
   onAdded?: () => void;
+  hideLabel?: boolean;
 }) {
   const isProd = mode === "prod";
 
@@ -181,32 +44,31 @@ export function AddSource({
   const [inspectError, setInspectError] = useState("");
   const [result, setResult] = useState<Inspect | null>(null);
 
-  const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState("");
-  const [addResult, setAddResult] = useState<AddResult | null>(null);
+  const { adding, addError, addResult, submitAdd, clear } = useSourceAdd(onAdded);
 
   // Editable form state, initialized when a verdict arrives.
-  const [branch, setBranch] = useState(""); // github_url / git_repo base branch
+  const [branch, setBranch] = useState(""); // single git_repo base branch
   const [childRepos, setChildRepos] = useState<
     Record<number, { checked: boolean; branch: string }>
   >({});
   const [docsChecked, setDocsChecked] = useState(true);
   const [showSkipped, setShowSkipped] = useState(false);
 
-  // Seed the editable form state from a fresh verdict (done in the event
-  // handler, not an effect, to avoid cascading renders).
+  // Seed the editable form state from a fresh verdict (in the event handler,
+  // not an effect, to avoid cascading renders).
   function seedForm(data: Inspect) {
-    if (data.github) setBranch(data.github.defaultBranch);
-    else if (data.repo) setBranch(data.repo.defaultBranch);
+    if (data.repo) setBranch(data.repo.defaultBranch);
     else setBranch("");
     setShowSkipped(false);
     if (data.children) {
       const init: Record<number, { checked: boolean; branch: string }> = {};
       data.children.repos.forEach((r, i) => {
-        init[i] = { checked: r.checkedDefault && !r.alreadyConnected, branch: r.defaultBranch };
+        // GitHub-backed repos track their default branch; local-only ones show
+        // the branch you're on.
+        const seedBranch = r.remoteUrl ? r.defaultBranch : r.currentBranch;
+        init[i] = { checked: r.checkedDefault && !r.alreadyConnected, branch: seedBranch };
       });
       setChildRepos(init);
-      // "Everything else" docs row is checked by default in local mode.
       setDocsChecked(!isProd);
     } else {
       setChildRepos({});
@@ -221,109 +83,27 @@ export function AddSource({
     setInspecting(true);
     setInspectError("");
     setResult(null);
-    setAddResult(null);
-    setAddError("");
-    try {
-      const res = await fetch("/api/sources/inspect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: trimmed }),
-      });
-      const data = (await res.json()) as Inspect;
-      if (!res.ok || data.error) {
-        // Surface the server's refusal verbatim (e.g. prod-mode path refusal).
-        setInspectError(data.error ?? `Could not inspect (${res.status}).`);
-        return;
-      }
-      seedForm(data);
-      setResult(data);
-    } catch {
-      setInspectError("Network error — could not reach the server.");
-    } finally {
+    clear();
+    const { data, error } = await inspectInput(trimmed);
+    if (error || !data) {
+      setInspectError(error ?? "Could not inspect the folder.");
       setInspecting(false);
+      return;
+    }
+    seedForm(data);
+    setResult(data);
+    setInspecting(false);
+  }
+
+  async function runAdd(sources: AddPayload[]) {
+    const ok = await submitAdd(sources);
+    if (ok) {
+      setResult(null);
+      setInput("");
     }
   }
 
-  const submitAdd = useCallback(
-    async (sources: AddPayload[]) => {
-      if (sources.length === 0 || adding) return;
-      setAdding(true);
-      setAddError("");
-      try {
-        const res = await fetch("/api/sources/add", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sources }),
-        });
-        const data = (await res.json()) as AddResult & { error?: string };
-        if (!res.ok) {
-          setAddError(data.error ?? `Could not add (${res.status}).`);
-          return;
-        }
-        setAddResult({ added: data.added ?? [], errors: data.errors ?? [] });
-        setResult(null);
-        setInput("");
-        onAdded?.();
-      } catch {
-        setAddError("Network error — could not reach the server.");
-      } finally {
-        setAdding(false);
-      }
-    },
-    [adding, onAdded]
-  );
-
   // ─── Verdict renderers ──────────────────────────────────────────────────────
-
-  function renderGithub(gh: GithubInfo) {
-    return (
-      <Card>
-        <Kicker>Code · synced from GitHub</Kicker>
-        <div style={{ ...mono, fontSize: 14, color: "var(--ink)", margin: "6px 0 10px" }}>
-          {gh.owner}/{gh.name}
-        </div>
-        {gh.alreadyConnected ? (
-          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
-            Already connected — nothing to do here.
-          </div>
-        ) : (
-          <>
-            <div style={{ fontSize: 13, color: "var(--text)", marginBottom: 8 }}>
-              Brain: mirrors{" "}
-              <span style={{ ...mono, color: "var(--ink)" }}>{gh.defaultBranch}</span>
-            </div>
-            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
-              Base branch
-            </label>
-            <input
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              spellCheck={false}
-              style={branchInputStyle()}
-            />
-            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 4 }}>
-              the branch Flow treats as reality — your changes are measured against it
-            </div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
-              Flow will clone fresh.
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <ConfirmBtn
-                loading={adding}
-                disabled={!branch.trim()}
-                label="Add source"
-                onClick={() =>
-                  submitAdd([
-                    { type: "repo", url: gh.url, localPath: null, branch: branch.trim(), name: gh.name },
-                  ])
-                }
-              />
-            </div>
-          </>
-        )}
-      </Card>
-    );
-  }
 
   function renderGitRepo(repo: RepoInfo) {
     return (
@@ -332,9 +112,14 @@ export function AddSource({
         <div style={{ ...mono, fontSize: 14, color: "var(--ink)", margin: "6px 0 4px" }}>
           {repo.name}
         </div>
-        <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginBottom: 10 }}>
+        <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
           {repo.path}
         </div>
+        {repo.remoteUrl && (
+          <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginBottom: 10 }}>
+            {ownerName(repo.remoteUrl)}
+          </div>
+        )}
         {repo.alreadyConnected ? (
           <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
             Already connected — nothing to do here.
@@ -371,7 +156,7 @@ export function AddSource({
                 disabled={!branch.trim()}
                 label="Add source"
                 onClick={() =>
-                  submitAdd([
+                  runAdd([
                     {
                       type: "repo",
                       url: repo.remoteUrl,
@@ -429,7 +214,7 @@ export function AddSource({
                 loading={adding}
                 label="Add source"
                 onClick={() =>
-                  submitAdd([
+                  runAdd([
                     {
                       type: "repo",
                       url: null,
@@ -498,7 +283,7 @@ export function AddSource({
           <ConfirmBtn
             loading={adding}
             label="Add source"
-            onClick={() => submitAdd([{ type: "docs", path: docs.path, name: docs.name }])}
+            onClick={() => runAdd([{ type: "docs", path: docs.path, name: docs.name }])}
           />
         </div>
       </Card>
@@ -506,12 +291,10 @@ export function AddSource({
   }
 
   function renderContainer(children: Children) {
-    const own = children.repos
-      .map((r, i) => ({ r, i }))
-      .filter(({ r }) => !r.thirdParty);
-    const third = children.repos
-      .map((r, i) => ({ r, i }))
-      .filter(({ r }) => r.thirdParty);
+    const withGithub = children.repos.filter((r) => r.remoteUrl).length;
+
+    const own = children.repos.map((r, i) => ({ r, i })).filter(({ r }) => !r.thirdParty);
+    const third = children.repos.map((r, i) => ({ r, i })).filter(({ r }) => r.thirdParty);
 
     const toggle = (i: number) =>
       setChildRepos((prev) => ({ ...prev, [i]: { ...prev[i], checked: !prev[i]?.checked } }));
@@ -522,7 +305,7 @@ export function AddSource({
       Object.values(childRepos).filter((c) => c.checked).length + (docsChecked ? 1 : 0);
 
     const repoRow = ({ r, i }: { r: ChildRepo; i: number }) => {
-      const st = childRepos[i] ?? { checked: false, branch: r.defaultBranch };
+      const st = childRepos[i] ?? { checked: false, branch: r.remoteUrl ? r.defaultBranch : r.currentBranch };
       return (
         <div
           key={i}
@@ -543,6 +326,13 @@ export function AddSource({
           />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ ...mono, fontSize: 13, color: "var(--ink)" }}>{r.name}</div>
+            {r.remoteUrl ? (
+              <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
+                {ownerName(r.remoteUrl)}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>local-only</div>
+            )}
             {r.alreadyConnected && (
               <div style={{ fontSize: 11, color: "var(--text-muted)" }}>already connected</div>
             )}
@@ -560,7 +350,11 @@ export function AddSource({
 
     return (
       <Card>
-        <Kicker>A folder with several things inside</Kicker>
+        <Kicker>
+          {withGithub > 0
+            ? `Found ${withGithub} GitHub repo${withGithub === 1 ? "" : "s"} in this folder`
+            : "A folder with several things inside"}
+        </Kicker>
         <div style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "6px 0 4px" }}>
           Pick what Flow should take on.
         </div>
@@ -625,7 +419,7 @@ export function AddSource({
                     type: "repo",
                     url: r.remoteUrl,
                     localPath: r.path,
-                    branch: (st.branch || r.defaultBranch).trim(),
+                    branch: (st.branch || r.defaultBranch || r.currentBranch).trim(),
                     name: r.name,
                   });
                 }
@@ -637,7 +431,7 @@ export function AddSource({
                   name: children.docs.name,
                 });
               }
-              submitAdd(sources);
+              runAdd(sources);
             }}
           />
         </div>
@@ -651,7 +445,7 @@ export function AddSource({
         <Kicker>Not something Flow can take on</Kicker>
         <div style={{ fontSize: 13, color: "var(--text)", marginTop: 8, lineHeight: 1.5 }}>
           {r.error ??
-            "Flow could not tell what this is. Try a GitHub repository URL, a local git repository, or a folder of documents."}
+            "Flow could not tell what this is. Point it at a local git repository or a folder of documents."}
         </div>
       </Card>
     );
@@ -659,8 +453,6 @@ export function AddSource({
 
   function renderVerdict(r: Inspect) {
     switch (r.kind) {
-      case "github_url":
-        return r.github ? renderGithub(r.github) : renderUnsupported(r);
       case "git_repo":
         return r.repo ? renderGitRepo(r.repo) : renderUnsupported(r);
       case "git_repo_local_only":
@@ -678,17 +470,22 @@ export function AddSource({
 
   return (
     <div>
-      <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        {isProd
-          ? "Paste a GitHub URL."
-          : "Paste a GitHub URL or a local folder path — Flow figures out the rest."}
+      {/* Pages that wrap us in their own titled section pass hideLabel to
+          avoid a stacked duplicate heading. */}
+      {!hideLabel && (
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--ink)", marginBottom: 4 }}>
+          Add a folder
+        </label>
+      )}
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
+        Point Flow at a project folder or a folder of docs.
       </p>
 
       <form onSubmit={handleInspect} style={{ display: "flex", gap: 8 }}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={isProd ? "https://github.com/owner/repo" : "https://github.com/owner/repo  or  /path/to/folder"}
+          placeholder="/Users/you/projects/my-app"
           spellCheck={false}
           style={{
             ...mono,
@@ -722,70 +519,10 @@ export function AddSource({
         </button>
       </form>
 
-      {isProd && (
-        <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
-          local paths live on your machine; on a remote Flow, connect GitHub repos or upload files
-        </div>
-      )}
-
-      {inspectError && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: "10px 12px",
-            borderRadius: 6,
-            background: "rgba(168,80,70,0.07)",
-            border: "1px solid rgba(168,80,70,0.25)",
-            color: "var(--danger)",
-            fontSize: 12.5,
-            lineHeight: 1.5,
-          }}
-        >
-          {inspectError}
-        </div>
-      )}
-
+      {inspectError && <ErrorBox message={inspectError} />}
       {result && renderVerdict(result)}
-
-      {addError && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: "10px 12px",
-            borderRadius: 6,
-            background: "rgba(168,80,70,0.07)",
-            border: "1px solid rgba(168,80,70,0.25)",
-            color: "var(--danger)",
-            fontSize: 12.5,
-          }}
-        >
-          {addError}
-        </div>
-      )}
-
-      {addResult && (
-        <div
-          style={{
-            marginTop: 14,
-            padding: "12px 14px",
-            borderRadius: 8,
-            background: "rgba(90,140,90,0.08)",
-            border: "1px solid rgba(90,140,90,0.22)",
-          }}
-        >
-          {addResult.added.map((a, i) => (
-            <div key={`ok-${i}`} style={{ fontSize: 12.5, color: "var(--text)" }}>
-              <span style={{ ...mono, color: "var(--ink)" }}>{a.name}</span>
-              {a.kind === "docs" ? " — added, ingestion coming soon" : " — indexing started"}
-            </div>
-          ))}
-          {addResult.errors.map((e, i) => (
-            <div key={`err-${i}`} style={{ fontSize: 12.5, color: "var(--danger)" }}>
-              <span style={{ ...mono }}>{e.name}</span> — {e.error}
-            </div>
-          ))}
-        </div>
-      )}
+      {addError && <ErrorBox message={addError} />}
+      {addResult && <AddResultBox result={addResult} />}
     </div>
   );
 }
