@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,6 +105,32 @@ export interface RepoEntry {
   branch: string;
   lastIndexedCommit?: string | null;
   addedAt?: string;
+  // Sources front door. A source plays up to two roles: BRAIN (indexed) and
+  // WORK (where coding-agent sessions run). `kind` distinguishes an indexed
+  // CODE repo from a DOCS folder; absent = code (back-compat with old rows).
+  kind?: "code" | "docs";
+  // The user's OWN checkout — the WORK surface. For a GitHub repo the BRAIN is
+  // still Flow's managed clone under repos/<name>; localPath is only where
+  // sessions run in-place. For a local-only (no-remote) repo it is ALSO the
+  // BRAIN we index from (the "local tier").
+  localPath?: string;
+  // Docs entries: the folder on disk + its ingestion state (the pipeline is a
+  // later task, so freshly-added docs sit at "pending_ingestion").
+  path?: string;
+  status?: "pending_ingestion";
+}
+
+// A single source registration. Every field except `name` is optional so the
+// one function can register a GitHub repo, a local-only repo, or a docs folder
+// (and, on re-add, patch just the fields that changed).
+export interface SourceRegistration {
+  name: string;
+  kind?: "code" | "docs";
+  url?: string;
+  branch?: string;
+  localPath?: string;
+  path?: string;
+  status?: "pending_ingestion";
 }
 
 function reposJsonPath(): string {
@@ -139,11 +165,91 @@ export function registerRepo(url: string, branch: string): RepoEntry {
   return entry;
 }
 
+// Register any source shape (GitHub repo, local-only repo, docs folder) into
+// repos.json. Dedupe by name; on re-add patch only the fields the caller
+// supplied (mirrors registerRepo's update-in-place behaviour). Returns the
+// stored entry.
+export function registerSource(entry: SourceRegistration): RepoEntry {
+  const registry = readRepoRegistry();
+  const existing = registry.repos.find((r) => r.name === entry.name);
+  if (existing) {
+    if (entry.kind !== undefined) existing.kind = entry.kind;
+    if (entry.url !== undefined) existing.url = entry.url;
+    if (entry.branch !== undefined) existing.branch = entry.branch;
+    if (entry.localPath !== undefined) existing.localPath = entry.localPath;
+    if (entry.path !== undefined) existing.path = entry.path;
+    if (entry.status !== undefined) existing.status = entry.status;
+    writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
+    return existing;
+  }
+  const created: RepoEntry = {
+    name: entry.name,
+    url: entry.url ?? "",
+    branch: entry.branch ?? "main",
+    lastIndexedCommit: null,
+    addedAt: new Date().toISOString(),
+    ...(entry.kind ? { kind: entry.kind } : {}),
+    ...(entry.localPath ? { localPath: entry.localPath } : {}),
+    ...(entry.path ? { path: entry.path } : {}),
+    ...(entry.status ? { status: entry.status } : {}),
+  };
+  registry.repos.push(created);
+  writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
+  return created;
+}
+
+// Shared GitHub-repo connection path: register in repos.json, (optionally)
+// record the user's own checkout as the WORK surface, start watching the
+// branch for PR/push events, and queue the index job. Factored out of the
+// dashboard repo_added handler so the sources front door reuses the EXACT
+// same path (no drift between the two entry points). Audit rows are the
+// caller's concern — this returns the registry entry + job id.
+export async function connectGithubRepo(
+  url: string,
+  branch: string,
+  localPath?: string,
+): Promise<{ entry: RepoEntry; jobId: string }> {
+  const entry = registerRepo(url, branch);
+  if (localPath) registerSource({ name: entry.name, localPath });
+  // registeredRepos is otherwise only seeded at boot — watch this branch now.
+  const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
+  const ownerRepo = ownerRepoFromUrl(url);
+  if (ownerRepo) watchRepo(ownerRepo, entry.branch);
+  const job = await enqueueJob({
+    type: "index_repo",
+    input: { repo: entry.name, url: entry.url, branch: entry.branch },
+    repo: entry.name,
+  });
+  return { entry, jobId: job.id };
+}
+
 // Clone into workspace/repos/<name> if the checkout is missing. Async — a
 // multi-minute clone must never block the event loop. Private repos: the
 // GITHUB_TOKEN (settings or env) is injected into the clone URL only; it is
 // never written to disk, the registry, or error messages.
 async function ensureRepoClone(entry: { name: string; url?: string; branch?: string }): Promise<string> {
+  // Local tier: an entry with no url but a localPath is the user's own checkout
+  // — index in place from that folder (there is nothing to clone). Materialize
+  // repos/<name> as a symlink to it, because downstream consumers (the index
+  // prompt, the corrections verifier) address checkouts as repos/<name>
+  // relative paths and must not care which tier a repo is.
+  if (!entry.url) {
+    const reg = readRepoRegistry().repos.find((r) => r.name === entry.name);
+    if (reg?.localPath && existsSync(reg.localPath)) {
+      const dest = resolve(WORKSPACE_DIR, "repos", entry.name);
+      if (!existsSync(dest)) {
+        mkdirSync(resolve(WORKSPACE_DIR, "repos"), { recursive: true });
+        try {
+          symlinkSync(reg.localPath, dest);
+        } catch (err) {
+          // A dangling symlink at dest fails existsSync yet blocks creation —
+          // anything other than "already there" is a real error.
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+      }
+      return dest;
+    }
+  }
   const dest = resolve(WORKSPACE_DIR, "repos", entry.name);
   if (existsSync(dest)) return dest;
   if (!entry.url) throw new Error(`repo '${entry.name}' has no checkout and no url to clone from`);

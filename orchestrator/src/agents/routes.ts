@@ -11,6 +11,11 @@
 //   GET  /v1/agents/sessions/:id/diff     unified git diff of the checkout
 //   GET  /v1/agents/sessions/:id/files    {q} — @mention file/folder autocomplete
 //   GET  /v1/agents/repos/files           {repo, q} — same, before a session exists
+//   GET  /v1/agents/worktrees             the separate copies (optionally ?repo=)
+//   GET  /v1/agents/worktrees/diff        {path} — base-scope diff of a copy
+//   POST /v1/agents/worktrees/remove      {path, force?} — delete a copy
+//   POST /v1/agents/worktrees/apply       {path} — merge a copy into your folder
+//   POST /v1/agents/worktrees/push        {path} — push a copy's branch to origin
 //   POST /v1/agents/graph-activity        (from the injected MCP subprocess)
 
 import type { FastifyInstance } from "fastify";
@@ -25,6 +30,12 @@ import {
   listRepoOptions,
   listSessionFiles,
   sessionDiff,
+  listManagedWorktrees,
+  repoHasGithubUrl,
+  removeManagedWorktree,
+  applyManagedWorktree,
+  pushManagedWorktree,
+  worktreeDiffAt,
   listSessions,
   readTranscript,
   recordGraphActivity,
@@ -45,8 +56,19 @@ export function registerAgentRoutes(app: FastifyInstance): void {
 
   app.get("/v1/agents/sessions", async () => ({ sessions: listSessions() }));
 
+  // Create a session. Response is one of:
+  //   {id, separateCopy}                     — started (separateCopy=true → runs
+  //                                            in an isolated worktree)
+  //   {collision:true, active:{id,title,status}}  — the target folder is already
+  //                                            in use by a live session; resend
+  //                                            with `placement` to resolve. This
+  //                                            is a 200, not an error — the UI
+  //                                            asks the user which to do.
+  //   {error}                                — 400.
+  // `placement` (optional): "in_place" starts anyway in the same folder;
+  // "separate_copy" branches the checkout into a worktree and runs there.
   app.post("/v1/agents/sessions", async (req, reply) => {
-    const body = req.body as { backend?: string; repo?: string; prompt?: string };
+    const body = req.body as { backend?: string; repo?: string; prompt?: string; placement?: string };
     const backend = body.backend as AgentBackend;
     if (!backend || !(backend in BACKENDS)) {
       return reply.code(400).send({ error: `backend must be one of ${Object.keys(BACKENDS).join(", ")}` });
@@ -54,7 +76,11 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     if (!body.repo || !body.prompt?.trim()) {
       return reply.code(400).send({ error: "repo and prompt are required" });
     }
-    const result = await createSession({ backend, repo: body.repo, prompt: body.prompt.trim() });
+    const placement = body.placement;
+    if (placement !== undefined && placement !== "in_place" && placement !== "separate_copy") {
+      return reply.code(400).send({ error: "placement must be 'in_place' or 'separate_copy'" });
+    }
+    const result = await createSession({ backend, repo: body.repo, prompt: body.prompt.trim(), placement });
     if ("error" in result) return reply.code(400).send(result);
     return result;
   });
@@ -67,6 +93,15 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     const meta = rows[0] ?? {};
     return {
       ...meta,
+      // Runs in an isolated "separate copy" (worktree) rather than the user's
+      // checkout — the UI shows a muted chip for it. Derived from worktree_id.
+      separateCopy: Boolean((meta as { worktree_id?: string }).worktree_id ?? live?.worktreeId),
+      // The worktree path, when this session runs on a separate copy — the exit
+      // banner (apply/push) targets it directly. null for in-place sessions.
+      worktreePath: (meta as { worktree_id?: string }).worktree_id ?? live?.worktreeId ?? null,
+      // Whether the copy's repo has a GitHub url — gates the banner's Push
+      // button (a local-only repo has nowhere to push).
+      worktreeGithub: repoHasGithubUrl(String((meta as { repo?: string }).repo ?? "")),
       live: Boolean(live),
       modes: live?.modes ?? null,
       configOptions: live?.configOptions ?? null,
@@ -180,11 +215,19 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     return r;
   });
 
-  // What the agent changed in its checkout — unified git diff vs HEAD plus
-  // untracked files. Works for live and archived sessions.
+  // What the agent changed in its checkout, in one of two scopes:
+  //   ?scope=session (default) — everything since the session started
+  //   ?scope=base              — the branch vs its registered base branch
+  // Works for live and archived sessions. Response: {files, diff, truncated,
+  // scope, base} — scope is the one actually used (base degrades to session
+  // when the base branch can't be resolved), base is its name or null.
   app.get("/v1/agents/sessions/:id/diff", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const r = await sessionDiff(id);
+    const scope = (req.query as { scope?: string }).scope ?? "session";
+    if (scope !== "session" && scope !== "base") {
+      return reply.code(400).send({ error: "scope must be 'session' or 'base'" });
+    }
+    const r = await sessionDiff(id, scope);
     if ("error" in r) return reply.code(404).send(r);
     return r;
   });
@@ -204,6 +247,58 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     if (!repo) return reply.code(400).send({ error: "repo required" });
     const r = await listRepoFiles(repo, q ?? "");
     if ("error" in r) return reply.code(404).send(r);
+    return r;
+  });
+
+  // ---- Managed "separate copies" (worktrees) — visibility + exits ----
+
+  // List every flow-managed separate copy (optionally ?repo=<name>). Per tree:
+  // {repo, path, branch, base, aheadCount, dirty, merged, health, sessions[],
+  // github}. The user's own primary checkout is never listed.
+  app.get("/v1/agents/worktrees", async (req) => {
+    const { repo } = req.query as { repo?: string };
+    return { worktrees: await listManagedWorktrees(repo) };
+  });
+
+  // Base-scope diff of a session-less copy: working tree vs merge-base(base,
+  // HEAD). Same {files, diff, truncated, scope:"base", base} shape as the
+  // session diff.
+  app.get("/v1/agents/worktrees/diff", async (req, reply) => {
+    const { path } = req.query as { path?: string };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    const r = await worktreeDiffAt(path);
+    if ("error" in r) return reply.code(404).send(r);
+    return r;
+  });
+
+  // Remove a copy. Refuses non-managed paths, a still-live session, and a dirty
+  // tree unless {force:true}. {ok} | {error} (400 on refusal).
+  app.post("/v1/agents/worktrees/remove", async (req, reply) => {
+    const { path, force } = req.body as { path?: string; force?: boolean };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    const r = await removeManagedWorktree(path, force === true);
+    if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  // Merge a copy's branch back into the user's checkout — THE one action that
+  // writes to their folder. Guards (dirty copy / dirty folder / conflict) each
+  // return a distinct {error}; success → {ok, mergedInto}.
+  app.post("/v1/agents/worktrees/apply", async (req, reply) => {
+    const { path } = req.body as { path?: string };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    const r = await applyManagedWorktree(path);
+    if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  // Push a copy's branch to origin (GitHub repos only) using ambient
+  // credentials. Success → {ok, compareUrl}; failure → git's stderr as {error}.
+  app.post("/v1/agents/worktrees/push", async (req, reply) => {
+    const { path } = req.body as { path?: string };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    const r = await pushManagedWorktree(path);
+    if ("error" in r) return reply.code(400).send(r);
     return r;
   });
 

@@ -47,8 +47,8 @@ function lineColor(line: string): { color?: string; bg?: string; muted?: boolean
   return {};
 }
 
-function FileHunk({ hunk }: { hunk: Hunk }) {
-  const [open, setOpen] = useState(true);
+function FileHunk({ hunk, defaultOpen = false }: { hunk: Hunk; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   // Drop the redundant header lines already shown in the file title bar.
   const body = hunk.lines.filter(
     (l) =>
@@ -60,6 +60,9 @@ function FileHunk({ hunk }: { hunk: Hunk }) {
       !l.startsWith("similarity ") &&
       !l.startsWith("rename ")
   );
+  // Per-file +/- so the collapsed list reads as a change summary at a glance.
+  const adds = hunk.lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length;
+  const dels = hunk.lines.filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
   return (
     <div className="rounded-md border border-line overflow-hidden">
       <button
@@ -69,6 +72,8 @@ function FileHunk({ hunk }: { hunk: Hunk }) {
       >
         <span className="text-text-muted text-[10px]">{open ? "▾" : "▸"}</span>
         <span className="text-ink text-[11.5px] truncate flex-1">{hunk.path}</span>
+        {adds > 0 && <span className="text-[10px]" style={{ color: "rgb(60,120,70)" }}>+{adds}</span>}
+        {dels > 0 && <span className="text-[10px]" style={{ color: "rgb(168,80,70)" }}>−{dels}</span>}
         {hunk.status !== "modified" && (
           <span className="text-[9.5px] uppercase tracking-wider text-text-muted">{hunk.status}</span>
         )}

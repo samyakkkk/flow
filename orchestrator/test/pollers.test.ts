@@ -20,6 +20,7 @@ import { createServer, type Server } from "node:http";
 // Set env BEFORE any module that touches DB is imported
 // -----------------------------------------------------------------------
 process.env.DB_PATH = ":memory:";
+process.env.ORCHESTRATOR_PORT = "17531"; // unique port for this test file (7530 may be a live flow)
 process.env.FLOW_ADMIN_TOKEN = "test-token-pollers";
 process.env.FLOW_FAKE_OPENCODE = "1";
 process.env.FLOW_DRAIN_DISABLE = "1";

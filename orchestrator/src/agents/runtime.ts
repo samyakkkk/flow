@@ -21,6 +21,19 @@ import db from "../db.js";
 import { getSetting } from "../settings.js";
 import { addNote, matchNotes } from "../notes.js";
 import { embedText } from "../embed.js";
+import {
+  createSessionWorktree,
+  listWorktrees,
+  pruneWorktrees,
+  inspectWorktree,
+  isManagedWorktree,
+  managedRepoOf,
+  managedWorktreesRoot,
+  realpathOrSelf,
+  removeWorktree,
+  applyWorktree,
+  pushWorktree,
+} from "./worktrees.js";
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -146,6 +159,9 @@ export interface RepoOption {
   name: string;
   path: string;
   cloned: boolean;
+  // The repo's registered base branch (repos.json `branch`) — the BASE-scope
+  // diff resolves against this. Undefined for entries that never recorded one.
+  branch?: string;
 }
 
 export function listRepoOptions(): RepoOption[] {
@@ -154,12 +170,22 @@ export function listRepoOptions(): RepoOption[] {
   if (reposJson && existsSync(reposJson)) {
     try {
       const parsed = JSON.parse(readFileSync(reposJson, "utf8")) as {
-        repos?: Array<{ name: string }>;
+        repos?: Array<{ name: string; kind?: string; localPath?: string; branch?: string }>;
       };
       const reposDir = path.join(path.dirname(reposJson), "repos");
       for (const r of parsed.repos ?? []) {
+        // Docs sources are not session targets — sessions run in code repos.
+        if (r.kind === "docs") continue;
+        const branch = typeof r.branch === "string" && r.branch ? r.branch : undefined;
+        // WORK surface: when the user connected their own checkout, sessions
+        // run in-place there (the in-place default) rather than in Flow's
+        // managed clone.
+        if (r.localPath && existsSync(r.localPath)) {
+          out.push({ name: r.name, path: r.localPath, cloned: true, branch });
+          continue;
+        }
         const p = path.join(reposDir, r.name);
-        out.push({ name: r.name, path: p, cloned: existsSync(p) });
+        out.push({ name: r.name, path: p, cloned: existsSync(p), branch });
       }
     } catch {
       /* empty list */
@@ -171,6 +197,15 @@ export function listRepoOptions(): RepoOption[] {
 // ---------------------------------------------------------------------------
 // Session store — SQLite metadata + JSONL event transcript + live subscribers
 
+// Baseline shape for FRESH DBs (fresh DBs skip migrations, so the new
+// session-diff columns must be born here). Existing DBs get the same columns
+// via migration 7 (see migrations.ts) — which also creates this table first,
+// because it's created here at runtime-module load, not in db.ts's baseline.
+//   start_sha       — working-tree snapshot at session start (git stash create
+//                     commit, or HEAD when clean); NULL in an empty repo.
+//   start_untracked — JSON array of untracked paths that pre-existed the
+//                     session (excluded from the SESSION-scope diff).
+//   worktree_id     — reserved for Phase B (isolated worktrees); unused today.
 db.exec(`
   CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY,
@@ -182,6 +217,9 @@ db.exec(`
     acp_session_id TEXT,
     stop_reason TEXT,
     error TEXT,
+    start_sha TEXT,
+    start_untracked TEXT,
+    worktree_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
@@ -224,6 +262,16 @@ export interface LiveSession {
   turnText: string; // agent message text accumulated over the current turn (rolling WIP note source)
   injectedIds: Set<string>; // memory items already injected this session — never repeat
   cwd: string;
+  // Working-tree snapshot captured at session start, for the SESSION-scope
+  // diff. startSha is a git commit object (stash-create or HEAD); null in an
+  // empty repo. startUntracked is the pre-existing untracked file list, which
+  // the session diff excludes so it shows only what the agent added.
+  startSha?: string | null;
+  startUntracked?: string[];
+  // Set when this session runs in a "separate copy" (git worktree) rather than
+  // in the user's checkout directly. The worktree PATH is the id — it's stable
+  // and derivable, so no extra bookkeeping is needed to find the tree again.
+  worktreeId?: string;
   title: string;
   status: SessionStatus;
   acpSessionId?: string;
@@ -242,12 +290,45 @@ export interface LiveSession {
 
 const sessions = new Map<string, LiveSession>();
 
+// COLLISION predicate — a new session collides when a still-active session
+// already holds the SAME resolved cwd. "Active" = starting/running/waiting/idle;
+// closed and errored (and, transitively, archived/reload-only) sessions never
+// collide. Pure and generic over the entry shape so it's unit-testable with
+// fake entries — no live ACP backend required.
+const ACTIVE_FOR_COLLISION: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
+  "starting",
+  "running",
+  "waiting",
+  "idle",
+]);
+
+export function collidingSession<T extends { id: string; cwd: string; status: SessionStatus }>(
+  candidates: Iterable<T>,
+  cwd: string
+): T | undefined {
+  for (const s of candidates) {
+    if (s.cwd === cwd && ACTIVE_FOR_COLLISION.has(s.status)) return s;
+  }
+  return undefined;
+}
+
+// Live-map collision lookup: is any currently-live session already working in
+// this folder? (Only the in-memory map matters — a session the orchestrator
+// lost on restart rehydrates as "error", which is not active.)
+function findCollision(cwd: string): LiveSession | undefined {
+  return collidingSession(sessions.values(), cwd);
+}
+
 const insertSession = db.prepare(
-  `INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  `INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, worktree_id, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 const updateSessionRow = db.prepare(
   `UPDATE agent_sessions SET status=?, acp_session_id=?, stop_reason=?, error=?, updated_at=? WHERE id=?`
+);
+// Persist the working-tree snapshot taken at session start (see createSession).
+const updateSessionStart = db.prepare(
+  `UPDATE agent_sessions SET start_sha=?, start_untracked=?, updated_at=? WHERE id=?`
 );
 
 function transcriptPath(id: string): string {
@@ -297,6 +378,9 @@ function rehydrate(id: string): LiveSession | undefined {
         title: string;
         stop_reason: string | null;
         acp_session_id: string | null;
+        start_sha: string | null;
+        start_untracked: string | null;
+        worktree_id: string | null;
         created_at: number;
         updated_at: number;
       }
@@ -311,6 +395,9 @@ function rehydrate(id: string): LiveSession | undefined {
     turnText: "",
     injectedIds: new Set(),
     cwd: row.cwd,
+    startSha: row.start_sha ?? null,
+    startUntracked: parseUntracked(row.start_untracked),
+    worktreeId: row.worktree_id ?? undefined,
     title: row.title,
     status: "error",
     acpSessionId: row.acp_session_id,
@@ -759,17 +846,62 @@ Two proposal tools let you contribute back — use them sparingly and precisely:
 - propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.
 - note: save branch-scoped working memory freely (no approval) — discoveries, dead ends ("tried X, deadlocked"), constraints, decisions. Note what the next session on this branch would otherwise re-learn the hard way.`;
 
+// PLACEMENT resolves a collision:
+//   undefined       — normal start; but if the folder is already in use by a
+//                     live session, DON'T start — return {collision} and let the
+//                     UI ask the user.
+//   "in_place"      — start anyway in the same folder (user chose to share it).
+//   "separate_copy" — branch the checkout into an isolated worktree and run
+//                     there (never overwrite the other session's tree).
+export type SessionPlacement = "in_place" | "separate_copy";
+
+export type CreateSessionResult =
+  | { id: string; separateCopy: boolean }
+  | { collision: true; active: { id: string; title: string; status: SessionStatus } }
+  | { error: string };
+
 export async function createSession(opts: {
   backend: AgentBackend;
   repo: string;
   prompt: string;
-}): Promise<{ id: string } | { error: string }> {
+  placement?: SessionPlacement;
+}): Promise<CreateSessionResult> {
   const repoOpt = listRepoOptions().find((r) => r.name === opts.repo);
   if (!repoOpt) return { error: `Unknown repo "${opts.repo}" — connect it first` };
   if (!repoOpt.cloned) return { error: `Repo "${opts.repo}" is not cloned yet` };
 
-  const id = crypto.randomUUID();
   const title = opts.prompt.length > 80 ? opts.prompt.slice(0, 77) + "…" : opts.prompt;
+
+  // COLLISION check (in-place default only). When the caller hasn't yet chosen a
+  // placement and the target folder is already held by a live session, stop and
+  // ask — starting a second agent in the same working tree lets them overwrite
+  // each other's edits.
+  if (!opts.placement) {
+    const active = findCollision(repoOpt.path);
+    if (active) {
+      return { collision: true, active: { id: active.id, title: active.title, status: active.status } };
+    }
+  }
+
+  // Decide the working directory. SEPARATE COPY branches the checkout into an
+  // isolated worktree and runs there; every other path runs in place. On
+  // worktree-creation failure we surface {error} and do NOT silently fall back
+  // to in_place — running in place is exactly what the user asked to avoid.
+  let cwd = repoOpt.path;
+  let worktreeId: string | undefined;
+  if (opts.placement === "separate_copy") {
+    const wt = await createSessionWorktree({
+      repoName: repoOpt.name,
+      srcCheckout: repoOpt.path,
+      baseBranch: repoOpt.branch ?? "main",
+      title,
+    });
+    if ("error" in wt) return { error: `Couldn't create a separate copy: ${wt.error}` };
+    cwd = wt.path;
+    worktreeId = wt.path; // the worktree path is the stable, derivable id
+  }
+
+  const id = crypto.randomUUID();
   const now = Date.now();
   const s: LiveSession = {
     id,
@@ -777,7 +909,8 @@ export async function createSession(opts: {
     repo: opts.repo,
     turnText: "",
     injectedIds: new Set(),
-    cwd: repoOpt.path,
+    cwd,
+    worktreeId,
     title,
     status: "starting",
     seq: 0,
@@ -789,16 +922,23 @@ export async function createSession(opts: {
     updatedAt: now,
   };
   sessions.set(id, s);
-  insertSession.run(id, opts.backend, opts.repo, repoOpt.path, title, "starting", now, now);
-  emit(s, "created", { backend: opts.backend, repo: opts.repo, title, cwd: repoOpt.path });
+  insertSession.run(id, opts.backend, opts.repo, cwd, title, "starting", worktreeId ?? null, now, now);
+  emit(s, "created", { backend: opts.backend, repo: opts.repo, title, cwd, separateCopy: Boolean(worktreeId) });
 
   // Async: connect, create ACP session, run the first turn.
   void (async () => {
     try {
-      s.branch = (await runGit(repoOpt.path, ["branch", "--show-current"])).trim() || undefined;
+      s.branch = (await runGit(cwd, ["branch", "--show-current"])).trim() || undefined;
+      // Snapshot the working tree at session start, BEFORE the agent touches
+      // anything — this is the base for the SESSION-scope diff, so it must be
+      // captured before the first turn runs.
+      const start = await captureStartState(cwd);
+      s.startSha = start.sha;
+      s.startUntracked = start.untracked;
+      updateSessionStart.run(start.sha, JSON.stringify(start.untracked), Date.now(), id);
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
-        cwd: repoOpt.path,
+        cwd,
         mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "")],
       });
       s.acpSessionId = String(resp.sessionId);
@@ -814,7 +954,7 @@ export async function createSession(opts: {
     }
   })();
 
-  return { id };
+  return { id, separateCopy: Boolean(worktreeId) };
 }
 
 // Rolling WIP note — the free tier of branch memory. Assembled from what the
@@ -1029,10 +1169,17 @@ export function sessionLocation(id: string): { cwd: string } | null {
 // `git` (not ACP tool-call content) so it's the same regardless of backend and
 // works for reloaded/archived sessions. Non-mutating: never touches the index.
 
+export type DiffScope = "session" | "base";
+
 export interface SessionDiff {
   files: Array<{ path: string; additions: number; deletions: number; status: "modified" | "added" }>;
   diff: string;
   truncated: boolean;
+  // The scope actually used (BASE degrades to SESSION when the base branch
+  // can't be resolved), and the base branch name for BASE scope (null in
+  // SESSION scope or when BASE degraded).
+  scope: DiffScope;
+  base: string | null;
 }
 
 const DIFF_MAX_BYTES = 400_000;
@@ -1051,17 +1198,146 @@ function runGit(cwd: string, args: string[]): Promise<string> {
   });
 }
 
-export async function sessionDiff(id: string): Promise<SessionDiff | { error: string }> {
-  const cwd = sessionCwd(id);
-  if (!cwd) return { error: "Unknown session" };
+// Probe git commands whose signal is the exit code, not stdout (cat-file -e,
+// rev-parse --verify): true iff git exited 0.
+function gitOk(cwd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd, timeout: 5000 }, (err) => resolve(!err));
+  });
+}
+
+// start_untracked is stored as a JSON array string; tolerate legacy/NULL/bad.
+function parseUntracked(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+// Snapshot the working tree at session start for the SESSION-scope diff.
+// `git stash create` writes a commit object capturing the current tracked
+// working tree + index WITHOUT touching either (unlike `git stash push`), and
+// prints its sha — or NOTHING when the tree is clean, in which case HEAD is the
+// snapshot. An empty repo (no HEAD) yields null: the session diff then falls
+// back to diff-vs-HEAD, which itself no-ops until the first commit. We also
+// record pre-existing untracked files so they don't pollute "what the agent
+// did" (the stash-create commit doesn't include untracked files).
+async function captureStartState(cwd: string): Promise<{ sha: string | null; untracked: string[] }> {
+  const inside = (await runGit(cwd, ["rev-parse", "--is-inside-work-tree"])).trim();
+  if (inside !== "true") return { sha: null, untracked: [] };
+  let sha = (await runGit(cwd, ["stash", "create"])).trim();
+  if (!sha) sha = (await runGit(cwd, ["rev-parse", "HEAD"])).trim();
+  const untracked = (await runGit(cwd, ["ls-files", "--others", "--exclude-standard"]))
+    .split("\n")
+    .filter(Boolean);
+  return { sha: sha || null, untracked };
+}
+
+// Resolve the repo's registered base branch (repos.json `branch`) to a git ref
+// that exists in this checkout: prefer the remote-tracking base
+// (origin/<branch>), fall back to a local branch of the same name. Returns null
+// when neither exists (or no base branch is registered) — BASE scope then
+// degrades to SESSION.
+async function resolveBaseRef(cwd: string, repo: string): Promise<{ ref: string; name: string } | null> {
+  const branch = listRepoOptions().find((r) => r.name === repo)?.branch;
+  if (!branch) return null;
+  for (const ref of [`origin/${branch}`, branch]) {
+    if (await gitOk(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])) {
+      return { ref, name: branch };
+    }
+  }
+  return null;
+}
+
+// Session record needed for a diff — resolved from the live map or (for
+// finished/reloaded sessions) the DB, so diffs work after a restart too.
+function sessionRecord(id: string): { cwd: string; repo: string; startSha: string | null; startUntracked: string[] } | null {
+  const live = sessions.get(id);
+  if (live) {
+    return { cwd: live.cwd, repo: live.repo, startSha: live.startSha ?? null, startUntracked: live.startUntracked ?? [] };
+  }
+  const row = db.prepare(`SELECT cwd, repo, start_sha, start_untracked FROM agent_sessions WHERE id = ?`).get(id) as
+    | { cwd?: string; repo?: string; start_sha?: string | null; start_untracked?: string | null }
+    | undefined;
+  if (!row?.cwd) return null;
+  return {
+    cwd: row.cwd,
+    repo: row.repo ?? "",
+    startSha: row.start_sha ?? null,
+    startUntracked: parseUntracked(row.start_untracked),
+  };
+}
+
+// What changed, in one of two scopes:
+//   SESSION (default) — everything since the session started: `git diff` of the
+//     working tree against the start snapshot, plus untracked files the agent
+//     added (excluding those that pre-existed the session). Survives the agent
+//     committing (the snapshot is a fixed point, not HEAD).
+//   BASE — the branch vs its registered base: `git diff` of the working tree
+//     against `merge-base(base, HEAD)`. Deliberately the merge-base and not a
+//     two-dot `base..HEAD`: we want what THIS branch adds on top of the fork
+//     point, not upstream commits that landed on base afterwards (which would
+//     show up reversed). Untracked: include all current untracked files.
+// Non-mutating: only reads and `--no-index` diffs; never touches the index.
+export async function sessionDiff(id: string, scope: DiffScope = "session"): Promise<SessionDiff | { error: string }> {
+  const rec = sessionRecord(id);
+  if (!rec) return { error: "Unknown session" };
+  const { cwd } = rec;
   if (!existsSync(cwd)) return { error: `Folder not found: ${cwd}` };
   const inside = (await runGit(cwd, ["rev-parse", "--is-inside-work-tree"])).trim();
-  if (inside !== "true") return { files: [], diff: "", truncated: false };
+  if (inside !== "true") return { files: [], diff: "", truncated: false, scope, base: null };
 
+  // Decide the ref we diff the working tree against, which untracked files to
+  // exclude, and the scope/base we actually resolved (BASE may degrade).
+  let baseRef = "HEAD";
+  let baseName: string | null = null;
+  let effectiveScope: DiffScope = scope;
+  let excludeUntracked = new Set<string>();
+
+  if (scope === "base") {
+    const resolved = await resolveBaseRef(cwd, rec.repo);
+    const mergeBase = resolved ? (await runGit(cwd, ["merge-base", resolved.ref, "HEAD"])).trim() : "";
+    if (resolved && mergeBase) {
+      baseRef = mergeBase;
+      baseName = resolved.name;
+    } else {
+      effectiveScope = "session"; // no base to compare against — degrade
+    }
+  }
+
+  if (effectiveScope === "session") {
+    // Guard: the start snapshot is a DANGLING commit (nothing refers to it), so
+    // `git gc` can prune it. Verify it still exists before diffing against it;
+    // otherwise fall back to HEAD — today's diff-vs-HEAD behaviour.
+    if (rec.startSha && (await gitOk(cwd, ["cat-file", "-e", `${rec.startSha}^{commit}`]))) {
+      baseRef = rec.startSha;
+      excludeUntracked = new Set(rec.startUntracked);
+    } else {
+      baseRef = "HEAD";
+    }
+  }
+
+  const built = await buildDiff(cwd, baseRef, excludeUntracked);
+  return { ...built, scope: effectiveScope, base: baseName };
+}
+
+// The shared diff-assembly: working tree vs `baseRef`, plus untracked files
+// (minus any pre-existing ones) rendered as additions. Factored out of
+// sessionDiff so the session-less worktree diff (worktreeDiff, below) reuses
+// exactly the same machinery instead of duplicating it. Non-mutating: only
+// reads and `--no-index` diffs; never touches the index.
+async function buildDiff(
+  cwd: string,
+  baseRef: string,
+  excludeUntracked: Set<string>
+): Promise<{ files: SessionDiff["files"]; diff: string; truncated: boolean }> {
   const files: SessionDiff["files"] = [];
 
-  // Tracked changes vs HEAD (staged + unstaged, combined).
-  const numstat = await runGit(cwd, ["diff", "HEAD", "--numstat"]);
+  // Tracked changes vs the chosen base (staged + unstaged, combined).
+  const numstat = await runGit(cwd, ["diff", baseRef, "--numstat"]);
   for (const line of numstat.split("\n")) {
     const cols = line.split("\t");
     if (cols.length < 3) continue;
@@ -1072,13 +1348,15 @@ export async function sessionDiff(id: string): Promise<SessionDiff | { error: st
       status: "modified",
     });
   }
-  let diff = await runGit(cwd, ["diff", "HEAD"]);
+  let diff = await runGit(cwd, ["diff", baseRef]);
 
   // Untracked, non-ignored files → render as additions via --no-index, which
-  // never writes to the index.
+  // never writes to the index. SESSION scope drops files that pre-existed the
+  // session; BASE scope shows all current untracked files.
   const untracked = (await runGit(cwd, ["ls-files", "--others", "--exclude-standard"]))
     .split("\n")
     .filter(Boolean)
+    .filter((f) => !excludeUntracked.has(f))
     .slice(0, UNTRACKED_MAX);
   for (const f of untracked) {
     const d = await runGit(cwd, ["diff", "--no-index", "--", "/dev/null", f]);
@@ -1244,4 +1522,174 @@ export function subscribe(id: string, fn: (ev: SessionEvent) => void): (() => vo
   if (!s) return null;
   s.subscribers.add(fn);
   return () => s.subscribers.delete(fn);
+}
+
+// ---------------------------------------------------------------------------
+// Managed worktrees — Phase C: visibility + exits for the separate copies.
+// The pure git ops live in worktrees.ts (runnable in the future local
+// companion, no db). Here we add the parts that need the registry + session
+// map: which repos to scan, which sessions are attached, the GitHub url, and
+// the "no live session attached" remove guard.
+
+// The repo's GitHub owner/repo parsed from its registry url (null for
+// local-only repos). Push and the compare URL depend on this.
+function repoGithub(repoName: string): { owner: string; repo: string } | null {
+  const reposJson = process.env.REPOS_JSON_PATH;
+  if (!reposJson || !existsSync(reposJson)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(reposJson, "utf8")) as { repos?: Array<{ name: string; url?: string }> };
+    const url = parsed.repos?.find((r) => r.name === repoName)?.url;
+    if (!url) return null;
+    const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?\/?$/i);
+    return m ? { owner: m[1], repo: m[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Does this repo have a GitHub url? Gates the Push action in the UI (the
+// session exit banner and the copies list both ask).
+export function repoHasGithubUrl(repo: string): boolean {
+  return repoGithub(repo) !== null;
+}
+
+// Sessions recorded against a worktree path (worktree_id). Realpath both sides:
+// createSession stores the raw dest path, `git worktree list` emits realpaths,
+// and on macOS those differ (/var vs /private/var). Live status wins over the
+// stored row status when the session is in the live map.
+function sessionsForWorktree(treePath: string): Array<{ id: string; title: string; status: SessionStatus }> {
+  const real = realpathOrSelf(treePath);
+  const rows = db
+    .prepare(`SELECT id, title, status, worktree_id FROM agent_sessions WHERE worktree_id IS NOT NULL ORDER BY created_at DESC`)
+    .all() as Array<{ id: string; title: string; status: string; worktree_id: string }>;
+  return rows
+    .filter((r) => realpathOrSelf(r.worktree_id) === real)
+    .map((r) => {
+      const live = sessions.get(r.id);
+      return { id: r.id, title: r.title, status: (live?.status ?? r.status) as SessionStatus };
+    });
+}
+
+export interface ManagedWorktree {
+  repo: string;
+  path: string;
+  branch: string | null;
+  base: string; // the repo's registered base branch
+  aheadCount: number;
+  dirty: boolean;
+  merged: boolean;
+  health: "ok" | "broken";
+  sessions: Array<{ id: string; title: string; status: SessionStatus }>;
+  github: boolean; // repo has a GitHub url → Push is available
+}
+
+// Every flow-managed separate copy (optionally filtered to one repo). For each
+// registered code checkout: prune, list, keep only trees under the managed root
+// (the user's OWN primary checkout is never a row), and enrich with git facts +
+// attached sessions. Never throws — a bad repo just contributes nothing.
+export async function listManagedWorktrees(repoFilter?: string): Promise<ManagedWorktree[]> {
+  if (!managedWorktreesRoot()) return [];
+  const repos = listRepoOptions().filter((r) => r.cloned && (!repoFilter || r.name === repoFilter));
+  const out: ManagedWorktree[] = [];
+  for (const r of repos) {
+    await pruneWorktrees(r.path);
+    const trees = await listWorktrees(r.path);
+    for (const t of trees) {
+      if (!isManagedWorktree(t.path)) continue; // skips the primary checkout
+      const info = await inspectWorktree({ treePath: t.path, baseBranch: r.branch ?? "main", branch: t.branch });
+      out.push({
+        repo: r.name,
+        path: t.path,
+        branch: info.branch,
+        base: info.base,
+        aheadCount: info.aheadCount,
+        dirty: info.dirty,
+        merged: info.merged,
+        health: info.health,
+        sessions: sessionsForWorktree(t.path),
+        github: repoGithub(r.name) !== null,
+      });
+    }
+  }
+  return out;
+}
+
+// Resolve a managed tree path to its owning repo, source checkout, and current
+// branch — the context the remove/apply/push/diff ops need. Returns null when
+// the path isn't managed or its repo isn't registered.
+async function resolveTree(
+  treePath: string
+): Promise<{ repo: string; src: string; branch: string | null; base: string } | null> {
+  const repoName = managedRepoOf(treePath);
+  if (!repoName) return null;
+  const opt = listRepoOptions().find((r) => r.name === repoName);
+  if (!opt) return null;
+  const real = realpathOrSelf(treePath);
+  // `git worktree list` still reports the branch of a folder-missing tree until
+  // it's pruned, so this resolves the branch for broken rows too.
+  const trees = await listWorktrees(opt.path);
+  const match = trees.find((t) => realpathOrSelf(t.path) === real);
+  return { repo: repoName, src: opt.path, branch: match?.branch ?? null, base: opt.branch ?? "main" };
+}
+
+export async function removeManagedWorktree(
+  treePath: string,
+  force = false
+): Promise<{ ok: true } | { error: string }> {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy — refusing to remove it." };
+  // Refuse while a LIVE session still runs here — pulling the tree out from
+  // under a working agent would strand it.
+  const attached = sessionsForWorktree(treePath).find((s) => ACTIVE_FOR_COLLISION.has(s.status));
+  if (attached) return { error: `A session is still active on this copy ("${attached.title}"). Stop it first.` };
+  const t = await resolveTree(treePath);
+  if (!t) return { error: "Couldn't find the source checkout for this copy." };
+  return removeWorktree({ srcCheckout: t.src, treePath, branch: t.branch, force });
+}
+
+export async function applyManagedWorktree(
+  treePath: string
+): Promise<{ ok: true; mergedInto: string } | { error: string }> {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  const t = await resolveTree(treePath);
+  if (!t || !t.branch) return { error: "Couldn't find the branch for this copy." };
+  return applyWorktree({ srcCheckout: t.src, treePath, branch: t.branch });
+}
+
+export async function pushManagedWorktree(
+  treePath: string
+): Promise<{ ok: true; compareUrl: string } | { error: string }> {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  const t = await resolveTree(treePath);
+  if (!t || !t.branch) return { error: "Couldn't find the branch for this copy." };
+  const gh = repoGithub(t.repo);
+  if (!gh) return { error: "This repository isn't connected to GitHub." };
+  return pushWorktree({ treePath, branch: t.branch, base: t.base, owner: gh.owner, repo: gh.repo });
+}
+
+// Diff a managed tree that has NO session of its own: working dir vs the
+// merge-base with its base branch. Same shape (and scope:"base") as the
+// session diff, reusing buildDiff via worktreeDiff below.
+export async function worktreeDiffAt(treePath: string): Promise<SessionDiff | { error: string }> {
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  const t = await resolveTree(treePath);
+  if (!t) return { error: "Unknown copy." };
+  return worktreeDiff(treePath, t.repo);
+}
+
+// Base-scope diff for an arbitrary checkout (a worktree with no session).
+// Mirrors sessionDiff's BASE branch: working tree vs merge-base(base, HEAD).
+export async function worktreeDiff(treePath: string, repo: string): Promise<SessionDiff | { error: string }> {
+  if (!existsSync(treePath)) return { error: `Folder not found: ${treePath}` };
+  const inside = (await runGit(treePath, ["rev-parse", "--is-inside-work-tree"])).trim();
+  if (inside !== "true") return { files: [], diff: "", truncated: false, scope: "base", base: null };
+  const resolved = await resolveBaseRef(treePath, repo);
+  const mergeBase = resolved ? (await runGit(treePath, ["merge-base", resolved.ref, "HEAD"])).trim() : "";
+  if (!resolved || !mergeBase) {
+    // No base to compare against — fall back to diff vs HEAD (still shows the
+    // tree's uncommitted work), reported with a null base.
+    const built = await buildDiff(treePath, "HEAD", new Set<string>());
+    return { ...built, scope: "base", base: null };
+  }
+  const built = await buildDiff(treePath, mergeBase, new Set<string>());
+  return { ...built, scope: "base", base: resolved.name };
 }
