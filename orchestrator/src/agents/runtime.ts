@@ -713,7 +713,9 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       // bash command whose free-text title mentions "flow-graph" must not
       // slip through this gate.
       const title = String(params.toolCall?.title ?? "");
-      if (/^flow-graph_(find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure|note)$/.test(title)) {
+      // Title formats vary by adapter: "flow-graph_<verb>" (older) vs
+      // "mcp__flow-graph__<verb>" (current claude-agent-acp). Match both.
+      if (/^(?:mcp__)?flow-graph_{1,2}(orient|find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure|note)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
