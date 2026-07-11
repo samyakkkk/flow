@@ -7,7 +7,7 @@
 import { getSetting } from "./settings.js";
 import { registerPoller } from "./pollers/engine.js";
 import { linearFetchSince } from "./adapters/linear.js";
-import { githubFetchSince } from "./adapters/github.js";
+import { githubFetchSince, ghAuthOk } from "./adapters/github.js";
 
 // ------------------------------------------------------------------
 // Internal: clear registry (engine doesn't export a clear function, so
@@ -56,16 +56,11 @@ export function reinitPollers(): void {
     intervalMs: githubIntervalMs,
     fetchSince: githubFetchSince,
     enabled: () => {
-      const pollMs =
-        getSetting("FLOW_GITHUB_POLL_MS") ?? process.env.FLOW_GITHUB_POLL_MS;
-      const token =
-        getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? "";
-      // GitHub poller: enabled if FLOW_GITHUB_POLL_MS is explicitly set
-      // (either via DB setting or env) OR if GITHUB_TOKEN is set via DB
+      // GitHub poller: enabled if git can authenticate (gh CLI, PAT, or SSH).
       return (
-        (Boolean(pollMs) || Boolean(token)) &&
         process.env.FLOW_GITHUB_POLL_DISABLE !== "1" &&
-        process.env.FLOW_POLL_DISABLE !== "1"
+        process.env.FLOW_POLL_DISABLE !== "1" &&
+        (Boolean(getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? "") || ghAuthOk())
       );
     },
   });

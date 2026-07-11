@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -269,6 +269,27 @@ async function ensureRepoClone(entry: { name: string; url?: string; branch?: str
   return dest;
 }
 
+// For managed GitHub clones: fetch origin and reset to the registered branch
+// so index_repo runs against current base-branch HEAD. Local/symlinked checkouts
+// (user's own work surface) are never touched.
+async function refreshRepoCheckout(name: string, branch: string): Promise<void> {
+  const dest = resolve(WORKSPACE_DIR, "repos", name);
+  if (!existsSync(dest)) return;
+  if (lstatSync(dest).isSymbolicLink()) return; // local tier — user's own checkout
+  const token = getSetting("GITHUB_TOKEN");
+  const env = token
+    ? { ...process.env, GIT_ASKPASS: "echo", GIT_USERNAME: "x-access-token", GIT_PASSWORD: token }
+    : process.env;
+  const fetch = await spawnAsync("git", ["-C", dest, "fetch", "origin", branch], env, 60_000);
+  if (fetch.status !== 0) {
+    throw new Error(`git fetch failed for ${name}: ${(fetch.stderr ?? fetch.error?.message ?? "unknown").split("\n")[0]}`);
+  }
+  const reset = await spawnAsync("git", ["-C", dest, "reset", "--hard", `origin/${branch}`], env, 30_000);
+  if (reset.status !== 0) {
+    throw new Error(`git reset failed for ${name}: ${(reset.stderr ?? reset.error?.message ?? "unknown").split("\n")[0]}`);
+  }
+}
+
 // Stall recovery (S103): on boot, any job left 'running' by a crash/restart is
 // marked failed. index_repo jobs are re-queued so indexing resumes.
 export function recoverStalledJobs(): void {
@@ -355,6 +376,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       const input = opts.input as { repo?: string; url?: string; branch?: string };
       if (input.repo) {
         await ensureRepoClone({ name: input.repo, url: input.url, branch: input.branch });
+        await refreshRepoCheckout(input.repo, input.branch ?? "main");
       }
     }
 

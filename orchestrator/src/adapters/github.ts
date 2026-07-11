@@ -19,7 +19,7 @@
 import type { FastifyInstance } from "fastify";
 import { createHmac } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { processEvent } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
@@ -56,6 +56,21 @@ export function ownerRepoFromUrl(url: string): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+// Check if gh CLI is authenticated (cached for 5 min to avoid spawning on every tick).
+let _ghAuthCache: { ok: boolean; at: number } | null = null;
+const GH_AUTH_TTL_MS = 5 * 60 * 1000;
+
+export function ghAuthOk(): boolean {
+  if (_ghAuthCache && Date.now() - _ghAuthCache.at < GH_AUTH_TTL_MS) return _ghAuthCache.ok;
+  try {
+    execSync("gh auth status", { stdio: "ignore", timeout: 5000 });
+    _ghAuthCache = { ok: true, at: Date.now() };
+  } catch {
+    _ghAuthCache = { ok: false, at: Date.now() };
+  }
+  return _ghAuthCache.ok;
+}
+
 // registeredRepos only lives in memory, so repos added via the dashboard
 // would stop being watched after a restart — re-seed from the workspace
 // registry (repos.json), which is the durable record of {url, branch}.
@@ -72,8 +87,15 @@ export async function seedWatchedRepos(): Promise<void> {
 // ------------------------------------------------------------------
 
 function githubPAT(): string {
-  // GITHUB_TOKEN is the settings key; GITHUB_PAT is the legacy env name
-  return getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? process.env.GITHUB_TOKEN ?? "";
+  // Priority: DB setting > legacy env > gh CLI token (if available)
+  const direct = getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? process.env.GITHUB_TOKEN ?? "";
+  if (direct) return direct;
+  // Fallback: gh CLI token (works if gh auth is configured)
+  try {
+    return execSync("gh auth token 2>/dev/null", { encoding: "utf-8", timeout: 5000 }).trim();
+  } catch {
+    return "";
+  }
 }
 
 function githubHeaders(): Record<string, string> {
@@ -289,16 +311,13 @@ export function registerGithubPoller(): void {
     intervalMs,
     fetchSince: githubFetchSince,
     enabled(): boolean {
-      // GitHub poller: enabled if FLOW_GITHUB_POLL_MS is set (env or DB),
-      // OR if GITHUB_TOKEN is set via DB settings.
-      const pollMs =
-        getSetting("FLOW_GITHUB_POLL_MS") ?? process.env.FLOW_GITHUB_POLL_MS;
-      const token = getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? "";
+      // GitHub poller: enabled if repos are registered and git can authenticate
+      // (gh CLI auth, GITHUB_TOKEN in env/DB, or SSH keys — git ls-remote handles it).
       return (
-        (Boolean(pollMs) || Boolean(token)) &&
         process.env.FLOW_GITHUB_POLL_DISABLE !== "1" &&
         process.env.FLOW_POLL_DISABLE !== "1" &&
-        registeredRepos.size > 0
+        registeredRepos.size > 0 &&
+        (Boolean(getSetting("GITHUB_TOKEN") ?? process.env.GITHUB_PAT ?? "") || ghAuthOk())
       );
     },
   });
