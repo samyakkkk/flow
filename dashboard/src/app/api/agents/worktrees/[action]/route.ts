@@ -4,10 +4,10 @@ import { orcFetch } from "@/lib/orchestrator";
 
 // Proxy the separate-copy exits:
 //   GET  /api/agents/worktrees/diff?path=…        base-scope diff of a copy
-//   POST /api/agents/worktrees/{remove|apply|push}  {path, force?}
+//   POST /api/agents/worktrees/{remove|pr|open}     {path, ...}
 // Status is passed through so the client sees the orchestrator's honest error
 // bodies verbatim.
-const POST_ACTIONS = new Set(["remove", "apply", "push"]);
+const POST_ACTIONS = new Set(["remove", "pr", "open", "apply", "push"]);
 
 export async function GET(
   req: Request,

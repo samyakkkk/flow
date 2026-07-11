@@ -471,7 +471,7 @@ export async function applyWorktree(opts: {
   return { ok: true, mergedInto };
 }
 
-// Push the copy's branch to origin using the user's AMBIENT git credentials.
+// Legacy helper: push a copy's branch to origin using the user's AMBIENT git credentials.
 // Deliberately NO token injection into the remote here — this is an interactive
 // push the user initiated, not the indexer's background fetch. owner/repo come
 // from the registry url (parsed by the caller) so we can build the compare URL.
@@ -493,6 +493,130 @@ export async function pushWorktree(opts: {
   const enc = (ref: string) => ref.split("/").map(encodeURIComponent).join("/");
   const compareUrl = `https://github.com/${owner}/${repo}/compare/${enc(base)}...${enc(branch)}`;
   return { ok: true, compareUrl };
+}
+
+export interface OpenPullRequestResult {
+  ok: true;
+  compareUrl: string;
+  branch: string;
+  targetBranch: string;
+  committed: boolean;
+}
+
+export interface OpenPullRequestConflict {
+  conflict: true;
+  branch: string;
+  targetBranch: string;
+  files: string[];
+}
+
+async function commitDirtyWorktree(treePath: string): Promise<boolean> {
+  if (!(await isDirty(treePath))) return false;
+  await git(treePath, ["add", "-A"]);
+  const staged = (await git(treePath, ["diff", "--cached", "--name-only"])).trim();
+  if (!staged) return false;
+  await git(treePath, ["commit", "-m", "Flow agent changes"]);
+  return true;
+}
+
+async function fetchTargetBranch(treePath: string, targetBranch: string): Promise<string | { error: string }> {
+  try {
+    await git(treePath, ["fetch", "origin", `+refs/heads/${targetBranch}:refs/remotes/origin/${targetBranch}`]);
+    return `origin/${targetBranch}`;
+  } catch (e) {
+    return { error: `Couldn't find target branch "${targetBranch}" on origin: ${gitErrLine(e)}` };
+  }
+}
+
+function parseConflictFiles(text: string): string[] {
+  const out = new Set<string>();
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^CONFLICT\b/.test(line) || /^Auto-merging\b/.test(line) || /^[a-f0-9]{40}$/.test(line)) continue;
+    if (/^[\w.-]+\s+/.test(line) && line.includes("\t")) {
+      const parts = line.split("\t");
+      if (parts[parts.length - 1]) out.add(parts[parts.length - 1]);
+      continue;
+    }
+    if (!line.includes(":")) out.add(line);
+  }
+  return [...out].slice(0, 20);
+}
+
+async function mergeConflicts(
+  treePath: string,
+  targetRef: string
+): Promise<{ conflict: false } | { conflict: true; files: string[] } | { error: string }> {
+  try {
+    await git(treePath, ["merge-tree", "--write-tree", targetRef, "HEAD"]);
+    return { conflict: false };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; message?: string };
+    const text = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n");
+    if (!/CONFLICT\b|conflict/i.test(text)) return { error: gitErrLine(e) };
+    let files = parseConflictFiles(text);
+    try {
+      await execFileP("git", ["-C", treePath, "merge-tree", "--write-tree", "--name-only", targetRef, "HEAD"], {
+        timeout: GIT_TIMEOUT_MS,
+        maxBuffer: MAX_BUFFER,
+      });
+    } catch (nameOnlyErr) {
+      const ne = nameOnlyErr as { stdout?: string; stderr?: string; message?: string };
+      const parsed = parseConflictFiles([ne.stdout, ne.stderr, ne.message].filter(Boolean).join("\n"));
+      if (parsed.length) files = parsed;
+    }
+    return { conflict: true, files };
+  }
+}
+
+// PR-first exit for a separate copy:
+//   1. package dirty work into a commit so GitHub has an actual diff,
+//   2. check mergeability against the chosen target branch,
+//   3. push the exact local HEAD to origin/branch and verify it exists,
+//   4. return the GitHub compare URL that opens the PR flow.
+export async function openPullRequestWorktree(opts: {
+  treePath: string;
+  branch: string;
+  targetBranch: string;
+  owner: string;
+  repo: string;
+}): Promise<OpenPullRequestResult | OpenPullRequestConflict | { error: string }> {
+  const { treePath, branch, targetBranch, owner, repo } = opts;
+  if (!isManagedWorktree(treePath)) return { error: "That path isn't a Flow-managed copy." };
+  if (!targetBranch.trim()) return { error: "Choose a target branch." };
+
+  let committed = false;
+  try {
+    committed = await commitDirtyWorktree(treePath);
+  } catch (e) {
+    return { error: `Couldn't commit this copy's changes: ${gitErrLine(e)}` };
+  }
+
+  const targetRef = await fetchTargetBranch(treePath, targetBranch);
+  if (typeof targetRef !== "string") return targetRef;
+
+  const ahead = parseInt((await git(treePath, ["rev-list", "--count", `${targetRef}..HEAD`])).trim(), 10);
+  if (!Number.isFinite(ahead) || ahead === 0) {
+    return { error: `No changes to open a PR against ${targetBranch}.` };
+  }
+
+  const conflicts = await mergeConflicts(treePath, targetRef);
+  if ("error" in conflicts) return { error: conflicts.error };
+  if (conflicts.conflict) {
+    return { conflict: true, branch, targetBranch, files: conflicts.files };
+  }
+
+  try {
+    await git(treePath, ["push", "-u", "origin", `HEAD:refs/heads/${branch}`]);
+    const remoteRef = (await git(treePath, ["ls-remote", "--heads", "origin", branch])).trim();
+    if (!remoteRef) return { error: `Pushed, but origin/${branch} was not found afterwards.` };
+  } catch (e) {
+    return { error: gitErrLine(e) };
+  }
+
+  const enc = (ref: string) => ref.split("/").map(encodeURIComponent).join("/");
+  const compareUrl = `https://github.com/${owner}/${repo}/compare/${enc(targetBranch)}...${enc(branch)}?expand=1`;
+  return { ok: true, compareUrl, branch, targetBranch, committed };
 }
 
 // Cheap hygiene before listing: drop dangling worktree metadata (folders the

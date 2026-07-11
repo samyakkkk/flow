@@ -14,8 +14,8 @@
 //   GET  /v1/agents/worktrees             the separate copies (optionally ?repo=)
 //   GET  /v1/agents/worktrees/diff        {path} — base-scope diff of a copy
 //   POST /v1/agents/worktrees/remove      {path, force?} — delete a copy
-//   POST /v1/agents/worktrees/apply       {path} — merge a copy into your folder
-//   POST /v1/agents/worktrees/push        {path} — push a copy's branch to origin
+//   POST /v1/agents/worktrees/pr          {path, targetBranch?} — push branch and open PR flow
+//   POST /v1/agents/worktrees/open        {path, target} — open a copy in Finder/VS Code
 //   POST /v1/agents/graph-activity        (from the injected MCP subprocess)
 
 import type { FastifyInstance } from "fastify";
@@ -32,9 +32,12 @@ import {
   sessionDiff,
   listManagedWorktrees,
   repoHasGithubUrl,
+  repoBaseBranch,
   removeManagedWorktree,
   applyManagedWorktree,
   pushManagedWorktree,
+  openPullRequestForManagedWorktree,
+  openWorktreeLocation,
   worktreeDiffAt,
   listSessions,
   readTranscript,
@@ -97,11 +100,11 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       // checkout — the UI shows a muted chip for it. Derived from worktree_id.
       separateCopy: Boolean((meta as { worktree_id?: string }).worktree_id ?? live?.worktreeId),
       // The worktree path, when this session runs on a separate copy — the exit
-      // banner (apply/push) targets it directly. null for in-place sessions.
+      // banner targets it directly. null for in-place sessions.
       worktreePath: (meta as { worktree_id?: string }).worktree_id ?? live?.worktreeId ?? null,
-      // Whether the copy's repo has a GitHub url — gates the banner's Push
-      // button (a local-only repo has nowhere to push).
+      // Whether the copy's repo has a GitHub url — gates the banner's PR action.
       worktreeGithub: repoHasGithubUrl(String((meta as { repo?: string }).repo ?? "")),
+      worktreeBase: repoBaseBranch(String((meta as { repo?: string }).repo ?? "")),
       live: Boolean(live),
       modes: live?.modes ?? null,
       configOptions: live?.configOptions ?? null,
@@ -281,9 +284,8 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     return r;
   });
 
-  // Merge a copy's branch back into the user's checkout — THE one action that
-  // writes to their folder. Guards (dirty copy / dirty folder / conflict) each
-  // return a distinct {error}; success → {ok, mergedInto}.
+  // Legacy/internal escape hatch: merge a copy's branch back into the user's
+  // checkout. The dashboard no longer offers this because PR-first is safer.
   app.post("/v1/agents/worktrees/apply", async (req, reply) => {
     const { path } = req.body as { path?: string };
     if (!path) return reply.code(400).send({ error: "path required" });
@@ -292,12 +294,31 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     return r;
   });
 
-  // Push a copy's branch to origin (GitHub repos only) using ambient
-  // credentials. Success → {ok, compareUrl}; failure → git's stderr as {error}.
+  // Legacy/internal push. The PR action below is the dashboard path because it
+  // commits dirty work, checks conflicts, verifies the remote ref, and returns
+  // the GitHub PR URL.
   app.post("/v1/agents/worktrees/push", async (req, reply) => {
     const { path } = req.body as { path?: string };
     if (!path) return reply.code(400).send({ error: "path required" });
     const r = await pushManagedWorktree(path);
+    if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  app.post("/v1/agents/worktrees/pr", async (req, reply) => {
+    const { path, targetBranch } = req.body as { path?: string; targetBranch?: string };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    const r = await openPullRequestForManagedWorktree(path, targetBranch);
+    if ("error" in r) return reply.code(400).send(r);
+    if ("conflict" in r) return reply.code(409).send(r);
+    return r;
+  });
+
+  app.post("/v1/agents/worktrees/open", async (req, reply) => {
+    const { path, target } = req.body as { path?: string; target?: "finder" | "vscode" };
+    if (!path) return reply.code(400).send({ error: "path required" });
+    if (target !== "finder" && target !== "vscode") return reply.code(400).send({ error: "target must be finder or vscode" });
+    const r = openWorktreeLocation(path, target);
     if ("error" in r) return reply.code(400).send(r);
     return r;
   });
