@@ -299,7 +299,8 @@ export function AgentSession({ id }: { id: string }) {
   const [diff, setDiff] = useState<{ files: DiffFile[]; diff: string; truncated: boolean; scope?: string; base?: string | null } | null>(null);
   const [diffScope, setDiffScope] = useState<"session" | "base">("session");
   const [baseInfo, setBaseInfo] = useState<{ available: boolean; name: string | null }>({ available: false, name: null });
-  const [showDiff, setShowDiff] = useState(false);
+  // Once the user picks a scope, stop auto-defaulting it (see the base probe).
+  const scopePinned = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -441,14 +442,22 @@ export function AgentSession({ id }: { id: string }) {
   // Is a base-branch comparison available? One probe (per session) decides
   // whether the scope toggle shows and what it's labelled — the server tells us
   // by echoing scope:"base" + a base name when it can resolve the base branch.
+  // When base IS available we default the panel to it: the base diff ("what
+  // this branch changed vs main") is a superset of the session diff and stays
+  // meaningful after the agent commits — whereas the session diff goes empty
+  // on a clean working tree, which would otherwise hide the whole panel.
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/agents/sessions/${id}/diff?scope=base`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
-        if (d.scope === "base" && d.base) setBaseInfo({ available: true, name: d.base });
-        else setBaseInfo({ available: false, name: null });
+        if (d.scope === "base" && d.base) {
+          setBaseInfo({ available: true, name: d.base });
+          if (!scopePinned.current) setDiffScope("base");
+        } else {
+          setBaseInfo({ available: false, name: null });
+        }
       })
       .catch(() => {});
     return () => {
@@ -901,57 +910,6 @@ export function AgentSession({ id }: { id: string }) {
            </div>
           </div>
 
-          {/* Changes — the git diff of the agent's checkout. Collapsed by
-              default; the header shows a live +/- summary so you notice edits. */}
-          {diff && diff.files.length > 0 && (
-            <div className="border-t border-line" style={{ background: "var(--paper)" }}>
-              <div className="w-full flex items-center gap-2 px-4 py-2">
-                <button
-                  onClick={() => setShowDiff((s) => !s)}
-                  className="flex items-center gap-2 text-left flex-1 min-w-0 hover:opacity-80 transition"
-                >
-                  <span className="text-text-muted text-[10px]">{showDiff ? "▾" : "▸"}</span>
-                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
-                    Changes
-                  </span>
-                  <span className="text-[11.5px] text-text">
-                    {diff.files.length} {diff.files.length === 1 ? "file" : "files"}
-                  </span>
-                  <span className="text-[11.5px]" style={{ color: "rgb(60,120,70)", fontFamily: "var(--font-mono)" }}>
-                    +{diff.files.reduce((n, f) => n + f.additions, 0)}
-                  </span>
-                  <span className="text-[11.5px]" style={{ color: "rgb(168,80,70)", fontFamily: "var(--font-mono)" }}>
-                    −{diff.files.reduce((n, f) => n + f.deletions, 0)}
-                  </span>
-                </button>
-                {/* Scope toggle — only when a base comparison is available.
-                    "This session" (since the session started) vs the base branch. */}
-                {baseInfo.available && (
-                  <div className="flex items-center gap-0.5 flex-shrink-0" style={{ fontFamily: "var(--font-mono)" }}>
-                    {(["session", "base"] as const).map((sc) => (
-                      <button
-                        key={sc}
-                        onClick={() => setDiffScope(sc)}
-                        className="px-2 py-0.5 rounded text-[10.5px] transition"
-                        style={
-                          diffScope === sc
-                            ? { background: "var(--accent)", color: "var(--ink)" }
-                            : { background: "transparent", color: "var(--text-muted)" }
-                        }
-                      >
-                        {sc === "session" ? "This session" : `vs ${baseInfo.name ?? "base"}`}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {showDiff && (
-                <div className="px-4 pb-3 max-h-[45vh] overflow-y-auto">
-                  <DiffView diff={diff.diff} truncated={diff.truncated} />
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Exit banner — the changes live on a separate copy; offer to bring
               them home (or push), so a finished session isn't a dead end. */}
@@ -1046,20 +1004,82 @@ export function AgentSession({ id }: { id: string }) {
           </div>
         </div>
 
-        {/* Brain panel — nodes light up as the agent queries them */}
-        <div className="w-[380px] flex-shrink-0 hidden lg:flex flex-col gap-2">
-          <BrainGraph
-            citedNodeIds={recentGraphIds}
-            height={420}
-            mode="overview"
-            pollInterval={0}
-          />
-          <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted px-1">
-            {recentGraphIds.length > 0
-              ? `${recentGraphIds.length} nodes consulted by this session`
-              : "The brain lights up when the agent consults it"}
-          </p>
-        </div>
+        {/* Right rail — Changes fill the top (every changed file + the diff),
+            the brain sits in a square box at the bottom. */}
+        <aside className="w-[440px] flex-shrink-0 hidden lg:flex flex-col gap-3 min-h-0">
+          {/* Changes — file list + diff, scoped to this session or vs base. */}
+          <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-line flex-shrink-0">
+              <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
+                Changes
+              </span>
+              {diff && diff.files.length > 0 && (
+                <>
+                  <span className="text-[11.5px] text-text">
+                    {diff.files.length} {diff.files.length === 1 ? "file" : "files"}
+                  </span>
+                  <span className="text-[11.5px]" style={{ color: "rgb(60,120,70)", fontFamily: "var(--font-mono)" }}>
+                    +{diff.files.reduce((n, f) => n + f.additions, 0)}
+                  </span>
+                  <span className="text-[11.5px]" style={{ color: "rgb(168,80,70)", fontFamily: "var(--font-mono)" }}>
+                    −{diff.files.reduce((n, f) => n + f.deletions, 0)}
+                  </span>
+                </>
+              )}
+              <div className="flex-1" />
+              {/* Scope toggle — only when a base comparison is available. */}
+              {baseInfo.available && (
+                <div className="flex items-center gap-0.5 flex-shrink-0" style={{ fontFamily: "var(--font-mono)" }}>
+                  {(["session", "base"] as const).map((sc) => (
+                    <button
+                      key={sc}
+                      onClick={() => {
+                        scopePinned.current = true;
+                        setDiffScope(sc);
+                      }}
+                      className="px-2 py-0.5 rounded text-[10.5px] transition"
+                      style={
+                        diffScope === sc
+                          ? { background: "var(--accent)", color: "var(--ink)" }
+                          : { background: "transparent", color: "var(--text-muted)" }
+                      }
+                    >
+                      {sc === "session" ? "This session" : `vs ${baseInfo.name ?? "base"}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2.5">
+              {diff && diff.files.length > 0 ? (
+                <DiffView diff={diff.diff} truncated={diff.truncated} />
+              ) : (
+                <p className="text-text-muted text-[12px] px-1 py-2">
+                  {diffScope === "base" && baseInfo.name
+                    ? `No changes vs ${baseInfo.name} yet.`
+                    : "No changes yet."}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Brain — square box; nodes light up as the agent queries them. */}
+          <div className="flex-shrink-0 flex flex-col gap-1.5">
+            <div className="rounded-lg border border-line bg-paper overflow-hidden">
+              <BrainGraph
+                citedNodeIds={recentGraphIds}
+                height={400}
+                mode="overview"
+                pollInterval={0}
+              />
+            </div>
+            <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted px-1">
+              {recentGraphIds.length > 0
+                ? `${recentGraphIds.length} nodes consulted by this session`
+                : "The brain lights up when the agent consults it"}
+            </p>
+          </div>
+        </aside>
       </div>
     </div>
   );
