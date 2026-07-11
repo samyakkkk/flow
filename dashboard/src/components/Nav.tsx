@@ -15,6 +15,7 @@ const PRIMARY_ITEMS = [
 const SECONDARY_ITEMS = [
   { href: "/inbox", label: "Inbox" },
   { href: "/connections", label: "Sources" },
+  { href: "/repos", label: "Repos" },
   { href: "/permissions", label: "Automations" },
   { href: "/activity", label: "Activity" },
   { href: "/settings", label: "Settings" },
