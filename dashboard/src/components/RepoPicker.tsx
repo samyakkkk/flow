@@ -5,6 +5,7 @@
 // component (behavior identical). onConnected is optional: Connections leaves
 // it unset (message-only, as before); the home surfaces pass a refresh.
 import { useState, FormEvent, useEffect, useCallback } from "react";
+import { BranchSelect } from "@/components/BranchSelect";
 
 interface GhRepo {
   full_name: string;
@@ -300,26 +301,21 @@ export function RepoPicker({
                     {repo.full_name}
                   </div>
                   {isSelected && !isIndexed ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-muted)" }}>
-                      branch:
-                      <input
-                        type="text"
+                    <div style={{ marginTop: 4 }} onClick={(e) => e.preventDefault()}>
+                      <BranchSelect
+                        repo={repo.url}
                         value={branches[repo.full_name] ?? repo.default_branch}
-                        onChange={(e) =>
-                          setBranches((prev) => ({ ...prev, [repo.full_name]: e.target.value }))
-                        }
-                        onClick={(e) => e.preventDefault()}
-                        spellCheck={false}
+                        fallback={repo.default_branch}
+                        onChange={(v) => setBranches((prev) => ({ ...prev, [repo.full_name]: v }))}
                         style={{
                           fontSize: 11,
-                          fontFamily: "monospace",
-                          padding: "1px 6px",
+                          padding: "2px 6px",
                           borderRadius: 4,
                           border: "1px solid var(--border)",
                           background: "var(--surface-2)",
                           color: "var(--text-primary)",
                           outline: "none",
-                          width: 140,
+                          cursor: "pointer",
                         }}
                       />
                     </div>
