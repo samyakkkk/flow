@@ -19,6 +19,7 @@ import { callVerb, verbs } from "./verbs.js";
 
 const READONLY = process.env.GATEWAY_MCP_READONLY === "1";
 const SESSION_VERBS = new Set([
+  "orient",
   "find_entity",
   "get_entity",
   "read_query",
@@ -88,7 +89,9 @@ for (const [name, verb] of Object.entries(verbs)) {
       try {
         const result = await callVerb(name, args);
         reportActivity(name, args, result, true);
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        // String results (orient) are prose for the model — don't JSON-escape them.
+        const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        return { content: [{ type: "text" as const, text }] };
       } catch (e) {
         reportActivity(name, args, null, false);
         throw e;
