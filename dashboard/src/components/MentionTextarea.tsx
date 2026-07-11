@@ -14,6 +14,7 @@ interface MentionTextareaProps {
   onChange: (value: string) => void;
   fetchFiles: (query: string) => Promise<FileEntry[]>;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
   disabled?: boolean;
   rows?: number;
@@ -35,6 +36,7 @@ export function MentionTextarea({
   onChange,
   fetchFiles,
   onKeyDown,
+  onPaste,
   placeholder,
   disabled,
   rows = 1,
@@ -131,6 +133,7 @@ export function MentionTextarea({
         }}
         onKeyDown={handleKeyDown}
         onKeyUp={syncMention}
+        onPaste={onPaste}
         onClick={syncMention}
         onBlur={() => setTimeout(() => setOpen(false), 120)}
         placeholder={placeholder}

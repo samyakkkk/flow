@@ -27,6 +27,11 @@ import { embedText } from "../embed.js";
 
 export type AgentBackend = "claude" | "codex" | "opencode";
 
+export interface ImageAttachment {
+  data: string; // base64-encoded
+  mimeType: string;
+}
+
 const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
 const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 
@@ -228,7 +233,7 @@ export interface LiveSession {
   error?: string;
   seq: number;
   turnActive: boolean;
-  queue: string[]; // queued steering prompts
+  queue: Array<{ text: string; images?: ImageAttachment[] }>; // queued steering prompts
   pendingPermissions: Map<string, PendingPermission>;
   subscribers: Set<(ev: SessionEvent) => void>;
   createdAt: number;
@@ -841,7 +846,7 @@ async function writeWipNote(s: LiveSession): Promise<void> {
 // is where memory arrives: preamble (first turn only) + auto-retrieved memory
 // block + the user's text. Injection matches against the USER's words only,
 // never the preamble.
-async function runTurn(s: LiveSession, text: string, preamble = ""): Promise<void> {
+async function runTurn(s: LiveSession, text: string, preamble = "", images?: ImageAttachment[]): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
@@ -849,18 +854,25 @@ async function runTurn(s: LiveSession, text: string, preamble = ""): Promise<voi
   setStatus(s, "running");
   const memory = await buildMemoryInjection(s, text);
   const finalText = `${preamble}${memory}${text}`;
-  emit(s, "user_prompt", { text: finalText });
+  emit(s, "user_prompt", { text: finalText, images });
+  // Build ACP content blocks: text + optional images.
+  const promptBlocks: acp.ContentBlock[] = [{ type: "text", text: finalText }];
+  if (images) {
+    for (const img of images) {
+      promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
+    }
+  }
   try {
     const result = await c.conn.prompt({
       sessionId: s.acpSessionId,
-      prompt: [{ type: "text", text: finalText }],
+      prompt: promptBlocks,
     });
     s.turnActive = false;
     void writeWipNote(s);
     // Steering queued during the turn? Run it next.
     const next = s.queue.shift();
     if (next !== undefined && s.status !== "closed") {
-      await runTurn(s, next);
+      await runTurn(s, next.text, "", next.images);
       return;
     }
     if (s.status !== "closed") setStatus(s, "idle", { stopReason: result.stopReason });
@@ -889,7 +901,7 @@ function describeError(backend: AgentBackend, e: unknown): string {
 
 // Steering: when idle → new turn immediately. When a turn is active → cancel
 // the current turn and run the steer prompt next (the user changed their mind).
-export async function steer(id: string, text: string): Promise<{ ok: true } | { error: string }> {
+export async function steer(id: string, text: string, images?: ImageAttachment[]): Promise<{ ok: true } | { error: string }> {
   const s = liveSession(id);
   if (!s || !s.acpSessionId) return { error: "Session is not live (reload-only or closed)" };
   let c: Connection;
@@ -899,11 +911,11 @@ export async function steer(id: string, text: string): Promise<{ ok: true } | { 
     return { error: (e as Error).message };
   }
   if (s.turnActive) {
-    s.queue.push(text);
+    s.queue.push({ text, images });
     await c.conn.cancel({ sessionId: s.acpSessionId });
     return { ok: true };
   }
-  void runTurn(s, text).catch(() => {});
+  void runTurn(s, text, "", images).catch(() => {});
   return { ok: true };
 }
 
