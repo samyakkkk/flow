@@ -40,6 +40,7 @@ interface EntityRow {
   id: unknown;
   name: unknown;
   description: unknown;
+  anchor?: unknown; // file:line evidence — makes find_entity a semantic code search
 }
 
 // A found row plus optional retrieval metadata: `via` says which pass surfaced
@@ -66,7 +67,7 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10, 
   const rows = await run(
     graph,
     `MATCH (n) WHERE (toLower(n.id) CONTAINS $ql OR toLower(n.name) CONTAINS $ql OR toLower(coalesce(n.aliases, '')) CONTAINS $ql) ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
-     RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description
+     RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor
      LIMIT ${clampLimit(limit)}`,
     { ql: q.toLowerCase(), ...(type ? { type } : {}) },
   );
@@ -88,7 +89,7 @@ async function findByVector(graph: string, q: string, type: string | undefined, 
     `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
      WITH n, vec.cosineDistance(n.embedding, vecf32($vec)) AS d
      WHERE d <= $maxDistance
-     RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, d AS distance
+     RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor, d AS distance
      ORDER BY d ASC
      LIMIT ${clampLimit(limit)}`,
     { vec, maxDistance: VECTOR_MAX_DISTANCE, ...(type ? { type } : {}) },
@@ -112,7 +113,7 @@ const findEntityInput = {
 async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
   const exact = await run(
     input.graph,
-    `MATCH (n {id: $q}) RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description`,
+    `MATCH (n {id: $q}) RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor`,
     { q: input.q },
   );
   if (exact.length > 0) return { status: "exact", matches: exact };
@@ -929,7 +930,8 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   }
   out.push("");
   out.push(
-    "HOW TO USE: drill into any [id] with get_entity; search with find_entity; traverse with read_query. " +
+    "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
+      "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract or procedure might govern — contracts and rules hang off nodes, not files. Traverse with read_query. " +
       "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
       "Store back as you work: note (branch findings, free, no approval), propose_procedure (durable rules — when the user states one, draft it completely), correct_graph (when the graph contradicts the code).",
   );
@@ -954,7 +956,8 @@ export const verbs = {
     handler: orient,
   },
   find_entity: {
-    description: "Look up graph entities by id, name, or alias. Always check here before creating.",
+    description:
+      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating.",
     shape: findEntityInput,
     handler: findEntity,
   },
