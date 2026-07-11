@@ -134,6 +134,8 @@ interface BrainGraphProps {
   pollInterval?: number;
   // Height of the graph canvas
   height?: number;
+  // When true, the component expands to fill its flex parent instead of using a fixed pixel height
+  fillHeight?: boolean;
   // Show the full overview (true) vs load neighborhood data externally
   mode?: "overview" | "neighborhood";
   // For neighborhood mode: pass pre-fetched data
@@ -146,6 +148,7 @@ export function BrainGraph({
   citedNodeIds,
   pollInterval = 0,
   height = 420,
+  fillHeight = false,
   mode = "overview",
   externalData,
   isIndexing = false,
@@ -350,7 +353,7 @@ export function BrainGraph({
 
   return (
     <div
-      className="rounded-lg border border-line overflow-hidden flex flex-col"
+      className={`rounded-lg border border-line overflow-hidden flex flex-col${fillHeight ? " flex-1 min-h-0" : ""}`}
       style={{ background: "rgb(54, 55, 38)" }} // --ink canvas
     >
       {/* Header */}
@@ -369,7 +372,7 @@ export function BrainGraph({
       {/* Canvas — no flex-1: its flex-basis:0% overrides the height on the
           main axis and collapses the canvas when the parent height is
           content-driven. */}
-      <div className="relative" style={{ height, minHeight: height }}>
+      <div className="relative" style={fillHeight ? { flex: 1, minHeight: 0 } : { height, minHeight: height }}>
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">

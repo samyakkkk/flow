@@ -329,11 +329,13 @@ export function AgentSession({ id }: { id: string }) {
   const [diff, setDiff] = useState<{ files: DiffFile[]; diff: string; truncated: boolean; scope?: string; base?: string | null } | null>(null);
   const [diffScope, setDiffScope] = useState<"session" | "base">("session");
   const [baseInfo, setBaseInfo] = useState<{ available: boolean; name: string | null }>({ available: false, name: null });
+  const [brainPct, setBrainPct] = useState(50);
   // Once the user picks a scope, stop auto-defaulting it (see the base probe).
   const scopePinned = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const asideRef = useRef<HTMLDivElement>(null);
 
   // Metadata once
   useEffect(() => {
@@ -739,6 +741,24 @@ export function AgentSession({ id }: { id: string }) {
     // reset so re-selecting the same file works
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
+
+  const startBrainDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startPct = brainPct;
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!asideRef.current) return;
+      const totalH = asideRef.current.clientHeight;
+      const deltaPct = ((ev.clientY - startY) / totalH) * 100;
+      setBrainPct(Math.max(15, Math.min(85, startPct + deltaPct)));
+    };
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [brainPct]);
 
   const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
   const running = !archived && (view.status === "running" || view.status === "starting");
@@ -1219,11 +1239,10 @@ export function AgentSession({ id }: { id: string }) {
           </div>
         </div>
 
-        {/* Right rail — Changes fill the top (every changed file + the diff),
-            the brain sits in a square box at the bottom. */}
-        <aside className="w-[440px] flex-shrink-0 hidden lg:flex flex-col gap-3 min-h-0">
+        {/* Right rail — Changes (top) and Brain (bottom) split by a draggable handle. */}
+        <aside ref={asideRef} className="w-[440px] flex-shrink-0 hidden lg:flex flex-col min-h-0">
           {/* Changes — file list + diff, scoped to this session or vs base. */}
-          <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
+          <div style={{ flex: 100 - brainPct }} className="min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-line flex-shrink-0">
               <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
                 Changes
@@ -1278,17 +1297,23 @@ export function AgentSession({ id }: { id: string }) {
             </div>
           </div>
 
-          {/* Brain — square box; nodes light up as the agent queries them. */}
-          <div className="flex-shrink-0 flex flex-col gap-1.5">
-            <div className="rounded-lg border border-line bg-paper overflow-hidden">
-              <BrainGraph
-                citedNodeIds={recentGraphIds}
-                height={400}
-                mode="overview"
-                pollInterval={0}
-              />
-            </div>
-            <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted px-1">
+          {/* Drag handle */}
+          <div
+            onMouseDown={startBrainDrag}
+            className="flex-shrink-0 h-1.5 flex items-center justify-center cursor-ns-resize group"
+          >
+            <div className="w-8 h-0.5 rounded-full bg-line group-hover:bg-text-muted transition" />
+          </div>
+
+          {/* Brain — nodes light up as the agent queries them. */}
+          <div style={{ flex: brainPct }} className="min-h-0 flex flex-col gap-1.5 overflow-hidden">
+            <BrainGraph
+              citedNodeIds={recentGraphIds}
+              fillHeight
+              mode="overview"
+              pollInterval={0}
+            />
+            <p style={{ fontFamily: "var(--font-mono)" }} className="flex-shrink-0 text-[10px] uppercase tracking-wider text-text-muted px-1">
               {recentGraphIds.length > 0
                 ? `${recentGraphIds.length} nodes consulted by this session`
                 : "The brain lights up when the agent consults it"}
