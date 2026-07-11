@@ -11,6 +11,25 @@ import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
 
 // ---------------------------------------------------------------------------
+// Image helpers
+
+function readFileAsBase64(file: File): Promise<{ data: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // strip the data:image/...;base64, prefix
+      const base64 = result.split(",")[1];
+      resolve({ data: base64, mimeType: file.type });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+const IMAGE_MIME_RE = /^image\//;
+
+// ---------------------------------------------------------------------------
 // Event → transcript reduction
 
 interface SessionEvent {
@@ -28,13 +47,18 @@ interface ToolCallRow {
 }
 
 type Block =
-  | { type: "user"; text: string; key: string }
+  | { type: "user"; text: string; key: string; images?: Array<{ data: string; mimeType: string }> }
   | { type: "agent"; text: string; key: string }
   | { type: "thought"; text: string; key: string }
   | { type: "tools"; calls: ToolCallRow[]; key: string }
   | { type: "graph"; verb: string; nodeIds: string[]; key: string }
   | { type: "plan"; entries: Array<{ content: string; status: string }>; key: string }
   | { type: "error"; text: string; key: string };
+
+interface ImageAttachment {
+  data: string; // base64-encoded
+  mimeType: string;
+}
 
 interface PermissionReq {
   requestId: string;
@@ -118,10 +142,11 @@ function reduceEvents(events: SessionEvent[]): {
     switch (ev.kind) {
       case "user_prompt": {
         const text = String(d.text ?? "");
+        const images = Array.isArray(d.images) ? (d.images as Array<{ data: string; mimeType: string }>) : undefined;
         // Hide the injected graph preamble — show only the human part.
         const idx = text.indexOf("\n\n");
         const shown = text.startsWith("You have access to") && idx > 0 ? text.slice(idx + 2) : text;
-        blocks.push({ type: "user", text: shown, key: `u${ev.seq}` });
+        blocks.push({ type: "user", text: shown, key: `u${ev.seq}`, images });
         break;
       }
       case "status": {
@@ -287,6 +312,7 @@ export function AgentSession({ id }: { id: string }) {
   const [exitCompareUrl, setExitCompareUrl] = useState("");
   const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [sendError, setSendError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -537,8 +563,10 @@ export function AgentSession({ id }: { id: string }) {
 
   async function send() {
     const text = input.trim();
-    if (!text) return;
+    if (!text && attachments.length === 0) return;
+    const currentAttachments = [...attachments];
     setInput("");
+    setAttachments([]);
     setSendError("");
     setBusy(true);
     // Show it immediately and snap to the bottom — no waiting on the round-trip.
@@ -553,10 +581,12 @@ export function AgentSession({ id }: { id: string }) {
         return next;
       });
     try {
+      const body: { text: string; images?: ImageAttachment[] } = { text };
+      if (currentAttachments.length > 0) body.images = currentAttachments;
       const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -607,6 +637,39 @@ export function AgentSession({ id }: { id: string }) {
   // user is prompted to bring the work home rather than leaving it stranded.
   const showExitBanner =
     !archived && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter((item) => IMAGE_MIME_RE.test(item.type));
+    if (imageItems.length === 0) return; // let default paste behavior handle text
+    e.preventDefault();
+    const newAttachments: ImageAttachment[] = [];
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      newAttachments.push(await readFileAsBase64(file));
+    }
+    if (newAttachments.length > 0) {
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    }
+  }
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    const newAttachments: ImageAttachment[] = [];
+    for (const file of files) {
+      if (IMAGE_MIME_RE.test(file.type)) {
+        newAttachments.push(await readFileAsBase64(file));
+      }
+    }
+    if (newAttachments.length > 0) {
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    }
+    // reset so re-selecting the same file works
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
   const running = !archived && (view.status === "running" || view.status === "starting");
@@ -758,6 +821,18 @@ export function AgentSession({ id }: { id: string }) {
                 case "user":
                   return (
                     <div key={b.key} className="self-end max-w-[85%] rounded-lg px-3.5 py-2.5" style={{ background: "var(--accent)" }}>
+                      {b.images && b.images.length > 0 && (
+                        <div className="flex gap-2 flex-wrap mb-2">
+                          {b.images.map((img, i) => (
+                            <img
+                              key={i}
+                              src={`data:${img.mimeType};base64,${img.data}`}
+                              alt={`Attachment ${i + 1}`}
+                              className="max-h-40 max-w-[200px] object-contain rounded-md border border-line"
+                            />
+                          ))}
+                        </div>
+                      )}
                       <p className="text-ink text-[13.5px] whitespace-pre-wrap break-words">{b.text}</p>
                     </div>
                   );
@@ -973,34 +1048,79 @@ export function AgentSession({ id }: { id: string }) {
               {sendError}
             </p>
           )}
-          <div className="border-t border-line px-4 py-3 flex gap-2 items-end" style={{ background: "var(--cream)" }}>
-            <MentionTextarea
-              value={input}
-              onChange={(v) => {
-                setInput(v);
-                if (sendError) setSendError("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
+          <div className="border-t border-line px-4 py-3 flex flex-col gap-2" style={{ background: "var(--cream)" }}>
+            {/* Image previews */}
+            {attachments.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {attachments.map((img, i) => (
+                  <div key={i} className="relative group">
+                    <img
+                      src={`data:${img.mimeType};base64,${img.data}`}
+                      alt={`Attachment ${i + 1}`}
+                      className="h-16 w-16 object-cover rounded-md border border-line"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink text-paper text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2 items-end">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={archived}
+                className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border border-line hover:bg-paper transition text-text-muted hover:text-ink disabled:opacity-50"
+                title="Attach image"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="12" height="12" rx="2" />
+                  <circle cx="5.5" cy="5.5" r="1.5" />
+                  <path d="M14 10.5l-3.5-3.5L4 14" />
+                </svg>
+              </button>
+              <MentionTextarea
+                value={input}
+                onChange={(v) => {
+                  setInput(v);
+                  if (sendError) setSendError("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                onPaste={handlePaste}
+                fetchFiles={fetchFiles}
+                placeholder={
+                  archived
+                    ? "This session ended before the last restart — start a new one to continue."
+                    : running
+                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, paste images)"
+                    : "Send a follow-up… (@ to tag a file, paste images)"
                 }
-              }}
-              fetchFiles={fetchFiles}
-              placeholder={
-                archived
-                  ? "This session ended before the last restart — start a new one to continue."
-                  : running
-                  ? "Steer the agent — this interrupts and redirects it… (@ to tag a file)"
-                  : "Send a follow-up… (@ to tag a file)"
-              }
-              rows={1}
-              disabled={archived}
-              className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
-            />
-            <Button onClick={send} disabled={archived || !input.trim() || busy}>
-              {running ? "Steer" : "Send"}
-            </Button>
+                rows={1}
+                disabled={archived}
+                className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
+              />
+              <Button onClick={send} disabled={archived || (!input.trim() && attachments.length === 0) || busy}>
+                {running ? "Steer" : "Send"}
+              </Button>
+            </div>
           </div>
         </div>
 
