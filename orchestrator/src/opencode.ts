@@ -9,7 +9,7 @@
 //   FLOW_ADMIN_TOKEN   — bearer token for /v1/notify
 //   FLOW_JOB_ID        — so the tool knows which job it belongs to
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -196,6 +196,30 @@ export function registerSource(entry: SourceRegistration): RepoEntry {
   registry.repos.push(created);
   writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
   return created;
+}
+
+// Record the commit we just indexed so update.mjs and the orchestrator agree
+// on state. Called after a successful index_repo job.
+export function updateRepoIndexCommit(name: string, commit: string): void {
+  const registry = readRepoRegistry();
+  const existing = registry.repos.find((r) => r.name === name);
+  if (existing) {
+    existing.lastIndexedCommit = commit;
+    existing.lastIndexedAt = new Date().toISOString();
+    writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
+  }
+}
+
+// Resolve the current HEAD of a managed checkout; null if missing/local.
+function repoHeadCommit(name: string): string | null {
+  const dest = resolve(WORKSPACE_DIR, "repos", name);
+  if (!existsSync(dest) || lstatSync(dest).isSymbolicLink()) return null;
+  try {
+    const res = spawnSync("git", ["-C", dest, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 5000 });
+    return res.status === 0 ? res.stdout.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 // Shared GitHub-repo connection path: register in repos.json, (optionally)
@@ -396,6 +420,12 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     }
 
     updateJob.run({ id, status: "done", result_json: JSON.stringify(result) });
+
+    // Record the commit we just indexed so update.mjs and the orchestrator agree.
+    if (opts.type === "index_repo" && repo) {
+      const head = repoHeadCommit(repo);
+      if (head) updateRepoIndexCommit(repo, head);
+    }
 
     // Base branch reindexed → the entities notes anchor to now exist: run the
     // branch-notes promotion pass. Merge-commit subjects from the checkout
