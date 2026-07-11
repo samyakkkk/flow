@@ -8,10 +8,11 @@ interface BranchSelectProps {
   fallback: string;
   disabled?: boolean;
   className?: string;
+  style?: React.CSSProperties;
   onChange: (value: string) => void;
 }
 
-export function BranchSelect({ repo, value, fallback, disabled, className, onChange }: BranchSelectProps) {
+export function BranchSelect({ repo, value, fallback, disabled, className, style, onChange }: BranchSelectProps) {
   const [branches, setBranches] = useState<string[]>(fallback ? [fallback] : []);
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function BranchSelect({ repo, value, fallback, disabled, className, onCha
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       className={className}
-      style={{ fontFamily: "var(--font-mono)" }}
+      style={{ fontFamily: "var(--font-mono)", ...style }}
     >
       {options.map((branch) => (
         <option key={branch} value={branch}>
