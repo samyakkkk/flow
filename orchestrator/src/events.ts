@@ -162,6 +162,19 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
     return;
   }
 
+  // A push to a watched base branch is a fact, not language — never classify
+  // it. The poller already filters to registered {repo, branch}, so every
+  // github push event is index-worthy by definition. Routing it through the
+  // LLM added failure modes (skip verdicts, low confidence, missing API key)
+  // that silently broke the merge → reindex → note-promotion loop.
+  if (event.source === "github" && event.type === "push") {
+    const classification = { classification: "index_worthy", confidence: 1.0, extracted: {} };
+    updateEventClassification.run({ id: event.id, classification_json: JSON.stringify(classification) });
+    const policy = policyFor("github_merge", "index_worthy");
+    await executeAction({ event, classification, policy });
+    return;
+  }
+
   // 2. Classify
   const classification = await classify(event);
   updateEventClassification.run({ id: event.id, classification_json: JSON.stringify(classification) });
