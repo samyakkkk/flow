@@ -749,8 +749,9 @@ export function AgentSession({ id }: { id: string }) {
     const onMouseMove = (ev: MouseEvent) => {
       if (!asideRef.current) return;
       const totalH = asideRef.current.clientHeight;
+      // Handle sits above the brain: dragging down enlarges Changes, shrinks the brain.
       const deltaPct = ((ev.clientY - startY) / totalH) * 100;
-      setBrainPct(Math.max(15, Math.min(85, startPct + deltaPct)));
+      setBrainPct(Math.max(15, Math.min(85, startPct - deltaPct)));
     };
     const onMouseUp = () => {
       document.removeEventListener("mousemove", onMouseMove);
@@ -1297,12 +1298,17 @@ export function AgentSession({ id }: { id: string }) {
             </div>
           </div>
 
-          {/* Drag handle */}
+          {/* Drag handle — visible grip pill on a divider line, VSCode-style. */}
           <div
             onMouseDown={startBrainDrag}
-            className="flex-shrink-0 h-1.5 flex items-center justify-center cursor-ns-resize group"
+            className="flex-shrink-0 h-3.5 flex items-center justify-center cursor-ns-resize group relative"
+            title="Drag to resize"
           >
-            <div className="w-8 h-0.5 rounded-full bg-line group-hover:bg-text-muted transition" />
+            <div className="absolute inset-x-0 top-1/2 -translate-y-px h-px bg-line group-hover:bg-text-muted transition-colors" />
+            <div className="relative px-2 py-[3px] rounded-full bg-paper border border-line group-hover:border-text-muted group-active:border-text-muted transition-colors flex flex-col gap-[3px]">
+              <span className="block w-6 h-px bg-text-muted/70" />
+              <span className="block w-6 h-px bg-text-muted/70" />
+            </div>
           </div>
 
           {/* Brain — nodes light up as the agent queries them. */}
