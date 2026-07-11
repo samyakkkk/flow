@@ -104,6 +104,7 @@ export interface RepoEntry {
   url: string;
   branch: string;
   lastIndexedCommit?: string | null;
+  lastIndexedAt?: string;
   addedAt?: string;
   // Sources front door. A source plays up to two roles: BRAIN (indexed) and
   // WORK (where coding-agent sessions run). `kind` distinguishes an indexed

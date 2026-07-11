@@ -70,9 +70,13 @@ export async function executeAction(ctx: ActionContext): Promise<void> {
   // Confidence floor (scenario S029): a low-confidence classification must not
   // auto-execute — one sarcastic message should never poison the graph. Below
   // the floor, auto downgrades to propose so a human sees it first.
+  // Exception: github.index_worthy is a safe, deterministic reindex trigger;
+  // requiring human approval for every push to main creates too much friction
+  // and lets the graph fall behind.
   const floor = Number(getSetting("FLOW_CONFIDENCE_FLOOR") ?? process.env.FLOW_CONFIDENCE_FLOOR ?? "0.75");
+  const isSafeAuto = event.source === "github" && classification.classification === "index_worthy";
   const effectivePolicy =
-    policy === "auto" && classification.confidence < floor ? "propose" : policy;
+    policy === "auto" && !isSafeAuto && classification.confidence < floor ? "propose" : policy;
 
   // Propose mode: write to outbox (DM the controller), no direct action
   if (effectivePolicy === "propose") {
@@ -215,12 +219,21 @@ async function handleGithubAuto(event: NormalizedEvent, cls: ClassificationResul
     return;
   }
 
-  // index_worthy: enqueue index job
+  // index_worthy: enqueue index job. The poller names repos as "owner/repo"
+  // but the job runner and workspace registry address checkouts by short name
+  // (repos/<name>), so resolve through the registry by URL — otherwise
+  // ensureRepoClone throws "no checkout and no url" and the job dies.
   const p = event.payload as Record<string, string | undefined>;
+  const { listWorkspaceRepos } = await import("../opencode.js");
+  const { ownerRepoFromUrl } = await import("../adapters/github.js");
+  const entry = listWorkspaceRepos().find(
+    (r) => r.url && ownerRepoFromUrl(r.url) === p.repo
+  );
+  const repoName = entry?.name ?? p.repo ?? "";
   const job = await enqueueJob({
     type: "index_repo",
-    input: { repo: p.repo ?? "", branch: p.branch ?? "main", commit: p.commit },
-    repo: p.repo,
+    input: { repo: repoName, url: entry?.url, branch: p.branch ?? entry?.branch ?? "main", commit: p.commit },
+    repo: repoName,
   });
   audit(event.id, c, cls.confidence, "index_job", job.id, "ok");
 }
