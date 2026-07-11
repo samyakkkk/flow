@@ -11,6 +11,7 @@
 //   GET  /v1/agents/sessions/:id/diff     unified git diff of the checkout
 //   GET  /v1/agents/sessions/:id/files    {q} — @mention file/folder autocomplete
 //   GET  /v1/agents/repos/files           {repo, q} — same, before a session exists
+//   GET  /v1/agents/repos/branches        {repo} — PR target branch selector options
 //   GET  /v1/agents/worktrees             the separate copies (optionally ?repo=)
 //   GET  /v1/agents/worktrees/diff        {path} — base-scope diff of a copy
 //   POST /v1/agents/worktrees/remove      {path, force?} — delete a copy
@@ -26,6 +27,7 @@ import {
   createSession,
   detectAgents,
   getSession,
+  listRepoBranches,
   listRepoFiles,
   listRepoOptions,
   listSessionFiles,
@@ -249,6 +251,14 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     const { repo, q } = req.query as { repo?: string; q?: string };
     if (!repo) return reply.code(400).send({ error: "repo required" });
     const r = await listRepoFiles(repo, q ?? "");
+    if ("error" in r) return reply.code(404).send(r);
+    return r;
+  });
+
+  app.get("/v1/agents/repos/branches", async (req, reply) => {
+    const { repo } = req.query as { repo?: string };
+    if (!repo) return reply.code(400).send({ error: "repo required" });
+    const r = await listRepoBranches(repo);
     if ("error" in r) return reply.code(404).send(r);
     return r;
   });

@@ -1830,6 +1830,34 @@ export function repoBaseBranch(repo: string): string {
   return listRepoOptions().find((r) => r.name === repo)?.branch ?? "main";
 }
 
+export async function listRepoBranches(repo: string): Promise<{ branches: string[]; base: string } | { error: string }> {
+  const repoOpt = listRepoOptions().find((r) => r.name === repo);
+  if (!repoOpt || !repoOpt.cloned) return { error: `Unknown repo "${repo}"` };
+  const base = repoOpt.branch ?? "main";
+  const seen = new Set<string>();
+  const branches: string[] = [];
+  const add = (branch: string) => {
+    const name = branch.trim();
+    if (!name || name === "HEAD" || name === "origin/HEAD") return;
+    const normalized = name.startsWith("origin/") ? name.slice("origin/".length) : name;
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    branches.push(normalized);
+  };
+  add(base);
+  try {
+    const refs = await runGit(repoOpt.path, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"]);
+    for (const line of refs.split(/\r?\n/)) add(line);
+  } catch {
+    try {
+      add(await runGit(repoOpt.path, ["branch", "--show-current"]));
+    } catch {
+      /* base branch already included */
+    }
+  }
+  return { branches, base };
+}
+
 // Sessions recorded against a worktree path (worktree_id). Realpath both sides:
 // createSession stores the raw dest path, `git worktree list` emits realpaths,
 // and on macOS those differ (/var vs /private/var). Live status wins over the

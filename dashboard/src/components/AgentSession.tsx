@@ -9,6 +9,7 @@ import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
+import { BranchSelect } from "@/components/BranchSelect";
 
 // ---------------------------------------------------------------------------
 // Image helpers
@@ -1064,11 +1065,12 @@ export function AgentSession({ id }: { id: string }) {
 	                <>
 	                  <label className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
 	                    PR to
-	                    <input
+	                    <BranchSelect
+	                      repo={meta?.repo}
 	                      value={exitTargetBranch}
-	                      onChange={(e) => setExitTargetBranch(e.target.value)}
-	                      className="w-[110px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
-	                      style={{ fontFamily: "var(--font-mono)" }}
+	                      fallback={meta?.worktreeBase || "main"}
+	                      onChange={setExitTargetBranch}
+	                      className="w-[132px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
 	                    />
 	                  </label>
 	                  <button

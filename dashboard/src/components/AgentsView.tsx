@@ -7,6 +7,7 @@ import { Kicker, Heading, Button, Card, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
+import { BranchSelect } from "@/components/BranchSelect";
 
 interface DetectedAgent {
   id: string;
@@ -577,11 +578,12 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                   <>
                     <label className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
                       PR to
-                      <input
+                      <BranchSelect
+                        repo={wt.repo}
                         value={targetBranch}
-                        onChange={(e) => setTargetBranches((m) => ({ ...m, [wt.path]: e.target.value }))}
-                        className="w-[110px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
-                        style={{ fontFamily: "var(--font-mono)" }}
+                        fallback={wt.base}
+                        onChange={(branch) => setTargetBranches((m) => ({ ...m, [wt.path]: branch }))}
+                        className="w-[132px] rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-ink"
                       />
                     </label>
                     <button
