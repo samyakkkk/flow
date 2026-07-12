@@ -65,9 +65,9 @@ export function entityText(
   return parts.join("\n");
 }
 
-async function callOpenRouter(input: string | string[]): Promise<number[][] | null> {
+async function callOpenRouter(input: string | string[]): Promise<{ vecs: number[][] | null; error?: string }> {
   const key = apiKey();
-  if (!key) return null;
+  if (!key) return { vecs: null, error: "OPENROUTER_API_KEY not configured" };
   try {
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -76,28 +76,40 @@ async function callOpenRouter(input: string | string[]): Promise<number[][] | nu
     });
     if (!res.ok) {
       console.warn(`[embed] ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
-      return null;
+      return { vecs: null, error: `embeddings API returned ${res.status}` };
     }
     const json = (await res.json()) as { data?: { embedding: number[]; index: number }[] };
     const data = json.data ?? [];
     const n = Array.isArray(input) ? input.length : 1;
     if (data.length !== n) {
       console.warn(`[embed] expected ${n} embeddings, got ${data.length}`);
-      return null;
+      return { vecs: null, error: `embeddings API returned ${data.length} vectors for ${n} inputs` };
     }
     // The API returns an `index` per row; sort to guarantee input alignment.
-    return [...data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
+    return { vecs: [...data].sort((a, b) => a.index - b.index).map((d) => d.embedding) };
   } catch (err) {
-    console.warn(`[embed] request failed: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[embed] request failed: ${msg}`);
+    return { vecs: null, error: `embeddings request failed: ${msg}` };
   }
 }
 
 export async function embedText(text: string): Promise<number[] | null> {
   const clean = text.trim();
   if (!clean) return null;
-  const out = await callOpenRouter(clean);
-  return out?.[0] ?? null;
+  return (await callOpenRouter(clean)).vecs?.[0] ?? null;
+}
+
+// Query-path variant of embedText that reports WHY embedding failed. Retrieval
+// callers (find_entity) surface this to the agent — a dead key or API outage
+// must read as "semantic search unavailable", not as an empty graph. A wrong
+// conclusion here is expensive: agents have filed coverage-gap flags against
+// graphs that in fact held the answer.
+export async function embedQuery(text: string): Promise<{ vec: number[] | null; error?: string }> {
+  const clean = text.trim();
+  if (!clean) return { vec: null, error: "empty query" };
+  const { vecs, error } = await callOpenRouter(clean);
+  return { vec: vecs?.[0] ?? null, error };
 }
 
 // Batched embedding for backfill. Returns one slot per input (null where a
@@ -108,8 +120,8 @@ export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> 
   const results: (number[] | null)[] = [];
   for (let i = 0; i < texts.length; i += CHUNK) {
     const chunk = texts.slice(i, i + CHUNK).map((t) => t.trim() || " ");
-    const embs = await callOpenRouter(chunk);
-    for (let j = 0; j < chunk.length; j++) results.push(embs ? embs[j] : null);
+    const { vecs } = await callOpenRouter(chunk);
+    for (let j = 0; j < chunk.length; j++) results.push(vecs ? vecs[j] : null);
   }
   return results;
 }

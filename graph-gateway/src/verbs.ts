@@ -2,7 +2,7 @@ import { z } from "zod";
 import { DEFAULT_GRAPH, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
-import { embedText, embeddingsEnabled, entityText } from "./embed.js";
+import { embedQuery, embedText, embeddingsEnabled, entityText } from "./embed.js";
 
 // Cosine-distance ceiling for semantic matches. Tuned on the flow graph (156
 // nodes) by sweeping a 24-query labelled set: recall climbs steeply up to ~0.65
@@ -63,13 +63,28 @@ const clampLimit = (limit: number) => Math.max(1, Math.min(50, Math.floor(limit)
 const HIDE_PROPOSED = `AND NOT (labels(n)[0] = 'Procedure' AND coalesce(n.status, '') = 'proposed')`;
 
 async function findSimilar(graph: string, q: string, type?: string, limit = 10, includeProposed = false): Promise<EntityRow[]> {
+  // Tokenized match: every query token must appear in the same field. Ids and
+  // names carry separator conventions the caller can't guess ("brands-live",
+  // "brandsLive", "Brands.Live") — splitting the query on non-alphanumerics
+  // lets "brands live" reach all of them. This pass is the only retrieval left
+  // when embeddings are down, so it must not be defeated by punctuation.
+  // Strictly widens the old whole-phrase CONTAINS: any field containing the
+  // full query contains each token. Punctuation-only queries keep the raw scan.
+  const tokens = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const fields = ["toLower(n.id)", "toLower(n.name)", "toLower(coalesce(n.aliases, ''))"];
+  const match = tokens.length > 0
+    ? fields.map((f) => tokens.map((_, i) => `${f} CONTAINS $t${i}`).join(" AND ")).map((c) => `(${c})`).join(" OR ")
+    : fields.map((f) => `${f} CONTAINS $ql`).join(" OR ");
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
-    `MATCH (n) WHERE (toLower(n.id) CONTAINS $ql OR toLower(n.name) CONTAINS $ql OR toLower(coalesce(n.aliases, '')) CONTAINS $ql) ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
+    `MATCH (n) WHERE (${match}) ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor
      LIMIT ${clampLimit(limit)}`,
-    { ql: q.toLowerCase(), ...(type ? { type } : {}) },
+    {
+      ...(tokens.length > 0 ? Object.fromEntries(tokens.map((t, i) => [`t${i}`, t])) : { ql: q.toLowerCase() }),
+      ...(type ? { type } : {}),
+    },
   );
   return rows as unknown as EntityRow[];
 }
@@ -78,11 +93,14 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10, 
 // stored embedding. This is what rescues queries whose words appear nowhere in
 // the graph ("worktree" → the repo-checkout / agent-session nodes). Brute-force
 // over nodes carrying an embedding — exact (no HNSW recall loss) and instant at
-// the hundreds-to-thousands of nodes a project graph holds. Returns [] when
-// embeddings are unconfigured or the query can't be embedded.
-async function findByVector(graph: string, q: string, type: string | undefined, limit: number, includeProposed = false): Promise<ScoredRow[]> {
-  const vec = await embedText(q);
-  if (!vec) return [];
+// the hundreds-to-thousands of nodes a project graph holds. When embeddings are
+// unconfigured or the query can't be embedded, `degraded` says why — callers
+// that answer retrieval questions must pass that on, because lexical-only
+// results are indistinguishable from "the graph has nothing" otherwise.
+async function findByVector(graph: string, q: string, type: string | undefined, limit: number, includeProposed = false): Promise<{ rows: ScoredRow[]; degraded?: string }> {
+  if (!embeddingsEnabled()) return { rows: [], degraded: "OPENROUTER_API_KEY not configured" };
+  const { vec, error } = await embedQuery(q);
+  if (!vec) return { rows: [], degraded: error ?? "query could not be embedded" };
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
@@ -94,11 +112,12 @@ async function findByVector(graph: string, q: string, type: string | undefined, 
      LIMIT ${clampLimit(limit)}`,
     { vec, maxDistance: VECTOR_MAX_DISTANCE, ...(type ? { type } : {}) },
   );
-  return (rows as unknown as ScoredRow[]).map((r) => ({
+  const scored = (rows as unknown as ScoredRow[]).map((r) => ({
     ...r,
-    via: "vector",
+    via: "vector" as const,
     distance: typeof r.distance === "number" ? Math.round(r.distance * 1000) / 1000 : r.distance,
   }));
+  return { rows: scored };
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +144,7 @@ async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
   const lexical: ScoredRow[] = (await findSimilar(input.graph, input.q, input.type, input.limit)).map(
     (r) => ({ ...r, via: "lexical" }),
   );
-  const vector = embeddingsEnabled() ? await findByVector(input.graph, input.q, input.type, input.limit) : [];
+  const { rows: vector, degraded } = await findByVector(input.graph, input.q, input.type, input.limit);
 
   const seen = new Set(lexical.map((r) => String(r.id)));
   const matches: ScoredRow[] = [...lexical];
@@ -135,7 +154,13 @@ async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
     seen.add(String(v.id));
     matches.push(v);
   }
-  return { status: matches.length > 0 ? "similar" : "none", matches };
+  return {
+    status: matches.length > 0 ? "similar" : "none",
+    matches,
+    ...(degraded
+      ? { warning: `Semantic search unavailable (${degraded}) — these results are substring-only and may miss related nodes. Do not conclude the graph lacks coverage from this response.` }
+      : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -459,14 +484,14 @@ async function proposeProcedure(input: z.infer<z.ZodObject<typeof proposeProcedu
   // Dedup: lexical CONTAINS alone misses near-identical names ("…before
   // deploy" vs "…before deploying"), so also match semantically on name +
   // trigger. The two passes are independent — run them concurrently.
-  // (findByVector self-noops to [] when embeddings are unconfigured.)
-  const [lexical, vector] = await Promise.all([
+  // (findByVector self-noops to no rows when embeddings are unconfigured.)
+  const [lexical, vecResult] = await Promise.all([
     findSimilar(input.graph, input.name, "Procedure", 5, true),
     findByVector(input.graph, `${input.name}\n${input.trigger}`, "Procedure", 5, true),
   ]);
   const candidates = [
     ...lexical,
-    ...vector.filter((v) => !lexical.some((l) => l.id === v.id)),
+    ...vecResult.rows.filter((v) => !lexical.some((l) => l.id === v.id)),
   ].filter((c) => c.id !== id);
   if (candidates.length > 0 && !input.confirm) {
     return {
