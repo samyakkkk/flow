@@ -35,6 +35,18 @@ function sourceChip(s: SourceEntry): string {
   return "GitHub-synced";
 }
 
+function timeAgo(iso?: string): string | null {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(diff / 86_400_000);
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (mins > 0) return `${mins}m ago`;
+  return "just now";
+}
+
 const branchSelectStyle: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
@@ -134,12 +146,23 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
     >
       {/* Main row */}
       <div className="flex items-center justify-between gap-3 px-3 py-2">
-        <span
-          style={{ fontFamily: "var(--font-mono)" }}
-          className="text-[12px] text-text truncate"
-        >
-          {s.name}
-        </span>
+        <div className="flex items-center gap-3 min-w-0">
+          <span
+            style={{ fontFamily: "var(--font-mono)" }}
+            className="text-[12px] text-text truncate"
+          >
+            {s.name}
+          </span>
+          {indexing ? (
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] text-text-muted flex-shrink-0">
+              indexing…
+            </span>
+          ) : timeAgo(s.lastIndexedAt) ? (
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] text-text-muted flex-shrink-0">
+              indexed {timeAgo(s.lastIndexedAt)}
+            </span>
+          ) : null}
+        </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span
             style={{ fontFamily: "var(--font-mono)" }}
