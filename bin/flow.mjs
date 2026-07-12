@@ -635,6 +635,24 @@ async function upProject(name, { rebuilt = false } = {}) {
   const workspaceDir = join(dir, "workspace");
   const reposJsonPath = join(workspaceDir, "repos.json");
 
+  // Re-sync the indexer workspace template from this checkout. The .opencode
+  // tools/agents are copied at project creation, but they must track the code
+  // they talk to: when the gateway started requiring bearer auth, every
+  // pre-existing workspace kept a tokenless graph tool and reindex jobs 401'd
+  // on every write. Convergent and idempotent on each full start, same
+  // philosophy as the gateway's boot reconcilers; cpSync overwrites template
+  // files and leaves any extra workspace files alone.
+  if (existsSync(workspaceDir)) {
+    const templateOpencode = join(indexWorkspaceDir(), ".opencode");
+    if (existsSync(templateOpencode)) {
+      cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
+    }
+    const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
+    if (existsSync(templateAgentsMd)) {
+      writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
+    }
+  }
+
   // ── Gateway ────────────────────────────────────────────────────────────────
   const gwLogFile = join(logsDir, "gateway.log");
   const gwEnv = {
