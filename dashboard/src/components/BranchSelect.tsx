@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 
 interface BranchSelectProps {
+  // Pass `repo` (registry name or remote URL) to fetch from the orchestrator.
+  // Pass `localPath` (absolute FS path) to fetch directly from the filesystem —
+  // used when a repo isn't registered yet (add-folder flow).
+  // When both are provided, localPath takes precedence.
   repo?: string;
+  localPath?: string;
   value: string;
   fallback: string;
   disabled?: boolean;
@@ -12,13 +17,26 @@ interface BranchSelectProps {
   onChange: (value: string) => void;
 }
 
-export function BranchSelect({ repo, value, fallback, disabled, className, style, onChange }: BranchSelectProps) {
+export function BranchSelect({ repo, localPath, value, fallback, disabled, className, style, onChange }: BranchSelectProps) {
   const [branches, setBranches] = useState<string[]>(fallback ? [fallback] : []);
 
   useEffect(() => {
     let cancelled = false;
     const base = fallback || value;
     setBranches(base ? [base] : []);
+
+    if (localPath) {
+      fetch(`/api/fs/branches?path=${encodeURIComponent(localPath)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { branches?: unknown } | null) => {
+          if (cancelled || !Array.isArray(data?.branches)) return;
+          const next = data.branches.map(String).filter(Boolean);
+          if (next.length > 0) setBranches(next);
+        })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }
+
     if (!repo) return;
     fetch(`/api/agents/repos/branches?repo=${encodeURIComponent(repo)}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -31,7 +49,7 @@ export function BranchSelect({ repo, value, fallback, disabled, className, style
     return () => {
       cancelled = true;
     };
-  }, [fallback, repo]);
+  }, [fallback, repo, localPath]);
 
   const options = useMemo(() => {
     const out: string[] = [];
