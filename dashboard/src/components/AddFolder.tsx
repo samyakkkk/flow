@@ -122,6 +122,7 @@ function SourceConfigModal({
               Base branch
             </label>
             <BranchSelect
+              localPath={repo.path}
               repo={repo.remoteUrl ?? undefined}
               value={branch}
               fallback={repo.defaultBranch}
@@ -438,13 +439,13 @@ export function AddFolder({
     }
   }
 
-  async function handleFolderSelected(path: string) {
+  async function handleFolderSelected(folderPath: string) {
     setPickerOpen(false);
     setInspecting(true);
     setInspectError("");
     setResult(null);
     clear();
-    const { data, error } = await inspectInput(path);
+    const { data, error } = await inspectInput(folderPath);
     setInspecting(false);
     if (error || !data) {
       setInspectError(error ?? "Could not inspect the folder.");
@@ -453,6 +454,33 @@ export function AddFolder({
     seedForm(data);
     setResult(data);
     setConfigOpen(true);
+  }
+
+  async function openNativePicker() {
+    setInspecting(true);
+    setInspectError("");
+    try {
+      const res = await fetch("/api/fs/pick-folder", { method: "POST" });
+      const json = await res.json() as { path?: string; cancelled?: boolean; error?: string };
+      if (json.cancelled) {
+        setInspecting(false);
+        return;
+      }
+      if (!res.ok || json.error) {
+        // Fall back to in-browser picker
+        setInspecting(false);
+        setPickerOpen(true);
+        return;
+      }
+      if (json.path) {
+        await handleFolderSelected(json.path);
+        return;
+      }
+    } catch {
+      // Fall back to in-browser picker on any error
+    }
+    setInspecting(false);
+    setPickerOpen(true);
   }
 
   async function runAdd(sources: AddPayload[]) {
@@ -475,7 +503,7 @@ export function AddFolder({
       </p>
 
       <button
-        onClick={() => setPickerOpen(true)}
+        onClick={openNativePicker}
         disabled={inspecting}
         style={{
           padding: "9px 18px",
@@ -489,7 +517,7 @@ export function AddFolder({
           whiteSpace: "nowrap",
         }}
       >
-        {inspecting ? "Inspecting..." : "Browse folders…"}
+        {inspecting ? "Inspecting..." : "Choose folder…"}
       </button>
 
       {inspectError && <ErrorBox message={inspectError} />}

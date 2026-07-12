@@ -23,6 +23,7 @@ interface RepoEntry {
   lastIndexedCommit?: string;
   addedAt: string;
   lastIndexedAt?: string;
+  [key: string]: unknown;
 }
 
 interface ReposFile {
@@ -38,6 +39,10 @@ function readRepos(): ReposFile {
   }
 }
 
+function writeRepos(data: ReposFile): void {
+  fs.writeFileSync(reposJsonPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
 export async function GET() {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -48,12 +53,9 @@ export async function POST(req: NextRequest) {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json() as { action: string; repoName?: string };
+  const body = await req.json() as { action: string; repoName?: string; branch?: string };
+
   if (body.action === "reindex" && body.repoName) {
-    // Enqueue an index_repo job via orchestrator
-    // NOTE: orchestrator /v1/ask creates answer jobs; index_repo must be enqueued through
-    // the same job queue. As of v1, there's no dedicated HTTP endpoint for index_repo jobs.
-    // We post an event that the orchestrator can route to a job enqueue.
     try {
       const data = await orcPost("/v1/events", token, {
         source: "dashboard",
@@ -68,6 +70,56 @@ export async function POST(req: NextRequest) {
       });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message }, { status: 502 });
+    }
+  }
+
+  if (body.action === "remove" && body.repoName) {
+    try {
+      const file = readRepos();
+      const before = file.repos.length;
+      file.repos = file.repos.filter((r) => r.name !== body.repoName);
+      if (file.repos.length === before) {
+        return NextResponse.json({ error: "Repo not found" }, { status: 404 });
+      }
+      writeRepos(file);
+      // Notify the orchestrator so it can clean up in-memory state
+      try {
+        await orcPost("/v1/events", token, {
+          source: "dashboard",
+          type: "repo_removed",
+          ts: Date.now(),
+          payload: { repoName: body.repoName },
+        });
+      } catch {
+        // best-effort — the write already succeeded
+      }
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+  }
+
+  if (body.action === "change_branch" && body.repoName && body.branch) {
+    try {
+      const file = readRepos();
+      const repo = file.repos.find((r) => r.name === body.repoName);
+      if (!repo) return NextResponse.json({ error: "Repo not found" }, { status: 404 });
+      repo.branch = body.branch;
+      writeRepos(file);
+      // Enqueue a reindex so the new branch is reflected in the graph
+      try {
+        await orcPost("/v1/events", token, {
+          source: "dashboard",
+          type: "reindex_request",
+          ts: Date.now(),
+          payload: { repoName: body.repoName, jobType: "index_repo" },
+        });
+      } catch {
+        // best-effort
+      }
+      return NextResponse.json({ ok: true, note: "Branch updated. Reindex queued." });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
     }
   }
 
