@@ -1,7 +1,9 @@
 import { tool } from "@opencode-ai/plugin";
 
 // OpenCode code-file tools for the memory graph. Copy or symlink this file
-// into your workspace's .opencode/tools/ directory; tool names become
+// into your workspace's .opencode/tools/ directory (and install
+// `@opencode-ai/plugin` via the sibling package.json — `flow up` does this);
+// tool names become
 // graph_find, graph_upsert, graph_relate, graph_get, graph_read, graph_schema.
 //
 // These are deliberately thin: every call goes over HTTP to the graph-gateway

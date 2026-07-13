@@ -172,6 +172,7 @@ Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated hist
 - **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
 - **"Unable to find image 'falkordb/falkordb:latest'" / image download fails** — the first-run image pull failed. `flow up` prints the real cause; if it mentions a rate limit, `docker login` (a free Docker Hub account raises the anonymous pull limit) or wait an hour. Otherwise check connectivity/VPN and re-run `flow up`.
 - **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.
+- **Brain stuck on "Building…" / index job `opencode exited 1`** — the graph tools need `@opencode-ai/plugin` in the project workspace. `flow up` installs it; if an older project predates that, run `npm install --prefix data/projects/<name>/workspace/.opencode` then reindex from the dashboard. Job logs under `data/projects/<name>/job-logs/` show `Cannot find module '@opencode-ai/plugin'` when this is the cause.
 - **Connecting a repo fails** — cloning needs `git` on your PATH.
 - **"still starting up" when you save your key** — the orchestrator takes a few seconds on first boot; wait and retry.
 - **Don't `docker compose up` for local dev** — use `flow up`. The compose file under `deploy/` is an experimental full-container path, not the local one.

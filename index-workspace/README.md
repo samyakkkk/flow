@@ -19,7 +19,9 @@ node scripts/update.mjs [repo-name]
 - Indexing runs as the `graph-builder` opencode agent (`.opencode/agents/`),
   which writes through the graph-gateway `graph_*` tools — find-before-create
   dedup is what keeps later repos enriching earlier ones instead of
-  duplicating them.
+  duplicating them. Those tools import `@opencode-ai/plugin`; the dependency
+  is declared in `.opencode/package.json` and `flow up` installs it into each
+  project workspace (do not rely on OpenCode's background install alone).
 - Model: `GRAPH_BUILDER_MODEL` env var, default `opencode/claude-sonnet-4-6`.
 - Watch what the builder writes live: `curl -s localhost:7433/v1/journal | jq`
   or `tail -f ../graph-gateway/data/journal.jsonl`.

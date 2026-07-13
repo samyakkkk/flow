@@ -56,7 +56,9 @@ npm run mcp    # stdio server, e.g. `claude mcp add graph-gateway -- npm run mcp
 ## OpenCode
 
 Copy or symlink `opencode-tools/graph.ts` into your workspace's
-`.opencode/tools/`. Tools appear as `graph_find`, `graph_upsert`,
+`.opencode/tools/`, and add a `.opencode/package.json` that depends on
+`@opencode-ai/plugin` (same version as your `opencode` / `opencode-ai`
+install). Tools appear as `graph_find`, `graph_upsert`,
 `graph_relate`, `graph_get`, `graph_read`, `graph_schema`, and stamp the
 calling session's identity into provenance automatically. Point
 `GRAPH_GATEWAY_URL` at the gateway if it isn't on the default port.

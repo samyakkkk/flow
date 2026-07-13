@@ -337,6 +337,68 @@ function nodeBin(subdir, name) {
 // SHADOWS the fresh root install and crashes the orchestrator at startup with a
 // cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
 // the exact fix, instead.
+// Sync the indexer .opencode template into a project workspace and ensure
+// `@opencode-ai/plugin` is installed there. The graph/notify tools import that
+// package; OpenCode's background `npm install` is flaky (engine checks) and a
+// missing plugin makes every index_repo job die with "Unexpected server error"
+// before any graph nodes are written — leaving the dashboard stuck on
+// "Building your brain…" because lastIndexedCommit stays null.
+function bundledOpencodeVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(orchestratorDir(), "package.json"), "utf8"));
+    const raw = pkg.dependencies?.["opencode-ai"];
+    if (typeof raw === "string" && raw.length) return raw.replace(/^[^\d]*/, "") || raw;
+  } catch {
+    /* fall through */
+  }
+  return "1.17.14";
+}
+
+function syncOpencodeWorkspace(workspaceDir, { quiet = false } = {}) {
+  mkdirSync(workspaceDir, { recursive: true });
+  const templateOpencode = join(indexWorkspaceDir(), ".opencode");
+  const dest = join(workspaceDir, ".opencode");
+  if (existsSync(templateOpencode)) {
+    cpSync(templateOpencode, dest, { recursive: true });
+  } else {
+    mkdirSync(dest, { recursive: true });
+  }
+
+  // Keep package.json convergent with the bundled opencode-ai version even if
+  // the template on disk drifts (older projects, partial checkouts).
+  const version = bundledOpencodeVersion();
+  const pkgPath = join(dest, "package.json");
+  writeFileSync(
+    pkgPath,
+    JSON.stringify({ private: true, dependencies: { "@opencode-ai/plugin": version } }, null, 2) + "\n",
+    "utf8"
+  );
+
+  const pluginPkg = join(dest, "node_modules", "@opencode-ai", "plugin", "package.json");
+  let installed = null;
+  if (existsSync(pluginPkg)) {
+    try {
+      installed = JSON.parse(readFileSync(pluginPkg, "utf8")).version ?? null;
+    } catch {
+      installed = null;
+    }
+  }
+  if (installed === version) return;
+
+  if (!quiet) console.log(c.dim("  installing @opencode-ai/plugin for graph tools…"));
+  const res = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
+    cwd: dest,
+    stdio: quiet ? "ignore" : ["ignore", "ignore", "inherit"],
+    timeout: 180000,
+  });
+  if (res.status !== 0) {
+    console.log(
+      `  ${FAIL} could not install @opencode-ai/plugin in ${relative(flowRoot, dest) || dest}\n` +
+        `      Indexing will fail until you run:  npm install --prefix ${relative(flowRoot, dest) || dest}`
+    );
+  }
+}
+
 function preflightNativeDeps() {
   const probe = spawnSync(process.execPath, ["-e", "require('better-sqlite3')"], {
     cwd: orchestratorDir(),
@@ -442,12 +504,7 @@ FLOW_ADMIN_TOKEN=${adminToken}
     { encoding: "utf-8", mode: 0o600 }
   );
 
-  const templateOpencode = join(indexWorkspaceDir(), ".opencode");
-  if (existsSync(templateOpencode)) {
-    cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
-  } else {
-    mkdirSync(join(workspaceDir, ".opencode"), { recursive: true });
-  }
+  syncOpencodeWorkspace(workspaceDir, { quiet: true });
   const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
   if (existsSync(templateAgentsMd)) {
     writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
@@ -640,13 +697,10 @@ async function upProject(name, { rebuilt = false } = {}) {
   // they talk to: when the gateway started requiring bearer auth, every
   // pre-existing workspace kept a tokenless graph tool and reindex jobs 401'd
   // on every write. Convergent and idempotent on each full start, same
-  // philosophy as the gateway's boot reconcilers; cpSync overwrites template
-  // files and leaves any extra workspace files alone.
+  // philosophy as the gateway's boot reconcilers; also installs
+  // @opencode-ai/plugin so index jobs don't die on a missing module.
   if (existsSync(workspaceDir)) {
-    const templateOpencode = join(indexWorkspaceDir(), ".opencode");
-    if (existsSync(templateOpencode)) {
-      cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
-    }
+    syncOpencodeWorkspace(workspaceDir);
     const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
     if (existsSync(templateAgentsMd)) {
       writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
