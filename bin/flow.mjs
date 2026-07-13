@@ -330,13 +330,6 @@ function nodeBin(subdir, name) {
   return found;
 }
 
-// Probe the orchestrator's native module (better-sqlite3) the same way the
-// orchestrator will load it — from orchestratorDir, nearest-node_modules-first.
-// Catches the "pulled the fix but node_modules is poisoned" clone: an install
-// attempted on another Node leaves a nested copy built for the wrong ABI, which
-// SHADOWS the fresh root install and crashes the orchestrator at startup with a
-// cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
-// the exact fix, instead.
 // Sync the indexer .opencode template into a project workspace and ensure
 // `@opencode-ai/plugin` is installed there. The graph/notify tools import that
 // package; OpenCode's background `npm install` is flaky (engine checks) and a
@@ -344,13 +337,23 @@ function nodeBin(subdir, name) {
 // before any graph nodes are written — leaving the dashboard stuck on
 // "Building your brain…" because lastIndexedCommit stays null.
 function bundledOpencodeVersion() {
-  try {
-    const pkg = JSON.parse(readFileSync(join(orchestratorDir(), "package.json"), "utf8"));
-    const raw = pkg.dependencies?.["opencode-ai"];
-    if (typeof raw === "string" && raw.length) return raw.replace(/^[^\d]*/, "") || raw;
-  } catch {
-    /* fall through */
+  // The plugin must match the opencode binary that loads it, and that binary
+  // comes from the orchestrator's opencode-ai dependency — so that's the
+  // source of truth. Fall back to the template's own package.json (which
+  // exists so the index-workspace works standalone), then a last-resort pin.
+  const candidates = [
+    [join(orchestratorDir(), "package.json"), "opencode-ai"],
+    [join(indexWorkspaceDir(), ".opencode", "package.json"), "@opencode-ai/plugin"],
+  ];
+  for (const [pkgPath, depName] of candidates) {
+    try {
+      const raw = JSON.parse(readFileSync(pkgPath, "utf8")).dependencies?.[depName];
+      if (typeof raw === "string" && raw.length) return raw.replace(/^[^\d]*/, "") || raw;
+    } catch {
+      /* try next */
+    }
   }
+  console.log(c.dim("  could not resolve the bundled opencode version; pinning @opencode-ai/plugin@1.17.14"));
   return "1.17.14";
 }
 
@@ -399,6 +402,13 @@ function syncOpencodeWorkspace(workspaceDir, { quiet = false } = {}) {
   }
 }
 
+// Probe the orchestrator's native module (better-sqlite3) the same way the
+// orchestrator will load it — from orchestratorDir, nearest-node_modules-first.
+// Catches the "pulled the fix but node_modules is poisoned" clone: an install
+// attempted on another Node leaves a nested copy built for the wrong ABI, which
+// SHADOWS the fresh root install and crashes the orchestrator at startup with a
+// cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
+// the exact fix, instead.
 function preflightNativeDeps() {
   const probe = spawnSync(process.execPath, ["-e", "require('better-sqlite3')"], {
     cwd: orchestratorDir(),

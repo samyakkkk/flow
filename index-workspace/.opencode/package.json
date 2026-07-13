@@ -1,5 +1,6 @@
 {
   "private": true,
+  "//": "The plugin version must match the opencode-ai release Flow bundles (orchestrator/package.json — the source of truth). `flow up` rewrites this file in each project workspace from that source; this copy is the fallback and serves standalone index-workspace runs.",
   "dependencies": {
     "@opencode-ai/plugin": "1.17.14"
   }
