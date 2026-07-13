@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
         source: "dashboard",
         type: "reindex_request",
         ts: Date.now(),
-        payload: { repoName: body.repoName, jobType: "index_repo" },
+        payload: { repo: body.repoName, jobType: "index_repo" },
       });
       return NextResponse.json({
         ok: true,
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
           source: "dashboard",
           type: "reindex_request",
           ts: Date.now(),
-          payload: { repoName: body.repoName, jobType: "index_repo" },
+          payload: { repo: body.repoName, branch: body.branch, jobType: "index_repo" },
         });
       } catch {
         // best-effort

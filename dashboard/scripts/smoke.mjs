@@ -40,6 +40,7 @@ const POLICIES_RESPONSE = {
 };
 
 const ASK_JOB_ID = "smoke-job-001";
+const receivedEvents = [];
 const ASK_RESPONSE = {
   id: ASK_JOB_ID,
   status: "done",
@@ -199,7 +200,13 @@ function startStubOrchestrator() {
       return sendJson({ rows: [], count: 0 });
     }
     if (req.url?.startsWith("/v1/events")) {
-      return sendJson({ id: "stub-evt", status: "accepted" }, 202);
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        try { receivedEvents.push(JSON.parse(body)); } catch { /* malformed bodies are tested elsewhere */ }
+        sendJson({ id: "stub-evt", status: "accepted" }, 202);
+      });
+      return;
     }
     if (req.url === "/v1/mode") {
       return sendJson(MODE_RESPONSE);
@@ -587,6 +594,19 @@ async function main() {
       "/api/repos repo entries have name field (displayed in Home GitHub card)"
     );
   }
+
+  const reindexRes = await httpPost(
+    `${DASH_BASE}/api/repos`,
+    { action: "reindex", repoName: "owner/manual-reindex-repo" },
+    { Cookie: sessionCookie }
+  );
+  assert(reindexRes.status === 200, `/api/repos reindex returns 200 (got ${reindexRes.status})`);
+  const reindexEvent = receivedEvents.find((event) => event.type === "reindex_request");
+  assert(reindexEvent !== undefined, "/api/repos reindex posts a reindex_request event");
+  assert(
+    reindexEvent.payload?.repo === "owner/manual-reindex-repo",
+    "/api/repos reindex sends the repo field expected by the orchestrator"
+  );
 
   // ── Check 23: /api/repos endpoint returns the registry (used by HomeGitHubCard)
   // Already verified above in Check 22 that /api/repos returns repos with name fields.
