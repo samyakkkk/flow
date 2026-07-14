@@ -519,7 +519,7 @@ function buildPrompt(opts: JobInput): BuiltPrompt {
     case "index_repo":
       return {
         agent: "graph-builder",
-        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${opts.input.branch ?? "main"}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
+        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${opts.input.branch ?? "main"}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find_entity), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
       };
     case "enrich":
       return {
@@ -547,7 +547,7 @@ function buildPrompt(opts: JobInput): BuiltPrompt {
           `Evidence offered: ${c.evidence ?? "(none)"}`,
           c.repo ? `Repo hint: repos/${c.repo}` : `Repo hint: none — infer the repo from each node's evidence field.`,
           ``,
-          `Verify the flag ONLY against the repository checkouts under repos/ — these are the registered base branches and the ground truth. For each flagged node: read it (graph_get), read the code it claims to describe, and check its 1-hop neighborhood. If the flag is confirmed by the checkout, apply the MINIMAL correction via the graph_* tools with file:line evidence. If it cannot be confirmed from the checkout (branch-local work, or simply wrong), change nothing.`,
+          `Verify the flag ONLY against the repository checkouts under repos/ — these are the registered base branches and the ground truth. For each flagged node: read it (graph_get_entity), read the code it claims to describe, and check its 1-hop neighborhood. If the flag is confirmed by the checkout, apply the MINIMAL correction via the graph_* tools with file:line evidence. If it cannot be confirmed from the checkout (branch-local work, or simply wrong), change nothing.`,
           ``,
           `Finish your answer with exactly one JSON object: {"verdict": "applied" | "rejected", "summary": "<one paragraph: what you changed, or why you rejected the flag>"}. Use "applied" only if you actually modified the graph.`,
         ].join("\n"),
@@ -644,6 +644,10 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
     GRAPH_GATEWAY_URL: process.env.GATEWAY_URL ?? "http://127.0.0.1:7433",
     FLOW_JOB_TOKEN: jobScopedToken(jobId),
     FLOW_JOB_ID: jobId,
+    // Stamped by the gateway MCP (builder mode) into every write's provenance,
+    // overriding whatever the model supplies — writes trace to the job row and
+    // its transcript in job-logs/, not to a model-chosen name.
+    FLOW_ACTOR: `opencode:${agent ?? "opencode"}:${jobId}`,
     ...(openrouterKey ? { OPENROUTER_API_KEY: openrouterKey } : {}),
     // Graph tools authenticate to the (now bearer-authed) gateway. The
     // subprocess already had full gateway write access by construction; the

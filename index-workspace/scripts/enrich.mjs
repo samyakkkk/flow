@@ -20,10 +20,10 @@ const prompt = `You are enriching an existing knowledge graph, not building one 
 ${question}
 
 Method:
-1. Start from the graph: graph_find / graph_get / graph_read to see how this area is currently modeled and where it is thin, wrong, or too coarse.
+1. Start from the graph: graph_find_entity / graph_get_entity / graph_read_query to see how this area is currently modeled and where it is thin, wrong, or too coarse.
 2. Then establish the truth in code: read the relevant repos under repos/ (all connected repos are available — cross-repo paths are usually the point).
 3. Fix the graph: add the missing fine-grained capabilities, usage contracts (with uses / does_not_use / sensitive_to / triage_note), and edges; enrich or correct descriptions; tighten evidence.
-4. If you find the same real-world thing modeled as two nodes (e.g. an ExternalService placeholder from before its repo was indexed, alongside the real Service), consolidate with graph_merge — keep the richer canonical node.
+4. If you find the same real-world thing modeled as two nodes (e.g. an ExternalService placeholder from before its repo was indexed, alongside the real Service), consolidate with graph_merge_entities — keep the richer canonical node.
 
 Every write needs evidence (repo file:line) and honest confidence. Finish with a summary: what the answer to the question is, what you changed in the graph, and anything you could not verify.`;
 
