@@ -3,18 +3,15 @@ import { getSessionToken } from "@/lib/auth";
 import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
 
 // GET /api/graph/overview
-// Calls the graph-gateway POST /v1/verbs/read_query with a safe read-only Cypher
-// and returns cytoscape-ready nodes + edges (up to LIMIT).
+// Calls the graph-gateway POST /v1/verbs/read_query with safe read-only Cypher
+// and returns cytoscape-ready nodes + edges — the complete graph, fetched as
+// two queries (all nodes, then all relationships). A single joined
+// `MATCH (n) OPTIONAL MATCH (n)-[r]->(m)` query multiplies rows by out-degree,
+// so any row LIMIT silently drops whole subgraphs once the graph grows.
 // We omit `graph` from the body so the gateway uses its configured default graph.
 
-const LIMIT = 300;
-
-const CYPHER = `
-MATCH (n)
-OPTIONAL MATCH (n)-[r]->(m)
-RETURN n, r, m
-LIMIT ${LIMIT}
-`.trim();
+const NODES_CYPHER = `MATCH (n) RETURN n`;
+const EDGES_CYPHER = `MATCH ()-[r]->() RETURN r`;
 
 // FalkorDB's native node/edge shape as the gateway returns it: `id` is an
 // INTERNAL integer, the real id + name live in `properties`, the label in
@@ -32,15 +29,9 @@ interface GwRel {
   type?: string;
   properties?: Record<string, unknown>;
 }
-interface GatewayRow {
-  n?: GwNode | null;
-  r?: GwRel | null;
-  m?: GwNode | null;
-}
-
 interface GatewayQueryResult {
   status: string;
-  rows?: GatewayRow[];
+  rows?: Record<string, unknown>[];
   columns?: string[];
   error?: string;
 }
@@ -61,38 +52,35 @@ export async function GET() {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const res = await fetch(`${GATEWAY_URL}/v1/verbs/read_query`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
-      body: JSON.stringify({ cypher: CYPHER }),
-      signal: AbortSignal.timeout(8000),
-    });
+    const runQuery = async (cypher: string): Promise<Record<string, unknown>[]> => {
+      const res = await fetch(`${GATEWAY_URL}/v1/verbs/read_query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
+        body: JSON.stringify({ cypher }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error(`Gateway responded ${res.status}`);
+      const result = (await res.json()) as GatewayQueryResult;
+      if (result.status !== "ok" && result.status !== "success") {
+        throw new Error(result.error ?? result.status);
+      }
+      return result.rows ?? [];
+    };
 
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: `Gateway responded ${res.status}`, nodes: [], edges: [] },
-        { status: 502 }
-      );
-    }
-
-    const result = (await res.json()) as GatewayQueryResult;
-
-    if (result.status !== "ok" && result.status !== "success") {
-      return NextResponse.json({ nodes: [], edges: [], error: result.error ?? result.status });
-    }
-
-    const rows = result.rows ?? [];
+    const [nodeRows, edgeRows] = await Promise.all([
+      runQuery(NODES_CYPHER),
+      runQuery(EDGES_CYPHER),
+    ]);
 
     const nodesMap = new Map<string, CyNode>();          // display id → node
     const internalToDisplay = new Map<number, string>(); // FalkorDB int id → display id
-    const edgesSet = new Set<string>();
-    const edges: CyEdge[] = [];
 
     const displayId = (nd: GwNode): string =>
       String(nd.properties?.id ?? nd.properties?.name ?? `node-${nd.id}`);
 
-    const addNode = (nd?: GwNode | null): string | null => {
-      if (!nd) return null;
+    for (const row of nodeRows) {
+      const nd = row.n as GwNode | null | undefined;
+      if (!nd) continue;
       const did = displayId(nd);
       internalToDisplay.set(nd.id, did);
       if (!nodesMap.has(did)) {
@@ -105,20 +93,21 @@ export async function GET() {
           },
         });
       }
-      return did;
-    };
+    }
 
-    for (const row of rows) {
-      const s = addNode(row.n);
-      const t = addNode(row.m);
-      const r = row.r;
-      if (s && t && r) {
-        const label = r.relationshipType ?? r.type ?? "";
-        const key = `${s}→${label}→${t}`;
-        if (!edgesSet.has(key)) {
-          edgesSet.add(key);
-          edges.push({ source: s, target: t, label });
-        }
+    const edgesSet = new Set<string>();
+    const edges: CyEdge[] = [];
+    for (const row of edgeRows) {
+      const r = row.r as GwRel | null | undefined;
+      if (!r) continue;
+      const s = internalToDisplay.get(r.sourceId);
+      const t = internalToDisplay.get(r.destinationId);
+      if (!s || !t) continue;
+      const label = r.relationshipType ?? r.type ?? "";
+      const key = `${s}→${label}→${t}`;
+      if (!edgesSet.has(key)) {
+        edgesSet.add(key);
+        edges.push({ source: s, target: t, label });
       }
     }
 
