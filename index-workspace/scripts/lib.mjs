@@ -49,7 +49,7 @@ export function runBuilder(prompt) {
 export function fullIndexPrompt(name) {
   return `Index the repository at repos/${name} into the knowledge graph.
 
-The graph may already contain entities from other repositories. Before creating anything, check what exists (graph_find / graph_read). Reuse and enrich existing entities, and pay special attention to cross-repo dependencies: if this repo calls an API, table, queue, or bucket that is already modeled, that is where usage contracts belong.
+The graph may already contain entities from other repositories. Before creating anything, check what exists (graph_find_entity / graph_read_query). Reuse and enrich existing entities, and pay special attention to cross-repo dependencies: if this repo calls an API, table, queue, or bucket that is already modeled, that is where usage contracts belong.
 
 Work through the repo: identify the service(s), API endpoints, capabilities, resources it reads/writes, external dependencies, and the usage contracts for its important dependencies. Write to the graph incrementally as you learn, following your instructions. Finish with a summary of what you modeled, open questions, and low-confidence assumptions.`;
 }

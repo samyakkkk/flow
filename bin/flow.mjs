@@ -645,12 +645,36 @@ async function upProject(name, { rebuilt = false } = {}) {
   if (existsSync(workspaceDir)) {
     const templateOpencode = join(indexWorkspaceDir(), ".opencode");
     if (existsSync(templateOpencode)) {
+      // Plugin-era tool files must be actively removed: cpSync overwrites but
+      // never deletes, and a leftover graph.ts/notify.ts re-triggers opencode's
+      // per-workspace @opencode-ai/plugin install — whose transitive deps carry
+      // Node engines constraints we don't control (the exact failure the MCP
+      // config below replaces).
+      rmSync(join(workspaceDir, ".opencode", "tools", "graph.ts"), { force: true });
+      rmSync(join(workspaceDir, ".opencode", "tools", "notify.ts"), { force: true });
       cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
     }
     const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
     if (existsSync(templateAgentsMd)) {
       writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
     }
+    // Graph tools reach the workspace as MCP, not as plugin tool files: point
+    // opencode at the gateway's MCP server in builder mode. Generated (not
+    // copied from the template) because the command needs absolute paths into
+    // THIS checkout. Per-job env (graph name, journal, tokens, write scope,
+    // actor) is inherited from the spawning opencode process, which gets it
+    // from the orchestrator.
+    const opencodeConfig = {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        graph: {
+          type: "local",
+          command: [nodeBin(gatewayDir(), "tsx"), join(gatewayDir(), "src", "mcp.ts")],
+          environment: { GATEWAY_MCP_MODE: "builder" },
+        },
+      },
+    };
+    writeFileSync(join(workspaceDir, "opencode.json"), JSON.stringify(opencodeConfig, null, 2) + "\n", "utf-8");
   }
 
   // ── Gateway ────────────────────────────────────────────────────────────────
@@ -686,6 +710,11 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
+    // Inherited down to the gateway MCP subprocess that opencode jobs spawn —
+    // it opens FalkorDB directly, so it needs the project's graph name and
+    // journal, or indexer writes land in the default graph and journal.
+    GRAPH_NAME: graph,
+    JOURNAL_PATH: journalPath,
     NODE_ENV: "production",
   };
 

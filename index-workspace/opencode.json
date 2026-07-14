@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "graph": {
+      "type": "local",
+      "command": ["../node_modules/.bin/tsx", "../graph-gateway/src/mcp.ts"],
+      "environment": { "GATEWAY_MCP_MODE": "builder" }
+    }
+  }
+}
