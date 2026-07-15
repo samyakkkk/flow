@@ -174,13 +174,16 @@ function build(tool: string, input: Record<string, unknown>): Extracted {
 }
 
 // Pick the single most human-meaningful field from a tool input. Paths are
-// shortened to their workspace-relative tail; anything else is truncated.
+// shortened to their workspace-relative tail (claude uses snake_case
+// file_path; opencode camelCase filePath); anything else is truncated as-is.
 function terseArg(input: Record<string, unknown>): string {
-  const candidate =
-    input.id ?? input.filePath ?? input.path ?? input.pattern ?? input.command ?? input.query ?? input.name ?? input.type;
+  const pathArg = input.filePath ?? input.file_path ?? input.path;
+  const candidate = input.id ?? pathArg ?? input.pattern ?? input.command ?? input.query ?? input.name ?? input.type;
   if (candidate === undefined || candidate === null) return "";
   let s = String(candidate);
-  const reposIdx = s.indexOf("repos/");
-  if (reposIdx > 0) s = s.slice(reposIdx);
+  if (candidate === pathArg) {
+    const reposIdx = s.indexOf("repos/");
+    if (reposIdx > 0) s = s.slice(reposIdx);
+  }
   return s.slice(0, 80);
 }
