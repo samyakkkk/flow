@@ -9,6 +9,7 @@
 //     always-visible "+ Add a source" that expands the same two doors inline.
 import { useState } from "react";
 import Link from "next/link";
+import { useProject } from "@/lib/useProject";
 import { AddFolder } from "@/components/AddFolder";
 import { RepoPicker } from "@/components/RepoPicker";
 import { BranchSelect } from "@/components/BranchSelect";
@@ -61,6 +62,7 @@ const branchSelectStyle: React.CSSProperties = {
 };
 
 function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) {
+  const { prefix } = useProject();
   const chip = sourceChip(s);
   const indexing = s.kind !== "docs" && !s.lastIndexedCommit;
 
@@ -76,7 +78,7 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
     setReindexing(true);
     setReindexMsg("");
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reindex", repoName: s.name }),
@@ -94,7 +96,7 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
   async function handleRemove() {
     setRemoving(true);
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove", repoName: s.name }),
@@ -119,7 +121,7 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
     }
     setSavingBranch(true);
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "change_branch", repoName: s.name, branch: pendingBranch.trim() }),

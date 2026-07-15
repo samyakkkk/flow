@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { ORCHESTRATOR_URL, GATEWAY_URL } from "@/lib/config";
 import { getSessionToken } from "@/lib/auth";
+import { requireProject } from "@/lib/projectContext";
 
 async function checkService(url: string, token?: string): Promise<{ ok: boolean; latencyMs: number; detail?: string }> {
   const start = Date.now();
@@ -21,9 +21,10 @@ async function checkService(url: string, token?: string): Promise<{ ok: boolean;
 
 export async function GET() {
   const token = await getSessionToken();
+  const project = await requireProject();
   const [orc, gw] = await Promise.all([
-    checkService(ORCHESTRATOR_URL, token ?? undefined),
-    checkService(GATEWAY_URL),
+    checkService(project.orchestratorUrl, token ?? undefined),
+    checkService(project.gatewayUrl),
   ]);
   return NextResponse.json({ orchestrator: orc, gateway: gw });
 }

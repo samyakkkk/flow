@@ -1,10 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useProject } from "@/lib/useProject";
 import { Button, Heading, Input, Kicker } from "@/components/ui";
 
 // State 0 — the first thing a new user sees. Nothing else exists until Flow has
 // a brain. Focused, warm, self-explanatory. See docs/UX.md + docs/DESIGN.md.
 export function KeyGate({ onReady }: { onReady: () => void }) {
+  const { prefix } = useProject();
   const [key, setKey] = useState("");
   const [status, setStatus] = useState<"idle" | "checking" | "ok" | "error">("idle");
   const [error, setError] = useState("");
@@ -15,7 +17,7 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
   const [enteringNew, setEnteringNew] = useState(false);
 
   useEffect(() => {
-    fetch("/api/onboarding/suggested-key")
+    fetch(prefix("/api/onboarding/suggested-key"))
       .then((r) => (r.ok ? r.json() : { available: false }))
       .then((d) => setSuggested(d))
       .catch(() => setSuggested({ available: false }));
@@ -25,7 +27,7 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
     setStatus("checking");
     setError("");
     try {
-      const res = await fetch("/api/onboarding/adopt-key", { method: "POST" });
+      const res = await fetch(prefix("/api/onboarding/adopt-key"), { method: "POST" });
       const data = (await res.json()) as { ok: boolean; error?: string };
       if (data.ok) {
         setStatus("ok");
@@ -45,7 +47,7 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
     setStatus("checking");
     setError("");
     try {
-      const res = await fetch("/api/onboarding/openrouter", {
+      const res = await fetch(prefix("/api/onboarding/openrouter"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: key.trim() }),

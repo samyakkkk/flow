@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
+import { requireProject } from "@/lib/projectContext";
 
 // GET /api/graph/neighborhood?nodeId=xxx[&graph=yyy]
 // Calls graph-gateway POST /v1/verbs/get_entity ({id, graph?}) and flattens
@@ -24,10 +24,11 @@ export async function GET(req: NextRequest) {
   const graph = searchParams.get("graph") ?? undefined;
   if (!nodeId) return NextResponse.json({ error: "nodeId is required" }, { status: 400 });
 
+  const project = await requireProject();
   try {
-    const res = await fetch(`${GATEWAY_URL}/v1/verbs/get_entity`, {
+    const res = await fetch(`${project.gatewayUrl}/v1/verbs/get_entity`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
+      headers: { "Content-Type": "application/json", ...(project.adminToken ? { authorization: `Bearer ${project.adminToken}` } : {}) },
       body: JSON.stringify(graph ? { id: nodeId, graph } : { id: nodeId }),
       signal: AbortSignal.timeout(5000),
     });

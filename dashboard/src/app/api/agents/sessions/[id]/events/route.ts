@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { ORCHESTRATOR_URL } from "@/lib/config";
+import { requireProject } from "@/lib/projectContext";
 
 // GET /api/agents/sessions/:id/events — SSE pass-through from the orchestrator.
 // The browser's EventSource can't send Authorization headers, so the token is
@@ -14,8 +14,9 @@ export async function GET(
   const { id } = await params;
   const since = req.nextUrl.searchParams.get("since") ?? "0";
 
+  const project = await requireProject();
   const upstream = await fetch(
-    `${ORCHESTRATOR_URL}/v1/agents/sessions/${encodeURIComponent(id)}/events?since=${since}`,
+    `${project.orchestratorUrl}/v1/agents/sessions/${encodeURIComponent(id)}/events?since=${since}`,
     {
       headers: { authorization: `Bearer ${token}` },
       signal: req.signal,

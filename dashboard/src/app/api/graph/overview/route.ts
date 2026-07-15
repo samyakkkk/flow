@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { FLOW_ADMIN_TOKEN, GATEWAY_URL } from "@/lib/config";
+import { requireProject } from "@/lib/projectContext";
 
 // GET /api/graph/overview
 // Calls the graph-gateway POST /v1/verbs/read_query with safe read-only Cypher
@@ -51,11 +51,12 @@ export async function GET() {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const project = await requireProject();
   try {
     const runQuery = async (cypher: string): Promise<Record<string, unknown>[]> => {
-      const res = await fetch(`${GATEWAY_URL}/v1/verbs/read_query`, {
+      const res = await fetch(`${project.gatewayUrl}/v1/verbs/read_query`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(FLOW_ADMIN_TOKEN ? { authorization: `Bearer ${FLOW_ADMIN_TOKEN}` } : {}) },
+        headers: { "Content-Type": "application/json", ...(project.adminToken ? { authorization: `Bearer ${project.adminToken}` } : {}) },
         body: JSON.stringify({ cypher }),
         signal: AbortSignal.timeout(15000),
       });

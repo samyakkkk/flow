@@ -3,6 +3,7 @@ import { callVerb, verbs } from "./verbs.js";
 import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
 import { runBootTasks } from "./reconcile.js";
+import { isPat, verifyPatForProject } from "./patAuth.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
@@ -10,16 +11,26 @@ import { runBootTasks } from "./reconcile.js";
 //   GET  /health                                     (open)
 //
 // Auth: when GATEWAY_TOKEN or FLOW_ADMIN_TOKEN is in the env (flow up passes
-// the project .env), every non-/health request must carry it as a bearer.
-// This closes the local self-bless hole (any process could call
-// review_procedure) and is the prerequisite for exposing the gateway to
-// remote MCP clients (EC2 topology). No token in env → open, as before —
-// dev fallback only.
+// the project .env), every non-/health request must carry a bearer that is
+// EITHER that static token (internal services: orchestrator, dashboard
+// proxy, indexer) OR a personal access token from the deployment auth store
+// (per-user machine credential, minted in the dashboard) whose user holds a
+// grant on this gateway's project (FLOW_PROJECT_NAME). This closes the local
+// self-bless hole (any process could call review_procedure) and is the
+// per-user gating for remote MCP clients (EC2 topology). No token in env →
+// open, as before — dev fallback only.
 
 const port = Number(process.env.GATEWAY_PORT ?? 7433);
 const TOKEN = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
 if (!TOKEN) {
   console.warn("[gateway] no GATEWAY_TOKEN/FLOW_ADMIN_TOKEN in env — HTTP verbs are UNAUTHENTICATED (dev mode)");
+}
+
+function authorized(header: string): boolean {
+  if (!header.startsWith("Bearer ")) return false;
+  const bearer = header.slice("Bearer ".length);
+  if (isPat(bearer)) return verifyPatForProject(bearer) !== null;
+  return bearer === TOKEN;
 }
 
 function json(res: import("node:http").ServerResponse, code: number, body: unknown) {
@@ -35,8 +46,8 @@ const server = createServer(async (req, res) => {
     }
     if (TOKEN) {
       const auth = String(req.headers.authorization ?? "");
-      if (auth !== `Bearer ${TOKEN}`) {
-        return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token." });
+      if (!authorized(auth)) {
+        return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token (project token or a personal access token with a grant on this project)." });
       }
     }
     if (req.method === "GET" && url.pathname === "/v1/journal") {
