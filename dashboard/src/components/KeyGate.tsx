@@ -3,6 +3,13 @@ import { useEffect, useState } from "react";
 import { useProject } from "@/lib/useProject";
 import { Button, Heading, Input, Kicker } from "@/components/ui";
 
+type DetectedAgent = {
+  id: string;
+  name: string;
+  installed: boolean;
+  source?: "explicit" | "local" | "bundled";
+};
+
 // State 0 — the first thing a new user sees. Nothing else exists until Flow has
 // a brain. Focused, warm, self-explanatory. See docs/UX.md + docs/DESIGN.md.
 export function KeyGate({ onReady }: { onReady: () => void }) {
@@ -16,11 +23,28 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
   const [suggested, setSuggested] = useState<{ available: boolean; hint?: string } | null>(null);
   const [enteringNew, setEnteringNew] = useState(false);
 
+  // Skip = indexing runs through a coding CLI on this machine. Detect which are
+  // actually usable so the skip copy can name them (or warn if there are none).
+  // null = still checking; [] = none found (or the check failed).
+  const [detectedClis, setDetectedClis] = useState<string[] | null>(null);
+
   useEffect(() => {
     fetch(prefix("/api/onboarding/suggested-key"))
       .then((r) => (r.ok ? r.json() : { available: false }))
       .then((d) => setSuggested(d))
       .catch(() => setSuggested({ available: false }));
+  }, []);
+
+  useEffect(() => {
+    fetch(prefix("/api/agents"))
+      .then((r) => (r.ok ? r.json() : { agents: [] }))
+      .then((d: { agents?: DetectedAgent[] }) => {
+        const usable = (d.agents ?? []).filter(
+          (a) => a.installed && (a.source === "local" || a.source === "explicit")
+        );
+        setDetectedClis(usable.map((a) => a.name));
+      })
+      .catch(() => setDetectedClis([]));
   }, []);
 
   async function reuse() {
@@ -42,8 +66,8 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
     }
   }
 
-  // BYO provider: opencode already holds provider auth for the graph-builder,
-  // so no key is required here. Record BRAIN_MODE so the gate stays open;
+  // BYO provider: a local coding CLI already holds provider auth for the
+  // graph-builder, so no key is required here. Record BRAIN_MODE so the gate stays open;
   // classifier + semantic search wake up later if a key lands in Settings.
   async function skipWithOwnProvider() {
     setStatus("checking");
@@ -111,7 +135,7 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
               ? "Let's connect your first source."
               : suggested?.available && !enteringNew
               ? "You already gave Flow an OpenRouter key on another project. Reuse it, or use a different one for this project."
-              : "Flow uses an LLM to understand your code and conversations. Paste your OpenRouter key to begin — or skip if opencode already has your models."}
+              : "Flow uses an LLM to understand your code and conversations. Paste your OpenRouter key to begin — or skip if a coding CLI on this machine already has your models."}
           </p>
         </div>
 
@@ -181,11 +205,26 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
                 style={{ fontFamily: "var(--font-mono)" }}
                 className="text-[12px] uppercase tracking-wider text-text-muted hover:text-ink transition"
               >
-                Skip — my models are set up in opencode
+                Skip — my coding CLI handles models
               </button>
               <p className="text-[12px] text-text-muted mt-2 max-w-sm mx-auto">
-                Indexing uses opencode&apos;s own provider auth. Event classification and semantic
-                search stay off until you add an API key in Settings.
+                {detectedClis !== null && detectedClis.length === 0 ? (
+                  <>
+                    No coding CLI detected — install opencode, Codex, or Claude Code, or indexing
+                    will fail. Event classification and semantic search stay off until you add an
+                    API key in Settings.
+                  </>
+                ) : (
+                  <>
+                    Indexing runs through a coding CLI installed on this machine (opencode, Codex,
+                    or Claude Code)
+                    {detectedClis && detectedClis.length > 0
+                      ? `. Detected: ${detectedClis.join(", ")}.`
+                      : "."}{" "}
+                    Event classification and semantic search stay off until you add an API key in
+                    Settings.
+                  </>
+                )}
               </p>
             </div>
           </div>

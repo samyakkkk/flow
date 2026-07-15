@@ -26,7 +26,7 @@ interface SectionDef {
 const SECTIONS: Record<SectionKey, SectionDef> = {
   models: {
     label: "Models & Keys",
-    keys: ["OPENROUTER_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "BRAIN_MODE", "CLASSIFIER_MODEL", "GRAPH_BUILDER_MODEL"],
+    keys: ["OPENROUTER_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "BRAIN_MODE", "CLASSIFIER_MODEL", "GRAPH_BUILDER_MODEL", "INDEXER_RUNTIME"],
   },
   integrations: {
     label: "Integrations",
