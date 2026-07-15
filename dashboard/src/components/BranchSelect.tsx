@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useProject } from "@/lib/useProject";
 
 interface BranchSelectProps {
   // Pass `repo` (registry name or remote URL) to fetch from the orchestrator.
@@ -18,6 +19,7 @@ interface BranchSelectProps {
 }
 
 export function BranchSelect({ repo, localPath, value, fallback, disabled, className, style, onChange }: BranchSelectProps) {
+  const { prefix } = useProject();
   const [branches, setBranches] = useState<string[]>(fallback ? [fallback] : []);
 
   useEffect(() => {
@@ -26,7 +28,7 @@ export function BranchSelect({ repo, localPath, value, fallback, disabled, class
     setBranches(base ? [base] : []);
 
     if (localPath) {
-      fetch(`/api/fs/branches?path=${encodeURIComponent(localPath)}`)
+      fetch(prefix(`/api/fs/branches?path=${encodeURIComponent(localPath)}`))
         .then((r) => (r.ok ? r.json() : null))
         .then((data: { branches?: unknown } | null) => {
           if (cancelled || !Array.isArray(data?.branches)) return;
@@ -38,7 +40,7 @@ export function BranchSelect({ repo, localPath, value, fallback, disabled, class
     }
 
     if (!repo) return;
-    fetch(`/api/agents/repos/branches?repo=${encodeURIComponent(repo)}`)
+    fetch(prefix(`/api/agents/repos/branches?repo=${encodeURIComponent(repo)}`))
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { branches?: unknown } | null) => {
         if (cancelled || !Array.isArray(data?.branches)) return;
@@ -49,7 +51,7 @@ export function BranchSelect({ repo, localPath, value, fallback, disabled, class
     return () => {
       cancelled = true;
     };
-  }, [fallback, repo, localPath]);
+  }, [fallback, repo, localPath, prefix]);
 
   const options = useMemo(() => {
     const out: string[] = [];

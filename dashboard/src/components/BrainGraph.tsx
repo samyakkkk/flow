@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useProject } from "@/lib/useProject";
 import { Kicker } from "@/components/ui";
 import type { FalkorDBCanvas, GraphNode as FalkorGraphNode } from "@falkordb/canvas";
 
@@ -153,6 +154,7 @@ export function BrainGraph({
   externalData,
   isIndexing = false,
 }: BrainGraphProps) {
+  const { prefix } = useProject();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<FalkorDBCanvas | null>(null);
   // Display id (string) → stable numeric id: @falkordb/canvas addresses nodes
@@ -167,7 +169,7 @@ export function BrainGraph({
 
   const fetchOverview = useCallback(async () => {
     try {
-      const res = await fetch("/api/graph/overview");
+      const res = await fetch(prefix("/api/graph/overview"));
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = (await res.json()) as GraphData;
       setGraphData(data);
@@ -176,7 +178,7 @@ export function BrainGraph({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [prefix]);
 
   // Load data
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
 import { readLocalConfig } from "@/lib/localConfig";
+import { requireProject } from "@/lib/projectContext";
 import { orcFetch } from "@/lib/orchestrator";
 import { execSync } from "node:child_process";
 
@@ -80,7 +81,7 @@ export async function GET(): Promise<NextResponse> {
   }
 
   // Fall back to stored GitHub PAT
-  const cfg = readLocalConfig();
+  const cfg = readLocalConfig(await requireProject());
   const pat = cfg["github_pat"] ?? "";
   if (pat) {
     const patRepos = await tryGitHubPat(pat);
@@ -110,7 +111,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // the local copy is a convenience for the /api/github/repos listing path only.
   if (body.action === "save_pat" && body.pat) {
     const { writeLocalConfig } = await import("@/lib/localConfig");
-    writeLocalConfig({ github_pat: body.pat });
+    writeLocalConfig(await requireProject(), { github_pat: body.pat });
     // Also propagate to orchestrator settings (best-effort; don't block on failure)
     try {
       await orcFetch("/v1/settings", token, {

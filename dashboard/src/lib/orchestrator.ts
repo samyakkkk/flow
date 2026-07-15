@@ -1,12 +1,15 @@
-// Thin fetch wrapper for orchestrator API — always server-side.
-import { ORCHESTRATOR_URL } from "./config";
+// Thin fetch wrapper for orchestrator API — always server-side. Resolves the
+// orchestrator URL from this request's project (x-flow-project header) so one
+// dashboard process can front every project on the deployment.
+import { requireProject } from "./projectContext";
 
 export async function orcFetch(
   path: string,
   token: string,
   opts: RequestInit = {}
 ): Promise<Response> {
-  const url = `${ORCHESTRATOR_URL}${path}`;
+  const project = await requireProject();
+  const url = `${project.orchestratorUrl}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,

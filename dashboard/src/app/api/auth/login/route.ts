@@ -1,33 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateToken } from "@/lib/auth";
-import { SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/config";
+import { IS_LOCAL, SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/config";
+import { loadAuthStore, verifyPassword, mintSession } from "@/lib/authStore";
 
+// POST /api/auth/login {email, password} — prod-mode sign-in against the
+// deployment auth store. One session covers every project the user is
+// granted; per-project scoping happens in the proxy + requireSession().
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-  const token = (body.token as string | undefined)?.trim();
+  if (IS_LOCAL) return NextResponse.json({ ok: true }); // no login step on your own box
 
-  if (!token) {
-    return NextResponse.json({ error: "token is required" }, { status: 400 });
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!email || !password) {
+    return NextResponse.json({ error: "email and password are required" }, { status: 400 });
   }
 
-  const check = await validateToken(token);
-  if (check === "invalid") {
-    return NextResponse.json({ error: "Invalid token" }, { status: 401 });
-  }
-  if (check === "unreachable") {
+  const store = loadAuthStore();
+  if (!store || store.users.length === 0) {
     return NextResponse.json(
-      { error: "Flow's engine isn't reachable right now — wait a few seconds and try again (or run `flow doctor`)." },
-      { status: 503 }
+      { error: "No accounts yet — create the owner account first." },
+      { status: 409 }
     );
   }
 
+  const user = store.users.find((u) => u.email === email);
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+  }
+
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, token, {
+  res.cookies.set(SESSION_COOKIE, mintSession(user.id, SESSION_MAX_AGE, store), {
     httpOnly: true,
     sameSite: "lax",
     maxAge: SESSION_MAX_AGE,
     path: "/",
-    // secure: true — enable in production with HTTPS
   });
   return res;
 }

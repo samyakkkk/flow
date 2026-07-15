@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useProject } from "@/lib/useProject";
 
 export type FlowMode = "local" | "prod";
 
@@ -16,10 +17,11 @@ const DEFAULT: ModeState = { mode: "local", gates: { slack: "prod_only" }, loadi
  * Falls back to "local" if the request fails (safe default).
  */
 export function useMode(): ModeState {
+  const { prefix } = useProject();
   const [state, setState] = useState<ModeState>(DEFAULT);
 
   useEffect(() => {
-    fetch("/api/mode")
+    fetch(prefix("/api/mode"))
       .then((r) => r.json())
       .then((d) => {
         const data = d as { mode?: string; gates?: { slack?: string } };

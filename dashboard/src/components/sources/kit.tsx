@@ -6,6 +6,7 @@
 // and the add-submit logic live here once. Plain language only; never the
 // words worktree / carve-out.
 import { useCallback, useState } from "react";
+import { useProject } from "@/lib/useProject";
 
 // ─── Contract types (mirror POST /v1/sources/inspect + /add) ─────────────────
 
@@ -225,10 +226,11 @@ export function AddResultBox({ result }: { result: AddResult }) {
 // POST the raw input (a path or a URL) to the classifier. Surfaces the server's
 // refusal verbatim (e.g. a prod-mode path refusal) rather than inventing copy.
 export async function inspectInput(
-  input: string
+  input: string,
+  prefix: (path: string) => string = (p) => p
 ): Promise<{ data?: Inspect; error?: string }> {
   try {
-    const res = await fetch("/api/sources/inspect", {
+    const res = await fetch(prefix("/api/sources/inspect"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
@@ -246,6 +248,7 @@ export async function inspectInput(
 // Encapsulates the add-submit call plus its error / success banner state, so
 // each door renders <AddResultBox> / <ErrorBox> without repeating the fetch.
 export function useSourceAdd(onAdded?: () => void) {
+  const { prefix } = useProject();
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
   const [addResult, setAddResult] = useState<AddResult | null>(null);
@@ -261,7 +264,7 @@ export function useSourceAdd(onAdded?: () => void) {
       setAdding(true);
       setAddError("");
       try {
-        const res = await fetch("/api/sources/add", {
+        const res = await fetch(prefix("/api/sources/add"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sources }),
@@ -281,7 +284,7 @@ export function useSourceAdd(onAdded?: () => void) {
         setAdding(false);
       }
     },
-    [adding, onAdded]
+    [adding, onAdded, prefix]
   );
 
   return { adding, addError, addResult, submitAdd, clear };
