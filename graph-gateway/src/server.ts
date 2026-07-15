@@ -3,6 +3,7 @@ import { callVerb, verbs } from "./verbs.js";
 import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
 import { runBootTasks } from "./reconcile.js";
+import { startLocalModel } from "./local-embed.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
 
 // HTTP face of the gateway — bind to localhost only.
@@ -79,7 +80,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
-  // Converge this graph in the background: versioned migrations, then
-  // reconcilers (e.g. embedding backfill). See reconcile.ts.
+  // Start the local embedding model download immediately so it runs in
+  // parallel with migrations. runBootTasks awaits the same singleton promise
+  // before it reconciles embeddings — nodes indexed during the download are
+  // backfilled automatically once the model is ready. See reconcile.ts.
+  startLocalModel();
   runBootTasks(DEFAULT_GRAPH);
 });
