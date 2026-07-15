@@ -788,8 +788,11 @@ export default function HomePage() {
   const { prefix } = useProject();
   const router = useRouter();
 
-  // Check if brain is set (for KeyGate)
-  const hasBrain = settings.some((s) => s.key === "OPENROUTER_API_KEY" && s.set);
+  // Check if brain is set (for KeyGate): an LLM key, or explicit BYO-provider
+  // mode (opencode's own auth carries the graph-builder; no key needed here).
+  const hasBrain = settings.some(
+    (s) => (s.key === "OPENROUTER_API_KEY" || s.key === "LLM_API_KEY" || s.key === "BRAIN_MODE") && s.set
+  );
 
   // Derive whether any repo is currently being indexed (no lastIndexedCommit yet)
   const isAnyRepoIndexing = repos.some((r) => !r.lastIndexedCommit);
@@ -839,7 +842,9 @@ export default function HomePage() {
       setGraphNodeCount((graph.nodes ?? []).length);
       setGraphEdgeCount((graph.edges ?? []).length);
 
-      const brainSet = s.some((item) => item.key === "OPENROUTER_API_KEY" && item.set);
+      const brainSet = s.some(
+        (item) => (item.key === "OPENROUTER_API_KEY" || item.key === "LLM_API_KEY" || item.key === "BRAIN_MODE") && item.set
+      );
       if (!brainSet) {
         setState("no-brain");
         return;

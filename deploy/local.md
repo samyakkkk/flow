@@ -15,9 +15,12 @@ full-container path (see the bottom of this file).
 - **Docker running** — Flow starts FalkorDB (its graph database) in a container.
   Already run FalkorDB yourself? Point Flow at it and skip Docker:
   `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
-- An **OpenRouter API key** — you'll paste it into the dashboard on first run
-  (not an env var). Nothing else to install: the graph engine (opencode) is
-  bundled as a dependency.
+- An **LLM provider** — paste an OpenRouter key into the dashboard on first run,
+  skip if any supported coding CLI (opencode, Codex, or Claude Code) is installed
+  on your machine (indexing runs through whichever is present — `INDEXER_RUNTIME`,
+  default auto-detects opencode → codex → claude), or point Flow at any
+  OpenAI-compatible API (`LLM_BASE_URL` + `LLM_API_KEY` in Settings). Nothing else
+  to install: the graph engine (opencode) is bundled as a dependency.
 
 ---
 
@@ -33,7 +36,10 @@ flow up mycompany                   # creates it if new, then starts
 `flow up` prints your dashboard URL. In local mode you're already signed in — no
 token to paste. Then, in the browser:
 
-1. Add your **OpenRouter key** (nothing else is reachable until the brain has a model).
+1. **Give Flow a brain** — paste an OpenRouter key, or skip if a supported coding
+   CLI (opencode, Codex, or Claude Code) is installed, since indexing runs through
+   whichever is present (`INDEXER_RUNTIME`, default auto-detects opencode → codex →
+   claude). Classification and semantic search stay off until an LLM key is set.
 2. **Connect a repo** from the Home picker and watch the graph build.
 3. **Ask** from the floating bar, or head to **Agents** to run a coding task.
 

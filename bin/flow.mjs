@@ -48,6 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
+import { deleteProjectGraph } from "./lib/falkordb.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -519,6 +520,8 @@ FLOW_ADMIN_TOKEN=${adminToken}
 # SLACK_APP_TOKEN=        # prod-mode only
 # LINEAR_API_KEY=
 # OPENROUTER_API_KEY=
+# LLM_BASE_URL=           # any OpenAI-compatible API (classifier + embeddings)
+# LLM_API_KEY=
 # GITHUB_TOKEN=
 `,
     { encoding: "utf-8", mode: 0o600 }
@@ -728,12 +731,36 @@ async function upProject(name, { rebuilt = false } = {}) {
   if (existsSync(workspaceDir)) {
     const templateOpencode = join(indexWorkspaceDir(), ".opencode");
     if (existsSync(templateOpencode)) {
+      // Plugin-era tool files must be actively removed: cpSync overwrites but
+      // never deletes, and a leftover graph.ts/notify.ts re-triggers opencode's
+      // per-workspace @opencode-ai/plugin install — whose transitive deps carry
+      // Node engines constraints we don't control (the exact failure the MCP
+      // config below replaces).
+      rmSync(join(workspaceDir, ".opencode", "tools", "graph.ts"), { force: true });
+      rmSync(join(workspaceDir, ".opencode", "tools", "notify.ts"), { force: true });
       cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
     }
     const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
     if (existsSync(templateAgentsMd)) {
       writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
     }
+    // Graph tools reach the workspace as MCP, not as plugin tool files: point
+    // opencode at the gateway's MCP server in builder mode. Generated (not
+    // copied from the template) because the command needs absolute paths into
+    // THIS checkout. Per-job env (graph name, journal, tokens, write scope,
+    // actor) is inherited from the spawning opencode process, which gets it
+    // from the orchestrator.
+    const opencodeConfig = {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        graph: {
+          type: "local",
+          command: [nodeBin(gatewayDir(), "tsx"), join(gatewayDir(), "src", "mcp.ts")],
+          environment: { GATEWAY_MCP_MODE: "builder" },
+        },
+      },
+    };
+    writeFileSync(join(workspaceDir, "opencode.json"), JSON.stringify(opencodeConfig, null, 2) + "\n", "utf-8");
   }
 
   // ── Gateway ────────────────────────────────────────────────────────────────
@@ -749,11 +776,14 @@ async function upProject(name, { rebuilt = false } = {}) {
     FLOW_PROJECT_NAME: name,
     NODE_ENV: "production",
   };
-  // Embeddings (semantic find_entity + embed-on-write) need the OpenRouter key.
+  // Embeddings (semantic find_entity + embed-on-write) need an LLM API key —
+  // LLM_API_KEY for any OpenAI-compatible provider, or the OpenRouter key.
   // Fall back to the machine default / ambient env when it isn't in the .env.
-  if (!gwEnv.OPENROUTER_API_KEY) {
-    const k = readGlobalKey(dir, "OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-    if (k) gwEnv.OPENROUTER_API_KEY = k;
+  for (const key of ["LLM_API_KEY", "LLM_BASE_URL", "OPENROUTER_API_KEY"]) {
+    if (!gwEnv[key]) {
+      const k = readGlobalKey(dir, key) ?? process.env[key];
+      if (k) gwEnv[key] = k;
+    }
   }
 
   const gwPid = spawnService({
@@ -773,6 +803,12 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
+    // Inherited down to the gateway MCP subprocesses that indexer jobs spawn
+    // (opencode via workspace opencode.json; claude/codex directly) — the MCP
+    // opens FalkorDB directly, so it needs the project's graph name and
+    // journal, or indexer writes land in the default graph and journal.
+    GRAPH_NAME: graph,
+    JOURNAL_PATH: journalPath,
     NODE_ENV: "production",
   };
 
@@ -1046,7 +1082,35 @@ async function cmdRm(args) {
     }
   }
   console.log(`\n${c.bold("Flow")} ${c.dim("· removing " + name)}`);
+  const project = readProject(name);
+  const projectEnv = parseEnvFile(join(projectDir(name), ".env"));
   await downProject(name);
+
+  // FalkorDB is shared across projects, but each project normally owns one
+  // named graph. Delete that graph before removing project.json so a failed DB
+  // connection leaves enough metadata for the user to retry instead of
+  // creating a permanently orphaned graph. A custom graph may intentionally
+  // be shared; preserve it while another registered project still uses it.
+  const sharedWith = listProjects().find(
+    ({ name: otherName, project: other }) => otherName !== name && other.graph === project.graph,
+  );
+  if (sharedWith) {
+    console.log(`  ${c.dim(`· graph ${project.graph} kept (shared with ${sharedWith.name})`)}`);
+  } else {
+    const host = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+    const port = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    let result;
+    try {
+      result = await deleteProjectGraph({ graph: project.graph, host, port });
+    } catch (err) {
+      throw new Error(
+        `Couldn't delete FalkorDB graph "${project.graph}" at ${host}:${port}; project files were kept so you can retry.\n` +
+          `  ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    console.log(`  ${result.existed ? OK : c.dim("·")} ${c.dim(result.existed ? `deleted graph ${project.graph}` : `graph ${project.graph} already empty`)}`);
+  }
+
   rmSync(projectDir(name), { recursive: true, force: true });
   console.log(`  ${OK} removed ${c.bold(name)}\n`);
 }

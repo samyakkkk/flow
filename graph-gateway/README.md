@@ -53,13 +53,19 @@ curl -s localhost:7433/v1/journal
 npm run mcp    # stdio server, e.g. `claude mcp add graph-gateway -- npm run mcp`
 ```
 
-## OpenCode
+Three modes, selected by env:
 
-Copy or symlink `opencode-tools/graph.ts` into your workspace's
-`.opencode/tools/`. Tools appear as `graph_find`, `graph_upsert`,
-`graph_relate`, `graph_get`, `graph_read`, `graph_schema`, and stamp the
-calling session's identity into provenance automatically. Point
-`GRAPH_GATEWAY_URL` at the gateway if it isn't on the default port.
+- **Full** (default): all verbs, for operators driving the gateway by hand.
+- **Builder** (`GATEWAY_MCP_MODE=builder`): the indexer surface — query verbs
+  plus `upsert_entity`, `upsert_relation`, `merge_entities`, and a `notify`
+  tool when a job identity is present. `FLOW_ACTOR` is stamped into every
+  write's provenance and `FLOW_WRITE_SCOPE` (comma-separated node ids)
+  restricts writes for correction-verification jobs. Workspaces point opencode
+  at this via an `mcp` entry in `opencode.json` (see
+  `index-workspace/opencode.json`) — no per-workspace npm install, no
+  `@opencode-ai/plugin` dependency.
+- **Session** (`GATEWAY_MCP_READONLY=1`): query verbs plus the governed
+  proposal verbs, injected into coding-agent sessions.
 
 ## Journal
 
