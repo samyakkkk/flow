@@ -137,9 +137,18 @@ const EXPOSED = MODE === "session" ? SESSION_VERBS : MODE === "builder" ? BUILDE
 
 for (const [name, verb] of Object.entries(verbs)) {
   if (EXPOSED && !EXPOSED.has(name)) continue;
+  // Safety annotations matter operationally: codex asks permission for
+  // un-annotated MCP tools, and in headless `codex exec` an unanswerable
+  // permission request cancels the call. Graph writes are idempotent upserts
+  // into Flow's own database; merge_entities deletes a node, so it alone is
+  // flagged destructive.
+  const isWrite = name in WRITE_VERB_ID_FIELDS;
+  const annotations = isWrite
+    ? { readOnlyHint: false, destructiveHint: name === "merge_entities", idempotentHint: true, openWorldHint: false }
+    : { readOnlyHint: true, openWorldHint: false };
   server.registerTool(
     name,
-    { description: verb.description, inputSchema: verb.shape },
+    { description: verb.description, inputSchema: verb.shape, annotations },
     async (args: unknown) => {
       const idFields = WRITE_VERB_ID_FIELDS[name];
       if (MODE === "builder" && idFields) {
