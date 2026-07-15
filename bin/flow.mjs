@@ -48,6 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
+import { deleteProjectGraph } from "./lib/falkordb.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1046,7 +1047,35 @@ async function cmdRm(args) {
     }
   }
   console.log(`\n${c.bold("Flow")} ${c.dim("· removing " + name)}`);
+  const project = readProject(name);
+  const projectEnv = parseEnvFile(join(projectDir(name), ".env"));
   await downProject(name);
+
+  // FalkorDB is shared across projects, but each project normally owns one
+  // named graph. Delete that graph before removing project.json so a failed DB
+  // connection leaves enough metadata for the user to retry instead of
+  // creating a permanently orphaned graph. A custom graph may intentionally
+  // be shared; preserve it while another registered project still uses it.
+  const sharedWith = listProjects().find(
+    ({ name: otherName, project: other }) => otherName !== name && other.graph === project.graph,
+  );
+  if (sharedWith) {
+    console.log(`  ${c.dim(`· graph ${project.graph} kept (shared with ${sharedWith.name})`)}`);
+  } else {
+    const host = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+    const port = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    let result;
+    try {
+      result = await deleteProjectGraph({ graph: project.graph, host, port });
+    } catch (err) {
+      throw new Error(
+        `Couldn't delete FalkorDB graph "${project.graph}" at ${host}:${port}; project files were kept so you can retry.\n` +
+          `  ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    console.log(`  ${result.existed ? OK : c.dim("·")} ${c.dim(result.existed ? `deleted graph ${project.graph}` : `graph ${project.graph} already empty`)}`);
+  }
+
   rmSync(projectDir(name), { recursive: true, force: true });
   console.log(`  ${OK} removed ${c.bold(name)}\n`);
 }
