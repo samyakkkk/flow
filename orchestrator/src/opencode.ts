@@ -664,7 +664,7 @@ function indexerTimeout(opts: JobInput): number {
 // content (prompt-injection surface, S106/S107) so it gets a JOB-SCOPED notify
 // token, NOT the root admin token: HMAC(admin, jobId). GRAPH_GATEWAY_* are
 // used by opencode's workspace graph tools and are harmless for the others.
-function indexerChildEnv(opts: JobInput, jobId: string): NodeJS.ProcessEnv {
+function indexerChildEnv(opts: JobInput, jobId: string, actor: string): NodeJS.ProcessEnv {
   const port = process.env.ORCHESTRATOR_PORT ?? "7500";
   const openrouterKey =
     getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? "";
@@ -678,8 +678,9 @@ function indexerChildEnv(opts: JobInput, jobId: string): NodeJS.ProcessEnv {
     FLOW_JOB_ID: jobId,
     // Stamped by the gateway MCP (builder mode) into every write's provenance,
     // overriding whatever the model supplies — writes trace to the job row and
-    // its transcript in job-logs/, not to a model-chosen name.
-    FLOW_ACTOR: `opencode:${agent ?? "opencode"}:${jobId}`,
+    // its transcript in job-logs/, not to a model-chosen name. The MCP child
+    // inherits this from the CLI's env, whichever backend spawned it.
+    FLOW_ACTOR: actor,
     ...(openrouterKey ? { OPENROUTER_API_KEY: openrouterKey } : {}),
     // Graph tools authenticate to the (now bearer-authed) gateway. The
     // subprocess already had full gateway write access by construction; the
@@ -735,7 +736,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   if (resumeSessionId) args.push("--session", resumeSessionId);
   args.push(prompt);
 
-  const env = indexerChildEnv(opts, jobId);
+  const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
   const timeoutMs = indexerTimeout(opts);
 
   // Stagger process starts: two opencode processes launched in the same
@@ -846,7 +847,7 @@ async function runClaudeBackend(opts: JobInput, jobId: string): Promise<{ result
     "--", prompt,
   ];
 
-  const env = indexerChildEnv(opts, jobId);
+  const env = indexerChildEnv(opts, jobId, `claude:graph-builder:${jobId}`);
   const timeoutMs = indexerTimeout(opts);
 
   startActivity(jobId, opts.repo ?? "", "claude");
@@ -940,7 +941,7 @@ async function runCodexBackend(opts: JobInput, jobId: string): Promise<{ result:
   for (const o of overrides) args.push("-c", o);
   args.push(fullPrompt);
 
-  const env = indexerChildEnv(opts, jobId);
+  const env = indexerChildEnv(opts, jobId, `codex:graph-builder:${jobId}`);
   const timeoutMs = indexerTimeout(opts);
 
   startActivity(jobId, opts.repo ?? "", "codex");

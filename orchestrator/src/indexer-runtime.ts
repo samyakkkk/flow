@@ -84,11 +84,13 @@ function stripFrontmatter(md: string): string {
 }
 
 // Env for the flow-graph MCP process spawned alongside claude/codex indexing
-// runs. It talks directly to FalkorDB and journals mutations; unlike the
-// session MCP it must keep write verbs, so GATEWAY_MCP_READONLY is left unset.
+// runs. Builder mode is the indexer surface (query verbs + entity writes +
+// notify) with FLOW_WRITE_SCOPE enforced server-side — the same mode the
+// workspace opencode.json uses, so all three backends see identical tools.
 export function mcpEnv(opts: { graphName: string; writeScope?: string }): Record<string, string> {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const env: Record<string, string> = {
+    GATEWAY_MCP_MODE: "builder",
     GRAPH_NAME: opts.graphName,
     FLOW_CORRECTIONS_URL: `http://127.0.0.1:${orchPort}/v1/corrections`,
   };
