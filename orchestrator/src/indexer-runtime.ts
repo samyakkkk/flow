@@ -87,13 +87,30 @@ function stripFrontmatter(md: string): string {
 // runs. Builder mode is the indexer surface (query verbs + entity writes +
 // notify) with FLOW_WRITE_SCOPE enforced server-side — the same mode the
 // workspace opencode.json uses, so all three backends see identical tools.
-export function mcpEnv(opts: { graphName: string; writeScope?: string }): Record<string, string> {
+export interface McpSpecOpts {
+  graphName: string;
+  writeScope?: string;
+  // Provenance + notify identity. claude passes its full environment down to
+  // MCP children so inheritance would suffice there, but codex spawns MCP
+  // servers with ONLY the configured env — without these set explicitly,
+  // codex-run jobs journal a model-supplied actor and get no notify tool.
+  actor?: string;
+  job?: { id: string; token: string };
+}
+
+export function mcpEnv(opts: McpSpecOpts): Record<string, string> {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const env: Record<string, string> = {
     GATEWAY_MCP_MODE: "builder",
     GRAPH_NAME: opts.graphName,
     FLOW_CORRECTIONS_URL: `http://127.0.0.1:${orchPort}/v1/corrections`,
   };
+  if (opts.actor) env.FLOW_ACTOR = opts.actor;
+  if (opts.job) {
+    env.FLOW_JOB_ID = opts.job.id;
+    env.FLOW_JOB_TOKEN = opts.job.token;
+    env.ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? `http://127.0.0.1:${orchPort}`;
+  }
   if (process.env.JOURNAL_PATH) env.JOURNAL_PATH = process.env.JOURNAL_PATH;
   if (process.env.FALKOR_HOST) env.FALKOR_HOST = process.env.FALKOR_HOST;
   if (process.env.FALKOR_PORT) env.FALKOR_PORT = process.env.FALKOR_PORT;
@@ -107,7 +124,7 @@ export function mcpEnv(opts: { graphName: string; writeScope?: string }): Record
 }
 
 // The flow-graph MCP server spec (command + args + env) for direct-spawn CLIs.
-export function mcpServerSpec(opts: { graphName: string; writeScope?: string }): {
+export function mcpServerSpec(opts: McpSpecOpts): {
   command: string;
   args: string[];
   env: Record<string, string>;

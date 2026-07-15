@@ -822,6 +822,8 @@ async function runClaudeBackend(opts: JobInput, jobId: string): Promise<{ result
   const spec = mcpServerSpec({
     graphName: projectGraphName(),
     writeScope: opts.type === "correct_graph" ? correctionWriteScope(opts) : undefined,
+    actor: `claude:graph-builder:${jobId}`,
+    job: { id: jobId, token: jobScopedToken(jobId) },
   });
   const mcpConfigPath = resolve(jobLogDir(), `${jobId}.mcp.json`);
   writeFileSync(
@@ -919,6 +921,8 @@ async function runCodexBackend(opts: JobInput, jobId: string): Promise<{ result:
   const spec = mcpServerSpec({
     graphName: projectGraphName(),
     writeScope: opts.type === "correct_graph" ? correctionWriteScope(opts) : undefined,
+    actor: `codex:graph-builder:${jobId}`,
+    job: { id: jobId, token: jobScopedToken(jobId) },
   });
   const envInline = Object.entries(spec.env)
     .map(([k, v]) => `${k}=${tomlString(v)}`)
