@@ -53,7 +53,7 @@ The graph is the center. Both you and your agents build from it.
 
 ## Quickstart
 
-**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). You'll add an [OpenRouter](https://openrouter.ai) key in the dashboard on first run. **Nothing else to install** — the graph engine (opencode) is bundled.
+**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). On first run the dashboard asks for an [OpenRouter](https://openrouter.ai) key — or skip it if opencode on your machine already has a provider connected (any OpenAI-compatible API also works via `LLM_BASE_URL` + `LLM_API_KEY` in Settings). **Nothing else to install** — the graph engine (opencode) is bundled.
 
 To *also* run coding agents from the dashboard, install any of Claude Code, Codex, or OpenCode; Flow detects whatever's already on your machine.
 
@@ -67,7 +67,7 @@ flow up mycompany                  # creates it if new, then starts — prints y
 Then it's all in the browser:
 
 1. **Open the dashboard URL.** In local mode you're already signed in — no token to paste.
-2. **Add your OpenRouter key** (nothing else is reachable until the brain has a model).
+2. **Give Flow a brain** — paste an OpenRouter key, or skip if opencode already has your models (event classification and semantic search stay off until some LLM key is set).
 3. **Connect a repo** from the Home picker (uses your `gh` login, a PAT, or a public URL) and watch the graph build.
 4. **Ask a question** from the floating bar, or head to **Agents** to kick off a coding task.
 

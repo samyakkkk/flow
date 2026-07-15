@@ -22,7 +22,7 @@ async function main() {
   const force = process.argv.includes("--force");
 
   if (!embeddingsEnabled()) {
-    console.error("OPENROUTER_API_KEY is not set — nothing to do.");
+    console.error("No LLM API key set (LLM_API_KEY or OPENROUTER_API_KEY) — nothing to do.");
     process.exit(1);
   }
 

@@ -110,7 +110,7 @@ export function runBootTasks(graph: string): void {
         console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else {
-      console.log(`[reconcile] OPENROUTER_API_KEY not set — semantic search disabled for '${graph}'`);
+      console.log(`[reconcile] no LLM API key set (LLM_API_KEY / OPENROUTER_API_KEY) — semantic search disabled for '${graph}'`);
     }
   })();
 }

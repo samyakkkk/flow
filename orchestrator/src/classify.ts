@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NormalizedEvent } from "./events.js";
-import { getSetting } from "./settings.js";
+import { getSetting, llmApiKey, llmBaseUrl } from "./settings.js";
 import { logLLM } from "./llmlog.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -90,7 +90,7 @@ class FixtureClassifier implements Classifier {
 class LiveClassifier implements Classifier {
   async classify(event: NormalizedEvent): Promise<ClassificationResult> {
     // Read at call time (not module load) so DB/env changes take effect immediately
-    const apiKey = getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? "";
+    const apiKey = llmApiKey();
     const model = getSetting("CLASSIFIER_MODEL") ?? process.env.CLASSIFIER_MODEL ?? "minimax/minimax-m3";
 
     const taxKey = taxonomyKey(event);
@@ -100,11 +100,11 @@ class LiveClassifier implements Classifier {
       // No key yet (fresh project): degrade without calling the API. confidence
       // 0 keeps any auto action behind the floor; the reason lands in the audit
       // trail and the dashboard nudges the user to add the key in Settings.
-      console.warn("[classify] OPENROUTER_API_KEY not configured — events cannot be understood until it is set (Settings).");
+      console.warn("[classify] no LLM API key configured (LLM_API_KEY or OPENROUTER_API_KEY) — events cannot be understood until one is set (Settings).");
       return {
         classification: enums[0],
         confidence: 0,
-        extracted: { unconfigured: "OPENROUTER_API_KEY missing — add it in dashboard Settings" },
+        extracted: { unconfigured: "LLM_API_KEY / OPENROUTER_API_KEY missing — add one in dashboard Settings" },
       };
     }
     const enumList = enums.map((e) => `"${e}"`).join(" | ");
@@ -143,7 +143,7 @@ Do not add extra fields or prose.`;
       const t0 = Date.now();
       let rawContent = "";
       try {
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const response = await fetch(`${llmBaseUrl()}/chat/completions`, {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${apiKey}`,
@@ -161,7 +161,7 @@ Do not add extra fields or prose.`;
         });
 
         if (!response.ok) {
-          throw new Error(`OpenRouter HTTP ${response.status}: ${await response.text()}`);
+          throw new Error(`Classifier HTTP ${response.status}: ${await response.text()}`);
         }
 
         const data = await response.json() as {

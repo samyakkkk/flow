@@ -42,6 +42,32 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
     }
   }
 
+  // BYO provider: opencode already holds provider auth for the graph-builder,
+  // so no key is required here. Record BRAIN_MODE so the gate stays open;
+  // classifier + semantic search wake up later if a key lands in Settings.
+  async function skipWithOwnProvider() {
+    setStatus("checking");
+    setError("");
+    try {
+      const res = await fetch(prefix("/api/settings"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ BRAIN_MODE: "opencode" }),
+      });
+      if (res.ok) {
+        setStatus("ok");
+        setTimeout(onReady, 900);
+      } else {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setStatus("error");
+        setError(data.error ?? "Couldn't save that choice.");
+      }
+    } catch {
+      setStatus("error");
+      setError("Couldn't reach the server.");
+    }
+  }
+
   async function submit() {
     if (!key.trim()) return;
     setStatus("checking");
@@ -85,7 +111,7 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
               ? "Let's connect your first source."
               : suggested?.available && !enteringNew
               ? "You already gave Flow an OpenRouter key on another project. Reuse it, or use a different one for this project."
-              : "Flow uses an LLM to understand your code and conversations. Paste your OpenRouter key to begin."}
+              : "Flow uses an LLM to understand your code and conversations. Paste your OpenRouter key to begin — or skip if opencode already has your models."}
           </p>
         </div>
 
@@ -147,6 +173,20 @@ export function KeyGate({ onReady }: { onReady: () => void }) {
               <Button onClick={submit} disabled={status === "checking" || !key.trim()} arrow>
                 {status === "checking" ? "Verifying…" : "Connect"}
               </Button>
+            </div>
+            <div className="pt-4 text-center">
+              <button
+                onClick={skipWithOwnProvider}
+                disabled={status === "checking"}
+                style={{ fontFamily: "var(--font-mono)" }}
+                className="text-[12px] uppercase tracking-wider text-text-muted hover:text-ink transition"
+              >
+                Skip — my models are set up in opencode
+              </button>
+              <p className="text-[12px] text-text-muted mt-2 max-w-sm mx-auto">
+                Indexing uses opencode&apos;s own provider auth. Event classification and semantic
+                search stay off until you add an API key in Settings.
+              </p>
             </div>
           </div>
         )}

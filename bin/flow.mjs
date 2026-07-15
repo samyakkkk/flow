@@ -520,6 +520,8 @@ FLOW_ADMIN_TOKEN=${adminToken}
 # SLACK_APP_TOKEN=        # prod-mode only
 # LINEAR_API_KEY=
 # OPENROUTER_API_KEY=
+# LLM_BASE_URL=           # any OpenAI-compatible API (classifier + embeddings)
+# LLM_API_KEY=
 # GITHUB_TOKEN=
 `,
     { encoding: "utf-8", mode: 0o600 }
@@ -774,11 +776,14 @@ async function upProject(name, { rebuilt = false } = {}) {
     FLOW_PROJECT_NAME: name,
     NODE_ENV: "production",
   };
-  // Embeddings (semantic find_entity + embed-on-write) need the OpenRouter key.
+  // Embeddings (semantic find_entity + embed-on-write) need an LLM API key —
+  // LLM_API_KEY for any OpenAI-compatible provider, or the OpenRouter key.
   // Fall back to the machine default / ambient env when it isn't in the .env.
-  if (!gwEnv.OPENROUTER_API_KEY) {
-    const k = readGlobalKey(dir, "OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-    if (k) gwEnv.OPENROUTER_API_KEY = k;
+  for (const key of ["LLM_API_KEY", "LLM_BASE_URL", "OPENROUTER_API_KEY"]) {
+    if (!gwEnv[key]) {
+      const k = readGlobalKey(dir, key) ?? process.env[key];
+      if (k) gwEnv[key] = k;
+    }
   }
 
   const gwPid = spawnService({

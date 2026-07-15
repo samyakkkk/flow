@@ -1,18 +1,21 @@
-// Semantic search support. Entities and queries are embedded with OpenRouter's
-// embeddings endpoint (openai/text-embedding-3-small, 1536-dim) so find_entity
-// can match on meaning, not just substrings — e.g. "worktree" surfacing the
+// Semantic search support. Entities and queries are embedded through any
+// OpenAI-compatible embeddings endpoint (default OpenRouter,
+// openai/text-embedding-3-small, 1536-dim) so find_entity can match on
+// meaning, not just substrings — e.g. "worktree" surfacing the
 // agent-session / repo-checkout nodes even though the word appears nowhere.
 //
-// Deliberately non-fatal: if OPENROUTER_API_KEY is unset or the API errors, we
-// log and return null. Writes still succeed (just without a vector) and
-// find_entity falls back to the lexical CONTAINS match it always did.
+// Deliberately non-fatal: if no API key is set (LLM_API_KEY or
+// OPENROUTER_API_KEY) or the API errors, we log and return null. Writes still
+// succeed (just without a vector) and find_entity falls back to the lexical
+// CONTAINS match it always did.
 
 const MODEL = process.env.FLOW_EMBED_MODEL ?? "openai/text-embedding-3-small";
 export const EMBED_DIM = Number(process.env.FLOW_EMBED_DIM ?? 1536);
-const ENDPOINT = process.env.FLOW_EMBED_URL ?? "https://openrouter.ai/api/v1/embeddings";
+const BASE_URL = (process.env.LLM_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+const ENDPOINT = process.env.FLOW_EMBED_URL ?? `${BASE_URL}/embeddings`;
 
 function apiKey(): string {
-  return process.env.OPENROUTER_API_KEY ?? "";
+  return process.env.LLM_API_KEY ?? process.env.OPENROUTER_API_KEY ?? "";
 }
 
 export function embeddingsEnabled(): boolean {

@@ -7,13 +7,16 @@
 // Best-effort like the gateway's: no key or API error → null; callers store
 // notes without vectors (they just won't be injectable until re-embedded).
 
-import { getSetting } from "./settings.js";
+import { llmApiKey, llmBaseUrl } from "./settings.js";
 
 const MODEL = process.env.FLOW_EMBED_MODEL ?? "openai/text-embedding-3-small";
-const ENDPOINT = process.env.FLOW_EMBED_URL ?? "https://openrouter.ai/api/v1/embeddings";
+
+function endpoint(): string {
+  return process.env.FLOW_EMBED_URL ?? `${llmBaseUrl()}/embeddings`;
+}
 
 function apiKey(): string {
-  return getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? "";
+  return llmApiKey();
 }
 
 export async function embedText(text: string): Promise<Float32Array | null> {
@@ -21,7 +24,7 @@ export async function embedText(text: string): Promise<Float32Array | null> {
   const clean = text.trim();
   if (!key || !clean) return null;
   try {
-    const res = await fetch(ENDPOINT, {
+    const res = await fetch(endpoint(), {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
       body: JSON.stringify({ model: MODEL, input: clean }),

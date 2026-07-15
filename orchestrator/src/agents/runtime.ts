@@ -18,7 +18,7 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
-import { getSetting } from "../settings.js";
+import { llmApiKey, llmBaseUrl } from "../settings.js";
 import { addNote, matchNotes } from "../notes.js";
 import { embedText } from "../embed.js";
 import {
@@ -951,8 +951,11 @@ function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpSer
   // Give the read-only MCP the embeddings key so find_entity can do semantic
   // search — without it, the vector fallback silently no-ops and agents get the
   // old substring-only behaviour. Same key used everywhere (getSetting → DB/env).
-  const embedKey = getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-  if (embedKey) env.push({ name: "OPENROUTER_API_KEY", value: embedKey });
+  const embedKey = llmApiKey();
+  if (embedKey) {
+    env.push({ name: "LLM_API_KEY", value: embedKey });
+    env.push({ name: "LLM_BASE_URL", value: llmBaseUrl() });
+  }
   return { name: "flow-graph", command: binPath("tsx"), args: [GATEWAY_MCP], env };
 }
 
