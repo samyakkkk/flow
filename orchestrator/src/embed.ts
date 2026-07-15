@@ -1,44 +1,45 @@
 // embed.ts — Minimal embedding client for the orchestrator's own stores
-// (branch notes). Mirrors graph-gateway/src/embed.ts (same model, same
-// endpoint) but reads the key via getSetting so DB-configured keys work, and
-// exposes cosine over Float32Array for in-process matching — note vectors
-// live in SQLite BLOBs, matched locally without a gateway hop.
+// (branch notes). Embeds through the gateway's shared local model
+// (POST /v1/embed) rather than owning a second copy — the gateway is the
+// single owner of Gemma, so one model instance serves both graph nodes and
+// note vectors, in the same 768-dim space. Note vectors live in SQLite BLOBs,
+// matched locally (cosine below) without a further gateway hop.
 //
-// Best-effort like the gateway's: no key or API error → null; callers store
-// notes without vectors (they just won't be injectable until re-embedded).
+// Best-effort: if the model is still downloading, the gateway is unreachable,
+// or the request errors, we return null. Callers store notes without a vector
+// (they just won't be injectable until re-embedded on a later write).
+//
+// Dimension note: notes embedded before this switch carry OpenAI 1536-dim
+// vectors; new queries are 768-dim Gemma. cosine() returns 0 on a length
+// mismatch, so stale-dimension notes simply stop matching and age out via
+// the normal note decay — no migration needed.
 
-import { llmApiKey, llmBaseUrl } from "./settings.js";
+const GATEWAY_URL = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
 
-const MODEL = process.env.FLOW_EMBED_MODEL ?? "openai/text-embedding-3-small";
-
-function endpoint(): string {
-  return process.env.FLOW_EMBED_URL ?? `${llmBaseUrl()}/embeddings`;
-}
-
-function apiKey(): string {
-  return llmApiKey();
+function gatewayToken(): string {
+  return process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
 }
 
 export async function embedText(text: string): Promise<Float32Array | null> {
-  const key = apiKey();
   const clean = text.trim();
-  if (!key || !clean) return null;
+  if (!clean) return null;
+  const token = gatewayToken();
   try {
-    const res = await fetch(endpoint(), {
+    const res = await fetch(`${GATEWAY_URL}/v1/embed`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: MODEL, input: clean }),
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ text: clean }),
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
-      console.warn(`[embed] ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      console.warn(`[embed] gateway ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
       return null;
     }
-    const json = (await res.json()) as { data?: { embedding: number[] }[] };
-    const emb = json.data?.[0]?.embedding;
-    return Array.isArray(emb) ? Float32Array.from(emb) : null;
+    const json = (await res.json()) as { vec?: number[] | null; ready?: boolean };
+    if (!json.ready) return null; // model still loading — store without a vector
+    return Array.isArray(json.vec) ? Float32Array.from(json.vec) : null;
   } catch (err) {
-    console.warn(`[embed] request failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[embed] gateway request failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
