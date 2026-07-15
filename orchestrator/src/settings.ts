@@ -73,10 +73,18 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "INDEXER_RUNTIME",
+    secret: false,
+    description:
+      "Which coding CLI runs indexing jobs: auto (first installed of opencode → codex → claude), or force one",
+    default: "auto",
+    appliesTo: "builder",
+  },
+  {
     key: "GRAPH_BUILDER_MODEL",
     secret: false,
-    description: "Model ID passed to OpenRouter for the graph-builder opencode worker",
-    default: "openrouter/minimax/minimax-m3",
+    description:
+      "Overrides the per-backend default model for indexing jobs. A thin or noisy graph is usually fixed by setting this to a stronger model.",
     appliesTo: "builder",
   },
   {

@@ -803,8 +803,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
-    // Inherited down to the gateway MCP subprocess that opencode jobs spawn —
-    // it opens FalkorDB directly, so it needs the project's graph name and
+    // Inherited down to the gateway MCP subprocesses that indexer jobs spawn
+    // (opencode via workspace opencode.json; claude/codex directly) — the MCP
+    // opens FalkorDB directly, so it needs the project's graph name and
     // journal, or indexer writes land in the default graph and journal.
     GRAPH_NAME: graph,
     JOURNAL_PATH: journalPath,

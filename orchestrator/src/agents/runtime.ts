@@ -46,8 +46,8 @@ export interface ImageAttachment {
   mimeType: string;
 }
 
-const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
-const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
+export const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
+export const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 
 // npm workspaces hoist bins to the root node_modules; fall back to the
 // orchestrator's own node_modules for non-workspace installs.
@@ -56,7 +56,7 @@ const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 // captured this path once kept serving a location that a later reinstall
 // removed — every new agent session then injected an MCP server with a dead
 // command, which failed SILENTLY (the agent just had no flow-graph tools).
-function binPath(name: string): string {
+export function binPath(name: string): string {
   const hoisted = path.join(FLOW_ROOT, "node_modules", ".bin", name);
   if (existsSync(hoisted)) return hoisted;
   const local = path.join(FLOW_ROOT, "orchestrator", "node_modules", ".bin", name);
@@ -202,7 +202,7 @@ function compareVersionParts(a: number[] | null, b: number[] | null): number {
   return 0;
 }
 
-async function resolveLocalExecutable(command: string): Promise<string | null> {
+export async function resolveLocalExecutable(command: string): Promise<string | null> {
   const candidates = localExecutableCandidates(command);
   if (candidates.length <= 1) return candidates[0] ?? null;
 
@@ -331,7 +331,7 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 const PROJECT_DIR = path.dirname(process.env.DB_PATH ?? path.join(FLOW_ROOT, "data", "flow.db"));
 const SESSIONS_DIR = path.join(PROJECT_DIR, "agent-sessions");
 
-function projectGraphName(): string {
+export function projectGraphName(): string {
   try {
     const pj = JSON.parse(readFileSync(path.join(PROJECT_DIR, "project.json"), "utf8"));
     if (typeof pj.graph === "string" && pj.graph) return pj.graph;
