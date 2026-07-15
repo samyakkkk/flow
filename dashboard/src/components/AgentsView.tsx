@@ -3,6 +3,7 @@
 // session history. Sessions stream live in /agents/<id>.
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProject } from "@/lib/useProject";
 import { Kicker, Heading, Button, Card, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
@@ -75,6 +76,7 @@ function timeAgo(ts: number): string {
 
 export function AgentsView() {
   const router = useRouter();
+  const { prefix } = useProject();
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -93,8 +95,8 @@ export function AgentsView() {
   const refresh = useCallback(async () => {
     try {
       const [a, s] = await Promise.all([
-        fetch("/api/agents").then((r) => r.json()),
-        fetch("/api/agents/sessions").then((r) => r.json()),
+        fetch(prefix("/api/agents")).then((r) => r.json()),
+        fetch(prefix("/api/agents/sessions")).then((r) => r.json()),
       ]);
       setAgents(a.agents ?? []);
       setRepos((a.repos ?? []).filter((r: RepoOption) => r.cloned));
@@ -104,7 +106,7 @@ export function AgentsView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     refresh();
@@ -115,11 +117,11 @@ export function AgentsView() {
   const fetchFiles = useCallback(
     (q: string) => {
       if (!repo) return Promise.resolve([]);
-      return fetch(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}`)
+      return fetch(prefix(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}`))
         .then((r) => (r.ok ? r.json() : { entries: [] }))
         .then((d: { entries?: FileEntry[] }) => d.entries ?? []);
     },
-    [repo]
+    [repo, prefix]
   );
 
   // `placement` is passed only after the user answers a collision prompt:
@@ -130,7 +132,7 @@ export function AgentsView() {
     setError("");
     setCollision(null);
     try {
-      const res = await fetch("/api/agents/sessions", {
+      const res = await fetch(prefix("/api/agents/sessions"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ backend, repo, prompt, ...(placement ? { placement } : {}) }),
@@ -143,7 +145,7 @@ export function AgentsView() {
         setStarting(false);
         return;
       }
-      router.push(`/agents/${data.id}`);
+      router.push(prefix(`/agents/${data.id}`));
     } catch (e) {
       setError((e as Error).message);
       setStarting(false);
@@ -269,7 +271,7 @@ export function AgentsView() {
 
       {/* Separate copies — only rendered when at least one exists, so it stays
           invisible until the collision flow actually creates one. */}
-      <SeparateCopies onNavigate={(sid) => router.push(`/agents/${sid}`)} />
+      <SeparateCopies onNavigate={(sid) => router.push(prefix(`/agents/${sid}`))} />
 
       {/* Sessions */}
       <Kicker>Sessions</Kicker>
@@ -280,7 +282,7 @@ export function AgentsView() {
         {sessions.map((s) => (
           <button
             key={s.id}
-            onClick={() => router.push(`/agents/${s.id}`)}
+            onClick={() => router.push(prefix(`/agents/${s.id}`))}
             className="text-left rounded-lg border border-line bg-paper px-4 py-3 hover:bg-cream transition flex items-center gap-4"
           >
             <AgentBrandIcon backend={s.backend} className="text-ink flex-shrink-0" />
@@ -325,6 +327,7 @@ interface Worktree {
 }
 
 function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => void }) {
+  const { prefix } = useProject();
   const [trees, setTrees] = useState<Worktree[]>([]);
   const [loaded, setLoaded] = useState(false);
   // Per-copy UI state, keyed by the copy's path.
@@ -340,7 +343,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch("/api/agents/worktrees");
+      const r = await fetch(prefix("/api/agents/worktrees"));
       const d = await r.json();
       if (Array.isArray(d.worktrees)) setTrees(d.worktrees);
     } catch {
@@ -348,7 +351,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     } finally {
       setLoaded(true);
     }
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     refresh();
@@ -366,7 +369,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     clearError(path);
     clearNotice(path);
     try {
-      const res = await fetch(`/api/agents/worktrees/${action}`, {
+      const res = await fetch(prefix(`/api/agents/worktrees/${action}`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, ...body }),
@@ -391,7 +394,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     clearNotice(path);
     setConflicts((c) => ({ ...c, [path]: undefined }));
     try {
-      const res = await fetch("/api/agents/worktrees/pr", {
+      const res = await fetch(prefix("/api/agents/worktrees/pr"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, targetBranch }),
@@ -427,7 +430,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     setBusy((b) => ({ ...b, [path]: true }));
     clearError(path);
     try {
-      const res = await fetch("/api/agents/worktrees/open", {
+      const res = await fetch(prefix("/api/agents/worktrees/open"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, target: "vscode" }),
@@ -455,7 +458,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
       const text =
         `Resolve the merge conflicts blocking this worktree from opening a PR into ${target}.\n\n` +
         `Work in the current checkout only. Fetch the target branch, inspect the conflict, edit the conflicting files, commit the resolution, and then tell me when it is ready to open the PR again.`;
-      const res = await fetch(`/api/agents/sessions/${session.id}/prompt`, {
+      const res = await fetch(prefix(`/api/agents/sessions/${session.id}/prompt`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text }),
@@ -479,7 +482,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     setOpenDiff((o) => ({ ...o, [path]: next }));
     if (next && diffs[path] === undefined) {
       try {
-        const r = await fetch(`/api/agents/worktrees/diff?path=${encodeURIComponent(path)}`);
+        const r = await fetch(prefix(`/api/agents/worktrees/diff?path=${encodeURIComponent(path)}`));
         const d = r.ok ? await r.json() : null;
         setDiffs((m) => ({ ...m, [path]: d && Array.isArray(d.files) ? d : null }));
       } catch {

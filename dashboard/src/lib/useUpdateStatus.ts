@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useProject } from "@/lib/useProject";
 
 export interface UpdateStatus {
   behind: number;
@@ -14,12 +15,13 @@ export interface UpdateStatus {
  * a dashboard that stays open for days honest without meaningful cost.
  */
 export function useUpdateStatus(): UpdateStatus {
+  const { prefix } = useProject();
   const [status, setStatus] = useState<UpdateStatus>({ behind: 0 });
 
   useEffect(() => {
     let alive = true;
     const check = () => {
-      fetch("/api/update-status")
+      fetch(prefix("/api/update-status"))
         .then((r) => (r.ok ? r.json() : { behind: 0 }))
         .then((d) => {
           if (alive) setStatus({ behind: Number(d.behind) || 0, current: d.current, latest: d.latest });

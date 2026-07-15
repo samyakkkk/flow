@@ -5,6 +5,7 @@
 // component (behavior identical). onConnected is optional: Connections leaves
 // it unset (message-only, as before); the home surfaces pass a refresh.
 import { useState, FormEvent, useEffect, useCallback } from "react";
+import { useProject } from "@/lib/useProject";
 import { BranchSelect } from "@/components/BranchSelect";
 
 interface GhRepo {
@@ -101,6 +102,7 @@ export function RepoPicker({
   onMsg: (s: string) => void;
   onConnected?: () => void;
 }) {
+  const { prefix } = useProject();
   const [ghData, setGhData] = useState<GhReposResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -112,7 +114,7 @@ export function RepoPicker({
 
   const loadRepos = useCallback(() => {
     setLoading(true);
-    fetch("/api/github/repos")
+    fetch(prefix("/api/github/repos"))
       .then((r) => r.json())
       .then((d) => {
         setGhData(d as GhReposResponse);
@@ -122,7 +124,7 @@ export function RepoPicker({
         setGhData({ source: "none", repos: [], hint: "Could not reach server." });
         setLoading(false);
       });
-  }, []);
+  }, [prefix]);
 
   useEffect(() => { loadRepos(); }, [loadRepos]);
 
@@ -130,7 +132,7 @@ export function RepoPicker({
     e.preventDefault();
     setSavingPat(true);
     try {
-      await fetch("/api/github/repos", {
+      await fetch(prefix("/api/github/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "save_pat", pat }),
@@ -154,7 +156,7 @@ export function RepoPicker({
         branch: branches[r.full_name]?.trim() || r.default_branch,
       }));
     try {
-      const res = await fetch("/api/github/repos", {
+      const res = await fetch(prefix("/api/github/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "add_repos", repos: reposToAdd }),

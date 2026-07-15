@@ -2,6 +2,7 @@
 import { Shell } from "@/components/Shell";
 import { timeAgo } from "@/lib/time";
 import { useCallback, useEffect, useState } from "react";
+import { useProject } from "@/lib/useProject";
 
 // Review inbox — the human verification surface for the two agent proposal
 // lanes: procedure proposals (bless exactly what you review; edits apply on
@@ -145,12 +146,13 @@ function ProposalCard({
   });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const { prefix } = useProject();
 
   async function review(action: "approve" | "reject") {
     setBusy(true);
     setMsg("");
     try {
-      const res = await fetch("/api/procedures", {
+      const res = await fetch(prefix("/api/procedures"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -308,12 +310,13 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [retiring, setRetiring] = useState<Record<string, boolean>>({});
   const [retireMsgs, setRetireMsgs] = useState<Record<string, string>>({});
+  const { prefix } = useProject();
 
   const load = useCallback(() => {
     Promise.all([
-      fetch("/api/procedures").then((r) => r.json()).catch(() => ({ proposed: [], blessed: [] })),
-      fetch("/api/corrections").then((r) => r.json()).catch(() => ({ rows: [] })),
-      fetch("/api/notes?limit=30").then((r) => r.json()).catch(() => ({ rows: [] })),
+      fetch(prefix("/api/procedures")).then((r) => r.json()).catch(() => ({ proposed: [], blessed: [] })),
+      fetch(prefix("/api/corrections")).then((r) => r.json()).catch(() => ({ rows: [] })),
+      fetch(prefix("/api/notes?limit=30")).then((r) => r.json()).catch(() => ({ rows: [] })),
     ]).then(([p, c, n]) => {
       setNotes(((n as { rows?: NoteRow[] }).rows ?? []));
       const pd = p as { proposed?: ProcedureRow[]; blessed?: ProcedureRow[]; retireProposed?: ProcedureRow[] };
@@ -323,7 +326,7 @@ export default function InboxPage() {
       setCorrections(((c as { rows?: CorrectionRow[] }).rows ?? []));
       setLoading(false);
     });
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     load();
@@ -333,7 +336,7 @@ export default function InboxPage() {
     setRetiring((r) => ({ ...r, [id]: true }));
     setRetireMsgs((m) => ({ ...m, [id]: "" }));
     try {
-      const res = await fetch("/api/procedures", {
+      const res = await fetch(prefix("/api/procedures"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, action }),
@@ -523,7 +526,7 @@ export default function InboxPage() {
                     </div>
                     <button
                       onClick={() => {
-                        fetch(`/api/notes?id=${encodeURIComponent(n.id)}`, { method: "DELETE" }).then(load);
+                        fetch(prefix(`/api/notes?id=${encodeURIComponent(n.id)}`), { method: "DELETE" }).then(load);
                       }}
                       style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 13, lineHeight: 1 }}
                       aria-label="Delete note"

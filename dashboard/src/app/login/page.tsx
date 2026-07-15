@@ -1,41 +1,116 @@
 "use client";
+// Deployment-level sign-in. Three states, decided by /api/auth/status:
+//   local            → no login exists; bounce straight back
+//   prod, first run  → create the owner account (setup code from `flow up`)
+//   prod             → email + password
+// One session covers every project the account is granted.
 import { useState, useEffect, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+
+interface AuthStatus {
+  mode: "local" | "prod";
+  needsBootstrap: boolean;
+}
+
+function Field({
+  label,
+  type,
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+  mono,
+}: {
+  label: string;
+  type: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  mono?: boolean;
+}) {
+  return (
+    <>
+      <label
+        style={{
+          display: "block",
+          fontSize: 12,
+          fontWeight: 500,
+          color: "var(--text-secondary)",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 7,
+          border: "1px solid var(--border)",
+          background: "var(--surface-2)",
+          color: "var(--text-primary)",
+          fontSize: 14,
+          fontFamily: mono ? "ui-monospace, monospace" : "inherit",
+          outline: "none",
+          marginBottom: 16,
+        }}
+      />
+    </>
+  );
+}
 
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
-  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<AuthStatus | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Already authenticated → leave immediately. In local mode auth/check is
-  // always 200 (env token is authoritative), so a local user who lands here
-  // via bookmark or stale redirect can never get stuck on a login screen.
+  // always 200, so a local user who lands here via bookmark or stale redirect
+  // can never get stuck on a login screen.
   useEffect(() => {
     fetch("/api/auth/check", { cache: "no-store" })
       .then((r) => {
-        if (r.ok) router.replace(from);
+        if (r.ok) {
+          router.replace(from);
+          return null;
+        }
+        return fetch("/api/auth/status", { cache: "no-store" }).then((s) => s.json());
       })
-      .catch(() => {});
+      .then((s) => {
+        if (s) setStatus(s as AuthStatus);
+      })
+      .catch(() => setStatus({ mode: "prod", needsBootstrap: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const bootstrap = status?.needsBootstrap ?? false;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch(bootstrap ? "/api/auth/bootstrap" : "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify(bootstrap ? { email, password, setupToken } : { email, password }),
       });
-      const data = await res.json() as Record<string, unknown>;
+      const data = (await res.json()) as Record<string, unknown>;
       if (!res.ok) {
-        setError((data.error as string) ?? "Login failed");
+        setError((data.error as string) ?? "Sign-in failed");
       } else {
         router.push(from);
       }
@@ -45,6 +120,8 @@ function LoginForm() {
       setLoading(false);
     }
   }
+
+  const ready = email && password && (!bootstrap || setupToken);
 
   return (
     <div
@@ -94,44 +171,27 @@ function LoginForm() {
             color: "var(--text-primary)",
           }}
         >
-          Sign in
+          {bootstrap ? "Set up Flow" : "Sign in"}
         </h1>
         <p style={{ margin: "0 0 24px", fontSize: 13, color: "var(--text-secondary)" }}>
-          Enter your admin token to continue.
+          {bootstrap
+            ? "Create the owner account for this deployment. The setup code was printed by `flow up` on the server."
+            : "Sign in with your Flow account."}
         </p>
 
         <form onSubmit={handleSubmit}>
-          <label
-            style={{
-              display: "block",
-              fontSize: 12,
-              fontWeight: 500,
-              color: "var(--text-secondary)",
-              marginBottom: 6,
-            }}
-          >
-            Admin Token
-          </label>
-          <input
-            id="token-input"
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="flow_..."
-            autoFocus
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 7,
-              border: `1px solid ${error ? "var(--error)" : "var(--border)"}`,
-              background: "var(--surface-2)",
-              color: "var(--text-primary)",
-              fontSize: 14,
-              fontFamily: "ui-monospace, monospace",
-              outline: "none",
-              marginBottom: 16,
-            }}
-          />
+          <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@company.com" autoFocus />
+          <Field label="Password" type="password" value={password} onChange={setPassword} />
+          {bootstrap && (
+            <Field
+              label="Setup code"
+              type="password"
+              value={setupToken}
+              onChange={setSetupToken}
+              placeholder="printed by flow up"
+              mono
+            />
+          )}
           {error && (
             <div
               style={{
@@ -149,26 +209,28 @@ function LoginForm() {
           )}
           <button
             type="submit"
-            disabled={loading || !token}
+            disabled={loading || !ready}
             style={{
               width: "100%",
               padding: "10px",
               borderRadius: 7,
               border: "none",
-              background: loading || !token ? "var(--surface-2)" : "var(--accent)",
-              color: loading || !token ? "var(--text-muted)" : "#fff",
+              background: loading || !ready ? "var(--surface-2)" : "var(--accent)",
+              color: loading || !ready ? "var(--text-muted)" : "#fff",
               fontSize: 14,
               fontWeight: 600,
-              cursor: loading || !token ? "not-allowed" : "pointer",
+              cursor: loading || !ready ? "not-allowed" : "pointer",
               transition: "background 0.15s",
             }}
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? (bootstrap ? "Creating…" : "Signing in…") : bootstrap ? "Create owner account" : "Sign in"}
           </button>
         </form>
 
         <p style={{ marginTop: 20, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-          Token is validated against the orchestrator and stored in an httpOnly session cookie. Never shared with the browser.
+          {bootstrap
+            ? "Passwords are stored as scrypt hashes on the server. The setup code works exactly once."
+            : "Your session is a signed httpOnly cookie. Project access follows your grants."}
         </p>
       </div>
     </div>

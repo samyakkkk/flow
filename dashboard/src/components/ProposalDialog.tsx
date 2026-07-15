@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useProject } from "@/lib/useProject";
 import { timeAgo } from "@/lib/time";
 
 // Floating review dialog, mounted in the Shell so it appears on every page:
@@ -40,6 +41,7 @@ function readDismissed(): Set<string> {
 }
 
 export function ProposalDialog() {
+  const { prefix } = useProject();
   const [items, setItems] = useState<PendingItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -47,7 +49,7 @@ export function ProposalDialog() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/procedures");
+      const res = await fetch(prefix("/api/procedures"));
       if (!res.ok) return;
       const d = (await res.json()) as { proposed?: PendingItem[]; retireProposed?: PendingItem[] };
       setItems(
@@ -58,7 +60,7 @@ export function ProposalDialog() {
     } catch {
       /* dialog is best-effort; the Inbox is the durable surface */
     }
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     dismissed.current = readDismissed();
@@ -81,7 +83,7 @@ export function ProposalDialog() {
     setBusy(true);
     setMsg("");
     try {
-      const res = await fetch("/api/procedures", {
+      const res = await fetch(prefix("/api/procedures"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: item.id, action }),
@@ -200,7 +202,7 @@ export function ProposalDialog() {
             <button style={btn(false)} disabled={busy} onClick={() => act("reject")}>
               Reject
             </button>
-            <a href="/inbox" style={{ fontSize: 11, color: "var(--accent-hover)", textDecoration: "none", marginLeft: "auto" }}>
+            <a href={prefix("/inbox")} style={{ fontSize: 11, color: "var(--accent-hover)", textDecoration: "none", marginLeft: "auto" }}>
               Edit in Inbox →
             </a>
           </>

@@ -3,6 +3,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMode } from "@/lib/useMode";
 import { useUpdateStatus } from "@/lib/useUpdateStatus";
+import { useProject } from "@/lib/useProject";
+import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 
 // Primary nav items (front door — visually emphasized)
 const PRIMARY_ITEMS = [
@@ -22,11 +24,14 @@ const SECONDARY_ITEMS = [
 
 export function Nav() {
   const path = usePathname();
+  const { prefix } = useProject();
   const { mode, loading } = useMode();
   const update = useUpdateStatus();
 
   function isActive(href: string) {
-    return href === "/" ? path === "/" : path.startsWith(href);
+    const full = prefix(href);
+    // Home is /p/<name>/ (or /) — exact match, tolerant of the trailing slash.
+    return href === "/" ? path === full || path === full.replace(/\/$/, "") : path.startsWith(full);
   }
 
   return (
@@ -96,14 +101,19 @@ export function Nav() {
         )}
       </div>
 
+      {/* Project switcher — the door between projects */}
+      <div className="px-3 pt-3">
+        <ProjectSwitcher />
+      </div>
+
       {/* Primary links */}
-      <div className="px-3 pt-4 pb-2">
+      <div className="px-3 pt-3 pb-2">
         {PRIMARY_ITEMS.map((item) => {
           const active = isActive(item.href);
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={prefix(item.href)}
               className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5 transition-colors"
               style={{
                 background: active ? "var(--sand)" : "transparent",
@@ -137,7 +147,7 @@ export function Nav() {
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={prefix(item.href)}
               className="flex items-center px-3 py-1.5 rounded-md mb-0.5 transition-colors"
               style={{
                 background: active ? "var(--sand)" : "transparent",

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
-import { ORCHESTRATOR_URL } from "@/lib/config";
+import { requireProject } from "@/lib/projectContext";
 
 // POST { id: number, decision: "approve" | "dismiss" }
 // Proxies to orchestrator PATCH /v1/outbox/:id. Approve replays the original
@@ -14,7 +14,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "id and decision required" }, { status: 400 });
   }
 
-  const res = await fetch(`${ORCHESTRATOR_URL}/v1/outbox/${body.id}`, {
+  const project = await requireProject();
+  const res = await fetch(`${project.orchestratorUrl}/v1/outbox/${body.id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ decision: body.decision }),

@@ -2,6 +2,7 @@
 import { Shell } from "@/components/Shell";
 import { Kicker, Heading, Button, StatusPill, Card } from "@/components/ui";
 import { useEffect, useState, useCallback } from "react";
+import { useProject } from "@/lib/useProject";
 
 interface AuditRow {
   id: number;
@@ -265,12 +266,13 @@ export default function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [approveMessages, setApproveMessages] = useState<Record<number, string>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const { prefix } = useProject();
 
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
-      fetch("/api/audit?limit=200").then((r) => r.json()),
-      fetch("/api/outbox?status=pending").then((r) => r.json()),
+      fetch(prefix("/api/audit?limit=200")).then((r) => r.json()),
+      fetch(prefix("/api/outbox?status=pending")).then((r) => r.json()),
     ]).then(([a, o]) => {
       const auditData = a as { rows?: AuditRow[] };
       const outboxData = o as { rows?: OutboxRow[] };
@@ -278,7 +280,7 @@ export default function ActivityPage() {
       setOutboxRows(outboxData.rows ?? []);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     load();
@@ -287,7 +289,7 @@ export default function ActivityPage() {
   }, [load]);
 
   async function handleApprove(id: number, action: "approve" | "dismiss") {
-    const res = await fetch("/api/outbox/approve", {
+    const res = await fetch(prefix("/api/outbox/approve"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, action }),
