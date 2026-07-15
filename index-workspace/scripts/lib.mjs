@@ -7,7 +7,7 @@ export const WORKSPACE = dirname(dirname(fileURLToPath(import.meta.url)));
 export const REPOS_DIR = join(WORKSPACE, "repos");
 export const REGISTRY_PATH = join(WORKSPACE, "repos.json");
 export const GATEWAY_URL = process.env.GRAPH_GATEWAY_URL ?? "http://127.0.0.1:7433";
-export const MODEL = process.env.GRAPH_BUILDER_MODEL ?? "openrouter/minimax/minimax-m3";
+export const MODEL = process.env.GRAPH_BUILDER_MODEL ?? "opencode/deepseek-v4-flash-free";
 
 export function loadRegistry() {
   try {
