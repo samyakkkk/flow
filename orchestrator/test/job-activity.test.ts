@@ -21,6 +21,8 @@ const OPENCODE_PENDING =
 const CLAUDE_TOOL =
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__flow-graph__upsert_entity","input":{"id":"svc:api"}}]}}';
 const CODEX_CMD = '{"type":"item.completed","item":{"type":"command_execution","command":"git log --oneline"}}';
+const CODEX_MCP =
+  '{"type":"item.completed","item":{"type":"mcp_tool_call","server":"flow-graph","tool":"upsert_entity","arguments":{"id":"svc:x"},"status":"completed"}}';
 
 describe("job-activity", () => {
   test("extracts terse labels and counts per backend", () => {
@@ -52,9 +54,13 @@ describe("job-activity", () => {
 
     startActivity("job3", "repo-c", "codex");
     recordActivityLine("job3", "codex", CODEX_CMD);
+    recordActivityLine("job3", "codex", CODEX_MCP);
     a = activityForRepo("repo-c");
     assert.equal(a?.events[0].label, "bash git log --oneline");
     assert.equal(a?.events[0].kind, "bash");
+    assert.equal(a?.events[1].label, "graph_upsert_entity svc:x");
+    assert.equal(a?.events[1].kind, "graph");
+    assert.equal(a?.counts.graphWrites, 1);
   });
 
   test("finish keeps counts but clears the ticker (live-only)", () => {

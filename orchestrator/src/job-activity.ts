@@ -138,7 +138,12 @@ function extractCodex(obj: Record<string, unknown>): Extracted | null {
   if (!item) return null;
   const itemType = String(item.type ?? item.item_type ?? "");
   if (itemType === "command_execution") return build("bash", { command: item.command });
-  if (itemType === "mcp_tool_call") return build(String(item.tool ?? "mcp"), (item.arguments as Record<string, unknown>) ?? {});
+  // Live-observed shape: {server: "flow-graph", tool: "upsert_entity", arguments: {...}}.
+  // Prefix the server so graph verbs classify as kind "graph" like other backends.
+  if (itemType === "mcp_tool_call") {
+    const tool = `${String(item.server ?? "mcp")}_${String(item.tool ?? "call")}`;
+    return build(tool, (item.arguments as Record<string, unknown>) ?? {});
+  }
   if (itemType === "file_read" || itemType === "file_change") return build("read", { filePath: item.path });
   return null;
 }
