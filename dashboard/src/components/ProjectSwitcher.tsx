@@ -90,7 +90,7 @@ export function ProjectSwitcher() {
               aria-selected={p.name === project}
               onClick={() => {
                 setOpen(false);
-                if (p.name !== project) router.push(`/p/${p.name}/`);
+                if (p.name !== project) router.push(`/${p.name}/`);
               }}
               className="w-full flex items-center justify-between px-3 py-2 transition-colors hover:bg-sand"
               style={{

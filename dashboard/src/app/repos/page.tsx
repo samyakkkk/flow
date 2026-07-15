@@ -5,6 +5,6 @@ import { headers } from "next/headers";
 // Sources, reindex, branch, and remove actions are all available there.
 export default async function ReposPage() {
   const name = (await headers()).get("x-flow-project");
-  if (name) redirect(`/p/${name}/`);
+  if (name) redirect(`/${name}/`);
   redirect("/");
 }

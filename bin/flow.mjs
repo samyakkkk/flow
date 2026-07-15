@@ -473,9 +473,16 @@ function printTable(headers, rows) {
 
 // Create a project on disk. Pure side-effect + return metadata; prints nothing
 // so callers (explicit create, or create-on-`up`) control their own output.
+// Names that collide with the dashboard's deployment-level URLs (/login,
+// /api/…) or the legacy /p/ prefix — a project can't live at those paths.
+const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     die(`Invalid project name "${name}" — use only letters, digits, _ and -`);
+  }
+  if (RESERVED_PROJECT_NAMES.has(name.toLowerCase())) {
+    die(`"${name}" is reserved (it collides with a dashboard URL) — pick another name.`);
   }
   const existingNames = listProjectNames();
   if (existingNames.includes(name)) die(`Project "${name}" already exists at ${projectDir(name)}`);
@@ -623,7 +630,7 @@ async function cmdUp(args) {
   if (dashOk && up.length > 0) {
     console.log("");
     for (const r of up) {
-      console.log(`  ${c.bold(r.name.padEnd(16))} ${c.cyan(`${dashUrl}/p/${r.name}`)}`);
+      console.log(`  ${c.bold(r.name.padEnd(16))} ${c.cyan(`${dashUrl}/${r.name}`)}`);
     }
     console.log("");
     if (mode !== "prod") {
@@ -950,7 +957,7 @@ async function cmdLs() {
       }
 
       void ports;
-      const dashUrl = `http://localhost:${dashboardPort()}/p/${name}`;
+      const dashUrl = `http://localhost:${dashboardPort()}/${name}`;
       return [
         name,
         mode,
@@ -1034,13 +1041,13 @@ async function cmdDoctor() {
     // Every page reachable under this project's prefix (flag only crashes/
     // unreachable — a 3xx auth redirect in prod is fine, not a failure).
     for (const path of DOCTOR_PAGES) {
-      const r = await fetchStatus(`${base}/p/${name}${path === "/" ? "/" : path}`);
+      const r = await fetchStatus(`${base}/${name}${path === "/" ? "/" : path}`);
       if (r.status === 0 || r.status >= 500) problems.push(`${path} ${r.status || "unreachable"}`);
     }
 
     const label = c.bold(name.padEnd(16));
     if (problems.length === 0) {
-      console.log(`  ${label} ${OK} ${c.dim("services + pages OK")}   ${c.cyan(`${base}/p/${name}`)}`);
+      console.log(`  ${label} ${OK} ${c.dim("services + pages OK")}   ${c.cyan(`${base}/${name}`)}`);
     } else {
       anyFail = true;
       console.log(`  ${label} ${FAIL} ${c.red(problems.slice(0, 5).join(", "))}`);
