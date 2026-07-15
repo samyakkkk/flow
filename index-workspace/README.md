@@ -21,6 +21,6 @@ node scripts/update.mjs [repo-name]
   wired via `opencode.json` — no npm install needed) — find-before-create
   dedup is what keeps later repos enriching earlier ones instead of
   duplicating them.
-- Model: `GRAPH_BUILDER_MODEL` env var, default `opencode/claude-sonnet-4-6`.
+- Model: `GRAPH_BUILDER_MODEL` env var, default `openrouter/minimax/minimax-m3`.
 - Watch what the builder writes live: `curl -s localhost:7433/v1/journal | jq`
   or `tail -f ../graph-gateway/data/journal.jsonl`.
