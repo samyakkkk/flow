@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
 import { Lora, Inter, Space_Mono } from "next/font/google";
-import { headers } from "next/headers";
-import { PROJECT_HEADER } from "@/lib/config";
 import { ProjectProvider } from "@/lib/useProject";
 import "./globals.css";
 
@@ -14,18 +12,18 @@ export const metadata: Metadata = {
   description: "Flow — the ground truth of your codebase",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Set by proxy.ts when it strips the /p/<name> URL prefix; null on
-  // deployment-level pages (login).
-  const project = (await headers()).get(PROJECT_HEADER);
+  // ProjectProvider derives the project from the URL client-side (the layout
+  // itself doesn't re-render on client navigation between projects) and
+  // remounts the subtree on switch so pages refetch.
   return (
     <html lang="en" className={`h-full ${lora.variable} ${inter.variable} ${spaceMono.variable}`}>
       <body className="min-h-full" style={{ background: "var(--cream)", color: "var(--text)" }}>
-        <ProjectProvider name={project}>{children}</ProjectProvider>
+        <ProjectProvider>{children}</ProjectProvider>
       </body>
     </html>
   );

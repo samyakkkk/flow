@@ -7,20 +7,23 @@ import { verifySession, userCanAccess, userProjectFilter, loadAuthStore } from "
 // so the project registry and auth store are plain fs reads, no round-trips).
 //
 // URL scheme (single dashboard for every project on the deployment):
-//   /p/<name>/<rest>  → rewritten to /<rest> with the project name stamped
+//   /<name>/<rest>    → rewritten to /<rest> with the project name stamped
 //                       into the PROJECT_HEADER request header. Pages and API
 //                       routes resolve their project from that header.
 //   /                 → redirect to the default project's home
+//   /p/<name>/<rest>  → legacy prefix — permanent redirect to /<name>/<rest>
 //   /login, /api/auth/*, /api/projects, /api/access/*, /api/tokens
-//                     → deployment-level, no project scope
+//                     → deployment-level, no project scope (these names are
+//                       refused as project names by the CLI and registry)
 //
 // Auth model:
 //   local — single user on their own box; no login, full access. The
 //           project admin tokens never leave the server either way.
 //   prod  — signed session cookie for a user account in data/auth.json.
 //           Grants are enforced HERE for pages (redirect to /login) and
-//           for a non-granted project (404 — don't leak project names),
-//           and re-checked in requireSession() for every API route.
+//           re-checked in requireSession() for every API route. A project
+//           that doesn't exist and a project the user isn't granted answer
+//           identically (404) so neither names nor existence leak.
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/",
@@ -45,6 +48,13 @@ function notFound() {
   return NextResponse.json({ error: "Not found" }, { status: 404 });
 }
 
+function toHome(req: NextRequest) {
+  const url = req.nextUrl.clone();
+  url.pathname = "/";
+  url.search = "";
+  return NextResponse.redirect(url);
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -53,6 +63,14 @@ export async function proxy(req: NextRequest) {
   }
   if (DEPLOYMENT_API.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next(); // routes enforce their own session/role checks
+  }
+
+  // Legacy /p/<name>/… prefix → the bare form.
+  const legacy = pathname.match(/^\/p\/([^/]+)(\/.*)?$/);
+  if (legacy) {
+    const url = req.nextUrl.clone();
+    url.pathname = `/${legacy[1]}${legacy[2] ?? "/"}`;
+    return NextResponse.redirect(url, 308);
   }
 
   // Resolve the session user once (prod). Local mode needs no user.
@@ -74,32 +92,31 @@ export async function proxy(req: NextRequest) {
     const last = req.cookies.get("flow_last_project")?.value;
     const target = visible.find((p) => p.name === last) ?? visible[0];
     const url = req.nextUrl.clone();
-    url.pathname = `/p/${target.name}/`;
+    url.pathname = `/${target.name}/`;
     url.search = "";
     return NextResponse.redirect(url);
   }
 
-  // Project-scoped URLs: /p/<name>/<rest>
-  const m = pathname.match(/^\/p\/([^/]+)(\/.*)?$/);
-  if (!m) {
-    // Any other unprefixed path (old bookmarks like /agents, or a stray
-    // /api/... call) has no project scope — send pages to "/" to pick one,
-    // and 404 API calls loudly rather than guessing a project.
-    if (pathname.startsWith("/api/")) return notFound();
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-    url.search = "";
-    return NextResponse.redirect(url);
+  // Project-scoped URLs: /<name>/<rest>
+  const m = pathname.match(/^\/([^/]+)(\/.*)?$/);
+  const name = m?.[1] ?? "";
+  const rest = m?.[2] || "/";
+  const project = isValidProjectName(name) ? getRegistryProject(name) : null;
+  const isApi = rest.startsWith("/api/") || (name === "api" && !project);
+
+  if (!project) {
+    // Unknown first segment. APIs fail loudly. Pages: in local mode redirect
+    // home (old unprefixed bookmarks like /agents land somewhere useful); in
+    // prod, 404 — identical to the non-granted answer, so nothing leaks.
+    if (isApi || pathname.startsWith("/api/")) return notFound();
+    if (IS_LOCAL) return toHome(req);
+    if (!user) return toLogin(req, true);
+    return notFound();
   }
 
-  const name = m[1];
-  const rest = m[2] || "/";
-  if (!isValidProjectName(name) || !getRegistryProject(name)) return notFound();
-
-  const isApi = rest.startsWith("/api/");
   if (!IS_LOCAL) {
     if (!user) return isApi ? NextResponse.json({ error: "Unauthorized" }, { status: 401 }) : toLogin(req, true);
-    // Non-granted project: 404, not 403 — project names shouldn't leak.
+    // Non-granted project: 404, not 403 — same answer as "doesn't exist".
     if (!userCanAccess(user, name)) return notFound();
   }
 
