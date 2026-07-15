@@ -29,6 +29,7 @@ import {
   resolveIndexerBackend,
 } from "./indexer-runtime.js";
 import { finishActivity, recordActivityLine, startActivity } from "./job-activity.js";
+import { resolveGithubDefaultBranch } from "./repo-branch.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -237,10 +238,13 @@ function repoHeadCommit(name: string): string | null {
 // caller's concern — this returns the registry entry + job id.
 export async function connectGithubRepo(
   url: string,
-  branch: string,
+  branch?: string,
   localPath?: string,
 ): Promise<{ entry: RepoEntry; jobId: string }> {
-  const entry = registerRepo(url, branch);
+  const name = url.replace(/\/+$/, "").split("/").pop()!.replace(/\.git$/, "");
+  const existingBranch = readRepoRegistry().repos.find((repo) => repo.name === name)?.branch?.trim();
+  const resolvedBranch = branch?.trim() || existingBranch || await resolveGithubDefaultBranch(url);
+  const entry = registerRepo(url, resolvedBranch);
   if (localPath) registerSource({ name: entry.name, localPath });
   // registeredRepos is otherwise only seeded at boot — watch this branch now.
   const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
@@ -359,18 +363,57 @@ export function recoverStalledJobs(): void {
 
 // Enqueue a job and kick off execution in background (non-blocking enqueue)
 export async function enqueueJob(opts: JobInput): Promise<{ id: string }> {
+  const normalizedOpts = normalizeIndexJob(opts);
   const id = randomUUID();
   insertJob.run({
     id,
-    type: opts.type,
-    input: JSON.stringify(opts.input),
-    repo: opts.repo ?? null,
+    type: normalizedOpts.type,
+    input: JSON.stringify(normalizedOpts.input),
+    repo: normalizedOpts.repo ?? null,
   });
 
   // Execute async — don't await; callers get the job id and can poll
-  setImmediate(() => void runJob(id, opts));
+  setImmediate(() => void runJob(id, normalizedOpts));
 
   return { id };
+}
+
+// One normalization boundary for every index entry point. Explicit input wins;
+// otherwise hydrate from the durable registry. This prevents a branchless
+// reindex request from silently changing a repo registered on master/trunk to
+// main, and it ensures the stored job records the branch it will actually use.
+function normalizeIndexJob(opts: JobInput): JobInput {
+  if (opts.type !== "index_repo") return opts;
+
+  const inputRepo = typeof opts.input.repo === "string" ? opts.input.repo.trim() : "";
+  const repo = inputRepo || opts.repo?.trim() || "";
+  if (!repo) throw new Error("index_repo requires a repo");
+
+  const entry = readRepoRegistry().repos.find((candidate) => candidate.name === repo);
+  const inputBranch = typeof opts.input.branch === "string" ? opts.input.branch.trim() : "";
+  const branch = inputBranch || entry?.branch?.trim() || "";
+  if (!branch) {
+    throw new Error(`index_repo requires a branch for '${repo}' (none supplied or registered)`);
+  }
+
+  const inputUrl = typeof opts.input.url === "string" ? opts.input.url.trim() : "";
+  const url = inputUrl || entry?.url?.trim() || "";
+  return {
+    ...opts,
+    repo,
+    input: {
+      ...opts.input,
+      repo,
+      ...(url ? { url } : {}),
+      branch,
+    },
+  };
+}
+
+function requiredIndexBranch(input: Record<string, unknown>): string {
+  const branch = typeof input.branch === "string" ? input.branch.trim() : "";
+  if (!branch) throw new Error("normalized index_repo job is missing its branch");
+  return branch;
 }
 
 export function getJob(id: string): Job | null {
@@ -406,8 +449,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     if (opts.type === "index_repo" && !process.env.FLOW_FAKE_OPENCODE) {
       const input = opts.input as { repo?: string; url?: string; branch?: string };
       if (input.repo) {
-        await ensureRepoClone({ name: input.repo, url: input.url, branch: input.branch });
-        await refreshRepoCheckout(input.repo, input.branch ?? "main");
+        const branch = requiredIndexBranch(input);
+        await ensureRepoClone({ name: input.repo, url: input.url, branch });
+        await refreshRepoCheckout(input.repo, branch);
       }
     }
 
@@ -442,7 +486,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       void (async () => {
         try {
           const input = opts.input as { branch?: string };
-          const base = input.branch ?? "main";
+          const base = requiredIndexBranch(input);
           const dest = resolve(WORKSPACE_DIR, "repos", repo);
           const merges = await spawnAsync(
             "git",
@@ -527,7 +571,7 @@ function buildPrompt(opts: JobInput): BuiltPrompt {
     case "index_repo":
       return {
         agent: "graph-builder",
-        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${opts.input.branch ?? "main"}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find_entity), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
+        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${requiredIndexBranch(opts.input)}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find_entity), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
       };
     case "enrich":
       return {
