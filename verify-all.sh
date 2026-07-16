@@ -2,7 +2,7 @@
 # flow/verify-all.sh — Host-mode verification suite (no Docker required).
 #
 # Runs every verification step in order:
-#   1. graph-gateway  — TypeScript typecheck (npx tsc --noEmit)
+#   1. graph-gateway  — unit tests + TypeScript typecheck
 #   2. orchestrator   — Unit + scenario tests (npm test)
 #   3. simulators     — Full scenario verify: boots orchestrator + linear-mock
 #                       internally, runs all scenarios (npm run verify)
@@ -87,6 +87,9 @@ run_step() {
 
 run_step "graph-gateway typecheck" "${GATEWAY_DIR}" \
   node_modules/.bin/tsc --noEmit
+
+run_step "graph-gateway unit tests" "${GATEWAY_DIR}" \
+  npm test
 
 run_step "orchestrator unit tests" "${ORCHESTRATOR_DIR}" \
   npm test
