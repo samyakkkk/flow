@@ -424,6 +424,7 @@ export interface SessionEvent {
   ts: number;
   kind:
     | "created"
+    | "title"
     | "status"
     | "update" // raw ACP session update (message/thought/tool_call/plan chunks)
     | "user_prompt"
@@ -515,6 +516,9 @@ const updateSessionRow = db.prepare(
 // Persist the working-tree snapshot taken at session start (see createSession).
 const updateSessionStart = db.prepare(
   `UPDATE agent_sessions SET start_sha=?, start_untracked=?, updated_at=? WHERE id=?`
+);
+const updateSessionTitle = db.prepare(
+  `UPDATE agent_sessions SET title=?, updated_at=? WHERE id=?`
 );
 
 function transcriptPath(id: string): string {
@@ -1215,6 +1219,17 @@ export async function createSession(opts: {
       s.startSha = start.sha;
       s.startUntracked = start.untracked;
       updateSessionStart.run(start.sha, JSON.stringify(start.untracked), Date.now(), id);
+      // opencode.ts already imports runtime helpers for the multi-CLI indexer,
+      // so load it lazily here after module initialization to avoid a static
+      // import cycle.
+      const { generateThreadTitle } = await import("../opencode.js");
+      const generatedTitle = await generateThreadTitle(opts.prompt, id);
+      if (generatedTitle && generatedTitle !== s.title) {
+        s.title = generatedTitle;
+        s.updatedAt = Date.now();
+        updateSessionTitle.run(generatedTitle, s.updatedAt, id);
+        emit(s, "title", { title: generatedTitle });
+      }
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
         cwd,

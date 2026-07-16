@@ -120,6 +120,7 @@ function contentText(c: unknown): string {
 
 function reduceEvents(events: SessionEvent[]): {
   blocks: Block[];
+  title?: string;
   status: string;
   stopReason?: string;
   error?: string;
@@ -129,6 +130,7 @@ function reduceEvents(events: SessionEvent[]): {
   configOptions: ConfigOption[];
 } {
   const blocks: Block[] = [];
+  let title: string | undefined;
   let status = "starting";
   let stopReason: string | undefined;
   let error: string | undefined;
@@ -142,6 +144,11 @@ function reduceEvents(events: SessionEvent[]): {
   for (const ev of events) {
     const d = ev.data ?? {};
     switch (ev.kind) {
+      case "created":
+      case "title": {
+        if (typeof d.title === "string" && d.title) title = d.title;
+        break;
+      }
       case "user_prompt": {
         const text = String(d.text ?? "");
         const images = Array.isArray(d.images) ? (d.images as Array<{ data: string; mimeType: string }>) : undefined;
@@ -262,6 +269,7 @@ function reduceEvents(events: SessionEvent[]): {
 
   return {
     blocks,
+    title,
     status,
     stopReason,
     error,
@@ -800,7 +808,7 @@ export function AgentSession({ id }: { id: string }) {
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-ink text-[15px] truncate" style={{ fontFamily: "var(--font-display)" }}>
-            {meta?.title ?? "Session"}
+            {view.title ?? meta?.title ?? "Session"}
           </p>
           <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
             {AGENT_NAMES[meta?.backend ?? ""] ?? meta?.backend} · {meta?.repo}
