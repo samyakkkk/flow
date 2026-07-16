@@ -14,7 +14,9 @@ import { existsSync, realpathSync } from "node:fs";
 import { readdir, copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createLogger } from "@flow/logger";
 
+const log = createLogger("worktrees");
 const execFileP = promisify(execFile);
 
 // A worktree add on a big repo (and the overlay copies below) must never block
@@ -101,7 +103,7 @@ async function overlayEnvFiles(srcCheckout: string, dest: string): Promise<void>
     try {
       await copyFile(path.join(srcCheckout, name), path.join(dest, name));
     } catch (e) {
-      console.warn(`[worktrees] failed to copy ${name} into worktree: ${(e as Error).message}`);
+      log.warn("failed to copy into worktree", { name, err: (e as Error).message });
     }
   }
 }
@@ -127,7 +129,7 @@ async function overlayNodeModules(srcCheckout: string, dest: string): Promise<vo
   try {
     await execFileP("cp", args, { timeout: CP_TIMEOUT_MS, maxBuffer: MAX_BUFFER });
   } catch (e) {
-    console.warn(`[worktrees] node_modules CoW clone failed, skipping: ${(e as Error).message}`);
+    log.warn("node_modules CoW clone failed, skipping", { err: (e as Error).message });
   }
 }
 

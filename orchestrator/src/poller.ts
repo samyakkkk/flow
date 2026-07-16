@@ -10,7 +10,10 @@
 // use the generic style (github, linear, fireflies) use registerPoller() from here.
 // The engine is the single source of truth for cursor persistence and scheduling.
 
+import { createLogger } from "@flow/logger";
 import { registerPoller as engineRegisterPoller, stopAllPollers, pollNow } from "./pollers/engine.js";
+
+const log = createLogger("poller");
 export { stopAllPollers, pollNow, getAllPollStatus } from "./pollers/engine.js";
 export type { PollCursorRow, FetchResult, PollerConfig as EnginePollerConfig } from "./pollers/engine.js";
 
@@ -74,7 +77,7 @@ export function stopPoller(source: string, resource = "_all"): void {
   // The engine doesn't have a per-key stop exposed yet — stopAllPollers() is
   // the clean shutdown. For now, this is a no-op (pollers self-terminate when
   // the engine is stopped via stopAllPollers in index.ts onClose hook).
-  console.log(`[poller] stopPoller(${source}, ${resource}) — use stopAllPollers() for full shutdown`);
+  log.info("stopPoller called — use stopAllPollers() for full shutdown", { source, resource });
 }
 
 /**

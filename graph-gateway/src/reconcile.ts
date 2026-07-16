@@ -20,9 +20,13 @@
 // (mcp.ts) is read-only and short-lived; running convergence there would race
 // across concurrent agent sessions.
 
+import { createLogger } from "@flow/logger";
 import { run, raw } from "./graph.js";
 import { embedBatch, entityText } from "./embed.js";
 import { startLocalModel, MODEL_STAMP } from "./local-embed.js";
+
+const log = createLogger("reconcile");
+const graphLog = log.child("graph");
 
 const versionKey = (graph: string) => `flow:graph-version:${graph}`;
 // Tracks which embed model's vectors are stored in the graph. When this
@@ -49,7 +53,7 @@ export async function runGraphMigrations(graph: string): Promise<void> {
     if (m.id <= current) continue;
     await m.up(graph);
     await conn.set(versionKey(graph), String(m.id));
-    console.log(`[graph] migration ${m.id} applied to '${graph}': ${m.name}`);
+    graphLog.info("migration applied", { id: m.id, graph, name: m.name });
   }
   if (GRAPH_MIGRATIONS.length === 0 && current < LATEST) {
     await conn.set(versionKey(graph), String(LATEST));
@@ -66,7 +70,7 @@ export async function reconcileEmbeddings(
   graph: string,
   opts: { force?: boolean; log?: (msg: string) => void } = {},
 ): Promise<{ total: number; embedded: number; failed: number }> {
-  const log = opts.log ?? ((m: string) => console.log(m));
+  const emit = opts.log ?? ((m: string) => log.info(m));
   const filter = opts.force ? "" : "WHERE n.embedding IS NULL";
   const rows = await run(
     graph,
@@ -75,7 +79,7 @@ export async function reconcileEmbeddings(
   );
   if (rows.length === 0) return { total: 0, embedded: 0, failed: 0 };
 
-  log(`[reconcile] graph='${graph}': embedding ${rows.length} node(s)${opts.force ? " (force)" : ""}`);
+  emit(`embedding ${rows.length} node(s) for graph='${graph}'${opts.force ? " (force)" : ""}`);
   const texts = rows.map((r) =>
     entityText(String(r.type), String(r.name ?? ""), r.description as string, r.aliases as string, r.trigger as string),
   );
@@ -91,9 +95,9 @@ export async function reconcileEmbeddings(
     }
     await run(graph, `MATCH (n {id: $id}) SET n.embedding = vecf32($vec)`, { id: rows[i].id, vec });
     embedded++;
-    if (embedded % 50 === 0) log(`[reconcile] ${embedded}/${rows.length}`);
+    if (embedded % 50 === 0) emit(`${embedded}/${rows.length}`);
   }
-  log(`[reconcile] graph='${graph}': embedded ${embedded}, failed ${failed}`);
+  emit(`graph='${graph}': embedded ${embedded}, failed ${failed}`);
   return { total: rows.length, embedded, failed };
 }
 
@@ -109,17 +113,17 @@ export async function reconcileAfterModelReady(graph: string): Promise<void> {
     const saved = await conn.get(embedStampKey(graph));
     const force = saved !== MODEL_STAMP;
     if (force) {
-      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${MODEL_STAMP}) — re-embedding all nodes`);
+      log.info("embed model changed — re-embedding all nodes", { previous: saved ?? "none", current: MODEL_STAMP });
     }
     const { total, embedded, failed } = await reconcileEmbeddings(graph, { force });
     if (total === 0) {
-      console.log(`[reconcile] graph='${graph}': all nodes already embedded`);
+      log.info("all nodes already embedded", { graph });
     } else {
-      console.log(`[reconcile] graph='${graph}': embedded ${embedded}/${total}${failed ? `, failed ${failed}` : ""}`);
+      log.info("embedded nodes", { graph, embedded, total, failed });
     }
     if (force) await conn.set(embedStampKey(graph), MODEL_STAMP);
   } catch (err) {
-    console.warn(`[reconcile] post-model reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn("post-model reconcile failed", { err: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -133,7 +137,7 @@ export function runBootTasks(graph: string): void {
     try {
       await runGraphMigrations(graph);
     } catch (err) {
-      console.warn(`[graph] migrations for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
+      graphLog.warn("migrations failed", { graph, err: err instanceof Error ? err.message : String(err) });
     }
     try {
       // startLocalModel() is a singleton — safe to call here even though
@@ -141,7 +145,7 @@ export function runBootTasks(graph: string): void {
       await startLocalModel();
       await reconcileAfterModelReady(graph);
     } catch (err) {
-      console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn("embeddings failed", { graph, err: err instanceof Error ? err.message : String(err) });
     }
   })();
 }

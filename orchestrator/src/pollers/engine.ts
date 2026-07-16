@@ -20,8 +20,11 @@
 //   registerPoller({ source: "github", resource: "owner/repo", intervalMs: 60_000, fetchSince, enabled });
 //   startAllPollers();
 
+import { createLogger } from "@flow/logger";
 import db from "../db.js";
 import type { NormalizedEvent } from "../events.js";
+
+const log = createLogger("poller");
 
 // ------------------------------------------------------------------
 // Types
@@ -178,7 +181,7 @@ async function tick(key: string): Promise<void> {
       try {
         await processEvent(event);
       } catch (err) {
-        console.error(`[poller:${source}:${resource}] processEvent error for event ${event.id}: ${err}`);
+        log.error("processEvent error", { source, resource, eventId: event.id, err: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -194,9 +197,9 @@ async function tick(key: string): Promise<void> {
     backoffMs.delete(key);
 
     if (isCatchingUp) {
-      console.log(`[poller:${source}:${resource}] catching_up: processed ${result.events.length} events, cursor=${result.nextCursor}`);
+      log.info("catching_up: processed events", { source, resource, count: result.events.length, cursor: result.nextCursor });
     } else if (result.events.length > 0) {
-      console.log(`[poller:${source}:${resource}] fetched ${result.events.length} events, cursor=${result.nextCursor}`);
+      log.info("fetched events", { source, resource, count: result.events.length, cursor: result.nextCursor });
     }
 
     scheduleNext(key, config.intervalMs);
@@ -215,7 +218,7 @@ async function tick(key: string): Promise<void> {
       detail: null,
     });
 
-    console.error(`[poller:${source}:${resource}] error: ${errMsg}; backing off ${next}ms`);
+    log.error("poll error, backing off", { source, resource, err: errMsg, backoffMs: next });
     scheduleNext(key, next);
   }
 }
@@ -239,14 +242,14 @@ function scheduleNext(key: string, baseMs: number): void {
 
 export function startAllPollers(): void {
   if (process.env.FLOW_POLL_DISABLE === "1") {
-    console.log("[poller-engine] FLOW_POLL_DISABLE=1 — not starting any pollers");
+    log.info("FLOW_POLL_DISABLE=1 — not starting any pollers");
     return;
   }
   if (running) return;
   running = true;
 
   for (const [key, config] of registry) {
-    console.log(`[poller-engine] Starting poller key=${key}, interval=${config.intervalMs}ms`);
+    log.info("starting poller", { key, intervalMs: config.intervalMs });
     // Stagger initial starts so they don't all fire at once
     const initialDelay = Math.floor(Math.random() * Math.min(config.intervalMs, 5000));
     const t = setTimeout(() => {

@@ -17,9 +17,11 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
+import { createLogger } from "@flow/logger";
 import db from "../db.js";
 import { llmApiKey, llmBaseUrl } from "../settings.js";
 import { addNote, matchNotes } from "../notes.js";
+import { redactIfSecret } from "../secrets.js";
 import { embedText } from "../embed.js";
 import {
   createSessionWorktree,
@@ -35,6 +37,8 @@ import {
   pushWorktree,
   openPullRequestWorktree,
 } from "./worktrees.js";
+
+const log = createLogger("agent");
 
 // ---------------------------------------------------------------------------
 // Backends
@@ -521,6 +525,34 @@ function transcriptPath(id: string): string {
   return path.join(SESSIONS_DIR, `${id}.jsonl`);
 }
 
+const TERMINAL_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>(["error", "closed"]);
+
+// Compact activity summary lines for `tail -f` / log aggregation — never the
+// full tool payload, just enough to see what a session is doing. Mirrors the
+// per-line indexer_step logging in job-activity.ts but for interactive agent
+// sessions (agents/routes.ts sessions, not job-queue runs).
+function logSessionSummary(s: LiveSession, kind: SessionEvent["kind"], data: unknown): void {
+  if (kind === "created") {
+    log.info("session_start", { sessionId: s.id, backend: s.backend, repo: s.repo });
+    return;
+  }
+  if (kind === "status") {
+    const d = data as { status?: SessionStatus; stopReason?: string; error?: string } | null;
+    if (d?.status && TERMINAL_STATUSES.has(d.status)) {
+      log.info("session_end", { sessionId: s.id, backend: s.backend, status: d.status, stopReason: d.stopReason, error: d.error });
+    }
+    return;
+  }
+  if (kind === "update") {
+    const d = data as { sessionUpdate?: string; title?: string; kind?: string } | null;
+    if (d?.sessionUpdate === "tool_call") {
+      const redactedTitle = redactIfSecret(String(d.title ?? ""));
+      const title = redactedTitle.slice(0, 120);
+      log.info("tool_call", { sessionId: s.id, backend: s.backend, tool: d.kind ?? "", title });
+    }
+  }
+}
+
 export function emit(s: LiveSession, kind: SessionEvent["kind"], data: unknown): void {
   const ev: SessionEvent = { seq: ++s.seq, ts: Date.now(), kind, data };
   try {
@@ -529,6 +561,7 @@ export function emit(s: LiveSession, kind: SessionEvent["kind"], data: unknown):
   } catch {
     /* transcript best-effort; live stream still works */
   }
+  logSessionSummary(s, kind, data);
   for (const sub of s.subscribers) {
     try {
       sub(ev);

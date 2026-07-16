@@ -4,10 +4,13 @@
 // reinitPollers() clears the existing registry and re-registers all pollers
 // using the current getSetting() values (DB > env > default).
 
+import { createLogger } from "@flow/logger";
 import { getSetting } from "./settings.js";
 import { registerPoller } from "./pollers/engine.js";
 import { linearFetchSince } from "./adapters/linear.js";
 import { githubFetchSince, ghAuthOk } from "./adapters/github.js";
+
+const log = createLogger("bootstrap");
 
 // ------------------------------------------------------------------
 // Internal: clear registry (engine doesn't export a clear function, so
@@ -72,7 +75,7 @@ export function reinitPollers(): void {
       const { registerFirefliesPoller } = await import("./adapters/meetings.js");
       registerFirefliesPoller();
     } catch (err) {
-      console.error("[bootstrap] registerFirefliesPoller error:", err);
+      log.error("registerFirefliesPoller error", { err: err instanceof Error ? err.message : String(err) });
     }
   })();
 }

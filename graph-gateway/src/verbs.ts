@@ -1,8 +1,11 @@
 import { z } from "zod";
+import { createLogger } from "@flow/logger";
 import { DEFAULT_GRAPH, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
 import { embedQuery, embedText, embeddingsEnabled, entityText } from "./embed.js";
+
+const log = createLogger("verbs");
 
 // Cosine-distance ceiling for semantic matches. Tuned on the flow graph (156
 // nodes) by sweeping a 24-query labelled set: recall climbs steeply up to ~0.65
@@ -266,7 +269,7 @@ async function embedNode(graph: string, id: string): Promise<void> {
     if (!vec) return;
     await run(graph, `MATCH (n {id: $id}) SET n.embedding = vecf32($vec)`, { id, vec });
   } catch (err) {
-    console.warn(`[embed] node ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn("embed failed", { id, err: err instanceof Error ? err.message : String(err) });
   }
 }
 

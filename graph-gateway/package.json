@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@flow/logger": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "falkordb": "^6.2.0",
     "node-llama-cpp": "^3.0.0",

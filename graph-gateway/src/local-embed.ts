@@ -1,3 +1,5 @@
+import { createLogger } from "@flow/logger";
+
 // Local embedding via node-llama-cpp + EmbeddingGemma-300M (768-dim).
 //
 // Singleton loader — call startLocalModel() early (server.ts startup) to kick
@@ -12,6 +14,8 @@ export const MODEL_STAMP = "local:embeddinggemma-300M-Q8_0";
 export const LOCAL_EMBED_DIM = 768;
 
 const HF_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+
+const log = createLogger("local-embed");
 
 // Minimal interface — avoids importing node-llama-cpp types at module scope
 // (the dep may not be installed yet during tsc on a fresh checkout).
@@ -31,7 +35,7 @@ export function isLocalEmbedReady(): boolean {
 export function startLocalModel(): Promise<void> {
   if (!_promise) {
     _promise = _init().catch((err) => {
-      console.error(`[local-embed] failed to load model: ${err instanceof Error ? err.message : String(err)}`);
+      log.error("failed to load model", { err: err instanceof Error ? err.message : String(err) });
     });
   }
   return _promise;
@@ -46,10 +50,10 @@ async function _init(): Promise<void> {
   const dir = join(homedir(), ".cache", "flow", "models");
   mkdirSync(dir, { recursive: true });
 
-  console.log("[local-embed] loading EmbeddingGemma-300M (~300 MB download on first run)…");
+  log.info("loading EmbeddingGemma-300M (~300 MB download on first run)…");
   const downloader = await createModelDownloader({ modelUri: HF_MODEL, dirPath: dir });
   if (downloader.totalSize > 0) {
-    console.log(`[local-embed] downloading ${Math.round(downloader.totalSize / 1_000_000)} MB…`);
+    log.info("downloading model", { mb: Math.round(downloader.totalSize / 1_000_000) });
   }
   const modelPath = await downloader.download();
 
@@ -57,7 +61,7 @@ async function _init(): Promise<void> {
   const model = await llama.loadModel({ modelPath });
   _ctx = (await model.createEmbeddingContext()) as unknown as EmbCtx;
   _ready = true;
-  console.log("[local-embed] EmbeddingGemma-300M ready (768-dim)");
+  log.info("EmbeddingGemma-300M ready (768-dim)");
 }
 
 export async function embedTextLocal(text: string): Promise<number[] | null> {
@@ -66,7 +70,7 @@ export async function embedTextLocal(text: string): Promise<number[] | null> {
     const { vector } = await _ctx.getEmbeddingFor(text);
     return Array.from(vector);
   } catch (err) {
-    console.warn(`[local-embed] embed error: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn("embed error", { err: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

@@ -6,9 +6,12 @@
 // Drainer (see drainer.ts) uses WebClient for sending messages.
 
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@flow/logger";
 import { processEvent } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
 import { getSetting } from "../settings.js";
+
+const log = createLogger("slack");
 
 // Dynamic import guards — only pull in bolt when tokens are present to avoid
 // runtime errors in test envs where the packages may not be installed.
@@ -27,7 +30,7 @@ export interface SlackAppHandle {
  */
 export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
   if ((process.env.FLOW_MODE ?? "local") !== "prod") {
-    console.log("[slack] disabled in local mode — ambient listening requires an always-on deployment");
+    log.info("disabled in local mode — ambient listening requires an always-on deployment");
     return null;
   }
 
@@ -35,7 +38,7 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
   const appToken = getSetting("SLACK_APP_TOKEN") ?? process.env.SLACK_APP_TOKEN;
 
   if (!botToken || !appToken) {
-    console.log("[slack] SLACK_BOT_TOKEN or SLACK_APP_TOKEN not set — Slack adapter disabled");
+    log.info("SLACK_BOT_TOKEN or SLACK_APP_TOKEN not set — Slack adapter disabled");
     return null;
   }
 
@@ -57,9 +60,9 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
     const wc = new WebClient(botToken);
     const authRes = await wc.auth.test();
     slackBotUserId = (authRes.user_id as string | undefined) ?? null;
-    console.log(`[slack] Bot user ID: ${slackBotUserId}`);
+    log.info("bot user ID resolved", { userId: slackBotUserId });
   } catch (err) {
-    console.warn(`[slack] Could not resolve bot user ID: ${err}`);
+    log.warn("could not resolve bot user ID", { err: err instanceof Error ? err.message : String(err) });
   }
 
   // ------------------------------------------------------------------
@@ -87,9 +90,9 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
       },
     };
 
-    console.log(`[slack] app_mention from ${userId} in ${channel}`);
+    log.info("app_mention", { userId, channel });
     await processEvent(normalized).catch((err) =>
-      console.error("[slack] Error processing mention:", err)
+      log.error("error processing mention", { err: err instanceof Error ? err.message : String(err) })
     );
   });
 
@@ -127,13 +130,13 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
     };
 
     await processEvent(normalized).catch((err) =>
-      console.error("[slack] Error processing ambient message:", err)
+      log.error("error processing ambient message", { err: err instanceof Error ? err.message : String(err) })
     );
   });
 
   // Start the socket-mode connection
   await app.start();
-  console.log("[slack] Bolt Socket Mode app started");
+  log.info("Bolt Socket Mode app started");
 
   slackApp = app;
 

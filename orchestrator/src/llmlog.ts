@@ -5,8 +5,10 @@
 // GET /v1/llmlog?limit=&kind=&ref=  (bearer) — newest first, full prompt/response.
 
 import type { FastifyInstance } from "fastify";
+import { createLogger } from "@flow/logger";
 import db from "./db.js";
 
+const log = createLogger("llmlog");
 const CAP = 16_000; // chars per prompt/response — enough to debug, bounded on disk
 
 const insert = db.prepare(`
@@ -39,7 +41,7 @@ export function logLLM(entry: {
     });
   } catch (err) {
     // Observability must never break the pipeline it observes.
-    console.error(`[llmlog] failed to record: ${err}`);
+    log.error("failed to record", { err: err instanceof Error ? err.message : String(err) });
   }
 }
 

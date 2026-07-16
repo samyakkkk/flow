@@ -1,0 +1,13 @@
+{
+  "name": "@flow/logger",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "Shared structured logger for orchestrator and graph-gateway.",
+  "main": "src/logger.ts",
+  "types": "src/logger.ts",
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -21,12 +21,16 @@
 
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@flow/logger";
 import db from "../db.js";
 import { processEvent, containsSecret } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
 import { registerPoller } from "../pollers/engine.js";
 import type { FetchResult } from "../pollers/engine.js";
 import { getSetting } from "../settings.js";
+
+const log = createLogger("meetings");
+const firefliesLog = createLogger("fireflies");
 
 // ------------------------------------------------------------------
 // Segmenter
@@ -138,7 +142,7 @@ export function registerMeetingRoutes(app: FastifyInstance): void {
       const segments = allSegments.filter((seg) => !containsSecret(seg.text));
       const dropped = allSegments.length - segments.length;
       if (dropped > 0) {
-        console.warn(`[meetings] dropped ${dropped} transcript segment(s) containing secrets`);
+        log.warn("dropped transcript segments containing secrets", { dropped });
       }
 
       if (segments.length === 0) {
@@ -173,7 +177,7 @@ export function registerMeetingRoutes(app: FastifyInstance): void {
         };
         // Fire-and-forget; don't block the response on slow classification
         void processEvent(event).catch((err) =>
-          console.error(`[meetings] Error processing segment event: ${err}`)
+          log.error("error processing segment event", { err: err instanceof Error ? err.message : String(err) })
         );
         eventIds.push(event.id);
       }
@@ -244,7 +248,7 @@ async function ingestFirefliesNode(node: FirefliesTranscriptNode): Promise<numbe
   const segments = allSegments.filter((seg) => !containsSecret(seg.text));
   const dropped = allSegments.length - segments.length;
   if (dropped > 0) {
-    console.warn(`[fireflies] dropped ${dropped} segment(s) with secrets in meeting ${meetingId}`);
+    firefliesLog.warn("dropped segments with secrets", { dropped, meetingId });
   }
 
   if (segments.length === 0) return 0;
@@ -276,7 +280,7 @@ async function ingestFirefliesNode(node: FirefliesTranscriptNode): Promise<numbe
       },
     };
     void processEvent(event).catch((err) =>
-      console.error(`[fireflies] processEvent error for segment ${seg.id}: ${err}`)
+      firefliesLog.error("processEvent error", { segmentId: seg.id, err: err instanceof Error ? err.message : String(err) })
     );
   }
 
@@ -404,7 +408,7 @@ export async function ingestFromFireflies(
 ): Promise<{ segments: number; meeting_id: string } | null> {
   const apiKey = getSetting("FIREFLIES_API_KEY") ?? process.env.FIREFLIES_API_KEY;
   if (!apiKey) {
-    console.warn("[meetings/fireflies] FIREFLIES_API_KEY not set — returning null");
+    firefliesLog.warn("FIREFLIES_API_KEY not set — returning null");
     return null;
   }
 

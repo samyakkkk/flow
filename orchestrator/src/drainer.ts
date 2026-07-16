@@ -11,8 +11,10 @@
 // If credentials for a target are absent, row stays pending (correct behaviour —
 // simulators assert on pending rows).
 
+import { createLogger } from "@flow/logger";
 import db from "./db.js";
 
+const log = createLogger("drainer");
 const MAX_RETRIES = 3;
 
 // ------------------------------------------------------------------
@@ -183,11 +185,11 @@ async function drainOnce(): Promise<void> {
 
       if (retries + 1 >= MAX_RETRIES) {
         markFailed.run({ id: row.id, payload: newPayload });
-        console.error(`[drainer] Row ${row.id} (${row.action_type}) failed permanently after ${retries + 1} attempts: ${errMsg}`);
+        log.error("row failed permanently", { rowId: row.id, actionType: row.action_type, attempt: retries + 1, err: errMsg });
       } else {
         // Update payload with retry info but keep status pending
         db.prepare("UPDATE outbox SET payload = ? WHERE id = ?").run(newPayload, row.id);
-        console.warn(`[drainer] Row ${row.id} (${row.action_type}) attempt ${retries + 1} failed: ${errMsg}`);
+        log.warn("row attempt failed", { rowId: row.id, actionType: row.action_type, attempt: retries + 1, err: errMsg });
       }
     }
   }
@@ -203,10 +205,10 @@ export function startDrainer(): void {
   if (drainTimer) return; // already running
 
   const intervalMs = parseInt(process.env.FLOW_DRAIN_MS ?? "3000", 10);
-  console.log(`[drainer] Starting outbox drainer, interval=${intervalMs}ms`);
+  log.info("starting outbox drainer", { intervalMs });
 
   drainTimer = setInterval(() => {
-    void drainOnce().catch((err) => console.error("[drainer] Uncaught error:", err));
+    void drainOnce().catch((err) => log.error("uncaught error", { err: err instanceof Error ? err.message : String(err) }));
   }, intervalMs);
 }
 

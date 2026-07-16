@@ -8,6 +8,10 @@
 // the debugging artifact. Labels are built from tool INPUTS only — never
 // prompt text, never tool outputs.
 
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("indexer");
+
 export type ActivityKind = "file" | "graph" | "bash" | "tool";
 
 export interface ActivityEvent {
@@ -46,7 +50,7 @@ export function startActivity(jobId: string, repo: string, backend: string): voi
     events: [],
   });
   latestJobByRepo.set(repo, jobId);
-  console.log(`[indexer] ${repo} · ${backend} run started (job ${jobId})`);
+  log.info("run started", { repo, backend, jobId });
 }
 
 export function finishActivity(jobId: string, status: "done" | "failed"): void {
@@ -55,9 +59,15 @@ export function finishActivity(jobId: string, status: "done" | "failed"): void {
   a.status = status;
   a.finishedAt = Date.now();
   const secs = Math.round((a.finishedAt - a.startedAt) / 1000);
-  console.log(
-    `[indexer] ${a.repo} · ${status} after ${secs}s — ${a.counts.toolCalls} calls, ${a.counts.filesRead} files read, ${a.counts.graphWrites} graph writes`
-  );
+  log.info("run finished", {
+    jobId,
+    repo: a.repo,
+    status,
+    secs,
+    toolCalls: a.counts.toolCalls,
+    filesRead: a.counts.filesRead,
+    graphWrites: a.counts.graphWrites,
+  });
   // Live-only feed: keep the counts summary, drop the ticker.
   a.events = [];
 }
@@ -75,7 +85,7 @@ export function recordActivityLine(jobId: string, backend: string, line: string)
   if (a.events.length > MAX_EVENTS) a.events.splice(0, a.events.length - MAX_EVENTS);
   // Mirror to the orchestrator log so `tail -f` shows the run live and a
   // killed job still leaves a trace (the transcript file lands only at exit).
-  console.log(`[indexer] ${a.repo} · ${extracted.label}`);
+  log.info("indexer_step", { jobId, repo: a.repo, tool: extracted.tool, label: extracted.label });
 }
 
 export function activityForRepo(repo: string): JobActivity | null {

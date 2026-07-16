@@ -2,6 +2,7 @@
 // Port 7500 (ORCHESTRATOR_PORT env override).
 
 import Fastify from "fastify";
+import { createLogger } from "@flow/logger";
 import { requireAuth } from "./auth.js";
 import { registerEventRoutes } from "./events.js";
 import { registerOutboxRoutes } from "./outbox-routes.js";
@@ -25,9 +26,17 @@ import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
 
+const log = createLogger("orchestrator");
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT ?? "7500", 10);
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL ?? "info",
+    base: { component: "http" },
+    timestamp: () => `,"ts":"${new Date().toISOString()}"`,
+    formatters: { level: (label) => ({ level: label }) },
+  },
+});
 
 // ------------------------------------------------------------------
 // Raw body parser — required by webhook routes for HMAC validation.
@@ -39,7 +48,7 @@ app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, 
     // Expose both raw (for HMAC) and parsed (for regular routes)
     const parsed = JSON.parse((body as Buffer).toString("utf-8")) as unknown;
     // Attach raw buffer to request so webhook handlers can reach it
-    (req as Record<string, unknown>)._rawBody = body as Buffer;
+    (req as unknown as Record<string, unknown>)._rawBody = body as Buffer;
     done(null, parsed);
   } catch (err) {
     done(err as Error, undefined);
@@ -211,7 +220,7 @@ app.addHook("onClose", async () => {
 const start = async (): Promise<void> => {
   try {
     await app.listen({ port: PORT, host: "0.0.0.0" });
-    console.log(`[orchestrator] listening on port ${PORT}`);
+    log.info("listening", { port: PORT });
 
     // Recover jobs left 'running' by a crash/restart (S103)
     recoverStalledJobs();
@@ -232,7 +241,7 @@ const start = async (): Promise<void> => {
 
     // Boot Slack Socket Mode adapter (no-op if tokens absent)
     bootSlackAdapter().catch((err) =>
-      console.error("[orchestrator] Slack adapter boot error:", err)
+      log.error("Slack adapter boot error", { err: err instanceof Error ? err.message : String(err) })
     );
   } catch (err) {
     app.log.error(err);

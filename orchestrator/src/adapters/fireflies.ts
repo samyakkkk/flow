@@ -40,8 +40,11 @@
 
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createLogger } from "@flow/logger";
 import { registerPoller, stopPoller } from "../poller.js";
 import type { NormalizedEvent } from "../events.js";
+
+const log = createLogger("fireflies");
 
 // ------------------------------------------------------------------
 // Fireflies API types
@@ -216,7 +219,7 @@ export function startFirefliesPoller(intervalMs = DEFAULT_INTERVAL_MS): ReturnTy
   const hasMock = !!process.env.FLOW_FIREFLIES_MOCK;
 
   if (!hasKey && !hasMock) {
-    console.log("[fireflies] FIREFLIES_API_KEY not set and FLOW_FIREFLIES_MOCK not set — poller not started");
+    log.info("FIREFLIES_API_KEY not set and FLOW_FIREFLIES_MOCK not set — poller not started");
     return null;
   }
 
@@ -245,5 +248,5 @@ export async function triggerFirefliesPoll(): Promise<void> {
   // Fireflies does not currently provide incoming webhooks.
   // When they do, this function should call registerPoller's pollTick
   // directly (or simply call firefliesFetchSince + processEvent inline).
-  console.log("[fireflies] triggerFirefliesPoll called — no-op (Fireflies has no webhooks)");
+  log.info("triggerFirefliesPoll called — no-op (Fireflies has no webhooks)");
 }

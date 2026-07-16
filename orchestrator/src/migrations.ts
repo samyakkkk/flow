@@ -21,6 +21,9 @@
 // swallowed.
 
 import type Database from "better-sqlite3";
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("db");
 
 type DB = Database.Database;
 
@@ -159,6 +162,6 @@ export function migrate(db: DB, opts: { fresh: boolean }): void {
       m.up(db);
       db.pragma(`user_version = ${m.id}`);
     })();
-    console.log(`[db] migration ${m.id} applied: ${m.name}`);
+    log.info("migration applied", { id: m.id, name: m.name });
   }
 }

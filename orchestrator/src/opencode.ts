@@ -30,6 +30,11 @@ import {
 } from "./indexer-runtime.js";
 import { finishActivity, recordActivityLine, startActivity } from "./job-activity.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("opencode");
+const notesLog = createLogger("notes");
+const indexerLog = createLogger("indexer");
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -357,7 +362,7 @@ export function recoverStalledJobs(): void {
     }
   }
   if (stalled.length > 0) {
-    console.warn(`[opencode] recovered ${stalled.length} stalled job(s); re-queued ${reindex.length} index job(s)`);
+    log.warn("recovered stalled jobs", { stalledCount: stalled.length, reindexCount: reindex.length });
   }
 }
 
@@ -497,7 +502,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
           const { promoteNotesForRepo } = await import("./notes.js");
           await promoteNotesForRepo(repo, base, merges.stdout ?? "");
         } catch (err) {
-          console.warn(`[notes] promotion pass failed for ${repo}: ${err}`);
+          notesLog.warn("promotion pass failed", { repo, err: err instanceof Error ? err.message : String(err) });
         }
       })();
     }
@@ -755,7 +760,7 @@ function persistJobTranscript(jobId: string, stdout: string, stderr: string): vo
     writeFileSync(resolve(logDir, `${jobId}.jsonl`), stdout ?? "");
     if (stderr) writeFileSync(resolve(logDir, `${jobId}.stderr.log`), stderr);
   } catch (err) {
-    console.error(`[indexer] failed to persist job transcript: ${err}`);
+    indexerLog.error("failed to persist job transcript", { jobId, err: err instanceof Error ? err.message : String(err) });
   }
 }
 

@@ -8,6 +8,9 @@ import db from "./db.js";
 import { classify, taxonomyKey } from "./classify.js";
 import { policyFor } from "./policy.js";
 import { executeAction } from "./actions/index.js";
+import { containsSecret } from "./secrets.js";
+
+export { containsSecret } from "./secrets.js";
 
 // Contract shape from system.md
 export interface NormalizedEvent {
@@ -17,24 +20,6 @@ export interface NormalizedEvent {
   ts: number;         // unix epoch ms
   payload: Record<string, unknown>;
   workspace?: string;
-}
-
-// High-signal secret formats. Deliberately narrow — false positives silently
-// drop real messages, so only patterns that are unambiguously credentials.
-const SECRET_PATTERNS: RegExp[] = [
-  /\bsk-[A-Za-z0-9_-]{20,}\b/,                  // OpenAI/OpenRouter-style keys
-  /\bxox[bapo]-[A-Za-z0-9-]{10,}\b/,            // Slack tokens
-  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,           // GitHub fine-grained PAT
-  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,             // GitHub classic tokens
-  /\blin_api_[A-Za-z0-9]{20,}\b/,               // Linear API keys
-  /\bAKIA[0-9A-Z]{16}\b/,                       // AWS access key id
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,         // PEM private keys
-];
-
-// Exported so corpus-writing paths (e.g. meeting ingest) can screen text
-// BEFORE persisting it — the corpus must never hold a credential either.
-export function containsSecret(text: string): boolean {
-  return SECRET_PATTERNS.some((re) => re.test(text));
 }
 
 const insertEvent = db.prepare(`
@@ -66,7 +51,7 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
   // window where GET /v1/events/:id could read a credential (S039/S040). The
   // sensitive hard-drop must not depend on the LLM recognizing a token format.
   const flat = JSON.stringify(event.payload);
-  if (SECRET_PATTERNS.some((re) => re.test(flat))) {
+  if (containsSecret(flat)) {
     // Nothing stored, no audit — same contract as classifier-detected sensitive.
     return;
   }

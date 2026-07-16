@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import type { NormalizedEvent } from "./events.js";
 import { getSetting, llmApiKey, llmBaseUrl } from "./settings.js";
 import { logLLM } from "./llmlog.js";
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("classify");
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES_DIR = resolve(__dirname, "../test/fixtures/classifications");
@@ -100,7 +103,7 @@ class LiveClassifier implements Classifier {
       // No key yet (fresh project): degrade without calling the API. confidence
       // 0 keeps any auto action behind the floor; the reason lands in the audit
       // trail and the dashboard nudges the user to add the key in Settings.
-      console.warn("[classify] no LLM API key configured (LLM_API_KEY or OPENROUTER_API_KEY) — events cannot be understood until one is set (Settings).");
+      log.warn("no LLM API key configured (LLM_API_KEY or OPENROUTER_API_KEY) — events cannot be understood until one is set (Settings)");
       return {
         classification: enums[0],
         confidence: 0,
@@ -196,7 +199,7 @@ Do not add extra fields or prose.`;
         });
         if (i === attempts - 1) throw err;
         // Retry on parse or network error
-        console.warn(`[classify] attempt ${i + 1} failed, retrying: ${(err as Error).message}`);
+        log.warn("attempt failed, retrying", { attempt: i + 1, err: (err as Error).message });
       }
     }
     throw new Error("Classifier: exhausted retries");

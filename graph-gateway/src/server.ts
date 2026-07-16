@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createLogger } from "@flow/logger";
 import { callVerb, verbs } from "./verbs.js";
 import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
@@ -23,10 +24,12 @@ import { isPat, verifyPatForProject } from "./patAuth.js";
 // per-user gating for remote MCP clients (EC2 topology). No token in env →
 // open, as before — dev fallback only.
 
+const log = createLogger("gateway");
+
 const port = Number(process.env.GATEWAY_PORT ?? 7433);
 const TOKEN = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
 if (!TOKEN) {
-  console.warn("[gateway] no GATEWAY_TOKEN/FLOW_ADMIN_TOKEN in env — HTTP verbs are UNAUTHENTICATED (dev mode)");
+  log.warn("no GATEWAY_TOKEN/FLOW_ADMIN_TOKEN in env — HTTP verbs are UNAUTHENTICATED (dev mode)");
 }
 
 function authorized(header: string): boolean {
@@ -105,7 +108,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
+  log.info("listening", { port, defaultGraph: DEFAULT_GRAPH });
   // Start the local embedding model download immediately so it runs in
   // parallel with migrations. runBootTasks awaits the same singleton promise
   // before it reconciles embeddings — nodes indexed during the download are

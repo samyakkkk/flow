@@ -18,6 +18,9 @@
 
 import type { FastifyInstance } from "fastify";
 import { createHmac } from "node:crypto";
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("github-poller");
 import { randomUUID } from "node:crypto";
 import { execSync, spawnSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
@@ -286,7 +289,7 @@ export async function githubFetchSince(cursor: string): Promise<FetchResult> {
       newHeads[repo] = sha;
     } catch (err) {
       // Log but don't fail the whole fetch — one repo error should not block others
-      console.error(`[github-poller] Error checking ${repo}: ${err}`);
+      log.error("error checking repo", { repo, err: err instanceof Error ? err.message : String(err) });
     }
   }
 

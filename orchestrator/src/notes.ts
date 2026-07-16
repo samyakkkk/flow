@@ -17,8 +17,11 @@
 
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@flow/logger";
 import db from "./db.js";
 import { blobToVec, cosine, embedText, vecToBlob } from "./embed.js";
+
+const log = createLogger("notes");
 
 export type NoteKind = "wip" | "note" | "caution" | "decision";
 const KINDS = new Set<NoteKind>(["wip", "note", "caution", "decision"]);
@@ -197,7 +200,7 @@ export async function promoteNotesForRepo(
     setStatus.run("promoted", row.id);
     promoted++;
   }
-  if (promoted + swept > 0) console.log(`[notes] ${repo}: promoted ${promoted}, swept ${swept}`);
+  if (promoted + swept > 0) log.info("promoted notes", { repo, promoted, swept });
   return { promoted, swept };
 }
 

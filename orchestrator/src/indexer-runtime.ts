@@ -15,6 +15,9 @@ import {
   resolveLocalExecutable,
 } from "./agents/runtime.js";
 import { getSetting, llmApiKey, llmBaseUrl } from "./settings.js";
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("indexer");
 
 export type IndexerBackend = "opencode" | "codex" | "claude";
 
@@ -50,7 +53,7 @@ export async function resolveIndexerBackend(): Promise<IndexerBackend> {
   // package as a dependency (the job runner resolves it via OPENCODE_BIN), so
   // indexing works on a machine with nothing installed. If even the bundled
   // copy is missing, the spawn failure surfaces its own error.
-  console.warn("[indexer] no coding CLI found on PATH — using bundled opencode");
+  log.warn("no coding CLI found on PATH — using bundled opencode");
   return "opencode";
 }
 

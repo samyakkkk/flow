@@ -13,6 +13,7 @@
     "verify": "bash verify-all.sh"
   },
   "workspaces": [
+    "shared",
     "orchestrator",
     "graph-gateway",
     "dashboard"

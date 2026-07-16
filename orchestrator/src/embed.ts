@@ -14,6 +14,9 @@
 // mismatch, so stale-dimension notes simply stop matching and age out via
 // the normal note decay — no migration needed.
 
+import { createLogger } from "@flow/logger";
+
+const log = createLogger("embed");
 const GATEWAY_URL = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
 
 function gatewayToken(): string {
@@ -32,14 +35,14 @@ export async function embedText(text: string): Promise<Float32Array | null> {
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
-      console.warn(`[embed] gateway ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      log.warn("gateway error", { status: res.status, body: (await res.text().catch(() => "")).slice(0, 200) });
       return null;
     }
     const json = (await res.json()) as { vec?: number[] | null; ready?: boolean };
     if (!json.ready) return null; // model still loading — store without a vector
     return Array.isArray(json.vec) ? Float32Array.from(json.vec) : null;
   } catch (err) {
-    console.warn(`[embed] gateway request failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn("gateway request failed", { err: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

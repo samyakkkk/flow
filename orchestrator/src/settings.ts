@@ -10,8 +10,11 @@
 // Small in-process cache is invalidated on every write.
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { createLogger } from "@flow/logger";
 import db from "./db.js";
 import { readGlobalDefault, writeGlobalDefault } from "./global-settings.js";
+
+const log = createLogger("settings");
 
 // ------------------------------------------------------------------
 // Setting registry entry
@@ -477,7 +480,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         reinitPollers();
         startAllPollers();
       } catch (err) {
-        console.error("[settings] reinitPollers error:", err);
+        log.error("reinitPollers error", { err: err instanceof Error ? err.message : String(err) });
       }
 
       // Attempt Slack re-boot if tokens changed and in prod mode
@@ -485,10 +488,10 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         try {
           const { bootSlackAdapter } = await import("./adapters/slack.js");
           bootSlackAdapter().catch((err) =>
-            console.error("[settings] Slack re-boot error:", err)
+            log.error("Slack re-boot error", { err: err instanceof Error ? err.message : String(err) })
           );
         } catch (err) {
-          console.error("[settings] Slack adapter import error:", err);
+          log.error("Slack adapter import error", { err: err instanceof Error ? err.message : String(err) });
         }
       }
 

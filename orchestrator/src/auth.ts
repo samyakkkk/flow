@@ -6,13 +6,14 @@
 
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { timingSafeEqual } from "node:crypto";
+import { createLogger } from "@flow/logger";
 
+const log = createLogger("auth");
 const TOKEN = process.env.FLOW_ADMIN_TOKEN ?? "dev-token";
 
 if (!process.env.FLOW_ADMIN_TOKEN) {
-  console.warn(
-    "[auth] FLOW_ADMIN_TOKEN not set — using insecure default 'dev-token'. " +
-    "Set this env var before exposing the service externally."
+  log.warn(
+    "FLOW_ADMIN_TOKEN not set — using insecure default 'dev-token'; set this env var before exposing the service externally"
   );
 }
 

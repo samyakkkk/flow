@@ -8,12 +8,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/worktrees.test.ts",
+    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/worktrees.test.ts test/logger.test.ts test/secrets.test.ts",
     "verify": "npm test",
     "verify:real": "tsx test/real-integrations.ts",
     "verify:session": "tsx test/real-session.ts"
   },
   "dependencies": {
+    "@flow/logger": "^0.1.0",
     "@agentclientprotocol/claude-agent-acp": "^0.56.0",
     "@agentclientprotocol/sdk": "^1.2.0",
     "@fastify/sensible": "^5.6.0",
