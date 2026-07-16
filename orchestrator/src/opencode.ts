@@ -13,12 +13,23 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import db, { DB_DIR } from "./db.js";
 import { postSlackMessage } from "./actions/slack.js";
 import { getSetting } from "./settings.js";
 import { logLLM } from "./llmlog.js";
+import { projectGraphName } from "./agents/runtime.js";
+import {
+  graphBuilderInstructions,
+  indexerModel,
+  mcpServerSpec,
+  resolveBackendExecutable,
+  resolveIndexerBackend,
+} from "./indexer-runtime.js";
+import { finishActivity, recordActivityLine, startActivity } from "./job-activity.js";
+import { resolveGithubDefaultBranch } from "./repo-branch.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -43,10 +54,6 @@ const OPENCODE_BIN = ((): string => {
   }
   return "opencode";
 })();
-
-// Read at call time via getSetting so DB/env changes take effect immediately.
-// The const below is only used as a fallback; runRealOpencode reads dynamically.
-const _DEFAULT_MODEL = "openrouter/minimax/minimax-m3";
 
 // Per-repo mutex: set of repos currently being indexed
 const runningRepos = new Set<string>();
@@ -231,10 +238,13 @@ function repoHeadCommit(name: string): string | null {
 // caller's concern — this returns the registry entry + job id.
 export async function connectGithubRepo(
   url: string,
-  branch: string,
+  branch?: string,
   localPath?: string,
 ): Promise<{ entry: RepoEntry; jobId: string }> {
-  const entry = registerRepo(url, branch);
+  const name = url.replace(/\/+$/, "").split("/").pop()!.replace(/\.git$/, "");
+  const existingBranch = readRepoRegistry().repos.find((repo) => repo.name === name)?.branch?.trim();
+  const resolvedBranch = branch?.trim() || existingBranch || await resolveGithubDefaultBranch(url);
+  const entry = registerRepo(url, resolvedBranch);
   if (localPath) registerSource({ name: entry.name, localPath });
   // registeredRepos is otherwise only seeded at boot — watch this branch now.
   const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
@@ -353,18 +363,57 @@ export function recoverStalledJobs(): void {
 
 // Enqueue a job and kick off execution in background (non-blocking enqueue)
 export async function enqueueJob(opts: JobInput): Promise<{ id: string }> {
+  const normalizedOpts = normalizeIndexJob(opts);
   const id = randomUUID();
   insertJob.run({
     id,
-    type: opts.type,
-    input: JSON.stringify(opts.input),
-    repo: opts.repo ?? null,
+    type: normalizedOpts.type,
+    input: JSON.stringify(normalizedOpts.input),
+    repo: normalizedOpts.repo ?? null,
   });
 
   // Execute async — don't await; callers get the job id and can poll
-  setImmediate(() => void runJob(id, opts));
+  setImmediate(() => void runJob(id, normalizedOpts));
 
   return { id };
+}
+
+// One normalization boundary for every index entry point. Explicit input wins;
+// otherwise hydrate from the durable registry. This prevents a branchless
+// reindex request from silently changing a repo registered on master/trunk to
+// main, and it ensures the stored job records the branch it will actually use.
+function normalizeIndexJob(opts: JobInput): JobInput {
+  if (opts.type !== "index_repo") return opts;
+
+  const inputRepo = typeof opts.input.repo === "string" ? opts.input.repo.trim() : "";
+  const repo = inputRepo || opts.repo?.trim() || "";
+  if (!repo) throw new Error("index_repo requires a repo");
+
+  const entry = readRepoRegistry().repos.find((candidate) => candidate.name === repo);
+  const inputBranch = typeof opts.input.branch === "string" ? opts.input.branch.trim() : "";
+  const branch = inputBranch || entry?.branch?.trim() || "";
+  if (!branch) {
+    throw new Error(`index_repo requires a branch for '${repo}' (none supplied or registered)`);
+  }
+
+  const inputUrl = typeof opts.input.url === "string" ? opts.input.url.trim() : "";
+  const url = inputUrl || entry?.url?.trim() || "";
+  return {
+    ...opts,
+    repo,
+    input: {
+      ...opts.input,
+      repo,
+      ...(url ? { url } : {}),
+      branch,
+    },
+  };
+}
+
+function requiredIndexBranch(input: Record<string, unknown>): string {
+  const branch = typeof input.branch === "string" ? input.branch.trim() : "";
+  if (!branch) throw new Error("normalized index_repo job is missing its branch");
+  return branch;
 }
 
 export function getJob(id: string): Job | null {
@@ -400,8 +449,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     if (opts.type === "index_repo" && !process.env.FLOW_FAKE_OPENCODE) {
       const input = opts.input as { repo?: string; url?: string; branch?: string };
       if (input.repo) {
-        await ensureRepoClone({ name: input.repo, url: input.url, branch: input.branch });
-        await refreshRepoCheckout(input.repo, input.branch ?? "main");
+        const branch = requiredIndexBranch(input);
+        await ensureRepoClone({ name: input.repo, url: input.url, branch });
+        await refreshRepoCheckout(input.repo, branch);
       }
     }
 
@@ -421,6 +471,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     }
 
     updateJob.run({ id, status: "done", result_json: JSON.stringify(result) });
+    finishActivity(id, "done");
 
     // Record the commit we just indexed so update.mjs and the orchestrator agree.
     if (opts.type === "index_repo" && repo) {
@@ -435,7 +486,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       void (async () => {
         try {
           const input = opts.input as { branch?: string };
-          const base = input.branch ?? "main";
+          const base = requiredIndexBranch(input);
           const dest = resolve(WORKSPACE_DIR, "repos", repo);
           const merges = await spawnAsync(
             "git",
@@ -490,6 +541,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       status: "failed",
       result_json: JSON.stringify({ error: String(err) }),
     });
+    finishActivity(id, "failed");
     if (opts.type === "correct_graph") {
       const correctionId = (opts.input as { correction_id?: string }).correction_id;
       if (correctionId) {
@@ -519,7 +571,7 @@ function buildPrompt(opts: JobInput): BuiltPrompt {
     case "index_repo":
       return {
         agent: "graph-builder",
-        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${opts.input.branch ?? "main"}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find_entity), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
+        prompt: `Index the repository at repos/${opts.input.repo ?? "."} (branch ${requiredIndexBranch(opts.input)}) into the knowledge graph. The graph may already contain entities from other repositories — check what exists before creating (graph_find_entity), reuse and enrich existing entities, and pay special attention to cross-repo dependencies. Write incrementally as you learn, per your instructions. Finish with a summary of what you modeled and any open questions.`,
       };
     case "enrich":
       return {
@@ -588,20 +640,33 @@ export function jobScopedToken(jobId: string): string {
 // Async spawn: collect stdout/stderr without blocking the event loop (P0-C —
 // spawnSync froze the server for the whole job). Kills on timeout.
 interface SpawnResult { status: number | null; stdout: string; stderr: string; error?: Error }
-function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<SpawnResult> {
+function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string, onLine?: (line: string) => void): Promise<SpawnResult> {
   return new Promise((resolve) => {
     // stdin MUST be 'ignore': with the default 'pipe', opencode sees an open
     // stdin and waits on it forever, producing zero output (the runs hang at
     // startup). This is why orchestrator-spawned jobs hung while manual
     // `nohup opencode … </dev/null` runs worked.
-    const child = spawn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"], ...(cwd ? { cwd } : {}) });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // Incremental line splitter for the live activity feed — a failing
+    // callback must never take the job down with it.
+    let pending = "";
+    const feedLines = (chunk: string) => {
+      if (!onLine) return;
+      pending += chunk;
+      let nl;
+      while ((nl = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        try { onLine(line); } catch { /* feed is best-effort */ }
+      }
+    };
     const timer = setTimeout(() => {
       if (!settled) { settled = true; child.kill("SIGKILL"); resolve({ status: null, stdout, stderr, error: new Error(`opencode timed out after ${timeoutMs}ms`) }); }
     }, timeoutMs);
-    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    child.stdout.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; feedLines(s); });
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
     child.on("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ status: null, stdout, stderr, error }); } });
     child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ status, stdout, stderr }); } });
@@ -609,31 +674,42 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
 }
 
 // ------------------------------------------------------------------
-// Real opencode runner — uses --format json to capture session ID
+// Real indexer runner — dispatches index/enrich/correct jobs to the
+// configured coding CLI (opencode | codex | claude). Chat jobs (answer,
+// continue) always use opencode.
 // ------------------------------------------------------------------
 
 async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result: unknown; sessionId: string }> {
-  const { agent, prompt, sessionId: resumeSessionId } = buildPrompt(opts);
+  // answer/continue rely on opencode session resume (--session <id>); multi-CLI
+  // chat is future work, so these stay on the opencode path unconditionally.
+  if (opts.type === "answer" || opts.type === "continue") {
+    return runOpencodeBackend(opts, jobId);
+  }
 
-  // Read model at call time so DB/env changes take effect without restart
-  const model =
-    getSetting("GRAPH_BUILDER_MODEL") ??
-    process.env.GRAPH_BUILDER_MODEL ??
-    _DEFAULT_MODEL;
+  const backend = await resolveIndexerBackend();
+  switch (backend) {
+    case "claude":
+      return runClaudeBackend(opts, jobId);
+    case "codex":
+      return runCodexBackend(opts, jobId);
+    case "opencode":
+    default:
+      return runOpencodeBackend(opts, jobId);
+  }
+}
 
-  const args: string[] = ["run", "--format", "json", "-m", model, "--dir", WORKSPACE_DIR];
-  if (agent) args.push("--agent", agent);
-  if (resumeSessionId) args.push("--session", resumeSessionId);
-  args.push(prompt);
+// Index/enrich runs read whole repos — give them real time. Conversational
+// jobs stay snappy.
+function indexerTimeout(opts: JobInput): number {
+  return opts.type === "index_repo" || opts.type === "enrich" ? 45 * 60 * 1000 : 15 * 60 * 1000;
+}
 
-  // Inject env so the notify tool can reach back to the orchestrator. The
-  // subprocess (which reads untrusted repo content — prompt-injection surface,
-  // S106/S107) gets a JOB-SCOPED token, NOT the root admin token: HMAC(admin,
-  // jobId). /v1/notify accepts either the admin token or the matching scoped
-  // token, so a leaked job token only authorizes notify for that one job.
+// Env shared by every backend subprocess. The subprocess reads untrusted repo
+// content (prompt-injection surface, S106/S107) so it gets a JOB-SCOPED notify
+// token, NOT the root admin token: HMAC(admin, jobId). GRAPH_GATEWAY_* are
+// used by opencode's workspace graph tools and are harmless for the others.
+function indexerChildEnv(opts: JobInput, jobId: string, actor: string): NodeJS.ProcessEnv {
   const port = process.env.ORCHESTRATOR_PORT ?? "7500";
-  // Inject OPENROUTER_API_KEY from DB/env so opencode workers have it even when
-  // it was set via the settings UI rather than the .env file.
   const openrouterKey =
     getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? "";
   const env: NodeJS.ProcessEnv = {
@@ -646,8 +722,9 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
     FLOW_JOB_ID: jobId,
     // Stamped by the gateway MCP (builder mode) into every write's provenance,
     // overriding whatever the model supplies — writes trace to the job row and
-    // its transcript in job-logs/, not to a model-chosen name.
-    FLOW_ACTOR: `opencode:${agent ?? "opencode"}:${jobId}`,
+    // its transcript in job-logs/, not to a model-chosen name. The MCP child
+    // inherits this from the CLI's env, whichever backend spawned it.
+    FLOW_ACTOR: actor,
     ...(openrouterKey ? { OPENROUTER_API_KEY: openrouterKey } : {}),
     // Graph tools authenticate to the (now bearer-authed) gateway. The
     // subprocess already had full gateway write access by construction; the
@@ -657,38 +734,70 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
     // job's prompt embeds agent-authored text (prompt-injection surface), so
     // the graph tools refuse writes outside this set (S106-adjacent).
     ...(opts.type === "correct_graph"
-      ? { FLOW_WRITE_SCOPE: ((opts.input as { target_ids?: string[] }).target_ids ?? []).join(",") }
+      ? { FLOW_WRITE_SCOPE: correctionWriteScope(opts) }
       : {}),
   };
   delete env.FLOW_ADMIN_TOKEN; // never expose the root token to the session
+  return env;
+}
 
-  // Index/enrich runs read whole repos — give them real time. Conversational
-  // jobs stay snappy.
-  const timeoutMs =
-    opts.type === "index_repo" || opts.type === "enrich" ? 45 * 60 * 1000 : 15 * 60 * 1000;
+function correctionWriteScope(opts: JobInput): string {
+  return ((opts.input as { target_ids?: string[] }).target_ids ?? []).join(",");
+}
+
+// Persist the full transcript BEFORE any error handling — failed runs are
+// exactly the ones worth debugging. DB_DIR is null only for in-memory tests.
+function persistJobTranscript(jobId: string, stdout: string, stderr: string): void {
+  if (!DB_DIR) return;
+  try {
+    const logDir = resolve(DB_DIR, "job-logs");
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(resolve(logDir, `${jobId}.jsonl`), stdout ?? "");
+    if (stderr) writeFileSync(resolve(logDir, `${jobId}.stderr.log`), stderr);
+  } catch (err) {
+    console.error(`[indexer] failed to persist job transcript: ${err}`);
+  }
+}
+
+// Directory for per-job temp files (MCP config, codex last-message). Falls back
+// to the OS temp dir when DB_DIR is null (in-memory tests never spawn a CLI).
+function jobLogDir(): string {
+  const dir = DB_DIR ? resolve(DB_DIR, "job-logs") : tmpdir();
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// ------------------------------------------------------------------
+// opencode backend — uses --format json to capture the session ID
+// ------------------------------------------------------------------
+
+async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ result: unknown; sessionId: string }> {
+  const { agent, prompt, sessionId: resumeSessionId } = buildPrompt(opts);
+  const model = indexerModel("opencode");
+
+  const args: string[] = ["run", "--format", "json", "-m", model, "--dir", WORKSPACE_DIR];
+  if (agent) args.push("--agent", agent);
+  if (resumeSessionId) args.push("--session", resumeSessionId);
+  args.push(prompt);
+
+  const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
+  const timeoutMs = indexerTimeout(opts);
 
   // Stagger process starts: two opencode processes launched in the same
   // instant (e.g. boot-time stall recovery re-queueing several jobs) collide
   // on opencode's internal state DB ("database is locked"). Concurrent runs
-  // are fine once initialized — only the starts need spacing.
+  // are fine once initialized — only the starts need spacing. Other backends
+  // have no such shared lock, so they don't stagger.
   await acquireSpawnSlot();
 
+  startActivity(jobId, opts.repo ?? "", "opencode");
   const t0 = Date.now();
-  const spawned = await spawnAsync(OPENCODE_BIN, args, env, timeoutMs);
+  const spawned = await spawnAsync(OPENCODE_BIN, args, env, timeoutMs, undefined, (line) =>
+    recordActivityLine(jobId, "opencode", line)
+  );
   const latencyMs = Date.now() - t0;
 
-  // Persist the full transcript BEFORE any error handling — failed runs are
-  // exactly the ones worth debugging. DB_DIR is null only for in-memory tests.
-  if (DB_DIR) {
-    try {
-      const logDir = resolve(DB_DIR, "job-logs");
-      mkdirSync(logDir, { recursive: true });
-      writeFileSync(resolve(logDir, `${jobId}.jsonl`), spawned.stdout ?? "");
-      if (spawned.stderr) writeFileSync(resolve(logDir, `${jobId}.stderr.log`), spawned.stderr);
-    } catch (err) {
-      console.error(`[opencode] failed to persist job transcript: ${err}`);
-    }
-  }
+  persistJobTranscript(jobId, spawned.stdout ?? "", spawned.stderr ?? "");
 
   if (spawned.error || spawned.status !== 0) {
     logLLM({
@@ -737,6 +846,200 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
   if (opts.type === "answer" || opts.type === "continue") {
     return { result: parseAnswerPayload(answerMd), sessionId };
   }
+
+  return { result: { status: "ok", raw: answerMd }, sessionId };
+}
+
+// ------------------------------------------------------------------
+// claude backend — Claude Code CLI in headless (-p) mode with the flow-graph
+// MCP spawned directly (it talks to FalkorDB and keeps write verbs).
+// ------------------------------------------------------------------
+
+async function runClaudeBackend(opts: JobInput, jobId: string): Promise<{ result: unknown; sessionId: string }> {
+  const { prompt } = buildPrompt(opts);
+  const model = indexerModel("claude");
+  const executable = await resolveBackendExecutable("claude");
+  const instructions = graphBuilderInstructions(WORKSPACE_DIR);
+
+  // --mcp-config takes a file path; write a per-job config that points claude
+  // at the flow-graph MCP (full write mode for indexing).
+  const spec = mcpServerSpec({
+    graphName: projectGraphName(),
+    writeScope: opts.type === "correct_graph" ? correctionWriteScope(opts) : undefined,
+    actor: `claude:graph-builder:${jobId}`,
+    job: { id: jobId, token: jobScopedToken(jobId) },
+  });
+  const mcpConfigPath = resolve(jobLogDir(), `${jobId}.mcp.json`);
+  writeFileSync(
+    mcpConfigPath,
+    JSON.stringify({ mcpServers: { "flow-graph": { command: spec.command, args: spec.args, env: spec.env } } })
+  );
+
+  // -p is a boolean (print mode); the prompt is positional and goes LAST so a
+  // prompt that happens to start with "-" can't be parsed as a flag.
+  // stream-json (which requires --verbose) instead of json: same final result,
+  // but every assistant turn arrives as its own line — that stream feeds the
+  // live activity ticker on the dashboard.
+  const args = [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--model", model,
+    "--append-system-prompt", instructions,
+    "--mcp-config", mcpConfigPath,
+    "--strict-mcp-config",
+    "--allowedTools", "mcp__flow-graph,Read,Grep,Glob,LS,Bash(git:*)",
+    "--disallowedTools", "Write,Edit,NotebookEdit,WebFetch,WebSearch",
+    "--", prompt,
+  ];
+
+  const env = indexerChildEnv(opts, jobId, `claude:graph-builder:${jobId}`);
+  const timeoutMs = indexerTimeout(opts);
+
+  startActivity(jobId, opts.repo ?? "", "claude");
+  const t0 = Date.now();
+  const spawned = await spawnAsync(executable, args, env, timeoutMs, WORKSPACE_DIR, (line) =>
+    recordActivityLine(jobId, "claude", line)
+  );
+  const latencyMs = Date.now() - t0;
+
+  persistJobTranscript(jobId, spawned.stdout ?? "", spawned.stderr ?? "");
+
+  if (spawned.error || spawned.status !== 0) {
+    logLLM({
+      kind: "opencode_job", ref: jobId, model, ok: false, latencyMs,
+      error: spawned.error?.message ?? `claude exited ${spawned.status}`,
+      prompt,
+      response: (spawned.stderr ?? "").slice(-4000),
+    });
+    if (spawned.error) throw spawned.error;
+    throw new Error(spawned.stderr || `claude exited ${spawned.status}`);
+  }
+
+  // stream-json emits JSONL; the last {"type":"result"} line carries the final
+  // text and session id. On parse failure keep the raw stdout as the result.
+  let answerMd = "";
+  let sessionId = "";
+  for (const line of (spawned.stdout ?? "").split("\n").filter((l) => l.trim())) {
+    try {
+      const evt = JSON.parse(line) as { type?: string; result?: string; session_id?: string };
+      if (evt.type === "result") {
+        if (typeof evt.result === "string") answerMd = evt.result;
+        if (typeof evt.session_id === "string") sessionId = evt.session_id;
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  // Fallback caps at the stream tail — the full transcript is on disk.
+  answerMd = answerMd || (spawned.stdout ?? "").slice(-4000) || "(no answer)";
+
+  logLLM({
+    kind: "opencode_job", ref: jobId, model, ok: true, latencyMs,
+    prompt,
+    response: answerMd,
+  });
+
+  return { result: { status: "ok", raw: answerMd }, sessionId };
+}
+
+// ------------------------------------------------------------------
+// codex backend — Codex CLI `exec`. Codex is NOT installed on this machine, so
+// this path has not been live-tested; it needs live verification.
+// ------------------------------------------------------------------
+
+// Quote a string as a TOML basic string for `codex -c key=value` overrides.
+function tomlString(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+async function runCodexBackend(opts: JobInput, jobId: string): Promise<{ result: unknown; sessionId: string }> {
+  const { prompt } = buildPrompt(opts);
+  const model = indexerModel("codex");
+  const executable = await resolveBackendExecutable("codex");
+  const instructions = graphBuilderInstructions(WORKSPACE_DIR);
+
+  // codex exec has no system-prompt flag — prepend the graph-builder guidance.
+  const fullPrompt = `${instructions}\n\n${prompt}`;
+
+  const spec = mcpServerSpec({
+    graphName: projectGraphName(),
+    writeScope: opts.type === "correct_graph" ? correctionWriteScope(opts) : undefined,
+    actor: `codex:graph-builder:${jobId}`,
+    job: { id: jobId, token: jobScopedToken(jobId) },
+  });
+  const envInline = Object.entries(spec.env)
+    .map(([k, v]) => `${k}=${tomlString(v)}`)
+    .join(", ");
+  const overrides = [
+    `mcp_servers.flow-graph.command=${tomlString(spec.command)}`,
+    `mcp_servers.flow-graph.args=[${tomlString(spec.args[0])}]`,
+    `mcp_servers.flow-graph.env={${envInline}}`,
+  ];
+
+  const lastMessagePath = resolve(jobLogDir(), `${jobId}.last.md`);
+  const args = [
+    "exec",
+    "--json",
+    "-m", model,
+    "--sandbox", "read-only",
+    "--skip-git-repo-check",
+    "--output-last-message", lastMessagePath,
+  ];
+  for (const o of overrides) args.push("-c", o);
+  args.push(fullPrompt);
+
+  const env = indexerChildEnv(opts, jobId, `codex:graph-builder:${jobId}`);
+  const timeoutMs = indexerTimeout(opts);
+
+  startActivity(jobId, opts.repo ?? "", "codex");
+  const t0 = Date.now();
+  const spawned = await spawnAsync(executable, args, env, timeoutMs, WORKSPACE_DIR, (line) =>
+    recordActivityLine(jobId, "codex", line)
+  );
+  const latencyMs = Date.now() - t0;
+
+  persistJobTranscript(jobId, spawned.stdout ?? "", spawned.stderr ?? "");
+
+  if (spawned.error || spawned.status !== 0) {
+    logLLM({
+      kind: "opencode_job", ref: jobId, model, ok: false, latencyMs,
+      error: spawned.error?.message ?? `codex exited ${spawned.status}`,
+      prompt,
+      response: (spawned.stderr ?? "").slice(-4000),
+    });
+    if (spawned.error) throw spawned.error;
+    throw new Error(spawned.stderr || `codex exited ${spawned.status}`);
+  }
+
+  // Final text is written to --output-last-message; fall back to stdout.
+  let answerMd = "";
+  try {
+    answerMd = readFileSync(lastMessagePath, "utf8");
+  } catch {
+    answerMd = spawned.stdout ?? "";
+  }
+  answerMd = answerMd || "(no answer)";
+
+  // Session id: scan the JSONL event stream for a thread/session identifier.
+  let sessionId = "";
+  for (const line of (spawned.stdout ?? "").split("\n").filter((l) => l.trim())) {
+    try {
+      const evt = JSON.parse(line) as { thread_id?: string; session_id?: string };
+      if (evt.thread_id || evt.session_id) {
+        sessionId = String(evt.thread_id ?? evt.session_id);
+        break;
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+
+  logLLM({
+    kind: "opencode_job", ref: jobId, model, ok: true, latencyMs,
+    prompt,
+    response: answerMd,
+  });
 
   return { result: { status: "ok", raw: answerMd }, sessionId };
 }

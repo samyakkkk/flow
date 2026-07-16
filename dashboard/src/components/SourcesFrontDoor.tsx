@@ -7,8 +7,9 @@
 //     two doors, front and centre.
 //   • variant="strip" — returning: a compact list of connected sources plus an
 //     always-visible "+ Add a source" that expands the same two doors inline.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useProject } from "@/lib/useProject";
 import { AddFolder } from "@/components/AddFolder";
 import { RepoPicker } from "@/components/RepoPicker";
 import { BranchSelect } from "@/components/BranchSelect";
@@ -47,6 +48,93 @@ function timeAgo(iso?: string): string | null {
   return "just now";
 }
 
+// Live activity of the current index job for a repo (orchestrator keeps it in
+// memory while the job runs; empty ticker once it finishes).
+interface IndexActivity {
+  status: "idle" | "running" | "done" | "failed";
+  backend?: string;
+  startedAt?: number;
+  counts?: { toolCalls: number; filesRead: number; graphWrites: number };
+  events?: { seq: number; ts: number; kind: string; label: string }[];
+}
+
+function elapsed(startedAt?: number): string {
+  if (!startedAt) return "";
+  const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ""}`;
+}
+
+// Polls while a job is running (or expected: first index / just-clicked
+// reindex) and renders a terse ticker of what the indexer is doing. One
+// initial fetch even when not expected, so externally-triggered runs (a push
+// to the watched branch) surface too.
+function IndexActivityStrip({ repo, active }: { repo: string; active: boolean }) {
+  const { prefix } = useProject();
+  const [activity, setActivity] = useState<IndexActivity | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    async function tick() {
+      try {
+        const r = await fetch(prefix(`/api/index-activity?repo=${encodeURIComponent(repo)}`));
+        const d = (await r.json()) as IndexActivity;
+        if (stop) return;
+        setActivity(d);
+        if (d.status === "running" || active) timer = setTimeout(tick, 3000);
+      } catch {
+        if (!stop && active) timer = setTimeout(tick, 5000);
+      }
+    }
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, active]);
+
+  if (activity?.status !== "running") return null;
+  const c = activity.counts ?? { toolCalls: 0, filesRead: 0, graphWrites: 0 };
+  const recent = (activity.events ?? []).slice(-8);
+
+  return (
+    <div style={{ borderTop: "1px solid var(--line)", background: "var(--paper)" }} className="px-3 py-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left"
+        style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)", cursor: "pointer" }}
+      >
+        <span>{expanded ? "▾" : "▸"}</span>
+        <span>
+          {activity.backend} · {elapsed(activity.startedAt)} · {c.toolCalls} calls · {c.filesRead} files read ·{" "}
+          {c.graphWrites} graph writes
+        </span>
+      </button>
+      {expanded && recent.length > 0 && (
+        <div className="mt-1.5 space-y-0.5 overflow-hidden">
+          {recent.map((e) => (
+            <div
+              key={e.seq}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: e.kind === "graph" ? "var(--ink)" : "var(--text-muted)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {e.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const branchSelectStyle: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
@@ -61,11 +149,15 @@ const branchSelectStyle: React.CSSProperties = {
 };
 
 function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) {
+  const { prefix } = useProject();
   const chip = sourceChip(s);
   const indexing = s.kind !== "docs" && !s.lastIndexedCommit;
 
   const [reindexing, setReindexing] = useState(false);
   const [reindexMsg, setReindexMsg] = useState("");
+  // Once a reindex is requested, keep the activity poller warm so the ticker
+  // appears as soon as the job starts.
+  const [watchActivity, setWatchActivity] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [editingBranch, setEditingBranch] = useState(false);
@@ -76,14 +168,17 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
     setReindexing(true);
     setReindexMsg("");
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reindex", repoName: s.name }),
       });
       const d = await res.json() as { note?: string; error?: string };
       setReindexMsg(res.ok ? (d.note ?? "Queued.") : (d.error ?? "Error"));
-      if (res.ok) setTimeout(() => setReindexMsg(""), 3000);
+      if (res.ok) {
+        setWatchActivity(true);
+        setTimeout(() => setReindexMsg(""), 3000);
+      }
     } catch {
       setReindexMsg("Network error");
     } finally {
@@ -94,7 +189,7 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
   async function handleRemove() {
     setRemoving(true);
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove", repoName: s.name }),
@@ -119,7 +214,7 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
     }
     setSavingBranch(true);
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch(prefix("/api/repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "change_branch", repoName: s.name, branch: pendingBranch.trim() }),
@@ -271,6 +366,9 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
           )}
         </div>
       </div>
+
+      {/* Live indexer activity — appears while an index job runs */}
+      {s.kind !== "docs" && <IndexActivityStrip repo={s.name} active={indexing || watchActivity} />}
 
       {/* Branch edit inline panel */}
       {editingBranch && (

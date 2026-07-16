@@ -5,6 +5,7 @@ import { AddRepoUrl } from "@/components/AddRepoUrl";
 import { RepoPicker } from "@/components/RepoPicker";
 import { useState, FormEvent, useEffect, useCallback } from "react";
 import { useMode } from "@/lib/useMode";
+import { useProject } from "@/lib/useProject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -173,9 +174,10 @@ function SubmitBtn({ loading, label, disabled = false }: { loading: boolean; lab
 function CatchingUpPanel() {
   const [rows, setRows] = useState<IngestRow[]>([]);
   const [lastFetch, setLastFetch] = useState<number>(0);
+  const { prefix } = useProject();
 
   const fetchStatus = useCallback(() => {
-    fetch("/api/ingest/status")
+    fetch(prefix("/api/ingest/status"))
       .then((r) => r.json())
       .then((d) => {
         const data = d as { sources?: IngestRow[] };
@@ -183,7 +185,7 @@ function CatchingUpPanel() {
         setLastFetch(Date.now());
       })
       .catch(() => {});
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     fetchStatus();
@@ -262,6 +264,7 @@ function CatchingUpPanel() {
 
 export default function ConnectionsPage() {
   const { mode, loading: modeLoading } = useMode();
+  const { prefix } = useProject();
   const [status, setStatus] = useState<ConnStatus | null>(null);
   const [indexedRepos, setIndexedRepos] = useState<RepoEntry[]>([]);
   const [msg, setMsg] = useState("");
@@ -273,15 +276,15 @@ export default function ConnectionsPage() {
   const [meetingLoading, setMeetingLoading] = useState(false);
 
   const refresh = useCallback(() => {
-    fetch("/api/connections")
+    fetch(prefix("/api/connections"))
       .then((r) => r.json())
       .then((d) => setStatus(d as ConnStatus))
       .catch(() => {});
-    fetch("/api/repos")
+    fetch(prefix("/api/repos"))
       .then((r) => r.json())
       .then((d) => setIndexedRepos((d as ReposData).repos ?? []))
       .catch(() => {});
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     refresh();
@@ -297,7 +300,7 @@ export default function ConnectionsPage() {
     setMeetingLoading(true);
     setMsg("");
     try {
-      const res = await fetch("/api/connections", {
+      const res = await fetch(prefix("/api/connections"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "meeting_notes", title: meetingTitle, text: meetingText }),
@@ -547,7 +550,7 @@ export default function ConnectionsPage() {
             stored as orchestrator overrides and take effect immediately.
           </div>
           <a
-            href="/settings"
+            href={prefix("/settings")}
             style={{
               padding: "8px 18px",
               borderRadius: 6,

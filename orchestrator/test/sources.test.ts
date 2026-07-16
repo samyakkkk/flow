@@ -29,6 +29,16 @@ let inspectSource: (input: string) => Promise<any>;
 let addSources: (sources: any[]) => Promise<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let registerSource: (entry: any) => any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let connectGithubRepo: (url: string, branch?: string) => Promise<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let enqueueJob: (opts: any) => Promise<{ id: string }>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let getJob: (id: string) => any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let processEvent: (event: any) => Promise<void>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let db: any;
 let TMP: string;
 const realFetch = globalThis.fetch;
 
@@ -45,7 +55,13 @@ before(async () => {
   const mod = await import("../src/sources.js");
   inspectSource = mod.inspectSource;
   addSources = mod.addSources;
-  registerSource = (await import("../src/opencode.js")).registerSource;
+  const opencode = await import("../src/opencode.js");
+  registerSource = opencode.registerSource;
+  connectGithubRepo = opencode.connectGithubRepo;
+  enqueueJob = opencode.enqueueJob;
+  getJob = opencode.getJob;
+  processEvent = (await import("../src/events.js")).processEvent;
+  db = (await import("../src/db.js")).default;
 });
 
 after(() => {
@@ -181,6 +197,64 @@ describe("inspectSource", () => {
 
   test("bare ~ (whole home folder) is rejected with a hint", async () => {
     await assert.rejects(() => inspectSource("~"), /whole home folder/);
+  });
+});
+
+describe("index branch propagation", () => {
+  test("an explicitly selected master branch reaches the stored index job", async () => {
+    const { entry, jobId } = await connectGithubRepo("https://github.com/acme/explicit-master", "master");
+    assert.equal(entry.branch, "master");
+    assert.equal(getJob(jobId)?.input.branch, "master");
+  });
+
+  test("a branchless reindex uses the branch already registered for the repo", async () => {
+    registerSource({
+      kind: "code",
+      name: "registered-master",
+      url: "https://github.com/acme/registered-master",
+      branch: "master",
+    });
+
+    const job = await enqueueJob({
+      type: "index_repo",
+      input: { repo: "registered-master" },
+      repo: "registered-master",
+    });
+
+    assert.equal(getJob(job.id)?.input.branch, "master");
+    assert.equal(getJob(job.id)?.input.url, "https://github.com/acme/registered-master");
+  });
+
+  test("the dashboard reindex event keeps the repo's registered master branch", async () => {
+    const repo = "event-master";
+    const eventId = "evt-reindex-registered-master";
+    registerSource({ kind: "code", name: repo, url: `https://github.com/acme/${repo}`, branch: "master" });
+
+    await processEvent({
+      id: eventId,
+      source: "dashboard",
+      type: "reindex_request",
+      ts: Date.now(),
+      payload: { repo },
+    });
+
+    const audit = db.prepare(
+      "SELECT target FROM audit_log WHERE event_id = ? AND action = 'index_job'",
+    ).get(eventId) as { target: string } | undefined;
+    assert.ok(audit, "reindex event enqueued an index job");
+    assert.equal(getJob(audit.target)?.input.branch, "master");
+  });
+
+  test("a branchless repo connection resolves the GitHub default branch", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ default_branch: "master" }), { status: 200 })) as typeof fetch;
+    try {
+      const { entry, jobId } = await connectGithubRepo("https://github.com/acme/resolved-master");
+      assert.equal(entry.branch, "master");
+      assert.equal(getJob(jobId)?.input.branch, "master");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
 

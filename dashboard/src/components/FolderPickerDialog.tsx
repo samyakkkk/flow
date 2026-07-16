@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useProject } from "@/lib/useProject";
 
 interface FsEntry {
   name: string;
@@ -23,6 +24,7 @@ export function FolderPickerDialog({
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
+  const { prefix } = useProject();
   const [data, setData] = useState<BrowseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -31,7 +33,7 @@ export function FolderPickerDialog({
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/fs/browse?path=${encodeURIComponent(path)}`);
+      const res = await fetch(prefix(`/api/fs/browse?path=${encodeURIComponent(path)}`));
       const json = await res.json() as BrowseData & { error?: string };
       if (!res.ok) {
         setError(json.error ?? "Could not open folder.");
@@ -42,7 +44,7 @@ export function FolderPickerDialog({
       setError("Network error browsing filesystem.");
     }
     setLoading(false);
-  }, []);
+  }, [prefix]);
 
   useEffect(() => { navigate("~"); }, [navigate]);
 

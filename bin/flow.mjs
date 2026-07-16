@@ -26,7 +26,7 @@ import { join, relative } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
-import { portsForIndex } from "./lib/ports.mjs";
+import { portsForIndex, dashboardPort } from "./lib/ports.mjs";
 import {
   flowRoot,
   projectDir,
@@ -48,6 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
+import { deleteProjectGraph } from "./lib/falkordb.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -286,33 +287,108 @@ function killPort(port) {
   } catch { /* lsof missing */ }
 }
 
-// (Re)start just the dashboard for a project against the current shared build.
-// Kills any stale process on the port first so a rebuild can't leave a
-// dashboard serving dead chunk hashes (the "unstyled page" bug).
-function spawnDashboardFor(name) {
-  const project = readProject(name);
-  const dir = projectDir(name);
-  const { ports, mode } = project;
-  const projectEnv = parseEnvFile(join(dir, ".env"));
+// ── Deployment-level state (data/): auth store + the singleton dashboard ────
+//
+// Since the single-dashboard refactor, ONE dashboard on dashboardPort()
+// serves every project under /p/<name>/…. It reads the project registry
+// (data/projects/*) per request, so new projects appear without a restart.
+
+function dataDir() {
+  return join(flowRoot, "data");
+}
+
+function authJsonPath() {
+  return join(dataDir(), "auth.json");
+}
+
+// The deployment is prod if ANY project is prod — an exposed box needs real
+// accounts even if a local-mode project also lives on it.
+function deploymentMode() {
+  return listProjects().some(({ project }) => project.mode === "prod") ? "prod" : "local";
+}
+
+// Create/upgrade data/auth.json (idempotent, convergent on every boot — same
+// philosophy as the gateway's reconcilers). In prod with no accounts yet, a
+// one-time setup code gates the "create owner" form; we print it so the
+// person at the terminal — and only them — can claim the deployment.
+function ensureAuthStore(mode) {
+  mkdirSync(dataDir(), { recursive: true });
+  let store = null;
+  if (existsSync(authJsonPath())) {
+    try {
+      store = JSON.parse(readFileSync(authJsonPath(), "utf-8"));
+    } catch {
+      store = null; // corrupt — rebuild below, prod users would re-bootstrap
+    }
+  }
+  if (!store || typeof store !== "object" || !store.sessionSecret) {
+    store = {
+      version: 1,
+      sessionSecret: randomBytes(24).toString("hex"),
+      users: [],
+      grants: {},
+      tokens: [],
+    };
+  }
+  store.users ??= [];
+  store.grants ??= {};
+  store.tokens ??= [];
+  let setupToken = null;
+  if (mode === "prod" && store.users.length === 0) {
+    store.setupToken ??= randomBytes(4).toString("hex");
+    setupToken = store.setupToken;
+  }
+  writeFileSync(authJsonPath(), JSON.stringify(store, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  return { setupToken };
+}
+
+function writeDashboardPid(pid) {
+  writeFileSync(join(dataDir(), "dashboard.json"), JSON.stringify({ pid, port: dashboardPort() }, null, 2) + "\n", "utf-8");
+}
+
+// (Re)start THE dashboard against the current shared build. Kills any stale
+// process on the port first so a rebuild can't leave it serving dead chunk
+// hashes (the "unstyled page" bug).
+function spawnDashboard(mode) {
+  const port = dashboardPort();
+  mkdirSync(join(dataDir(), "logs"), { recursive: true });
   const dashEnv = {
-    ...projectEnv,
-    ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
-    GATEWAY_URL: `http://localhost:${ports.gateway}`,
-    FLOW_ADMIN_TOKEN: projectEnv.FLOW_ADMIN_TOKEN ?? "flow-dev-token",
+    FLOW_DATA_DIR: dataDir(),
+    FLOW_AUTH_PATH: authJsonPath(),
     FLOW_MODE: mode,
-    REPOS_JSON_PATH: join(dir, "workspace", "repos.json"),
-    PORT: String(ports.dashboard),
+    PORT: String(port),
     NODE_ENV: "production",
   };
-  killPort(ports.dashboard);
+  killPort(port);
   const pid = spawnService({
     cwd: dashboardDir(),
-    cmd: [nodeBin(dashboardDir(), "next"), "start", "--port", String(ports.dashboard)],
+    cmd: [nodeBin(dashboardDir(), "next"), "start", "--port", String(port)],
     env: dashEnv,
-    logFile: join(dir, "logs", "dashboard.log"),
+    logFile: join(dataDir(), "logs", "dashboard.log"),
   });
-  writePids(name, { ...readPids(name), dashboard: pid });
+  writeDashboardPid(pid);
   return pid;
+}
+
+// Migration sweep: earlier installs ran one dashboard PER PROJECT on
+// ports.dashboard (7600, 7610, …). Kill them so stale processes can't sit on
+// old ports serving a dead build; the singleton replaces them all. Also clear
+// tracked per-project dashboard pids. Runs on every `flow up` — idempotent,
+// a no-op once nothing legacy is left.
+function cleanupLegacyDashboards() {
+  const singleton = dashboardPort();
+  for (const { name, project } of listProjects()) {
+    const legacyPort = project?.ports?.dashboard;
+    if (legacyPort && legacyPort !== singleton) killPort(legacyPort);
+    const pids = readPids(name);
+    if (pids.dashboard) {
+      if (isAlive(pids.dashboard)) {
+        try { process.kill(pids.dashboard, "SIGKILL"); } catch { /* gone */ }
+      }
+      delete pids.dashboard;
+      writePids(name, pids);
+    }
+  }
 }
 
 // Resolve a dependency binary (tsx, next) from wherever npm put it: the
@@ -398,9 +474,16 @@ function printTable(headers, rows) {
 
 // Create a project on disk. Pure side-effect + return metadata; prints nothing
 // so callers (explicit create, or create-on-`up`) control their own output.
+// Names that collide with the dashboard's deployment-level URLs (/login,
+// /api/…) or the legacy /p/ prefix — a project can't live at those paths.
+const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     die(`Invalid project name "${name}" — use only letters, digits, _ and -`);
+  }
+  if (RESERVED_PROJECT_NAMES.has(name.toLowerCase())) {
+    die(`"${name}" is reserved (it collides with a dashboard URL) — pick another name.`);
   }
   const existingNames = listProjectNames();
   if (existingNames.includes(name)) die(`Project "${name}" already exists at ${projectDir(name)}`);
@@ -437,6 +520,8 @@ FLOW_ADMIN_TOKEN=${adminToken}
 # SLACK_APP_TOKEN=        # prod-mode only
 # LINEAR_API_KEY=
 # OPENROUTER_API_KEY=
+# LLM_BASE_URL=           # any OpenAI-compatible API (classifier + embeddings)
+# LLM_API_KEY=
 # GITHUB_TOKEN=
 `,
     { encoding: "utf-8", mode: 0o600 }
@@ -527,32 +612,37 @@ async function cmdUp(args) {
     results.push(await upProject(name, { rebuilt }));
   }
 
-  // The rebuild replaced chunk hashes on disk, so any dashboard we DIDN'T just
-  // start is now serving dead assets (the unstyled-page bug). Refresh them.
-  if (rebuilt) {
-    const starting = new Set(names);
-    for (const other of listProjectNames()) {
-      if (starting.has(other)) continue;
-      const p = readProject(other)?.ports?.dashboard;
-      if (p && (await probe(`http://localhost:${p}/login`, 1000))) {
-        spawnDashboardFor(other);
-        await waitForHealth(`http://localhost:${p}/login`, 30000);
-        console.log(c.dim(`  refreshed ${other} dashboard (new build)`));
-      }
-    }
+  // Legacy per-project dashboards (pre-single-dashboard installs) die here;
+  // then THE dashboard comes up — restarted unconditionally so it can never
+  // be left serving a stale shared build (the unstyled-page bug).
+  void rebuilt;
+  cleanupLegacyDashboards();
+  const mode = deploymentMode();
+  const { setupToken } = ensureAuthStore(mode);
+  const dashUrl = `http://localhost:${dashboardPort()}`;
+  spawnDashboard(mode);
+  const dashOk = await waitForHealth(`${dashUrl}/login`, 45000);
+  if (!dashOk) {
+    console.log(`\n  ${FAIL} dashboard didn't start — log: ${relative(process.cwd(), join(dataDir(), "logs", "dashboard.log"))}`);
+    process.exitCode = 1;
   }
 
-  // Summary: dashboards you can open, and how to get in.
+  // Summary: one dashboard, a URL per project, and how to get in.
   const up = results.filter((r) => r.ok);
   const failed = results.filter((r) => !r.ok);
-  if (up.length > 0) {
-    const anyLocal = up.some((r) => r.mode !== "prod");
-    const anyProd = up.some((r) => r.mode === "prod");
+  if (dashOk && up.length > 0) {
     console.log("");
-    if (anyLocal && !anyProd) {
-      console.log(`  ${c.dim("Local mode — open a dashboard and you're already signed in.")}`);
-    } else if (anyProd) {
-      console.log(`  ${c.dim("Prod projects need the admin token from")} data/projects/<name>/.env`);
+    for (const r of up) {
+      console.log(`  ${c.bold(r.name.padEnd(16))} ${c.cyan(`${dashUrl}/${r.name}`)}`);
+    }
+    console.log("");
+    if (mode !== "prod") {
+      console.log(`  ${c.dim("Local mode — open a project and you're already signed in.")}`);
+    } else if (setupToken) {
+      console.log(`  ${c.dim("First-time setup: open")} ${c.cyan(`${dashUrl}/login`)} ${c.dim("and create the owner account.")}`);
+      console.log(`  ${c.dim("Setup code:")} ${c.bold(setupToken)} ${c.dim("(works once — manage accounts in Settings afterwards)")}`);
+    } else {
+      console.log(`  ${c.dim("Sign in at")} ${c.cyan(`${dashUrl}/login`)} ${c.dim("with your Flow account.")}`);
     }
   }
   if (failed.length > 0) {
@@ -569,16 +659,14 @@ async function upProject(name, { rebuilt = false } = {}) {
   mkdirSync(logsDir, { recursive: true });
 
   const { ports, graph, mode } = project;
-  const dashUrl = `http://localhost:${ports.dashboard}`;
   const label = c.bold(name.padEnd(16));
 
   // Already running? Use port-in-use, not a health probe — a flaky probe used
   // to trick us into starting a SECOND orchestrator on the busy port (which
   // then "didn't start"). If the orchestrator port is held AND it was spawned
-  // from the code we'd spawn now, keep it (and any agent sessions) and just
-  // refresh the dashboard. The dashboard is stateless, and this is the thing
-  // that breaks invisibly: dead, or serving a stale shared build after a
-  // rebuild (the unstyled-page bug). Cheap insurance.
+  // from the code we'd spawn now, keep it (and any agent sessions). The
+  // dashboard is deployment-level now and is restarted unconditionally in
+  // cmdUp after the project loop.
   //
   // But if the checkout moved since the services were spawned (self-update
   // pulled, or a branch switch), keeping them would silently run OLD code —
@@ -592,11 +680,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     const stampFile = join(dir, "code-head");
     const stamp = existsSync(stampFile) ? readFileSync(stampFile, "utf-8").trim() : null;
     if (!head || head === stamp) {
-      void rebuilt; // dashboard is refreshed unconditionally below
-      spawnDashboardFor(name);
-      const dashOk = await waitForHealth(`${dashUrl}/login`, 30000);
-      console.log(`  ${label} ${dashOk ? OK : FAIL} ${c.dim(dashOk ? "ready" : "orchestrator up · dashboard failed")}   ${c.cyan(dashUrl)}`);
-      return { name, ok: dashOk, ports, mode, alreadyRunning: true };
+      void rebuilt; // the deployment dashboard is refreshed unconditionally in cmdUp
+      console.log(`  ${label} ${OK} ${c.dim("already running")}`);
+      return { name, ok: true, ports, mode, alreadyRunning: true };
     }
     console.log(
       `  ${label} ${c.dim(`code changed (${(stamp ?? "unstamped").slice(0, 7)} → ${head.slice(0, 7)}) — restarting services`)}`,
@@ -612,11 +698,11 @@ async function upProject(name, { rebuilt = false } = {}) {
   };
 
   // Full start: clear any survivors on OUR ports first. A half-dead project
-  // (e.g. orchestrator crashed, dashboard/gateway still up) otherwise makes the
-  // fresh spawn die with EADDRINUSE while the STALE process answers the health
-  // check — "ready", but serving old code.
+  // (e.g. orchestrator crashed, gateway still up) otherwise makes the fresh
+  // spawn die with EADDRINUSE while the STALE process answers the health
+  // check — "ready", but serving old code. (The dashboard port is deployment-
+  // level and handled in cmdUp — never touch it per project.)
   killPort(ports.gateway);
-  killPort(ports.dashboard);
 
   // Stamp the code these services are spawned from (see the already-running
   // check above). Written before the spawns so a crash mid-start re-runs a
@@ -684,13 +770,20 @@ async function upProject(name, { rebuilt = false } = {}) {
     GRAPH_NAME: graph,
     GATEWAY_PORT: String(ports.gateway),
     JOURNAL_PATH: journalPath,
+    // PAT auth: the gateway accepts per-user tokens from the deployment auth
+    // store, checking the minting user's grant on THIS project.
+    FLOW_AUTH_PATH: authJsonPath(),
+    FLOW_PROJECT_NAME: name,
     NODE_ENV: "production",
   };
-  // Embeddings (semantic find_entity + embed-on-write) need the OpenRouter key.
+  // Embeddings (semantic find_entity + embed-on-write) need an LLM API key —
+  // LLM_API_KEY for any OpenAI-compatible provider, or the OpenRouter key.
   // Fall back to the machine default / ambient env when it isn't in the .env.
-  if (!gwEnv.OPENROUTER_API_KEY) {
-    const k = readGlobalKey(dir, "OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-    if (k) gwEnv.OPENROUTER_API_KEY = k;
+  for (const key of ["LLM_API_KEY", "LLM_BASE_URL", "OPENROUTER_API_KEY"]) {
+    if (!gwEnv[key]) {
+      const k = readGlobalKey(dir, key) ?? process.env[key];
+      if (k) gwEnv[key] = k;
+    }
   }
 
   const gwPid = spawnService({
@@ -710,8 +803,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
-    // Inherited down to the gateway MCP subprocess that opencode jobs spawn —
-    // it opens FalkorDB directly, so it needs the project's graph name and
+    // Inherited down to the gateway MCP subprocesses that indexer jobs spawn
+    // (opencode via workspace opencode.json; claude/codex directly) — the MCP
+    // opens FalkorDB directly, so it needs the project's graph name and
     // journal, or indexer writes land in the default graph and journal.
     GRAPH_NAME: graph,
     JOURNAL_PATH: journalPath,
@@ -725,44 +819,20 @@ async function upProject(name, { rebuilt = false } = {}) {
     logFile: orchLogFile,
   });
 
-  // ── Dashboard ──────────────────────────────────────────────────────────────
-  const dashLogFile = join(logsDir, "dashboard.log");
-  const adminToken = projectEnv.FLOW_ADMIN_TOKEN ?? "flow-dev-token";
-  const dashEnv = {
-    ...projectEnv,
-    ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
-    GATEWAY_URL: `http://localhost:${ports.gateway}`,
-    FLOW_ADMIN_TOKEN: adminToken,
-    FLOW_MODE: mode, // local → dashboard auto-authenticates (no login step); prod → token required
-    REPOS_JSON_PATH: reposJsonPath,
-    PORT: String(ports.dashboard),
-    NODE_ENV: "production",
-  };
+  writePids(name, { gateway: gwPid, orchestrator: orchPid });
 
-  // The shared production build was ensured once in cmdUp; each project just
-  // runs `next start -p <port>` against it.
-  const dashPid = spawnService({
-    cwd: dashboardDir(),
-    cmd: [nodeBin(dashboardDir(), "next"), "start", "--port", String(ports.dashboard)],
-    env: dashEnv,
-    logFile: dashLogFile,
-  });
-
-  writePids(name, { gateway: gwPid, orchestrator: orchPid, dashboard: dashPid });
-
-  // ── Wait for health ─────────────────────────────────────────────────────────
-  const [gwOk, orchOk, dashOk] = await Promise.all([
+  // ── Wait for health (the deployment dashboard is handled in cmdUp) ─────────
+  const [gwOk, orchOk] = await Promise.all([
     waitForHealth(`http://localhost:${ports.gateway}/health`, 25000),
     waitForHealth(`http://localhost:${ports.orchestrator}/health`, 25000),
-    waitForHealth(`http://localhost:${ports.dashboard}/login`, 45000),
   ]);
 
-  if (gwOk && orchOk && dashOk) {
-    finish(`${OK} ${c.dim("ready")}       ${c.cyan(dashUrl)}`);
+  if (gwOk && orchOk) {
+    finish(`${OK} ${c.dim("services up")}`);
     return { name, ok: true, ports, mode };
   }
 
-  const failed = [!gwOk && "gateway", !orchOk && "orchestrator", !dashOk && "dashboard"].filter(Boolean);
+  const failed = [!gwOk && "gateway", !orchOk && "orchestrator"].filter(Boolean);
   finish(`${FAIL} ${c.red(failed.join(", ") + " didn't start")}`);
   for (const svc of failed) {
     console.log(`      ${c.dim("log:")} ${relative(process.cwd(), join(logsDir, `${svc}.log`))}`);
@@ -786,7 +856,25 @@ async function cmdDown(args) {
   for (const name of names) {
     await downProject(name);
   }
+  // Whole-deployment down also stops THE dashboard. A single-project down
+  // leaves it running — it serves the other projects.
+  if (!targetName) stopDashboard();
   console.log("");
+}
+
+function stopDashboard() {
+  let touched = false;
+  try {
+    const pid = JSON.parse(readFileSync(join(dataDir(), "dashboard.json"), "utf-8"))?.pid;
+    if (pid && isAlive(pid)) {
+      try { process.kill(pid, "SIGTERM"); touched = true; } catch { /* gone */ }
+    }
+  } catch { /* no tracked pid */ }
+  if (portInUse(dashboardPort())) {
+    killPort(dashboardPort());
+    touched = true;
+  }
+  console.log(`  ${c.bold("dashboard".padEnd(16))} ${touched ? `${OK} ${c.dim("stopped")}` : c.dim("· not running")}`);
 }
 
 async function downProject(name) {
@@ -819,10 +907,14 @@ async function downProject(name) {
 
   // Port-based fallback: pids.json can go stale (manual restarts, crashes),
   // leaving a service alive so the next `up` reuses old code. Kill whatever
-  // still holds each project port.
+  // still holds each project port. The deployment dashboard's port is NOT a
+  // project port — skip it (legacy per-project dashboard ports still swept).
   const project = readProject(name);
   if (project?.ports) {
-    for (const port of Object.values(project.ports)) {
+    const projectPorts = Object.entries(project.ports)
+      .filter(([svc, port]) => !(svc === "dashboard" && port === dashboardPort()))
+      .map(([, port]) => port);
+    for (const port of projectPorts) {
       try {
         const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
         for (const p of out.split("\n").filter(Boolean)) {
@@ -871,7 +963,8 @@ async function cmdLs() {
         status = "STOPPED";
       }
 
-      const dashUrl = `http://localhost:${ports.dashboard}`;
+      void ports;
+      const dashUrl = `http://localhost:${dashboardPort()}/${name}`;
       return [
         name,
         mode,
@@ -911,23 +1004,19 @@ async function cmdDoctor() {
   }
   console.log(`\n${c.bold("Flow")} ${c.dim("· doctor")}\n`);
   let anyFail = false;
+  const base = `http://localhost:${dashboardPort()}`;
 
-  for (const { name, project } of projects) {
-    const { ports } = project;
-    const base = `http://localhost:${ports.dashboard}`;
+  // THE dashboard, once: up + serving live assets. /login is the one page
+  // that renders 200 without auth in both modes, so the asset check uses it.
+  {
     const problems = [];
-
-    if (!(await probe(`http://localhost:${ports.gateway}/health`, 2500))) problems.push("gateway down");
-    if (!(await probe(`http://localhost:${ports.orchestrator}/health`, 2500))) problems.push("orchestrator down");
-
-    // Dashboard home + asset check.
-    const home = await fetchStatus(`${base}/`, { wantText: true });
-    if (home.status === 0) {
+    const login = await fetchStatus(`${base}/login`, { wantText: true });
+    if (login.status === 0) {
       problems.push("dashboard down");
-    } else if (home.status >= 500) {
-      problems.push(`home ${home.status}`);
-    } else if (home.text) {
-      const assets = [...home.text.matchAll(/\/_next\/static\/[^"']+\.(?:css|js)/g)].map((m) => m[0]).slice(0, 4);
+    } else if (login.status >= 500) {
+      problems.push(`login ${login.status}`);
+    } else if (login.text) {
+      const assets = [...login.text.matchAll(/\/_next\/static\/[^"']+\.(?:css|js)/g)].map((m) => m[0]).slice(0, 4);
       if (assets.length === 0) {
         problems.push("no CSS/JS referenced");
       } else {
@@ -940,17 +1029,32 @@ async function cmdDoctor() {
         }
       }
     }
+    const label = c.bold("dashboard".padEnd(16));
+    if (problems.length === 0) {
+      console.log(`  ${label} ${OK} ${c.dim("up + assets OK")}   ${c.cyan(base)}`);
+    } else {
+      anyFail = true;
+      console.log(`  ${label} ${FAIL} ${c.red(problems.slice(0, 5).join(", "))}`);
+    }
+  }
 
-    // Every page reachable (flag only crashes/unreachable — a 3xx auth redirect
-    // in prod is fine, not a failure).
+  for (const { name, project } of projects) {
+    const { ports } = project;
+    const problems = [];
+
+    if (!(await probe(`http://localhost:${ports.gateway}/health`, 2500))) problems.push("gateway down");
+    if (!(await probe(`http://localhost:${ports.orchestrator}/health`, 2500))) problems.push("orchestrator down");
+
+    // Every page reachable under this project's prefix (flag only crashes/
+    // unreachable — a 3xx auth redirect in prod is fine, not a failure).
     for (const path of DOCTOR_PAGES) {
-      const r = await fetchStatus(`${base}${path}`);
+      const r = await fetchStatus(`${base}/${name}${path === "/" ? "/" : path}`);
       if (r.status === 0 || r.status >= 500) problems.push(`${path} ${r.status || "unreachable"}`);
     }
 
     const label = c.bold(name.padEnd(16));
     if (problems.length === 0) {
-      console.log(`  ${label} ${OK} ${c.dim("pages + assets OK")}   ${c.cyan(base)}`);
+      console.log(`  ${label} ${OK} ${c.dim("services + pages OK")}   ${c.cyan(`${base}/${name}`)}`);
     } else {
       anyFail = true;
       console.log(`  ${label} ${FAIL} ${c.red(problems.slice(0, 5).join(", "))}`);
@@ -958,7 +1062,7 @@ async function cmdDoctor() {
   }
   console.log("");
   if (anyFail) {
-    console.log(c.dim("  If assets are stale, run  flow up  — it now refreshes running dashboards after a rebuild.\n"));
+    console.log(c.dim("  If assets are stale, run  flow up  — it restarts the dashboard on the fresh build.\n"));
     process.exitCode = 1;
   }
 }
@@ -978,7 +1082,35 @@ async function cmdRm(args) {
     }
   }
   console.log(`\n${c.bold("Flow")} ${c.dim("· removing " + name)}`);
+  const project = readProject(name);
+  const projectEnv = parseEnvFile(join(projectDir(name), ".env"));
   await downProject(name);
+
+  // FalkorDB is shared across projects, but each project normally owns one
+  // named graph. Delete that graph before removing project.json so a failed DB
+  // connection leaves enough metadata for the user to retry instead of
+  // creating a permanently orphaned graph. A custom graph may intentionally
+  // be shared; preserve it while another registered project still uses it.
+  const sharedWith = listProjects().find(
+    ({ name: otherName, project: other }) => otherName !== name && other.graph === project.graph,
+  );
+  if (sharedWith) {
+    console.log(`  ${c.dim(`· graph ${project.graph} kept (shared with ${sharedWith.name})`)}`);
+  } else {
+    const host = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+    const port = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    let result;
+    try {
+      result = await deleteProjectGraph({ graph: project.graph, host, port });
+    } catch (err) {
+      throw new Error(
+        `Couldn't delete FalkorDB graph "${project.graph}" at ${host}:${port}; project files were kept so you can retry.\n` +
+          `  ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    console.log(`  ${result.existed ? OK : c.dim("·")} ${c.dim(result.existed ? `deleted graph ${project.graph}` : `graph ${project.graph} already empty`)}`);
+  }
+
   rmSync(projectDir(name), { recursive: true, force: true });
   console.log(`  ${OK} removed ${c.bold(name)}\n`);
 }

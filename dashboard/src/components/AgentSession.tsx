@@ -4,6 +4,7 @@
 // beside it, highlighting the exact nodes the agent queries as it works.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProject } from "@/lib/useProject";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
@@ -293,6 +294,7 @@ function configRank(category?: string): number {
 
 export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
+  const { prefix } = useProject();
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [archived, setArchived] = useState(false);
   const [meta, setMeta] = useState<{
@@ -339,7 +341,7 @@ export function AgentSession({ id }: { id: string }) {
 
   // Metadata once
   useEffect(() => {
-    fetch(`/api/agents/sessions/${id}`)
+    fetch(prefix(`/api/agents/sessions/${id}`))
       .then((r) => {
         if (r.status === 401) {
           window.location.href = `/login?from=${encodeURIComponent(`/agents/${id}`)}`;
@@ -368,7 +370,7 @@ export function AgentSession({ id }: { id: string }) {
   // ~90ms — replaying hundreds of chunk events one render at a time froze the
   // page on long sessions.
   useEffect(() => {
-    const es = new EventSource(`/api/agents/sessions/${id}/events`);
+    const es = new EventSource(prefix(`/api/agents/sessions/${id}/events`));
     const buffer: SessionEvent[] = [];
     const flush = () => {
       if (buffer.length === 0) return;
@@ -481,7 +483,7 @@ export function AgentSession({ id }: { id: string }) {
   // on a clean working tree, which would otherwise hide the whole panel.
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/agents/sessions/${id}/diff?scope=base`)
+    fetch(prefix(`/api/agents/sessions/${id}/diff?scope=base`))
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
@@ -505,7 +507,7 @@ export function AgentSession({ id }: { id: string }) {
     if (archived) return;
     let cancelled = false;
     const load = () => {
-      fetch(`/api/agents/sessions/${id}/diff?scope=${diffScope}`)
+      fetch(prefix(`/api/agents/sessions/${id}/diff?scope=${diffScope}`))
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (!cancelled && d && Array.isArray(d.files)) setDiff(d);
@@ -525,7 +527,7 @@ export function AgentSession({ id }: { id: string }) {
     async (action: string, body: unknown = {}) => {
       setBusy(true);
       try {
-        await fetch(`/api/agents/sessions/${id}/${action}`, {
+        await fetch(prefix(`/api/agents/sessions/${id}/${action}`), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -534,7 +536,7 @@ export function AgentSession({ id }: { id: string }) {
         setBusy(false);
       }
     },
-    [id]
+    [id, prefix]
   );
 
   // Open the agent's repo checkout in Finder/Explorer or VS Code. Only works
@@ -544,7 +546,7 @@ export function AgentSession({ id }: { id: string }) {
     async (target: "finder" | "vscode") => {
       setOpenHint("");
       try {
-        const res = await fetch(`/api/agents/sessions/${id}/open`, {
+        const res = await fetch(prefix(`/api/agents/sessions/${id}/open`), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ target }),
@@ -557,15 +559,15 @@ export function AgentSession({ id }: { id: string }) {
         setOpenHint("Couldn't reach the server.");
       }
     },
-    [id]
+    [id, prefix]
   );
 
   const fetchFiles = useCallback(
     (q: string) =>
-      fetch(`/api/agents/sessions/${id}/files?q=${encodeURIComponent(q)}`)
+      fetch(prefix(`/api/agents/sessions/${id}/files?q=${encodeURIComponent(q)}`))
         .then((r) => (r.ok ? r.json() : { entries: [] }))
         .then((d: { entries?: FileEntry[] }) => d.entries ?? []),
-    [id]
+    [id, prefix]
   );
 
   async function send() {
@@ -590,7 +592,7 @@ export function AgentSession({ id }: { id: string }) {
     try {
       const body: { text: string; images?: ImageAttachment[] } = { text };
       if (currentAttachments.length > 0) body.images = currentAttachments;
-      const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
+      const res = await fetch(prefix(`/api/agents/sessions/${id}/prompt`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -624,7 +626,7 @@ export function AgentSession({ id }: { id: string }) {
 	    setExitNotice("");
 	    setExitConflict(null);
 	    try {
-	      const res = await fetch("/api/agents/worktrees/pr", {
+	      const res = await fetch(prefix("/api/agents/worktrees/pr"), {
 	        method: "POST",
 	        headers: { "content-type": "application/json" },
 	        body: JSON.stringify({ path, targetBranch: exitTargetBranch || meta?.worktreeBase || "main" }),
@@ -659,7 +661,7 @@ export function AgentSession({ id }: { id: string }) {
 	    setExitBusy(true);
 	    setExitError("");
 	    try {
-	      const res = await fetch("/api/agents/worktrees/open", {
+	      const res = await fetch(prefix("/api/agents/worktrees/open"), {
 	        method: "POST",
 	        headers: { "content-type": "application/json" },
 	        body: JSON.stringify({ path, target: "vscode" }),
@@ -684,7 +686,7 @@ export function AgentSession({ id }: { id: string }) {
 	    stickToBottom.current = true;
 	    setPending((p) => [...p, text]);
 	    try {
-	      const res = await fetch(`/api/agents/sessions/${id}/prompt`, {
+	      const res = await fetch(prefix(`/api/agents/sessions/${id}/prompt`), {
 	        method: "POST",
 	        headers: { "content-type": "application/json" },
 	        body: JSON.stringify({ text }),
@@ -790,7 +792,7 @@ export function AgentSession({ id }: { id: string }) {
       {/* Header */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
-          onClick={() => router.push("/agents")}
+          onClick={() => router.push(prefix("/agents"))}
           className="text-text-muted hover:text-ink transition text-[13px]"
           aria-label="Back to agents"
         >

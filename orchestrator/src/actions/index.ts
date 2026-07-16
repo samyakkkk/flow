@@ -232,7 +232,7 @@ async function handleGithubAuto(event: NormalizedEvent, cls: ClassificationResul
   const repoName = entry?.name ?? p.repo ?? "";
   const job = await enqueueJob({
     type: "index_repo",
-    input: { repo: repoName, url: entry?.url, branch: p.branch ?? entry?.branch ?? "main", commit: p.commit },
+    input: { repo: repoName, url: entry?.url, branch: p.branch ?? entry?.branch, commit: p.commit },
     repo: repoName,
   });
   audit(event.id, c, cls.confidence, "index_job", job.id, "ok");

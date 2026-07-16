@@ -6,6 +6,7 @@ import { Kicker, Heading, Button, StatusPill, Card } from "@/components/ui";
 import { useEffect, useState, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useMode, type FlowMode } from "@/lib/useMode";
+import { useProject } from "@/lib/useProject";
 import Link from "next/link";
 import { BrandIcon } from "@/components/BrandIcon";
 import { SourcesFrontDoor } from "@/components/SourcesFrontDoor";
@@ -141,13 +142,14 @@ function lagLabel(lag: number | null): string {
 
 function NowIndexingPanel() {
   const [sources, setSources] = useState<IngestSource[]>([]);
+  const { prefix } = useProject();
 
   const fetch_ = useCallback(() => {
-    fetch("/api/ingest/status")
+    fetch(prefix("/api/ingest/status"))
       .then((r) => r.json())
       .then((d: { sources?: IngestSource[] }) => setSources(d.sources ?? []))
       .catch(() => {});
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     fetch_();
@@ -268,13 +270,14 @@ function ApiKeyCard({
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const { prefix } = useProject();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!value.trim()) return;
     setSaving(true);
     try {
-      await fetch("/api/settings", {
+      await fetch(prefix("/api/settings"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [settingKey]: value.trim() }),
@@ -344,13 +347,14 @@ function MeetingNotesCard({ onConnected }: { onConnected: () => void }) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const { prefix } = useProject();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!text.trim()) return;
     setSaving(true);
     try {
-      await fetch("/api/connections", {
+      await fetch(prefix("/api/connections"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "meeting_notes", title: title || "Manual upload", text }),
@@ -512,13 +516,14 @@ function InlineKeySourceCard({
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const { prefix } = useProject();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!value.trim()) return;
     setSaving(true);
     try {
-      await fetch("/api/settings", {
+      await fetch(prefix("/api/settings"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [settingKey]: value.trim() }),
@@ -608,13 +613,14 @@ function HomeMeetingNotesCard({ onUploaded }: { onUploaded: () => void }) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const { prefix } = useProject();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!text.trim()) return;
     setSaving(true);
     try {
-      await fetch("/api/connections", {
+      await fetch(prefix("/api/connections"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "meeting_notes", title: title || "Manual upload", text }),
@@ -726,6 +732,7 @@ function BrainStats({ nodeCount, edgeCount, repoCount, sources }: {
 // ─── Recent Activity ──────────────────────────────────────────────────────────
 
 function RecentActivity({ rows }: { rows: AuditRow[] }) {
+  const { prefix } = useProject();
   const visible = rows
     .map((r) => ({
       human: humanizeActivity(r),
@@ -757,7 +764,7 @@ function RecentActivity({ rows }: { rows: AuditRow[] }) {
         ))}
       </div>
       <Link
-        href="/activity"
+        href={prefix("/activity")}
         className="mt-2 text-[11px] text-text-muted hover:text-ink transition-colors"
         style={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.08em" }}
       >
@@ -778,10 +785,14 @@ export default function HomePage() {
   const [graphNodeCount, setGraphNodeCount] = useState(0);
   const [graphEdgeCount, setGraphEdgeCount] = useState(0);
   const { mode } = useMode();
+  const { prefix } = useProject();
   const router = useRouter();
 
-  // Check if brain is set (for KeyGate)
-  const hasBrain = settings.some((s) => s.key === "OPENROUTER_API_KEY" && s.set);
+  // Check if brain is set (for KeyGate): an LLM key, or explicit BYO-provider
+  // mode (opencode's own auth carries the graph-builder; no key needed here).
+  const hasBrain = settings.some(
+    (s) => (s.key === "OPENROUTER_API_KEY" || s.key === "LLM_API_KEY" || s.key === "BRAIN_MODE") && s.set
+  );
 
   // Derive whether any repo is currently being indexed (no lastIndexedCommit yet)
   const isAnyRepoIndexing = repos.some((r) => !r.lastIndexedCommit);
@@ -797,7 +808,7 @@ export default function HomePage() {
       // Settings is the auth gate. A 401 means the session cookie is stale or
       // expired — send the user to log in, NOT to the "no brain" key gate
       // (which would wrongly ask for the OpenRouter key even when it's set).
-      const settingsResp = await fetch("/api/settings");
+      const settingsResp = await fetch(prefix("/api/settings"));
       if (settingsResp.status === 401) {
         window.location.href = "/login?from=%2F";
         return;
@@ -812,10 +823,10 @@ export default function HomePage() {
 
       const [settingsRes, ingestRes, reposRes, auditRes, graphRes] = await Promise.allSettled([
         settingsResp.json() as Promise<SettingItem[]>,
-        fetch("/api/ingest/status").then((r) => r.json()) as Promise<{ sources: IngestSource[] }>,
-        fetch("/api/repos").then((r) => r.json()) as Promise<{ repos: RepoEntry[] }>,
-        fetch("/api/audit?limit=20").then((r) => r.json()) as Promise<{ rows: AuditRow[] }>,
-        fetch("/api/graph/overview").then((r) => r.json()) as Promise<{ nodes: unknown[]; edges: unknown[] }>,
+        fetch(prefix("/api/ingest/status")).then((r) => r.json()) as Promise<{ sources: IngestSource[] }>,
+        fetch(prefix("/api/repos")).then((r) => r.json()) as Promise<{ repos: RepoEntry[] }>,
+        fetch(prefix("/api/audit?limit=20")).then((r) => r.json()) as Promise<{ rows: AuditRow[] }>,
+        fetch(prefix("/api/graph/overview")).then((r) => r.json()) as Promise<{ nodes: unknown[]; edges: unknown[] }>,
       ]);
 
       const s = settingsRes.status === "fulfilled" ? (Array.isArray(settingsRes.value) ? settingsRes.value : []) : [];
@@ -831,7 +842,9 @@ export default function HomePage() {
       setGraphNodeCount((graph.nodes ?? []).length);
       setGraphEdgeCount((graph.edges ?? []).length);
 
-      const brainSet = s.some((item) => item.key === "OPENROUTER_API_KEY" && item.set);
+      const brainSet = s.some(
+        (item) => (item.key === "OPENROUTER_API_KEY" || item.key === "LLM_API_KEY" || item.key === "BRAIN_MODE") && item.set
+      );
       if (!brainSet) {
         setState("no-brain");
         return;
@@ -876,7 +889,7 @@ export default function HomePage() {
     if (state !== "building" && state !== "alive") return;
     const iv = setInterval(() => {
       // Re-check graph size for transitions
-      fetch("/api/graph/overview")
+      fetch(prefix("/api/graph/overview"))
         .then((r) => r.json())
         .then((d: { nodes: unknown[]; edges: unknown[] }) => {
           setGraphNodeCount((d.nodes ?? []).length);
@@ -887,11 +900,11 @@ export default function HomePage() {
         })
         .catch(() => {});
       // Also refresh ingest + repos
-      fetch("/api/ingest/status")
+      fetch(prefix("/api/ingest/status"))
         .then((r) => r.json())
         .then((d: { sources: IngestSource[] }) => setSources(d.sources ?? []))
         .catch(() => {});
-      fetch("/api/repos")
+      fetch(prefix("/api/repos"))
         .then((r) => r.json())
         .then((d: { repos: RepoEntry[] }) => setRepos(d.repos ?? []))
         .catch(() => {});
@@ -1049,7 +1062,7 @@ export default function HomePage() {
             <Button
               variant="primary"
               arrow
-              onClick={() => router.push("/ask")}
+              onClick={() => router.push(prefix("/ask"))}
             >
               Ask Flow
             </Button>

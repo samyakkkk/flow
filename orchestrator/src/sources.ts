@@ -25,8 +25,8 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative } from "node:path";
 import path from "node:path";
 import db from "./db.js";
-import { getSetting } from "./settings.js";
 import { getFlowMode, type FlowMode } from "./mode.js";
+import { resolveGithubDefaultBranch } from "./repo-branch.js";
 import {
   connectGithubRepo,
   enqueueJob,
@@ -217,28 +217,6 @@ function projectMode(): FlowMode {
     }
   }
   return getFlowMode();
-}
-
-// GitHub default branch via the REST API. Bearer the GITHUB_TOKEN when set;
-// any failure (network, 404 on a private repo without a token, rate limit)
-// falls back to "main". The token is never logged.
-async function githubDefaultBranch(owner: string, name: string): Promise<string> {
-  try {
-    const token = getSetting("GITHUB_TOKEN");
-    const res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return "main";
-    const j = (await res.json()) as { default_branch?: string };
-    return j.default_branch || "main";
-  } catch {
-    return "main";
-  }
 }
 
 // ------------------------------------------------------------------
@@ -442,7 +420,7 @@ export async function inspectSource(input: string): Promise<InspectResult> {
           url: gh.url,
           owner: gh.owner,
           name: gh.name,
-          defaultBranch: await githubDefaultBranch(gh.owner, gh.name),
+          defaultBranch: await resolveGithubDefaultBranch(gh.url),
           alreadyConnected: !!findRegistered({ name: gh.name, url: gh.url }),
         },
       };

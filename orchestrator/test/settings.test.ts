@@ -99,6 +99,7 @@ describe("settings registry", () => {
     const { SETTINGS } = await import("../src/settings.js");
     const secretKeys = new Set([
       "OPENROUTER_API_KEY",
+      "LLM_API_KEY",
       "LINEAR_API_KEY",
       "FIREFLIES_API_KEY",
       "GITHUB_TOKEN",

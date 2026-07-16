@@ -2,6 +2,8 @@
 import { Shell } from "@/components/Shell";
 import { useState, useEffect, useCallback } from "react";
 import { useMode } from "@/lib/useMode";
+import { useProject } from "@/lib/useProject";
+import { AccessSettings } from "@/components/AccessSettings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ interface SectionDef {
 const SECTIONS: Record<SectionKey, SectionDef> = {
   models: {
     label: "Models & Keys",
-    keys: ["OPENROUTER_API_KEY", "CLASSIFIER_MODEL", "GRAPH_BUILDER_MODEL"],
+    keys: ["OPENROUTER_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "BRAIN_MODE", "CLASSIFIER_MODEL", "GRAPH_BUILDER_MODEL", "INDEXER_RUNTIME"],
   },
   integrations: {
     label: "Integrations",
@@ -324,6 +326,7 @@ function Section({
 
 export default function SettingsPage() {
   const { mode, loading: modeLoading } = useMode();
+  const { prefix } = useProject();
   const [settings, setSettings] = useState<SettingItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -355,7 +358,7 @@ export default function SettingsPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch("/api/settings");
+      const res = await fetch(prefix("/api/settings"));
       if (res.status === 401) {
         window.location.href = "/login";
         return;
@@ -372,7 +375,7 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     fetchSettings();
@@ -417,7 +420,7 @@ export default function SettingsPage() {
     setSuccesses((prev) => ({ ...prev, [sectionKey]: null }));
 
     try {
-      const res = await fetch("/api/settings", {
+      const res = await fetch(prefix("/api/settings"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -545,6 +548,7 @@ export default function SettingsPage() {
               );
             }
           )}
+          <AccessSettings />
         </>
       )}
     </Shell>

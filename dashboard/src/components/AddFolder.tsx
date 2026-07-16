@@ -4,6 +4,7 @@
 // show a second dialog to confirm with sensible, editable defaults. Branch
 // selection is always a dropdown (fetched from the repo), never a text field.
 import { useState } from "react";
+import { useProject } from "@/lib/useProject";
 import type { FlowMode } from "@/lib/useMode";
 import { BranchSelect } from "@/components/BranchSelect";
 import { FolderPickerDialog } from "@/components/FolderPickerDialog";
@@ -408,6 +409,7 @@ export function AddFolder({
 }) {
   const isProd = mode === "prod";
 
+  const { prefix } = useProject();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState("");
@@ -445,7 +447,7 @@ export function AddFolder({
     setInspectError("");
     setResult(null);
     clear();
-    const { data, error } = await inspectInput(folderPath);
+    const { data, error } = await inspectInput(folderPath, prefix);
     setInspecting(false);
     if (error || !data) {
       setInspectError(error ?? "Could not inspect the folder.");
@@ -460,7 +462,7 @@ export function AddFolder({
     setInspecting(true);
     setInspectError("");
     try {
-      const res = await fetch("/api/fs/pick-folder", { method: "POST" });
+      const res = await fetch(prefix("/api/fs/pick-folder"), { method: "POST" });
       const json = await res.json() as { path?: string; cancelled?: boolean; error?: string };
       if (json.cancelled) {
         setInspecting(false);

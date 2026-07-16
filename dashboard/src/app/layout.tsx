@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Lora, Inter, Space_Mono } from "next/font/google";
+import { ProjectProvider } from "@/lib/useProject";
 import "./globals.css";
 
 const lora = Lora({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-lora", display: "swap" });
@@ -16,10 +17,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // ProjectProvider derives the project from the URL client-side (the layout
+  // itself doesn't re-render on client navigation between projects) and
+  // remounts the subtree on switch so pages refetch.
   return (
     <html lang="en" className={`h-full ${lora.variable} ${inter.variable} ${spaceMono.variable}`}>
       <body className="min-h-full" style={{ background: "var(--cream)", color: "var(--text)" }}>
-        {children}
+        <ProjectProvider>{children}</ProjectProvider>
       </body>
     </html>
   );

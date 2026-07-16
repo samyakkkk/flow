@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
 import { orcPost } from "@/lib/orchestrator";
+import { requireProject } from "@/lib/projectContext";
 import fs from "node:fs";
 import path from "node:path";
 
 export const runtime = "nodejs";
 
-// Resolved at request time (not module scope) so the bundler doesn't flag a
-// dynamic filesystem expression. REPOS_JSON_PATH is set per project by
-// `flow up`; the process.cwd() fallback is only for a bare single-workspace dev
-// layout.
-function reposJsonPath(): string {
-  const fromEnv = process.env.REPOS_JSON_PATH;
-  if (fromEnv) return path.resolve(fromEnv);
-  return path.resolve(process.cwd(), "..", "index-workspace", "repos.json");
+// Resolved at request time from this request's project (x-flow-project) —
+// each project keeps its own workspace/repos.json.
+async function reposJsonPath(): Promise<string> {
+  const project = await requireProject();
+  return path.resolve(project.reposJsonPath);
 }
 
 interface RepoEntry {
@@ -30,23 +28,23 @@ interface ReposFile {
   repos: RepoEntry[];
 }
 
-function readRepos(): ReposFile {
+async function readRepos(): Promise<ReposFile> {
   try {
-    const raw = fs.readFileSync(reposJsonPath(), "utf8");
+    const raw = fs.readFileSync(await reposJsonPath(), "utf8");
     return JSON.parse(raw) as ReposFile;
   } catch {
     return { repos: [] };
   }
 }
 
-function writeRepos(data: ReposFile): void {
-  fs.writeFileSync(reposJsonPath(), JSON.stringify(data, null, 2), "utf8");
+async function writeRepos(data: ReposFile): Promise<void> {
+  fs.writeFileSync(await reposJsonPath(), JSON.stringify(data, null, 2), "utf8");
 }
 
 export async function GET() {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  return NextResponse.json(readRepos());
+  return NextResponse.json(await readRepos());
 }
 
 export async function POST(req: NextRequest) {
@@ -75,13 +73,13 @@ export async function POST(req: NextRequest) {
 
   if (body.action === "remove" && body.repoName) {
     try {
-      const file = readRepos();
+      const file = await readRepos();
       const before = file.repos.length;
       file.repos = file.repos.filter((r) => r.name !== body.repoName);
       if (file.repos.length === before) {
         return NextResponse.json({ error: "Repo not found" }, { status: 404 });
       }
-      writeRepos(file);
+      await writeRepos(file);
       // Notify the orchestrator so it can clean up in-memory state
       try {
         await orcPost("/v1/events", token, {
@@ -101,11 +99,11 @@ export async function POST(req: NextRequest) {
 
   if (body.action === "change_branch" && body.repoName && body.branch) {
     try {
-      const file = readRepos();
+      const file = await readRepos();
       const repo = file.repos.find((r) => r.name === body.repoName);
       if (!repo) return NextResponse.json({ error: "Repo not found" }, { status: 404 });
       repo.branch = body.branch;
-      writeRepos(file);
+      await writeRepos(file);
       // Enqueue a reindex so the new branch is reflected in the graph
       try {
         await orcPost("/v1/events", token, {

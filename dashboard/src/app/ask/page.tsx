@@ -5,6 +5,7 @@ import { Kicker, Heading, Chip, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
 import { useState, FormEvent, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { useProject } from "@/lib/useProject";
 
 type CitationKind = "node" | "file" | "slack" | "linear";
 
@@ -62,6 +63,7 @@ function CitationBadge({ c }: { c: Citation }) {
 function AnswerGraph({ citations }: { citations: Citation[] }) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(false);
+  const { prefix } = useProject();
 
   const nodeIds = citations.filter((c) => c.kind === "node").map((c) => c.ref);
 
@@ -71,7 +73,7 @@ function AnswerGraph({ citations }: { citations: Citation[] }) {
     setGraphData(null);
     Promise.all(
       nodeIds.map((id) =>
-        fetch(`/api/graph/neighborhood?nodeId=${encodeURIComponent(id)}`)
+        fetch(prefix(`/api/graph/neighborhood?nodeId=${encodeURIComponent(id)}`))
           .then((r) => r.json())
           .catch(() => ({ nodes: [], edges: [] }))
       )
@@ -110,6 +112,7 @@ function AnswerGraph({ citations }: { citations: Citation[] }) {
 // ─── Inner page (accesses searchParams) ──────────────────────────────────────
 
 function AskPageInner() {
+  const { prefix } = useProject();
   const searchParams = useSearchParams();
   const initialQ = searchParams.get("q") ?? "";
 
@@ -132,7 +135,7 @@ function AskPageInner() {
     if (!pollId) return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/jobs/${pollId}`);
+        const res = await fetch(prefix(`/api/jobs/${pollId}`));
         const data = await res.json() as AskResult & { result?: AskResult };
         if (data.status === "done" || data.status === "failed") {
           clearInterval(interval);
@@ -152,7 +155,7 @@ function AskPageInner() {
     setResult(null);
     setPollId(null);
     try {
-      const res = await fetch("/api/ask", {
+      const res = await fetch(prefix("/api/ask"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),

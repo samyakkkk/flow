@@ -5,6 +5,7 @@
 // pasting a URL survives; folders go through AddFolder, and browsing your
 // account goes through the RepoPicker checklist above.
 import { useState, FormEvent } from "react";
+import { useProject } from "@/lib/useProject";
 import {
   mono,
   branchInputStyle,
@@ -20,6 +21,7 @@ import {
 } from "@/components/sources/kit";
 
 export function AddRepoUrl({ onAdded }: { onAdded?: () => void }) {
+  const { prefix } = useProject();
   const [input, setInput] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState("");
@@ -36,7 +38,7 @@ export function AddRepoUrl({ onAdded }: { onAdded?: () => void }) {
     setInspectError("");
     setResult(null);
     clear();
-    const { data, error } = await inspectInput(trimmed);
+    const { data, error } = await inspectInput(trimmed, prefix);
     if (error || !data) {
       setInspectError(error ?? "Could not inspect that URL.");
       setInspecting(false);

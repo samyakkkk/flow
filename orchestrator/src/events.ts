@@ -130,7 +130,7 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
     const { enqueueJob } = await import("./opencode.js");
     const job = await enqueueJob({
       type: "index_repo",
-      input: { repo: p.repo ?? "", branch: p.branch ?? "main" },
+      input: { repo: p.repo ?? "", branch: p.branch },
       repo: p.repo,
     });
     db.prepare(
@@ -153,7 +153,7 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
     // Register + watch + queue the index job via the shared connection path
     // (also used by the sources front door), then audit.
     const { connectGithubRepo } = await import("./opencode.js");
-    const { entry, jobId } = await connectGithubRepo(p.url, p.branch ?? "main");
+    const { entry, jobId } = await connectGithubRepo(p.url, p.branch);
     // target = the human-facing repo name (the dashboard shows it verbatim);
     // the job id lives in detail for debugging.
     db.prepare(

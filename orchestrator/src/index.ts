@@ -9,6 +9,7 @@ import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
 import { getJob, enqueueJob, recoverStalledJobs } from "./opencode.js";
+import { activityForRepo } from "./job-activity.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
 import { registerGithubWebhook, registerGithubPoller, seedWatchedRepos } from "./adapters/github.js";
 import { registerMeetingRoutes, registerFirefliesPoller } from "./adapters/meetings.js";
@@ -149,6 +150,22 @@ app.get<{ Params: { id: string } }>(
     if (!job) return reply.code(404).send({ error: "Not found" });
     const result = job.result_json ? JSON.parse(job.result_json) as Record<string, unknown> : null;
     return reply.send({ ...job, result });
+  }
+);
+
+// ------------------------------------------------------------------
+// Live indexer activity — what the current/latest index job for a repo is
+// doing right now (terse tool-call labels + counts). In-memory and live-only:
+// the ticker empties when the job ends; job-logs/ keeps the full transcript.
+// ------------------------------------------------------------------
+app.get<{ Querystring: { repo?: string } }>(
+  "/v1/index-activity",
+  async (req, reply) => {
+    const repo = req.query.repo ?? "";
+    if (!repo) return reply.code(400).send({ error: "repo query param required" });
+    const activity = activityForRepo(repo);
+    if (!activity) return reply.send({ status: "idle" });
+    return reply.send(activity);
   }
 );
 

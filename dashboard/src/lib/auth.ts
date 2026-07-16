@@ -1,48 +1,52 @@
 // Auth helpers — server side only.
+//
+// requireSession() keeps its old contract (resolve this request to the
+// project admin token, or null), so the ~30 API routes that call it did not
+// change in the single-dashboard refactor. What changed underneath:
+//
+//   local: the project's admin token comes from the registry (per-request),
+//          not from env — a single process serves every project.
+//   prod:  the cookie is a signed {uid, exp} session for a real user account
+//          in data/auth.json, NOT a project token. We verify the signature,
+//          check the user's grant on this request's project, and only then
+//          inject the project's admin token server-side. Humans never hold
+//          project tokens anymore.
 import { cookies } from "next/headers";
-import { SESSION_COOKIE, ORCHESTRATOR_URL, IS_LOCAL, FLOW_ADMIN_TOKEN } from "./config";
+import { SESSION_COOKIE, IS_LOCAL } from "./config";
+import { currentProject } from "./projectContext";
+import { verifySession, userCanAccess, type AuthUser } from "./authStore";
 
-/**
- * Validate a bearer token by hitting GET /v1/audit on the orchestrator.
- * Tri-state ON PURPOSE: "the orchestrator rejected this token" and "the
- * orchestrator can't be reached" must never be conflated — conflating them
- * once sent local users to a login page that could not possibly help them
- * (it validates against the same unreachable orchestrator).
- */
-export type TokenCheck = "valid" | "invalid" | "unreachable";
-
-export async function validateToken(token: string): Promise<TokenCheck> {
-  try {
-    const res = await fetch(`${ORCHESTRATOR_URL}/v1/audit?limit=1`, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-    if (res.status === 200) return "valid";
-    if (res.status === 401 || res.status === 403) return "invalid";
-    return "unreachable"; // 5xx etc. — orchestrator unhealthy, not an auth verdict
-  } catch {
-    return "unreachable";
-  }
-}
-
-/**
- * Get the token stored in the session cookie (server component / route handler).
- */
-export async function getSessionToken(): Promise<string | null> {
-  // Local mode = single user on their own machine. The dashboard already holds
-  // this project's admin token in its env, and it's authoritative here — use it
-  // and ignore any cookie (a stale or cross-project one shouldn't force a
-  // login on your own box). No paste-the-token step at all.
-  if (IS_LOCAL && FLOW_ADMIN_TOKEN) return FLOW_ADMIN_TOKEN;
-  // Prod: the cookie is the credential, and it's project-specific (validated
-  // against this project's orchestrator), so cross-project cookies are rejected.
+/** The authenticated user for this request (prod), or null. Local mode has no users. */
+export async function currentUser(): Promise<AuthUser | null> {
   const jar = await cookies();
-  return jar.get(SESSION_COOKIE)?.value ?? null;
+  return verifySession(jar.get(SESSION_COOKIE)?.value);
 }
 
 /**
- * Check if the current request is authenticated. Returns token or null.
+ * Resolve this request to the scoped project's admin token — the bearer for
+ * orchestrator/gateway calls. Returns null when unauthenticated, the project
+ * is unknown, or (prod) the user has no grant on it.
  */
 export async function requireSession(): Promise<string | null> {
-  return getSessionToken();
+  const project = await currentProject();
+  if (!project) return null;
+  if (IS_LOCAL) return project.adminToken || null;
+
+  const user = await currentUser();
+  if (!user) return null;
+  if (!userCanAccess(user, project.name)) return null;
+  return project.adminToken || null;
 }
+
+/** Prod-only: the request's user if they are an owner, else null. */
+export async function requireOwner(): Promise<AuthUser | null> {
+  const user = await currentUser();
+  return user?.role === "owner" ? user : null;
+}
+
+/**
+ * Legacy name for requireSession() — kept so the ~38 routes written against
+ * the per-project-dashboard era compile unchanged. Same contract: the scoped
+ * project's admin token, or null.
+ */
+export const getSessionToken = requireSession;

@@ -46,6 +46,26 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "LLM_BASE_URL",
+    secret: false,
+    description: "OpenAI-compatible API base URL for the classifier and embeddings (any provider works)",
+    default: "https://openrouter.ai/api/v1",
+    appliesTo: "classifier",
+  },
+  {
+    key: "LLM_API_KEY",
+    secret: true,
+    description: "API key for LLM_BASE_URL; when unset, falls back to OPENROUTER_API_KEY",
+    appliesTo: "classifier",
+  },
+  {
+    key: "BRAIN_MODE",
+    secret: false,
+    description:
+      "Set to 'opencode' when model access comes from opencode's own provider auth — no API key gate; classifier and embeddings stay off until LLM_API_KEY or OPENROUTER_API_KEY is set",
+    appliesTo: "classifier",
+  },
+  {
     key: "CLASSIFIER_MODEL",
     secret: false,
     description: "Model ID passed to OpenRouter for the event classifier",
@@ -53,10 +73,18 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "INDEXER_RUNTIME",
+    secret: false,
+    description:
+      "Which coding CLI runs indexing jobs: auto (first installed of opencode → codex → claude), or force one",
+    default: "auto",
+    appliesTo: "builder",
+  },
+  {
     key: "GRAPH_BUILDER_MODEL",
     secret: false,
-    description: "Model ID passed to OpenRouter for the graph-builder opencode worker",
-    default: "openrouter/minimax/minimax-m3",
+    description:
+      "Overrides the per-backend default model for indexing jobs. A thin or noisy graph is usually fixed by setting this to a stronger model.",
     appliesTo: "builder",
   },
   {
@@ -265,6 +293,18 @@ export function getSetting(key: string): string | undefined {
   return value;
 }
 
+// Shared resolution for the direct LLM API callers (classifier, embeddings).
+// LLM_API_KEY wins; OPENROUTER_API_KEY remains a fallback so existing setups
+// keep working. Empty string = no key (callers degrade, they don't crash).
+export function llmApiKey(): string {
+  return getSetting("LLM_API_KEY") ?? getSetting("OPENROUTER_API_KEY") ?? "";
+}
+
+export function llmBaseUrl(): string {
+  const base = getSetting("LLM_BASE_URL") ?? "https://openrouter.ai/api/v1";
+  return base.replace(/\/+$/, "");
+}
+
 /**
  * Return the source of a setting value.
  */
@@ -423,9 +463,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       for (const [key, value] of Object.entries(body)) {
         putSetting(key, value);
         auditSettingChange(key);
-        // Remember the OpenRouter key as the machine default so new projects
-        // can reuse it instead of re-entering it.
-        if (key === "OPENROUTER_API_KEY" && value) writeGlobalDefault(key, value);
+        // Remember LLM keys as machine defaults so new projects can reuse
+        // them instead of re-entering.
+        if ((key === "OPENROUTER_API_KEY" || key === "LLM_API_KEY") && value) writeGlobalDefault(key, value);
         if (slackKeys.has(key)) slackChanged = true;
       }
 

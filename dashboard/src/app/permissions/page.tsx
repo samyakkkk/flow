@@ -1,6 +1,7 @@
 "use client";
 import { Shell } from "@/components/Shell";
 import { useEffect, useState, useCallback } from "react";
+import { useProject } from "@/lib/useProject";
 
 type Decision = "auto" | "propose" | "off";
 
@@ -106,16 +107,17 @@ export default function PermissionsPage() {
   const [pending, setPending] = useState<Record<string, Decision>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [error, setError] = useState("");
+  const { prefix } = useProject();
 
   const load = useCallback(() => {
-    fetch("/api/policies")
+    fetch(prefix("/api/policies"))
       .then((r) => r.json())
       .then((d) => {
         setData(d as PoliciesResponse);
         setPending({});
       })
       .catch(() => setError("Failed to load policies"));
-  }, []);
+  }, [prefix]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -124,7 +126,7 @@ export default function PermissionsPage() {
     setPending((p) => ({ ...p, [key]: value }));
     setSaving((s) => ({ ...s, [key]: true }));
     try {
-      const res = await fetch("/api/policies", {
+      const res = await fetch(prefix("/api/policies"), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [key]: value }),

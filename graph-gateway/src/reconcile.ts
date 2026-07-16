@@ -21,9 +21,14 @@
 // across concurrent agent sessions.
 
 import { run, raw } from "./graph.js";
-import { embedBatch, embeddingsEnabled, entityText } from "./embed.js";
+import { embedBatch, entityText } from "./embed.js";
+import { startLocalModel, MODEL_STAMP } from "./local-embed.js";
 
 const versionKey = (graph: string) => `flow:graph-version:${graph}`;
+// Tracks which embed model's vectors are stored in the graph. When this
+// stamp changes (model upgrade or switch from OpenRouter), we force-re-embed
+// all nodes so query and document vectors stay in the same space.
+const embedStampKey = (graph: string) => `flow:embed-stamp:${graph}`;
 
 interface GraphMigration {
   id: number;
@@ -93,8 +98,35 @@ export async function reconcileEmbeddings(
 }
 
 // ---------------------------------------------------------------------------
-// Boot entry point. Migrations first (they're ordering-sensitive), then
-// reconcilers fire-and-forget. Any failure is logged, never fatal — a gateway
+// Called after the local model finishes loading. Checks whether the stored
+// embed-model stamp matches the current model — if not (first run, or after a
+// model upgrade), force-re-embeds all nodes so every vector is in the same
+// 768-dim space. On match, only backfills nodes that were written during the
+// download window (embedding IS NULL). Saves the stamp after a force run.
+export async function reconcileAfterModelReady(graph: string): Promise<void> {
+  try {
+    const conn = await raw();
+    const saved = await conn.get(embedStampKey(graph));
+    const force = saved !== MODEL_STAMP;
+    if (force) {
+      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${MODEL_STAMP}) — re-embedding all nodes`);
+    }
+    const { total, embedded, failed } = await reconcileEmbeddings(graph, { force });
+    if (total === 0) {
+      console.log(`[reconcile] graph='${graph}': all nodes already embedded`);
+    } else {
+      console.log(`[reconcile] graph='${graph}': embedded ${embedded}/${total}${failed ? `, failed ${failed}` : ""}`);
+    }
+    if (force) await conn.set(embedStampKey(graph), MODEL_STAMP);
+  } catch (err) {
+    console.warn(`[reconcile] post-model reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Boot entry point. Migrations first (ordering-sensitive, blocking), then
+// fire-and-forget: wait for the local embedding model (downloading if needed),
+// then reconcile embeddings. Any failure is logged, never fatal — a gateway
 // that can't converge is still a working gateway.
 export function runBootTasks(graph: string): void {
   void (async () => {
@@ -103,14 +135,13 @@ export function runBootTasks(graph: string): void {
     } catch (err) {
       console.warn(`[graph] migrations for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (embeddingsEnabled()) {
-      try {
-        await reconcileEmbeddings(graph);
-      } catch (err) {
-        console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } else {
-      console.log(`[reconcile] OPENROUTER_API_KEY not set — semantic search disabled for '${graph}'`);
+    try {
+      // startLocalModel() is a singleton — safe to call here even though
+      // server.ts already called it; the same promise is returned.
+      await startLocalModel();
+      await reconcileAfterModelReady(graph);
+    } catch (err) {
+      console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   })();
 }
