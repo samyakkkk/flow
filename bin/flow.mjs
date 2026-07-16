@@ -21,6 +21,7 @@ import {
   closeSync,
   readdirSync,
   statSync,
+  renameSync,
 } from "node:fs";
 import { join, relative } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -437,6 +438,9 @@ function preflightNativeDeps() {
 }
 
 function spawnService({ cwd, cmd, env, logFile }) {
+  if (existsSync(logFile) && statSync(logFile).size > 10 * 1024 * 1024) {
+    renameSync(logFile, `${logFile}.1`);
+  }
   const fd = openSync(logFile, "a");
   const child = spawn(cmd[0], cmd.slice(1), {
     cwd,
