@@ -13,7 +13,7 @@
 //   2. RECONCILERS — unversioned, convergent, idempotent, run in the
 //      background on every boot. For enrichment where "check what's missing
 //      and fill it" is cheap and safe to re-run. They self-heal: a reconciler
-//      also catches nodes written while a dependency (say, the OpenRouter key)
+//      also catches nodes written while a dependency (say, the local model)
 //      was missing. Never block startup, never crash the gateway.
 //
 // Only the long-lived HTTP gateway runs this — the per-session MCP subprocess
@@ -58,7 +58,7 @@ export async function runGraphMigrations(graph: string): Promise<void> {
 
 // ---------------------------------------------------------------------------
 // Reconciler: semantic embeddings. Nodes written before the embeddings
-// feature (or while OPENROUTER_API_KEY was unset / an embed call failed) have
+// feature (or while the local model was loading / an embed call failed) have
 // no vector; find_entity's semantic fallback can't see them. Converge here.
 // Returns counts so the manual script (scripts/backfill-embeddings.ts) can
 // report; `force` re-embeds everything (after an embed-text or model change).

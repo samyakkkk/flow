@@ -14,7 +14,7 @@ import {
   detectAgents,
   resolveLocalExecutable,
 } from "./agents/runtime.js";
-import { getSetting, llmApiKey, llmBaseUrl } from "./settings.js";
+import { getSetting } from "./settings.js";
 
 export type IndexerBackend = "opencode" | "codex" | "claude";
 
@@ -100,11 +100,16 @@ export interface McpSpecOpts {
 
 export function mcpEnv(opts: McpSpecOpts): Record<string, string> {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
+  const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
+  const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   const env: Record<string, string> = {
     GATEWAY_MCP_MODE: "builder",
     GRAPH_NAME: opts.graphName,
     FLOW_CORRECTIONS_URL: `http://127.0.0.1:${orchPort}/v1/corrections`,
+    // MCP is short-lived; borrow the gateway's one local Gemma instance.
+    FLOW_EMBED_URL: `${gatewayUrl}/v1/embed`,
   };
+  if (gatewayToken) env.FLOW_EMBED_TOKEN = gatewayToken;
   if (opts.actor) env.FLOW_ACTOR = opts.actor;
   if (opts.job) {
     env.FLOW_JOB_ID = opts.job.id;
@@ -114,11 +119,6 @@ export function mcpEnv(opts: McpSpecOpts): Record<string, string> {
   if (process.env.JOURNAL_PATH) env.JOURNAL_PATH = process.env.JOURNAL_PATH;
   if (process.env.FALKOR_HOST) env.FALKOR_HOST = process.env.FALKOR_HOST;
   if (process.env.FALKOR_PORT) env.FALKOR_PORT = process.env.FALKOR_PORT;
-  const key = llmApiKey();
-  if (key) {
-    env.LLM_API_KEY = key;
-    env.LLM_BASE_URL = llmBaseUrl();
-  }
   if (opts.writeScope) env.FLOW_WRITE_SCOPE = opts.writeScope;
   return env;
 }

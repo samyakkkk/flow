@@ -18,7 +18,6 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
-import { llmApiKey, llmBaseUrl } from "../settings.js";
 import { addNote, matchNotes } from "../notes.js";
 import { embedText } from "../embed.js";
 import {
@@ -927,6 +926,8 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 
 function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
+  const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
+  const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   const env: Array<{ name: string; value: string }> = [
     { name: "GATEWAY_MCP_READONLY", value: "1" },
     { name: "GRAPH_NAME", value: projectGraphName() },
@@ -945,17 +946,13 @@ function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpSer
     // correct_graph dispatch target — flags land in the corrections queue and
     // get verified against the base-branch checkout by the indexer.
     { name: "FLOW_CORRECTIONS_URL", value: `http://127.0.0.1:${orchPort}/v1/corrections` },
+    // The gateway owns the local embedding model. Agent MCP subprocesses use
+    // it over HTTP instead of loading one model copy per active session.
+    { name: "FLOW_EMBED_URL", value: `${gatewayUrl}/v1/embed` },
   ];
+  if (gatewayToken) env.push({ name: "FLOW_EMBED_TOKEN", value: gatewayToken });
   if (process.env.FALKOR_HOST) env.push({ name: "FALKOR_HOST", value: process.env.FALKOR_HOST });
   if (process.env.FALKOR_PORT) env.push({ name: "FALKOR_PORT", value: process.env.FALKOR_PORT });
-  // Give the read-only MCP the embeddings key so find_entity can do semantic
-  // search — without it, the vector fallback silently no-ops and agents get the
-  // old substring-only behaviour. Same key used everywhere (getSetting → DB/env).
-  const embedKey = llmApiKey();
-  if (embedKey) {
-    env.push({ name: "LLM_API_KEY", value: embedKey });
-    env.push({ name: "LLM_BASE_URL", value: llmBaseUrl() });
-  }
   return { name: "flow-graph", command: binPath("tsx"), args: [GATEWAY_MCP], env };
 }
 

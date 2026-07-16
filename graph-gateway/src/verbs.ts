@@ -98,7 +98,7 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10, 
 // that answer retrieval questions must pass that on, because lexical-only
 // results are indistinguishable from "the graph has nothing" otherwise.
 async function findByVector(graph: string, q: string, type: string | undefined, limit: number, includeProposed = false): Promise<{ rows: ScoredRow[]; degraded?: string }> {
-  if (!embeddingsEnabled()) return { rows: [], degraded: "no LLM API key configured (LLM_API_KEY / OPENROUTER_API_KEY)" };
+  if (!embeddingsEnabled()) return { rows: [], degraded: "local embedding service is not configured" };
   const { vec, error } = await embedQuery(q);
   if (!vec) return { rows: [], degraded: error ?? "query could not be embedded" };
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";

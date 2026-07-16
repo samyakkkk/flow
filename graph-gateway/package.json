@@ -9,6 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "mcp": "tsx src/mcp.ts",
+    "test": "node --import tsx/esm --test test/embed.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
