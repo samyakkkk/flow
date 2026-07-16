@@ -1,25 +1,20 @@
-// Semantic search support. Entities and queries are embedded through any
-// OpenAI-compatible embeddings endpoint (default OpenRouter,
-// openai/text-embedding-3-small, 1536-dim) so find_entity can match on
-// meaning, not just substrings — e.g. "worktree" surfacing the
-// agent-session / repo-checkout nodes even though the word appears nowhere.
+// Semantic search support. Entities and queries are embedded with a local
+// EmbeddingGemma-300M model (768-dim) via node-llama-cpp — no API key needed.
+// The model downloads from HuggingFace on first run (~300 MB) and is cached
+// locally by node-llama-cpp.
 //
-// Deliberately non-fatal: if no API key is set (LLM_API_KEY or
-// OPENROUTER_API_KEY) or the API errors, we log and return null. Writes still
-// succeed (just without a vector) and find_entity falls back to the lexical
-// CONTAINS match it always did.
+// Deliberately non-fatal: if the model hasn't finished loading yet, every
+// embed function returns null. Writes still succeed (just without a vector)
+// and find_entity falls back to the lexical CONTAINS match it always did.
+// Once the model is ready, reconcile.ts backfills all nodes written during
+// the download window.
 
-const MODEL = process.env.FLOW_EMBED_MODEL ?? "openai/text-embedding-3-small";
-export const EMBED_DIM = Number(process.env.FLOW_EMBED_DIM ?? 1536);
-const BASE_URL = (process.env.LLM_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/+$/, "");
-const ENDPOINT = process.env.FLOW_EMBED_URL ?? `${BASE_URL}/embeddings`;
+import { isLocalEmbedReady, embedTextLocal, embedBatchLocal, LOCAL_EMBED_DIM } from "./local-embed.js";
 
-function apiKey(): string {
-  return process.env.LLM_API_KEY ?? process.env.OPENROUTER_API_KEY ?? "";
-}
+export const EMBED_DIM = LOCAL_EMBED_DIM; // 768
 
 export function embeddingsEnabled(): boolean {
-  return apiKey().length > 0;
+  return isLocalEmbedReady();
 }
 
 // Human-readable words for the schema's machine labels. Embedding "workflow:"
@@ -68,63 +63,28 @@ export function entityText(
   return parts.join("\n");
 }
 
-async function callOpenRouter(input: string | string[]): Promise<{ vecs: number[][] | null; error?: string }> {
-  const key = apiKey();
-  if (!key) return { vecs: null, error: "OPENROUTER_API_KEY not configured" };
-  try {
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: MODEL, input }),
-    });
-    if (!res.ok) {
-      console.warn(`[embed] ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
-      return { vecs: null, error: `embeddings API returned ${res.status}` };
-    }
-    const json = (await res.json()) as { data?: { embedding: number[]; index: number }[] };
-    const data = json.data ?? [];
-    const n = Array.isArray(input) ? input.length : 1;
-    if (data.length !== n) {
-      console.warn(`[embed] expected ${n} embeddings, got ${data.length}`);
-      return { vecs: null, error: `embeddings API returned ${data.length} vectors for ${n} inputs` };
-    }
-    // The API returns an `index` per row; sort to guarantee input alignment.
-    return { vecs: [...data].sort((a, b) => a.index - b.index).map((d) => d.embedding) };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[embed] request failed: ${msg}`);
-    return { vecs: null, error: `embeddings request failed: ${msg}` };
-  }
-}
-
 export async function embedText(text: string): Promise<number[] | null> {
   const clean = text.trim();
   if (!clean) return null;
-  return (await callOpenRouter(clean)).vecs?.[0] ?? null;
+  return embedTextLocal(clean);
 }
 
 // Query-path variant of embedText that reports WHY embedding failed. Retrieval
-// callers (find_entity) surface this to the agent — a dead key or API outage
+// callers (find_entity) surface this to the agent — a model not yet loaded
 // must read as "semantic search unavailable", not as an empty graph. A wrong
 // conclusion here is expensive: agents have filed coverage-gap flags against
 // graphs that in fact held the answer.
 export async function embedQuery(text: string): Promise<{ vec: number[] | null; error?: string }> {
   const clean = text.trim();
   if (!clean) return { vec: null, error: "empty query" };
-  const { vecs, error } = await callOpenRouter(clean);
-  return { vec: vecs?.[0] ?? null, error };
+  if (!isLocalEmbedReady()) return { vec: null, error: "local embedding model not yet loaded" };
+  const vec = await embedTextLocal(clean);
+  return { vec, error: vec ? undefined : "embedding returned null" };
 }
 
 // Batched embedding for backfill. Returns one slot per input (null where a
 // chunk failed) so callers can align results with their node list.
 export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> {
   if (texts.length === 0) return [];
-  const CHUNK = 96;
-  const results: (number[] | null)[] = [];
-  for (let i = 0; i < texts.length; i += CHUNK) {
-    const chunk = texts.slice(i, i + CHUNK).map((t) => t.trim() || " ");
-    const { vecs } = await callOpenRouter(chunk);
-    for (let j = 0; j < chunk.length; j++) results.push(vecs ? vecs[j] : null);
-  }
-  return results;
+  return embedBatchLocal(texts.map((t) => t.trim() || " "));
 }

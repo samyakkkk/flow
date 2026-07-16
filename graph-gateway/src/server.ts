@@ -3,10 +3,13 @@ import { callVerb, verbs } from "./verbs.js";
 import { tail } from "./journal.js";
 import { DEFAULT_GRAPH } from "./graph.js";
 import { runBootTasks } from "./reconcile.js";
+import { startLocalModel } from "./local-embed.js";
+import { embedText, embeddingsEnabled, EMBED_DIM } from "./embed.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
+//   POST /v1/embed          body: { text }          (bearer-authed)
 //   GET  /v1/journal?limit=50                        (bearer-authed)
 //   GET  /health                                     (open)
 //
@@ -54,6 +57,30 @@ const server = createServer(async (req, res) => {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return json(res, 200, { entries: await tail(limit) });
     }
+    // Shared embedding endpoint. The gateway is the single owner of the local
+    // model, so other services (the orchestrator's branch-note store) embed
+    // through this hop instead of loading a second copy of Gemma. `ready` lets
+    // callers distinguish "model still downloading" from "embed failed" and
+    // store text without a vector rather than blocking. `dim` is the model's
+    // vector size so callers can guard against mixing embedding spaces.
+    if (req.method === "POST" && url.pathname === "/v1/embed") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: { text?: unknown } = {};
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          return json(res, 400, { status: "error", error: "Body must be valid JSON" });
+        }
+      }
+      const text = typeof body.text === "string" ? body.text : "";
+      if (!text.trim()) return json(res, 400, { status: "error", error: "text is required" });
+      const ready = embeddingsEnabled();
+      const vec = ready ? await embedText(text) : null;
+      return json(res, 200, { vec, dim: EMBED_DIM, ready });
+    }
     const verbMatch = url.pathname.match(/^\/v1\/verbs\/([a-z_]+)$/);
     if (req.method === "POST" && verbMatch) {
       const chunks: Buffer[] = [];
@@ -79,7 +106,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
-  // Converge this graph in the background: versioned migrations, then
-  // reconcilers (e.g. embedding backfill). See reconcile.ts.
+  // Start the local embedding model download immediately so it runs in
+  // parallel with migrations. runBootTasks awaits the same singleton promise
+  // before it reconciles embeddings — nodes indexed during the download are
+  // backfilled automatically once the model is ready. See reconcile.ts.
+  startLocalModel();
   runBootTasks(DEFAULT_GRAPH);
 });
