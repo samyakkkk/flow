@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate } from "./migrations.js";
+import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -261,6 +261,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_llm_log_ref ON llm_log(ref);
 `);
+
+// Memory v1 storage (observations + memories + FTS). Kept in migrations.ts as
+// MEMORY_SCHEMA so a fresh DB (this block) and an upgrading DB (migration 8)
+// create byte-identical tables. See migrations.ts for the column semantics.
+db.exec(MEMORY_SCHEMA);
+db.exec(MEMORY_TRIGGERS);
 
 // FTS triggers to keep virtual tables in sync with base tables
 db.exec(`

@@ -406,6 +406,7 @@ db.exec(`
     start_sha TEXT,
     start_untracked TEXT,
     worktree_id TEXT,
+    last_distilled_seq INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
