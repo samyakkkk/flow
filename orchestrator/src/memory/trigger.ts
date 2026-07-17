@@ -34,13 +34,19 @@ interface SessionMetaRow {
   last_distilled_seq: number | null;
 }
 
+// Statements are prepared LAZILY: agent_sessions is created by runtime.ts at
+// its module load, which imports this file at its TOP — so the table does not
+// exist yet when this module first evaluates. Preparing on first call defers
+// until the table is guaranteed present.
 function sessionMeta(id: string): SessionMetaRow | undefined {
   return db
     .prepare(`SELECT id, repo, status, updated_at, last_distilled_seq FROM agent_sessions WHERE id = ?`)
     .get(id) as SessionMetaRow | undefined;
 }
 
-const setDistilledSeq = db.prepare(`UPDATE agent_sessions SET last_distilled_seq = ? WHERE id = ?`);
+function setDistilledSeq(seq: number, id: string): void {
+  db.prepare(`UPDATE agent_sessions SET last_distilled_seq = ? WHERE id = ?`).run(seq, id);
+}
 
 // Run one distill for a session if it has new events. Non-throwing. Returns
 // whether it actually distilled (for tests).
@@ -64,7 +70,7 @@ export async function maybeDistill(id: string, branch: string | null = null): Pr
   }
   // Advance the high-water mark even on a zero-observation run — the content was
   // consumed; re-reading it yields nothing new.
-  setDistilledSeq.run(maxSeq, id);
+  setDistilledSeq(maxSeq, id);
   return true;
 }
 
