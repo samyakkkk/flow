@@ -337,6 +337,68 @@ describe("search ranking", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Grep-style keyword matching: filler words are stripped so a natural-language
+// query can't false-match a memory on a shared stopword. This is the fix for
+// the live-proof failure where "…images ON a landing page" surfaced an
+// unrelated sqlite memory because both contained "on" and FTS hits bypass the
+// silence gate. Multi-memory store so ranking/discrimination is exercised too.
+describe("keyword matching + multi-memory retrieval", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  async function seed(claim: string, repo: string, keys: string[] = []) {
+    const o = await store.insertObservation({ source: "session", repo, claim, kind: "gotcha", source_weight: "user_stated", retrieval_keys: keys, session_id: "s1" });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("meaningfulTokens strips filler, keeps identifiers/paths/errors", () => {
+    const t = search.meaningfulTokens("rotating avatar images for user profile cards on a marketing landing page");
+    for (const filler of ["for", "on", "a"]) assert.ok(!t.includes(filler), `"${filler}" must be stripped`);
+    assert.ok(t.includes("avatar") && t.includes("landing"));
+    // identifiers/paths/error snippets survive at any length
+    const c = search.meaningfulTokens("SqliteError: database is locked in store.ts insertObservation");
+    assert.ok(!c.includes("is"), '"is" must be stripped');
+    assert.ok(c.includes("database") && c.includes("locked"));
+    assert.ok(c.some((x) => x.includes("store.ts")) && c.includes("insertobservation"));
+    // an all-filler query yields nothing → no keyword bypass of silence
+    assert.deepEqual(search.meaningfulTokens("how is it that we do this with the"), []);
+  });
+
+  test("stopword-only overlap does NOT surface a memory (the live bug)", async () => {
+    clearMemory();
+    // The memory shares ONLY filler words with the query below ("on", "with").
+    await seed("the ci pipeline runs on github-actions with layer caching", "acme", ["ci", "github-actions", "caching"]);
+    const res = await search.searchMemory({ query: "avatar images on profile cards with rounded corners", repo: "acme", limit: 10 });
+    assert.equal(res.memories.length, 0, "shared stopwords must not surface an unrelated memory");
+    // positive control: a real content token from that memory DOES surface it
+    const hit = await search.searchMemory({ query: "github-actions caching", repo: "acme", limit: 10 });
+    assert.ok(hit.memories.length >= 1 && hit.memories[0].ftsHit, "real keyword must still hit");
+  });
+
+  test("grep-style identifier query pinpoints the right memory among many", async () => {
+    clearMemory();
+    await seed("route all sqlite writes through the shared db singleton in db.ts", "acme", ["insertObservation", "db.ts", "sqlite"]);
+    await seed("dashboard uses tailwind for styling", "acme", ["tailwind", "css"]);
+    await seed("payments verified with an hmac signature", "acme", ["hmac", "webhook"]);
+    await seed("retries use exponential backoff with jitter", "acme", ["retry", "backoff"]);
+    const res = await search.searchMemory({ query: "insertObservation", repo: "acme", limit: 10 });
+    assert.ok(res.memories.length >= 1);
+    assert.ok(res.memories[0].claim.includes("db singleton"), "the identifier must rank the sqlite memory first");
+  });
+
+  test("both polarities of a topic surface — retrieval doesn't need to resolve negation", async () => {
+    clearMemory();
+    // Two memories, opposite advice, same topic. Retrieval should surface BOTH
+    // (the agent reads the claim text to see always vs never); the consolidator,
+    // not search, is where contradiction is adjudicated.
+    await seed("always run bare `flow up` to refresh every project at once", "acme", ["flow-up", "restart"]);
+    await seed("never run bare `flow up` — restart one project and verify health", "acme", ["flow-up", "restart"]);
+    const res = await search.searchMemory({ query: "flow-up restart", repo: "acme", limit: 10 });
+    assert.equal(res.memories.length, 2, "both the always- and never- memories must surface");
+    assert.ok(res.memories.some((m) => m.claim.includes("always")) && res.memories.some((m) => m.claim.includes("never")));
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("migration idempotency", () => {
   test("running migrate twice on an existing pre-v8 DB is a no-op", async () => {
     const Database = (await import("better-sqlite3")).default;

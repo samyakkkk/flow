@@ -46,11 +46,43 @@ export interface SearchResult {
   durationMs: number;
 }
 
-// Escape a free-text query for FTS5 MATCH: quote each token so punctuation-heavy
-// identifiers/error snippets don't blow up the FTS parser. Empty → no FTS.
+// Filler words a keyword search must ignore. The point (per the grep analogy):
+// a model searching memory keys on meaningful strings, not whole sentences — so
+// a natural-language query like "…images ON a landing page" must NOT match a
+// memory merely because both contain "on". Without this, common-token FTS hits
+// bypass the silence gate and every query returns noise. This is NOT about
+// negation — "not"/"no" are dropped here because FTS never carries meaning;
+// the agent reads the claim text to see whether a memory says always vs never.
+const STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could",
+  "did", "do", "does", "for", "from", "get", "gets", "got", "had", "has", "have",
+  "how", "i", "if", "in", "into", "is", "it", "its", "me", "my", "no", "not", "of",
+  "on", "or", "our", "out", "over", "so", "than", "that", "the", "their", "them",
+  "then", "there", "they", "this", "to", "up", "us", "was", "we", "were", "what",
+  "when", "where", "which", "while", "will", "with", "would", "you", "your", "about",
+  "all", "any", "just", "like", "some", "such", "via", "using", "use", "should",
+]);
+
+// Meaningful search tokens, grep-style: keep identifiers/paths/error snippets
+// (anything with a code char) at any length; keep plain words that aren't filler;
+// drop everything else. Lowercased for matching.
+export function meaningfulTokens(query: string): string[] {
+  const raw = query.match(/[A-Za-z0-9_./:-]+/g) ?? [];
+  const out: string[] = [];
+  for (const t of raw) {
+    const lower = t.toLowerCase();
+    const hasCodeChar = /[_./:-]/.test(t) || /\d/.test(t);
+    if (hasCodeChar) { out.push(lower); continue; }
+    if (lower.length >= 2 && !STOPWORDS.has(lower)) out.push(lower);
+  }
+  return out;
+}
+
+// Escape meaningful tokens for FTS5 MATCH: quote each so punctuation-heavy
+// identifiers/error snippets don't blow up the parser. Empty → no FTS (and thus
+// no keyword bypass of the silence gate — a filler-only query stays silent).
 function ftsQuery(query: string): string {
-  const tokens = query.match(/[A-Za-z0-9_./:-]+/g) ?? [];
-  const quoted = tokens.filter((t) => t.length >= 2).map((t) => `"${t.replace(/"/g, '""')}"`);
+  const quoted = meaningfulTokens(query).map((t) => `"${t.replace(/"/g, '""')}"`);
   return quoted.join(" OR ");
 }
 
@@ -83,7 +115,7 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   const t0 = Date.now();
   const limit = Math.max(1, Math.min(50, input.limit ?? 8));
   const queryFamily = repoFamily(input.repo);
-  const queryTokens = (input.query.match(/[A-Za-z0-9_./:-]+/g) ?? []).map((t) => t.toLowerCase());
+  const queryTokens = meaningfulTokens(input.query);
 
   // --- FTS candidate ids (always eligible past the silence gate) ---
   const ftsIds = new Set<string>();
