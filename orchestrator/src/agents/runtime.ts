@@ -21,6 +21,7 @@ import db from "../db.js";
 import { llmApiKey, llmBaseUrl } from "../settings.js";
 import { addNote, matchNotes } from "../notes.js";
 import { embedText } from "../embed.js";
+import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
 import {
   createSessionWorktree,
   listWorktrees,
@@ -540,12 +541,17 @@ export function emit(s: LiveSession, kind: SessionEvent["kind"], data: unknown):
 }
 
 function setStatus(s: LiveSession, status: SessionStatus, extra?: { stopReason?: string; error?: string }): void {
+  const wasClosed = s.status === "closed";
   s.status = status;
   if (extra?.stopReason) s.stopReason = extra.stopReason;
   if (extra?.error) s.error = extra.error;
   s.updatedAt = Date.now();
   updateSessionRow.run(status, s.acpSessionId ?? null, s.stopReason ?? null, s.error ?? null, s.updatedAt, s.id);
   emit(s, "status", { status, stopReason: s.stopReason, error: s.error });
+  // Memory v1 write path: a session going closed is distilled (non-blocking,
+  // off the hot path). The idle sweep (trigger.ts) covers sessions that end by
+  // going quiet rather than by an explicit close.
+  if (status === "closed" && !wasClosed) onSessionClosed(s.id, s.branch ?? null);
 }
 
 const rehydrateRow = db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`);
@@ -659,6 +665,12 @@ export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
   }
   return out;
 }
+
+// Wire the memory distiller's triggers: give it the transcript reader (avoids an
+// import cycle) and start the idle sweep. Guarded so tests that never touch
+// sessions don't spin up a timer; FLOW_DISTILLER=0 disables both.
+setTranscriptReader((id) => readTranscript(id).map((e) => ({ seq: e.seq, kind: e.kind, data: e.data })));
+startIdleSweep();
 
 // ---------------------------------------------------------------------------
 // ACP connections — one adapter process per backend, shared across sessions

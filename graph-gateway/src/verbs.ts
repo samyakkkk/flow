@@ -767,6 +767,43 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 // Flow may run remotely (EC2) and never assumes the agent's filesystem;
 // for Flow-run sessions the runtime injects defaults via env.
 
+// ---------------------------------------------------------------------------
+// search_memory — retrieve-only access to Flow's memory (distilled session
+// memories + slack/linear corpus). Thin proxy to the orchestrator, which owns
+// the store, the embeddings, and the eval-calibrated ranking (family hard gate,
+// silence gate, FTS exact-match bypass). Search it like you grep: symptoms,
+// identifiers, and file paths are the reliable path.
+
+const searchMemoryInput = {
+  query: z.string().min(1).describe("What to look up. Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
+  repo: z.string().optional().describe("Repository name to scope to (defaults from the session's env). Cross-repo memories in the same product family are still eligible; unrelated repos are hard-filtered out."),
+  limit: z.number().int().min(1).max(50).optional().describe("Max memories to return (default 8)."),
+};
+
+async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>>) {
+  const repo = input.repo || process.env.FLOW_REPO || "";
+  const url =
+    process.env.FLOW_MEMORY_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/search` : "");
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  if (!url) return { status: "error", error: "No orchestrator configured for memory search (FLOW_MEMORY_URL unset)." };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ query: input.query, repo: repo || null, limit: input.limit }),
+      signal: AbortSignal.timeout(6000),
+    });
+    const body = (await res.json().catch(() => ({}))) as { lines?: string; error?: string };
+    if (!res.ok) return { status: "error", error: `Memory search failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "ok", results: body.lines ?? "(no memories match)" };
+  } catch (err) {
+    return { status: "error", error: `Memory search failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+
 const noteInput = {
   text: z.string().min(1).describe("The note — a discovery, dead end, constraint, decision, or worry, written for whoever works on this branch next"),
   kind: z.enum(["wip", "note", "caution", "decision"]).default("note").describe("'wip' = rolling state of current work (replaces your previous wip note); others accumulate and get promoted to the graph on merge"),
@@ -860,6 +897,27 @@ async function fetchBranchNotes(repo: string, branch: string): Promise<OrientNot
   }
 }
 
+interface MemoryStats {
+  memories: number;
+  observations: number;
+  bySource: Record<string, number>;
+}
+
+async function fetchMemoryStats(): Promise<MemoryStats | null> {
+  const url =
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/stats") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/stats` : "");
+  if (!url) return null;
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(url, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    return (await res.json()) as MemoryStats;
+  } catch {
+    return null;
+  }
+}
+
 interface OrientProc {
   id: string;
   name: string;
@@ -873,7 +931,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
 
-  const [repoRows, counts, procRows, notes] = await Promise.all([
+  const [repoRows, counts, procRows, notes, memStats] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
     run(
@@ -884,6 +942,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
        ORDER BY p.created_at DESC`,
     ) as Promise<unknown> as Promise<OrientProc[]>,
     fetchBranchNotes(repo, branch),
+    fetchMemoryStats(),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -952,6 +1011,23 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     out.push("(no notes yet)");
   } else {
     out.push(...section(notes, (n) => `- [${n.kind}] ${oneLine(n.text, 260)}`, "they continue in this branch's note store"));
+  }
+  out.push("");
+  // MEMORY — cross-session distilled knowledge + corpus, reached via
+  // search_memory (retrieve-only). Counts orient the agent to whether it's
+  // worth a look; the one-liner tells it how to query.
+  if (memStats && (memStats.memories > 0 || memStats.observations > 0)) {
+    const srcBits = Object.entries(memStats.bySource)
+      .sort((a, b) => b[1] - a[1])
+      .map(([s, n]) => `${n} ${s}`)
+      .join(", ");
+    out.push(
+      `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
+        (srcBits ? ` from ${srcBits} observations` : "") +
+        `. Search it like you grep — symptoms, identifiers, file paths work best (search_memory).`,
+    );
+  } else {
+    out.push("MEMORY: none yet — it fills as sessions end. Query with search_memory (symptoms, identifiers, file paths work best).");
   }
   out.push("");
   out.push(
@@ -1045,6 +1121,12 @@ export const verbs = {
       "Save a branch-scoped working note — discoveries, dead ends ('tried X, deadlocked'), constraints, decisions, or current WIP state (kind 'wip' replaces your previous wip note). Free to use, no approval needed; it surfaces automatically for future sessions on this branch. Note things the next session would otherwise re-learn the hard way.",
     shape: noteInput,
     handler: noteVerb,
+  },
+  search_memory: {
+    description:
+      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled.",
+    shape: searchMemoryInput,
+    handler: searchMemory,
   },
 } as const;
 
