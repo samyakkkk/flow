@@ -1,6 +1,6 @@
 // memory-client.ts — the gateway's thin HTTP client to the orchestrator's
 // memory surface (flow.db-backed). The gateway never touches flow.db directly;
-// it proxies, matching the FLOW_NOTES_URL / search_memory precedent.
+// it proxies, matching the FLOW_NOTES_URL / search_knowledge precedent.
 //
 // IMPLEMENTATION CHOICE (Sections B/C/D): rather than PROJECT memories into
 // FalkorDB (which would make the graph a second source of truth and require

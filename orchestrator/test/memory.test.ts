@@ -724,7 +724,7 @@ describe("node headline index (Section B)", () => {
     }
     const h = headline.getNodeHeadline("svc:payments");
     assert.ok(h.rendered.length <= headline.HEADLINE_CHAR_CAP, `render ${h.rendered.length} within cap ${headline.HEADLINE_CHAR_CAP}`);
-    assert.match(h.rendered, /\+\d+ more: search_memory node:svc:payments type:memory/, "overflow is a working node-scoped query");
+    assert.match(h.rendered, /\+\d+ more: search_knowledge node:svc:payments type:memory/, "overflow is a working node-scoped query");
   });
 
   test("memories are strength-ranked (strong first)", async () => {

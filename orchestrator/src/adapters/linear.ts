@@ -284,7 +284,7 @@ function mirrorTicket(issue: LinearIssueForPoller): void {
     updated_at: issue.updatedAt ? Math.floor(new Date(issue.updatedAt).getTime() / 1000) : null,
   });
   // Memory enrichment: mirror the ticket into the observations corpus so
-  // search_memory can surface it. repo_family inferred from the team prefix.
+  // search_knowledge can surface it. repo_family inferred from the team prefix.
   const text = [issue.title, issue.description].filter(Boolean).join(" — ");
   void observeCorpus({ source: "linear", text, repo: repoForTicket(issue.identifier ?? null) });
 }

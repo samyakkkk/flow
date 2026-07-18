@@ -1,4 +1,4 @@
-// routes.ts — HTTP surface for memory v1. The gateway's search_memory verb
+// routes.ts — HTTP surface for memory v1. The gateway's search_knowledge verb
 // proxies here (the memories + embeddings + FTS all live in the orchestrator's
 // flow.db; the gateway is a thin proxy, matching the note/correct_graph shape).
 //
