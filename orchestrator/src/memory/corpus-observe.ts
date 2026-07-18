@@ -1,5 +1,5 @@
 // corpus-observe.ts — enrich the corpus_insert path so slack/linear rows also
-// become observations (embedded, searchable via search_memory alongside session
+// become observations (embedded, searchable via search_knowledge alongside session
 // memories). repo_family is inferred from a channel/ticket→repo mapping when one
 // exists; otherwise null, which the cross-family gate treats as match-all.
 //

@@ -44,7 +44,7 @@ const SESSION_VERBS = new Set([
   // Ungated branch-scoped working memory.
   "note",
   // Retrieve-only cross-session memory (distilled decisions/gotchas + corpus).
-  "search_memory",
+  "search_knowledge",
 ]);
 // The graph-builder surface: exactly what the old .opencode/tools/graph.ts
 // plugin exposed, now served over MCP so workspaces need no npm install.

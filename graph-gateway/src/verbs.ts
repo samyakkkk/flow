@@ -938,7 +938,7 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 // for Flow-run sessions the runtime injects defaults via env.
 
 // ---------------------------------------------------------------------------
-// search_memory — retrieve-only access to Flow's memory (distilled session
+// search_knowledge — retrieve-only access to Flow's memory (distilled session
 // memories + slack/linear corpus). Thin proxy to the orchestrator, which owns
 // the store, the embeddings, and the eval-calibrated ranking (family hard gate,
 // silence gate, FTS exact-match bypass). Search it like you grep: symptoms,
@@ -1198,7 +1198,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   }
   out.push("");
   // MEMORY — cross-session distilled knowledge + corpus, reached via
-  // search_memory (retrieve-only). Counts orient the agent to whether it's
+  // search_knowledge (retrieve-only). Counts orient the agent to whether it's
   // worth a look; the one-liner tells it how to query.
   if (memStats && (memStats.memories > 0 || memStats.observations > 0)) {
     const srcBits = Object.entries(memStats.bySource)
@@ -1208,14 +1208,14 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     out.push(
       `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
         (srcBits ? ` from ${srcBits} observations` : "") +
-        `. Search it like you grep — symptoms, identifiers, file paths work best (search_memory). ` +
+        `. Search it like you grep — symptoms, identifiers, file paths work best (search_knowledge). ` +
         `get_entity on a node also shows a headline index of the memories/tickets/threads anchored to it. ` +
         `Drill into any [mem:…]/[obs:…]/[lin:…] with get_entity (batch ids[] works). ` +
-        `Scope a search to a node with search_memory node:<node_id> (composes with type:memory|ticket|thread).`,
+        `Scope a search to a node with search_knowledge node:<node_id> (composes with type:memory|ticket|thread).`,
     );
   } else {
     out.push(
-      "MEMORY: none yet — it fills as sessions end. Query with search_memory (symptoms, identifiers, file paths work best); " +
+      "MEMORY: none yet — it fills as sessions end. Query with search_knowledge (symptoms, identifiers, file paths work best); " +
         "get_entity shows a per-node headline index once memories anchor to nodes.",
     );
   }
@@ -1264,7 +1264,7 @@ export const verbs = {
   },
   get_entity: {
     description:
-      "Fetch a node with all its incoming and outgoing relationships, plus a headline INDEX of the memories/tickets/threads anchored to it (headlines only, ~300 tokens; a '+N more' line is a working search_memory node:<id> query). Also resolves memory drill-down ids — mem:<id> (memory card: strength breakdown, anchors, evidence), obs:<id>, lin:<identifier>, slackthread:<ts>. BATCH: pass ids:[…] (up to 15) to fetch several nodes/cards in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
+      "Fetch a node with all its incoming and outgoing relationships, plus a headline INDEX of the memories/tickets/threads anchored to it (headlines only, ~300 tokens; a '+N more' line is a working search_knowledge node:<id> query). Also resolves memory drill-down ids — mem:<id> (memory card: strength breakdown, anchors, evidence), obs:<id>, lin:<identifier>, slackthread:<ts>. BATCH: pass ids:[…] (up to 15) to fetch several nodes/cards in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
     shape: getEntityInput,
     handler: getEntity,
   },
@@ -1313,7 +1313,7 @@ export const verbs = {
     shape: noteInput,
     handler: noteVerb,
   },
-  search_memory: {
+  search_knowledge: {
     description:
       "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: searchMemoryInput,

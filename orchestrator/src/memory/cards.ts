@@ -15,7 +15,7 @@
 //
 // IMPLEMENTATION CHOICE (documented): the gateway resolves these namespaces by
 // calling the orchestrator over HTTP (/v1/memory/card/:type/:id) — the same
-// proxy pattern as FLOW_NOTES_URL / search_memory. The orchestrator owns
+// proxy pattern as FLOW_NOTES_URL / search_knowledge. The orchestrator owns
 // flow.db (memories, observations, corpus, anchors), so reading here is a
 // single indexed lookup with no graph round-trip. Cards carry NODE IDS for
 // anchors (not node bodies) so the model can get_entity them next.

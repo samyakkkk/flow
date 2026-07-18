@@ -1,4 +1,4 @@
-// search.ts — retrieval for search_memory. Eval-calibrated ranking:
+// search.ts — retrieval for search_knowledge. Eval-calibrated ranking:
 //
 //   HARD GATE on repo_family mismatch — drop, never downweight. (null family on
 //     either side = match-all.)
@@ -45,7 +45,7 @@ export interface ParsedQuery {
 // last part is an HTTP method OR the next token starts with '/'. Everything else
 // (real keywords like 'hmac') stays a keyword. `type:` is a plain leading token
 // that also ends node absorption. This matches the "+N more" line the headline
-// emits: `search_memory node:<id> type:<t>`.
+// emits: `search_knowledge node:<id> type:<t>`.
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 export function parseSearchTokens(raw: string): ParsedQuery {
   let node: string | null = null;

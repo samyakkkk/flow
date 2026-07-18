@@ -11,7 +11,7 @@
 //   - TICKETS: recency + status; [lin:<identifier>].
 //   - THREADS: recency; permalink; [slackthread:<ts>].
 //   - Total capped ~1200 chars; when a section overflows, append
-//     "+N more: search_memory node:<node_id> type:<t>".
+//     "+N more: search_knowledge node:<node_id> type:<t>".
 //
 // Served FAST: an in-process cache keyed by node id, invalidated on
 // consolidation (see consolidate.ts). Must add <20ms to get_entity — the query
@@ -164,7 +164,7 @@ export function renderNodeHeadline(h: NodeHeadline): string {
   let budget = HEADLINE_CHAR_CAP;
 
   const moreLine = (remaining: number, type: string): string =>
-    `  +${remaining} more: search_memory node:${h.node_id} type:${type}`;
+    `  +${remaining} more: search_knowledge node:${h.node_id} type:${type}`;
 
   // Render one typed section. RESERVES room for a "+N more" line before the last
   // item that would fit, so the overflow line ALWAYS fits within the cap (a
