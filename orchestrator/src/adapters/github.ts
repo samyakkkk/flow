@@ -50,6 +50,20 @@ export function watchRepo(ownerRepo: string, branch: string): void {
   registeredRepos.set(ownerRepo, branch);
 }
 
+// Stop watching (repo_removed flow). Accepts either the exact "owner/repo"
+// key or a bare repo name — the caller may no longer know the URL because
+// the registry entry was already deleted by the dashboard.
+export function unwatchRepo(ownerRepoOrName: string): boolean {
+  if (registeredRepos.delete(ownerRepoOrName)) return true;
+  for (const key of registeredRepos.keys()) {
+    if (key.endsWith(`/${ownerRepoOrName}`)) {
+      registeredRepos.delete(key);
+      return true;
+    }
+  }
+  return false;
+}
+
 // "owner/repo" from an https or ssh GitHub URL; null for non-GitHub URLs.
 export function ownerRepoFromUrl(url: string): string | null {
   const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim());

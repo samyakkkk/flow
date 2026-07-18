@@ -13,6 +13,7 @@
 
 import http from "node:http";
 import { spawn, execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const STUB_PORT = 17500;
@@ -306,11 +307,18 @@ async function main() {
   gatewayStub = await startGatewayStub();
 
   console.log("[smoke] Starting Next.js dev server on port", DASH_PORT);
+  // npm workspaces can hoist next's bin to the repo root (worktree checkouts
+  // do) — try the dashboard-local path first, then the hoisted one.
+  const dashDir = new URL("..", import.meta.url).pathname;
+  const nextBin =
+    ["node_modules/.bin/next", "../node_modules/.bin/next"]
+      .map((p) => dashDir + p)
+      .find((p) => existsSync(p)) ?? "node_modules/.bin/next";
   dashProc = spawn(
     "node",
-    ["node_modules/.bin/next", "dev", "--port", String(DASH_PORT)],
+    [nextBin, "dev", "--port", String(DASH_PORT)],
     {
-      cwd: new URL("..", import.meta.url).pathname,
+      cwd: dashDir,
       env: {
         ...process.env,
         ORCHESTRATOR_URL: `http://127.0.0.1:${STUB_PORT}`,

@@ -52,6 +52,7 @@ before(async () => {
       DEFAULT_GRAPH: "memory",
       run: async (g: string, c: string, p: Record<string, any> = {}) => mockRun(g, c, p),
       raw: async () => ({}),
+      deletedGraphError: async () => null,
       close: async () => {},
     },
   });

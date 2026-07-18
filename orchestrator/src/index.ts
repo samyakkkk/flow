@@ -8,8 +8,9 @@ import { registerOutboxRoutes } from "./outbox-routes.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
-import { getJob, enqueueJob, recoverStalledJobs } from "./opencode.js";
+import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses, checkDefaultBranchDrift } from "./opencode.js";
 import { activityForRepo } from "./job-activity.js";
+import { readIndexLog } from "./index-log.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
 import { registerGithubWebhook, registerGithubPoller, seedWatchedRepos } from "./adapters/github.js";
 import { registerMeetingRoutes, registerFirefliesPoller } from "./adapters/meetings.js";
@@ -178,6 +179,32 @@ app.get<{ Querystring: { repo?: string } }>(
 );
 
 // ------------------------------------------------------------------
+// Repo status — the per-repo state machine (never_indexed | queued |
+// indexing | indexed | failed) derived from the registry + jobs table.
+// The dashboard's source of truth for "is this repo fresh?".
+// ------------------------------------------------------------------
+app.get("/v1/repos/status", async (_req, reply) => {
+  return reply.send({ repos: repoStatuses() });
+});
+
+// ------------------------------------------------------------------
+// Indexer event log — the durable lifecycle trail (enqueued, parked,
+// superseded, started, done, failed, recovered, watch, removed) so a
+// self-deployer can reconstruct what the indexer did and when. Unlike
+// /v1/index-activity this survives restarts and job completion.
+// ------------------------------------------------------------------
+app.get<{ Querystring: { repo?: string; limit?: string } }>(
+  "/v1/index-log",
+  async (req, reply) => {
+    const rows = readIndexLog({
+      repo: req.query.repo || undefined,
+      limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined,
+    });
+    return reply.send({ rows, count: rows.length });
+  }
+);
+
+// ------------------------------------------------------------------
 // Audit log
 // ------------------------------------------------------------------
 app.get<{ Querystring: { limit?: string } }>(
@@ -211,7 +238,21 @@ app.get<{ Querystring: { status?: string } }>(
 app.addHook("onClose", async () => {
   stopDrainer();
   stopAllPollers();
+  // Kill live indexer CLIs (and their process groups) — an orphaned indexer
+  // surviving a restart would keep writing to the graph while boot recovery
+  // re-queues a duplicate job for the same repo.
+  const killed = killRunningJobChildren();
+  if (killed > 0) console.warn(`[orchestrator] killed ${killed} live job child process(es) on shutdown`);
 });
+
+// Without these handlers a SIGTERM (flow down / flow rm / systemd stop)
+// hard-kills the process and onClose never runs — leaving indexer CLI
+// children orphaned and still writing to the graph.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => {
+    void app.close().finally(() => process.exit(0));
+  });
+}
 
 // ------------------------------------------------------------------
 // Boot
@@ -237,6 +278,14 @@ const start = async (): Promise<void> => {
 
     // Start all registered pollers (no-ops if FLOW_POLL_DISABLE=1)
     startAllPollers();
+
+    // Default-branch drift check: shortly after boot, then daily. Records
+    // drift on the registry entry (never auto-switches); the dashboard shows
+    // "default → <branch>" so a human can decide. Skipped in tests.
+    if (!process.env.FLOW_FAKE_OPENCODE && process.env.FLOW_POLL_DISABLE !== "1") {
+      setTimeout(() => void checkDefaultBranchDrift(), 30_000);
+      setInterval(() => void checkDefaultBranchDrift(), 24 * 60 * 60 * 1000);
+    }
 
     // Boot Slack Socket Mode adapter (no-op if tokens absent)
     bootSlackAdapter().catch((err) =>

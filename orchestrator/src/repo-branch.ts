@@ -4,8 +4,15 @@
 import { getSetting } from "./settings.js";
 
 export async function resolveGithubDefaultBranch(url: string): Promise<string> {
+  return (await githubDefaultBranch(url)) ?? "main";
+}
+
+// Strict variant: null when the branch genuinely can't be resolved (non-GitHub
+// URL, API error). The drift check needs this — a "main" fallback would flag
+// false drift on every non-main repo whenever the API hiccups.
+export async function githubDefaultBranch(url: string): Promise<string | null> {
   const match = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(url.trim());
-  if (!match) return "main";
+  if (!match) return null;
 
   const [, owner, name] = match;
   try {
@@ -18,10 +25,10 @@ export async function resolveGithubDefaultBranch(url: string): Promise<string> {
       },
       signal: AbortSignal.timeout(6000),
     });
-    if (!res.ok) return "main";
+    if (!res.ok) return null;
     const body = (await res.json()) as { default_branch?: string };
-    return body.default_branch?.trim() || "main";
+    return body.default_branch?.trim() || null;
   } catch {
-    return "main";
+    return null;
   }
 }

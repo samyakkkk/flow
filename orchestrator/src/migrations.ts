@@ -161,7 +161,32 @@ export const MIGRATIONS: Migration[] = [
       db.exec(ANCHORS_SCHEMA);
     },
   },
+  {
+    id: 10,
+    name: "index_log: durable indexer lifecycle trail",
+    up: (db) => {
+      // Keep byte-identical to INDEX_LOG_SCHEMA in db.ts (see migration 8 note).
+      db.exec(INDEX_LOG_SCHEMA);
+    },
+  },
 ];
+
+// Indexer lifecycle trail — one row per transition (enqueued, parked,
+// superseded, started, done, failed, recovered, watch, removed) so
+// self-deployers can reconstruct what the indexer did and why without
+// shell access to the orchestrator log. Rows are append-only; detail is
+// JSON (branch, commit, duration_ms, error, ...). Read via GET /v1/index-log.
+export const INDEX_LOG_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS index_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo       TEXT NOT NULL,
+    event      TEXT NOT NULL,
+    job_id     TEXT,
+    detail     TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_index_log_repo ON index_log(repo, id);
+`;
 
 // Anchors: the join between a memory/observation (flow.db PRIMARY) and a graph
 // node (a rebuildable projection). flow.db owns the edge; any graph

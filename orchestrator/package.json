@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/worktrees.test.ts test/memory.test.ts",
+    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/worktrees.test.ts test/memory.test.ts test/index-queue.test.ts test/change-branch.test.ts test/repo-removed.test.ts test/index-incremental.test.ts",
     "verify": "npm test",
     "verify:real": "tsx test/real-integrations.ts",
     "verify:session": "tsx test/real-session.ts"

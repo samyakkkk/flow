@@ -48,7 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
-import { deleteProjectGraph } from "./lib/falkordb.mjs";
+import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -714,6 +714,17 @@ async function upProject(name, { rebuilt = false } = {}) {
 
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
+
+  // This project is (re)using its graph on purpose — clear any deletion
+  // tombstone a previous `flow rm` left, or the gateway will refuse writes.
+  // Best-effort: if FalkorDB isn't up yet the services will say so loudly.
+  try {
+    const falkorHost = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+    const falkorPort = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    await clearGraphTombstone({ graph, host: falkorHost, port: falkorPort });
+  } catch {
+    /* FalkorDB not reachable yet — nothing to clear */
+  }
 
   // Determine paths for this project
   const dbPath = join(dir, "flow.db");

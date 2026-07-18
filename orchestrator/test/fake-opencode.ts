@@ -50,7 +50,13 @@ export async function run(
       };
     }
 
-    case "index_repo":
+    case "index_repo": {
+      // simulate_delay_ms: hold the job open so tests can observe the per-repo
+      // coalescing queue (parked/superseded jobs) while this one "runs".
+      const delayMs = opts.input.simulate_delay_ms as number | undefined;
+      if (delayMs && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       return {
         result: {
           status: "ok",
@@ -61,6 +67,7 @@ export async function run(
         },
         sessionId,
       };
+    }
 
     case "enrich":
       return {

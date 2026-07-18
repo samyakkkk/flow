@@ -35,6 +35,18 @@ export async function raw() {
   return conn.connection;
 }
 
+// Deleted-graph tombstone (set by `flow rm`, cleared by `flow up`). FalkorDB
+// auto-creates a graph on first query, so without this check any surviving
+// writer (an in-flight indexer CLI holding this module in its MCP subprocess)
+// would silently resurrect a deleted graph as an untracked orphan. Returns
+// the refusal message, or null when the graph is writable.
+export async function deletedGraphError(graphName: string): Promise<string | null> {
+  const conn = await raw();
+  const tombstone = await conn.get(`flow:graph-deleted:${graphName}`);
+  if (!tombstone) return null;
+  return `graph '${graphName}' was deleted (${tombstone}) — refusing to write; if this graph should live again, run \`flow up\` for its project`;
+}
+
 export async function close(): Promise<void> {
   if (db) {
     await db.close();

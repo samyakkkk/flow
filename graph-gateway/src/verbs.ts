@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_GRAPH, run } from "./graph.js";
+import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
 import { embedQuery, embedText, embeddingsEnabled, entityText } from "./embed.js";
@@ -294,6 +294,8 @@ const upsertEntityInput = {
 };
 
 async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (!isNodeType(input.type)) {
     return { status: "error", error: `Unknown node type '${input.type}'. Allowed: ${NODE_TYPES.join(", ")}` };
   }
@@ -398,6 +400,8 @@ const upsertRelationInput = {
 };
 
 async function upsertRelation(input: z.infer<z.ZodObject<typeof upsertRelationInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (!isEdgeType(input.type)) {
     return { status: "error", error: `Unknown edge type '${input.type}'. Allowed: ${EDGE_TYPES.join(", ")}` };
   }
@@ -545,6 +549,8 @@ const mergeEntitiesInput = {
 // indexed). Rewires every edge from `remove` onto `keep`, fills props `keep`
 // lacks, folds the removed id/name into aliases, then deletes `remove`.
 async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (input.keep === input.remove) return { status: "error", error: "keep and remove are the same id" };
   const nodes = await run(
     input.graph,
