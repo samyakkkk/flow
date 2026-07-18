@@ -153,7 +153,38 @@ export const MIGRATIONS: Migration[] = [
       db.exec("ALTER TABLE agent_sessions ADD COLUMN last_distilled_seq INTEGER");
     },
   },
+  {
+    id: 9,
+    name: "memory v1: anchors join table (item ↔ graph node)",
+    up: (db) => {
+      // Keep byte-identical to ANCHORS_SCHEMA in db.ts (see migration 8 note).
+      db.exec(ANCHORS_SCHEMA);
+    },
+  },
 ];
+
+// Anchors: the join between a memory/observation (flow.db PRIMARY) and a graph
+// node (a rebuildable projection). flow.db owns the edge; any graph
+// representation is derivable. item_type distinguishes distilled memories from
+// raw corpus observations (linear/slack) so a node's headline index can pull
+// the right kind. node_id is the graph node id string (e.g. 'svc:users',
+// 'api:dashboard:GET /agents'); source records HOW the edge was inferred
+// (deterministic file match vs. semantic). resolved_at is the epoch the edge
+// was last (re)resolved — re-resolution deletes+reinserts. Cap of 3 anchors per
+// item is enforced in code, not schema. UNIQUE keeps re-resolution idempotent.
+export const ANCHORS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS anchors (
+    id          TEXT PRIMARY KEY,
+    item_type   TEXT NOT NULL,   -- 'memory' | 'observation'
+    item_id     TEXT NOT NULL,
+    node_id     TEXT NOT NULL,   -- graph node id string
+    source      TEXT NOT NULL,   -- 'files' | 'semantic'
+    resolved_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(item_type, item_id, node_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_anchors_item ON anchors(item_type, item_id);
+  CREATE INDEX IF NOT EXISTS idx_anchors_node ON anchors(node_id);
+`;
 
 // Memory v1 storage. observations = raw per-session/corpus claims (the corpus,
 // FTS-mirrored); memories = consolidated canonical claims an observation attaches

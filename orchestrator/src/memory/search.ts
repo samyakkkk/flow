@@ -20,8 +20,48 @@ import { getEmbedder, memoryVectors, type MemoryRow } from "./store.js";
 import { repoFamily, familyMatches } from "./repo-family.js";
 import { strengthTier } from "./strength.js";
 import { searchCorpus } from "../corpus.js";
+import { itemsAnchoredToNode } from "./anchors.js";
 
 export const COSINE_FLOOR = 0.55;
+
+// Node-scoped + type filters parsed out of the query string (Section E). A
+// caller can write `node:svc:users type:memory hmac` and get memories anchored
+// to svc:users matching "hmac"; the tokens are stripped before FTS/embedding so
+// they don't pollute the meaningful-token match. `node` / `type` params take
+// precedence over the in-query tokens when both are given.
+export type SearchTypeFilter = "memory" | "ticket" | "thread";
+const TYPE_FILTERS = new Set<SearchTypeFilter>(["memory", "ticket", "thread"]);
+
+export interface ParsedQuery {
+  query: string; // query with node:/type: tokens removed
+  node: string | null;
+  type: SearchTypeFilter | null;
+}
+
+// `node:` values are graph node ids which themselves contain colons
+// (api:dashboard:GET /agents), so we capture the rest of that whitespace-
+// delimited token, not just up to the next colon.
+export function parseSearchTokens(raw: string): ParsedQuery {
+  let node: string | null = null;
+  let type: SearchTypeFilter | null = null;
+  const kept: string[] = [];
+  for (const tok of raw.split(/\s+/)) {
+    if (!tok) continue;
+    if (tok.startsWith("node:") && tok.length > 5) {
+      node = tok.slice(5);
+      continue;
+    }
+    if (tok.startsWith("type:") && tok.length > 5) {
+      const t = tok.slice(5).toLowerCase();
+      if (TYPE_FILTERS.has(t as SearchTypeFilter)) {
+        type = t as SearchTypeFilter;
+        continue;
+      }
+    }
+    kept.push(tok);
+  }
+  return { query: kept.join(" ").trim(), node, type };
+}
 
 export interface MemoryHit {
   id: string;
@@ -109,18 +149,42 @@ export interface SearchInput {
   query: string;
   repo?: string | null;
   limit?: number;
+  // Node-scoped filter (Section E). Also parseable from a `node:` token in the
+  // query; the explicit param wins. Restricts hits to items anchored to the node.
+  node?: string | null;
+  // Type filter: memory | ticket | thread. Also parseable from `type:`.
+  type?: SearchTypeFilter | null;
 }
 
 export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   const t0 = Date.now();
   const limit = Math.max(1, Math.min(50, input.limit ?? 8));
+
+  // Pull node:/type: out of the query string; explicit params override.
+  const parsed = parseSearchTokens(input.query);
+  const effectiveQuery = parsed.query;
+  const node = input.node ?? parsed.node;
+  const type = input.type ?? parsed.type;
+
   const queryFamily = repoFamily(input.repo);
-  const queryTokens = meaningfulTokens(input.query);
+  const queryTokens = meaningfulTokens(effectiveQuery);
+
+  // Node scope: the ids anchored to the node, partitioned by item kind. Used to
+  // (a) restrict the memory candidate set and (b) scope corpus hits.
+  const nodeScope = node ? nodeScopeIds(node) : null;
+  // Empty query under a node scope is legitimate ("everything on this node") —
+  // the "+N more" line is exactly that. Fall through with empty tokens; the
+  // node filter carries the selection.
+
+  // Node scope excludes the memory pass entirely when the type filter asks for
+  // tickets/threads only.
+  const wantMemories = !type || type === "memory";
+  const wantCorpus = !type || type === "ticket" || type === "thread";
 
   // --- FTS candidate ids (always eligible past the silence gate) ---
   const ftsIds = new Set<string>();
-  const match = ftsQuery(input.query);
-  if (match) {
+  const match = ftsQuery(effectiveQuery);
+  if (wantMemories && match) {
     try {
       const rows = db
         .prepare(
@@ -144,18 +208,27 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   }
 
   // --- Vector candidates from the in-process cache ---
-  const qvec = await getEmbedder()(input.query);
+  const qvec = effectiveQuery ? await getEmbedder()(effectiveQuery) : null;
   const cosById = new Map<string, number>();
-  if (qvec) {
+  if (wantMemories && qvec) {
     for (const { id, vec } of memoryVectors()) {
       cosById.set(id, cosine(qvec, vec));
     }
   }
 
-  // Merge candidate ids: everything with a cosine + every FTS hit.
+  // Node-scoped, no keyword: the anchored memory set IS the candidate set (the
+  // "+N more" line's query). Seed candidates from the node scope so an empty
+  // query still returns the node's memories, strength-ranked.
+  const nodeMemoryIds = nodeScope ? new Set(nodeScope.memoryIds) : null;
+
+  // Merge candidate ids: everything with a cosine + every FTS hit (+ node
+  // memories when node-scoped so an empty query still surfaces them).
   const candidateIds = new Set<string>([...cosById.keys(), ...ftsIds]);
-  if (candidateIds.size === 0) {
-    return { memories: [], corpus: corpusHits(input.query, limit), durationMs: Date.now() - t0 };
+  if (nodeMemoryIds && effectiveQuery === "") for (const id of nodeMemoryIds) candidateIds.add(id);
+
+  const corpus = wantCorpus ? corpusHits(effectiveQuery, limit, nodeScope, type) : [];
+  if (candidateIds.size === 0 || !wantMemories) {
+    return { memories: [], corpus, durationMs: Date.now() - t0 };
   }
 
   const placeholders = [...candidateIds].map(() => "?").join(",");
@@ -163,16 +236,25 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
     .prepare(`SELECT * FROM memories WHERE status = 'active' AND id IN (${placeholders})`)
     .all(...candidateIds) as MemoryRow[];
 
+  // Empty query = no meaningful tokens → nothing is an FTS "exact hit" and the
+  // cosine floor would silence everything. Under a node scope that's wrong: the
+  // anchored set is the intended answer. Track it so the gate lets it through.
+  const emptyNodeScope = nodeMemoryIds !== null && effectiveQuery === "";
+
   const hits: MemoryHit[] = [];
   for (const m of memRows) {
+    // Node scope: drop memories not anchored to the node.
+    if (nodeMemoryIds && !nodeMemoryIds.has(m.id)) continue;
+
     // HARD family gate — drop, don't downweight.
     if (!familyMatches(queryFamily, m.repo_family)) continue;
 
     const cos = cosById.get(m.id) ?? 0;
     const isFts = ftsIds.has(m.id);
     // Silence gate: vector-only candidates must clear the cosine floor; FTS
-    // exact hits bypass it.
-    if (!isFts && cos < COSINE_FLOOR) continue;
+    // exact hits bypass it. An empty node-scoped query bypasses (the anchor IS
+    // the selection).
+    if (!emptyNodeScope && !isFts && cos < COSINE_FLOOR) continue;
 
     const keys = parseJsonArray(m.retrieval_keys);
     const keyOverlap = overlap(queryTokens, keys);
@@ -196,8 +278,23 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   hits.sort((a, b) => b.score - a.score);
   return {
     memories: hits.slice(0, limit),
-    corpus: corpusHits(input.query, limit),
+    corpus,
     durationMs: Date.now() - t0,
+  };
+}
+
+// Ids anchored to a node, split by item kind. memoryIds scope the memory pass;
+// observationIds scope corpus hits (a corpus observation anchored to the node
+// points back to its linear/slack row).
+interface NodeScope {
+  memoryIds: string[];
+  observationIds: string[];
+}
+function nodeScopeIds(nodeId: string): NodeScope {
+  const rows = itemsAnchoredToNode(nodeId);
+  return {
+    memoryIds: rows.filter((r) => r.item_type === "memory").map((r) => r.item_id),
+    observationIds: rows.filter((r) => r.item_type === "observation").map((r) => r.item_id),
   };
 }
 
@@ -241,11 +338,46 @@ export async function searchMemoryBatch(input: BatchSearchInput): Promise<BatchS
   return { groups, durationMs: Date.now() - t0 };
 }
 
-function corpusHits(query: string, limit: number): CorpusHit[] {
+// type filter → corpus source. ticket = linear, thread = slack. When node-scoped
+// the corpus is restricted to rows whose derived observation is anchored to the
+// node; an empty query under a node scope returns those rows directly.
+function corpusHits(
+  query: string,
+  limit: number,
+  nodeScope: NodeScope | null = null,
+  type: SearchTypeFilter | null = null,
+): CorpusHit[] {
+  const source = type === "ticket" ? "linear" : type === "thread" ? "slack" : undefined;
+
+  // Node-scoped: surface only corpus rows reachable from observations anchored
+  // to the node. We already have the anchored observation ids; read their source
+  // rows directly (keyword still narrows when present, but the anchor is the
+  // primary filter). Kept simple: return the anchored corpus observations' own
+  // claim text (the corpus row body) as hits.
+  if (nodeScope) {
+    if (nodeScope.observationIds.length === 0) return [];
+    const ph = nodeScope.observationIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT id, source, claim FROM observations
+         WHERE id IN (${ph}) AND source IN ('slack','linear','meeting')
+         ${source ? "AND source = ?" : ""} LIMIT ?`,
+      )
+      .all(...nodeScope.observationIds, ...(source ? [source] : []), limit) as Array<{
+      id: string;
+      source: string;
+      claim: string;
+    }>;
+    const tokens = meaningfulTokens(query);
+    return rows
+      .filter((r) => tokens.length === 0 || tokens.some((t) => r.claim.toLowerCase().includes(t)))
+      .map((r) => ({ id: r.id, text: r.claim, source: r.source }));
+  }
+
   const match = ftsQuery(query);
   if (!match) return [];
   try {
-    const rows = searchCorpus(match, undefined, limit) as Array<{ id: string; text?: string; source: string }>;
+    const rows = searchCorpus(match, source, limit) as Array<{ id: string; text?: string; source: string }>;
     return rows.map((r) => ({ id: r.id, text: String(r.text ?? ""), source: r.source }));
   } catch {
     return [];

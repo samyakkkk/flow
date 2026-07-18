@@ -32,6 +32,8 @@ import {
   getMemory,
 } from "./store.js";
 import { computeStrength, strongerWeight } from "./strength.js";
+import { resolveMemoryAnchors } from "./anchors.js";
+import { invalidateHeadlineCache } from "./headline.js";
 
 export const T_LO = 0.5;
 
@@ -90,6 +92,7 @@ export async function consolidateObservation(obs: ObservationRow, judge: Judge):
   if (!match || match.sim < T_LO) {
     const mem = createMemory(obs);
     recomputeStrength(mem.id);
+    await anchorAfterConsolidate(mem.id);
     return { action: "new", memoryId: mem.id, created: true };
   }
 
@@ -99,6 +102,7 @@ export async function consolidateObservation(obs: ObservationRow, judge: Judge):
   if (verdict === "new") {
     const mem = createMemory(obs);
     recomputeStrength(mem.id);
+    await anchorAfterConsolidate(mem.id);
     return { action: "new", memoryId: mem.id, created: true };
   }
 
@@ -123,5 +127,20 @@ export async function consolidateObservation(obs: ObservationRow, judge: Judge):
   }
 
   recomputeStrength(match.mem.id);
+  await anchorAfterConsolidate(match.mem.id);
   return { action: verdict, memoryId: match.mem.id, created: false };
+}
+
+// Resolve a memory's anchors and invalidate the headline cache for any node it
+// now touches. Non-throwing: anchoring is best-effort enrichment — a graph
+// hiccup must never sink consolidation (the memory is already stored). The
+// resolve itself is idempotent, so a missed pass is recovered on the next
+// reinforcement or a reindex re-resolve.
+async function anchorAfterConsolidate(memoryId: string): Promise<void> {
+  try {
+    const nodeIds = await resolveMemoryAnchors(memoryId);
+    for (const id of nodeIds) invalidateHeadlineCache(id);
+  } catch {
+    /* best-effort; item falls back to repo-level */
+  }
 }

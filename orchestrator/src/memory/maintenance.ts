@@ -6,6 +6,7 @@ import db from "../db.js";
 import { computeStrength, STRENGTH_FLOOR } from "./strength.js";
 import type { MemoryRow } from "./store.js";
 import { invalidateVectorCache } from "./store.js";
+import { invalidateHeadlineCache } from "./headline.js";
 
 export function sweepMemories(now = Math.floor(Date.now() / 1000)): { recomputed: number; sunk: number } {
   const rows = db.prepare(`SELECT * FROM memories WHERE status = 'active'`).all() as MemoryRow[];
@@ -28,5 +29,8 @@ export function sweepMemories(now = Math.floor(Date.now() / 1000)): { recomputed
   });
   tx();
   invalidateVectorCache();
+  // Strengths (and thus headline ranking + which memories are active) moved —
+  // drop the whole headline cache so get_entity re-renders fresh.
+  invalidateHeadlineCache();
   return { recomputed: rows.length, sunk };
 }

@@ -22,6 +22,8 @@ import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
 import { registerNoteRoutes } from "./notes.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
+import { setNodeAnchorProvider } from "./memory/anchors.js";
+import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
@@ -77,6 +79,10 @@ registerAgentRoutes(app);
 registerCorrectionRoutes(app);
 registerNoteRoutes(app);
 registerMemoryRoutes(app);
+// Memory anchors resolve graph node paths through the gateway; a null gateway
+// (no FLOW_GATEWAY_URL) leaves the default no-op provider and items stay
+// repo-level. flow.db is primary — this is a read-only projection lookup.
+setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
 
 // ------------------------------------------------------------------

@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS } from "./migrations.js";
+import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -267,6 +267,10 @@ db.exec(`
 // create byte-identical tables. See migrations.ts for the column semantics.
 db.exec(MEMORY_SCHEMA);
 db.exec(MEMORY_TRIGGERS);
+// anchors: item ↔ graph-node join (migration 9). flow.db is PRIMARY; graph is
+// a rebuildable projection. Kept byte-identical to the migration via the shared
+// ANCHORS_SCHEMA string.
+db.exec(ANCHORS_SCHEMA);
 
 // FTS triggers to keep virtual tables in sync with base tables
 db.exec(`

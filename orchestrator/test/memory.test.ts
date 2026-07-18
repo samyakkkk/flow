@@ -524,16 +524,17 @@ describe("migration idempotency", () => {
     mem.exec("CREATE TABLE agent_sessions(id TEXT PRIMARY KEY, backend TEXT, repo TEXT, cwd TEXT, title TEXT, status TEXT, created_at INTEGER, updated_at INTEGER);");
     mem.pragma("user_version = 7");
     migrations.migrate(mem, { fresh: false });
-    assert.equal(mem.pragma("user_version", { simple: true }), 8);
+    assert.equal(mem.pragma("user_version", { simple: true }), migrations.LATEST_VERSION);
     const cols = (mem.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{ name: string }>).map((c) => c.name);
     assert.ok(cols.includes("last_distilled_seq"));
     // second run must not throw and must not bump the version
     migrations.migrate(mem, { fresh: false });
-    assert.equal(mem.pragma("user_version", { simple: true }), 8);
-    // observations + FTS present
+    assert.equal(mem.pragma("user_version", { simple: true }), migrations.LATEST_VERSION);
+    // observations + memories + anchors (migration 9) present
     const tables = (mem.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((t) => t.name);
     assert.ok(tables.includes("observations"));
     assert.ok(tables.includes("memories"));
+    assert.ok(tables.includes("anchors"), "migration 9 creates the anchors table");
     mem.close();
   });
 });

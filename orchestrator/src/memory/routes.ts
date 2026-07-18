@@ -5,6 +5,11 @@
 //   POST /v1/memory/search  {query, repo?, limit?}   → {lines, memories, corpus, durationMs}
 //                           {queries:[…], repo?, limit?} → {lines, groups, durationMs} (batch)
 //   GET  /v1/memory/stats                            → counts per source (for orient)
+//   GET  /v1/memory/headline/:nodeId                 → node headline index (Section B)
+//   GET  /v1/memory/card/:type/:id                   → drill-down card (Section C)
+//   POST /v1/memory/hits    {query|queries, repo?, limit?} → find_entity memory
+//                                                     merge (Section D): typed
+//                                                     terse lines + quota.
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -15,6 +20,9 @@ import {
   renderBatchSearchResult,
   SEARCH_MEMORY_MAX_BATCH,
 } from "./search.js";
+import { getNodeHeadline } from "./headline.js";
+import { getCard } from "./cards.js";
+import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 
 export interface MemoryStats {
   memories: number;
@@ -76,4 +84,44 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
   );
 
   app.get("/v1/memory/stats", async () => memoryStats());
+
+  // Node headline index (Section B). Served from the in-process cache; the
+  // gateway appends `rendered` to get_entity output. Fast (<20ms target): an
+  // index-backed read + a cached render.
+  app.get<{ Params: { nodeId: string } }>("/v1/memory/headline/:nodeId", async (req) => {
+    const nodeId = decodeURIComponent(req.params.nodeId);
+    return getNodeHeadline(nodeId);
+  });
+
+  // Drill-down cards (Section C). type ∈ {mem,obs,lin,slackthread}. The gateway
+  // resolves these id namespaces in get_entity (single + batch ids[]) by calling
+  // here — flow.db owns the store, so it's one indexed lookup, no graph hop.
+  app.get<{ Params: { type: string; id: string } }>("/v1/memory/card/:type/:id", async (req, reply) => {
+    const card = getCard(req.params.type, decodeURIComponent(req.params.id));
+    if (card.status === "not_found") return reply.code(404).send(card);
+    return card;
+  });
+
+  // find_entity memory merge (Section D). Returns typed terse lines the gateway
+  // splices into find_entity results, with the type quota already applied.
+  app.post<{ Body: { query?: string; queries?: string[]; repo?: string | null; limit?: number } }>(
+    "/v1/memory/hits",
+    async (req, reply) => {
+      const b = req.body ?? {};
+      const repo = b.repo ?? null;
+      if (b.queries !== undefined) {
+        if (!Array.isArray(b.queries)) return reply.code(400).send({ error: "queries must be an array of strings" });
+        const queries = b.queries.map((q) => String(q ?? "").trim()).filter(Boolean);
+        if (queries.length === 0) return reply.code(400).send({ error: "queries is empty" });
+        if (queries.length > SEARCH_MEMORY_MAX_BATCH) {
+          return reply.code(400).send({ error: `too many queries (${queries.length}); max ${SEARCH_MEMORY_MAX_BATCH}` });
+        }
+        const groups = await memoryHitsForQueries(queries, repo, { limit: b.limit });
+        return reply.send({ quota: MEMORY_HIT_QUOTA, groups });
+      }
+      if (!b.query || !String(b.query).trim()) return reply.code(400).send({ error: "query is required" });
+      const groups = await memoryHitsForQueries([String(b.query)], repo, { limit: b.limit });
+      return reply.send({ quota: MEMORY_HIT_QUOTA, hits: groups[0].hits });
+    },
+  );
 }
