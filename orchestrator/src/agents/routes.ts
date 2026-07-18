@@ -290,10 +290,21 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   });
 
   // Same, for the "start a new session" composer (no session id yet).
+  // `folder` narrows the listing to a work folder the requesting owner
+  // registered — same vouching rule as session creation.
   app.get("/v1/agents/repos/files", async (req, reply) => {
-    const { repo, q } = req.query as { repo?: string; q?: string };
+    const { repo, q, folder, owner } = req.query as { repo?: string; q?: string; folder?: string; owner?: string };
     if (!repo) return reply.code(400).send({ error: "repo required" });
-    const r = await listRepoFiles(repo, q ?? "");
+    let dir: string | undefined;
+    if (folder?.trim()) {
+      const { listWorkFolders } = await import("../work-folders.js");
+      const wanted = folder.trim();
+      if (!listWorkFolders(owner?.trim() || "local").some((f) => f.path === wanted)) {
+        return reply.code(400).send({ error: "folder is not registered for this user" });
+      }
+      dir = wanted;
+    }
+    const r = await listRepoFiles(repo, q ?? "", 40, dir);
     if ("error" in r) return reply.code(404).send(r);
     return r;
   });

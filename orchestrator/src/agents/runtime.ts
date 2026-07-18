@@ -348,6 +348,12 @@ export interface RepoOption {
   // The repo's registered base branch (repos.json `branch`) — the BASE-scope
   // diff resolves against this. Undefined for entries that never recorded one.
   branch?: string;
+  // Whether sessions may run at `path`. "folder" = the user connected their
+  // own checkout, so it doubles as the WORK surface. "managed" = GitHub-added:
+  // `path` is Flow's BRAIN clone, kept for indexing and git metadata (branch
+  // lists) only — sessions never run there and never browse its files; they
+  // need an explicit per-user work folder.
+  surface: "folder" | "managed";
 }
 
 export function listRepoOptions(): RepoOption[] {
@@ -367,11 +373,11 @@ export function listRepoOptions(): RepoOption[] {
         // run in-place there (the in-place default) rather than in Flow's
         // managed clone.
         if (r.localPath && existsSync(r.localPath)) {
-          out.push({ name: r.name, path: r.localPath, cloned: true, branch });
+          out.push({ name: r.name, path: r.localPath, cloned: true, branch, surface: "folder" });
           continue;
         }
         const p = path.join(reposDir, r.name);
-        out.push({ name: r.name, path: p, cloned: existsSync(p), branch });
+        out.push({ name: r.name, path: p, cloned: existsSync(p), branch, surface: "managed" });
       }
     } catch {
       /* empty list */
@@ -1162,6 +1168,14 @@ export async function createSession(opts: {
   const found = listRepoOptions().find((r) => r.name === opts.repo);
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
   if (!found.cloned && !opts.workFolder) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  // BRAIN/WORK separation: a GitHub-added repo's only checkout is Flow's
+  // managed clone, which the indexer force-resets at will — never a place to
+  // run agents. Sessions over these repos require an explicit work folder.
+  if (found.surface === "managed" && !opts.workFolder) {
+    return {
+      error: `"${opts.repo}" was connected from GitHub, so Flow only indexes it. Pick one of your folders to run the agent in.`,
+    };
+  }
   let repoOpt = found;
   if (opts.workFolder) {
     if (!existsSync(opts.workFolder)) {
@@ -1766,11 +1780,18 @@ export async function listSessionFiles(
 export async function listRepoFiles(
   repo: string,
   query: string,
-  limit = 40
+  limit = 40,
+  dir?: string
 ): Promise<{ entries: FileEntry[] } | { error: string }> {
   const repoOpt = listRepoOptions().find((r) => r.name === repo);
   if (!repoOpt || !repoOpt.cloned) return { error: `Unknown repo "${repo}"` };
-  return { entries: await filesUnder(repoOpt.path, query, limit) };
+  // Autocomplete from where the session will actually run: the caller's work
+  // folder when one is chosen, else the user's connected folder. A managed
+  // (GitHub-only) repo has no browsable surface — the BRAIN clone is for
+  // indexing, not for peeking.
+  const root = dir ?? (repoOpt.surface === "folder" ? repoOpt.path : null);
+  if (!root) return { error: `"${repo}" is index-only — pick a work folder to browse its files` };
+  return { entries: await filesUnder(root, query, limit) };
 }
 
 // Open the session's repo folder in the OS file manager or VS Code. Local-mode
