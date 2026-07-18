@@ -30,6 +30,6 @@ function parseVerdict(reply: string): "same" | "new" | "refines" | "contradicts"
 export const haikuJudge: Judge = async (a, b) => {
   const prompt =
     `${JUDGE_PROMPT}\n\nA (existing memory): ${a.claim}\n\nB (new observation): ${b.claim}\n\nRelationship:`;
-  const reply = await callLlm(prompt, judgeModel());
+  const reply = await callLlm(prompt, { tier: "fast", feature: "judge", model: judgeModel() });
   return { verdict: parseVerdict(reply) };
 };

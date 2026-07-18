@@ -66,6 +66,28 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "LLM_TRANSPORT",
+    secret: false,
+    description:
+      "Transport for single-shot LLM calls (distiller, judge): auto (installed claude CLI first, else API key), or force 'cli' / 'http'",
+    default: "auto",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "LLM_MODEL_FAST",
+    secret: false,
+    description:
+      "Overrides the fast-tier model for single-shot LLM calls (judge). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "LLM_MODEL_SMART",
+    secret: false,
+    description:
+      "Overrides the smart-tier model for single-shot LLM calls (distiller). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
+    appliesTo: "pipeline",
+  },
+  {
     key: "CLASSIFIER_MODEL",
     secret: false,
     description: "Model ID passed to OpenRouter for the event classifier",
