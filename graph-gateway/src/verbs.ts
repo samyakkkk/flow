@@ -54,6 +54,42 @@ interface ScoredRow extends EntityRow {
 
 const clampLimit = (limit: number) => Math.max(1, Math.min(50, Math.floor(limit)));
 
+// Run `fn` over `items` with a small concurrency bound, preserving input order
+// in the result. Used by the batched read verbs so a model can fetch several
+// entities/queries in one call without us firing an unbounded fan-out at the
+// graph. Errors are captured per item (Promise.allSettled semantics), never
+// propagated — a batch is a set of independent reads and one bad item must not
+// sink the rest.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<Array<{ ok: true; value: R } | { ok: false; error: string }>> {
+  const out: Array<{ ok: true; value: R } | { ok: false; error: string }> = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      try {
+        out[i] = { ok: true, value: await fn(items[i], i) };
+      } catch (err) {
+        out[i] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+// Read verbs accept a single value OR a batch array. These caps bound the
+// server-side fan-out; over the cap is a hard error (clear failure beats a
+// silent truncation the model can't see). Concurrency is deliberately small —
+// a batch is a convenience for the model, not a load-test of the graph.
+const GET_ENTITY_MAX_BATCH = 15;
+const FIND_ENTITY_MAX_BATCH = 10;
+const BATCH_CONCURRENCY = 5;
+
 // Proposed-but-unblessed procedures are invisible to normal retrieval — they
 // only enter circulation once a human approves them. Label-scoped to Procedure:
 // other node types may legitimately carry a status prop (cleanProps allows it)
@@ -123,44 +159,86 @@ async function findByVector(graph: string, q: string, type: string | undefined, 
 // ---------------------------------------------------------------------------
 
 const findEntityInput = {
-  q: z.string().min(1).describe("Name, id, or phrase to look up"),
+  // Single query OR a batch: pass `qs` to look up several phrases in one call.
+  // At least one form is required; `q` wins when both are given.
+  q: z.string().min(1).optional().describe("Name, id, or phrase to look up (single form)"),
+  qs: z.array(z.string().min(1)).min(1).max(FIND_ENTITY_MAX_BATCH).optional().describe(`Phrases to look up in one call (batch form, ≤${FIND_ENTITY_MAX_BATCH}) — prefer one batched call over sequential single searches`),
   type: z.string().optional().describe("Optional node type filter, e.g. 'Service'"),
   limit: z.number().int().min(1).max(50).default(10),
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
-async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
+// Single-query lookup — the one code path both the single and batch forms reuse.
+async function findEntityOne(graph: string, q: string, type: string | undefined, limit: number) {
   const exact = await run(
-    input.graph,
+    graph,
     `MATCH (n {id: $q}) RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor`,
-    { q: input.q },
+    { q },
   );
-  if (exact.length > 0) return { status: "exact", matches: exact };
+  if (exact.length > 0) return { status: "exact" as const, matches: exact as unknown as ScoredRow[] };
 
   // Lexical substring first — it's a high-precision signal when the caller
   // already knows a name/id fragment. Then augment with semantic matches the
   // substring scan can't reach. Lexical hits keep their rank; vector hits fill
   // the remaining slots, deduped by id.
-  const lexical: ScoredRow[] = (await findSimilar(input.graph, input.q, input.type, input.limit)).map(
+  const lexical: ScoredRow[] = (await findSimilar(graph, q, type, limit)).map(
     (r) => ({ ...r, via: "lexical" }),
   );
-  const { rows: vector, degraded } = await findByVector(input.graph, input.q, input.type, input.limit);
+  const { rows: vector, degraded } = await findByVector(graph, q, type, limit);
 
   const seen = new Set(lexical.map((r) => String(r.id)));
   const matches: ScoredRow[] = [...lexical];
   for (const v of vector) {
-    if (matches.length >= input.limit) break;
+    if (matches.length >= limit) break;
     if (seen.has(String(v.id))) continue;
     seen.add(String(v.id));
     matches.push(v);
   }
   return {
-    status: matches.length > 0 ? "similar" : "none",
+    status: (matches.length > 0 ? "similar" : "none") as "similar" | "none",
     matches,
     ...(degraded
       ? { warning: `Semantic search unavailable (${degraded}) — these results are substring-only and may miss related nodes. Do not conclude the graph lacks coverage from this response.` }
       : {}),
   };
+}
+
+async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
+  if (input.q === undefined && input.qs === undefined) {
+    return { status: "error", error: "Pass `q` (single) or `qs` (batch, up to 10)." };
+  }
+  // Single form stays byte-for-byte compatible: {status, matches, warning?}.
+  if (input.q !== undefined) {
+    return findEntityOne(input.graph, input.q, input.type, input.limit);
+  }
+
+  // Batch: one group per query, in REQUEST ORDER. Cross-group duplicate node
+  // ids are noted tersely ("(also matched q1)") instead of repeating the full
+  // entry — the first group to surface an id owns the full match; later groups
+  // just point back. A per-query failure is isolated to that group.
+  const qs = input.qs as string[];
+  const settled = await mapWithConcurrency(qs, BATCH_CONCURRENCY, (q) =>
+    findEntityOne(input.graph, q, input.type, input.limit),
+  );
+
+  const firstSeenIn = new Map<string, number>(); // node id → group index that owns the full entry
+  const groups = settled.map((r, i) => {
+    if (!r.ok) return { query: qs[i], status: "error" as const, error: r.error };
+    const res = r.value;
+    const matches = res.matches.map((m) => {
+      const id = String(m.id);
+      const owner = firstSeenIn.get(id);
+      if (owner === undefined) {
+        firstSeenIn.set(id, i);
+        return m;
+      }
+      // Terse cross-group dedup note — full entry lives in the owning group.
+      return { id: m.id, note: `(also matched q${owner + 1})` };
+    });
+    return { query: qs[i], status: res.status, matches, ...("warning" in res ? { warning: res.warning } : {}) };
+  });
+
+  return { status: "batch", count: groups.length, groups };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +395,10 @@ async function upsertRelation(input: z.infer<z.ZodObject<typeof upsertRelationIn
 // ---------------------------------------------------------------------------
 
 const getEntityInput = {
-  id: z.string().min(1),
+  // Single id OR a batch: pass `ids` to fetch several nodes concurrently in one
+  // call. At least one form is required; `id` wins when both are given.
+  id: z.string().min(1).optional().describe("Node id to fetch (single form)"),
+  ids: z.array(z.string().min(1)).min(1).max(GET_ENTITY_MAX_BATCH).optional().describe(`Node ids to fetch in one call (batch form, ≤${GET_ENTITY_MAX_BATCH}) — prefer one batched call over sequential single lookups`),
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
@@ -329,21 +410,50 @@ function stripEmbedding<T extends { props?: unknown }>(row: T): T {
   return row;
 }
 
-async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
-  const node = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id: input.id });
-  if (node.length === 0) return { status: "not_found" };
+// Single-node fetch — the one code path both the single and batch forms reuse.
+async function getEntityOne(graph: string, id: string) {
+  const node = await run(graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id });
+  if (node.length === 0) return { status: "not_found" as const, id };
   stripEmbedding(node[0] as { props?: unknown });
   const out = await run(
-    input.graph,
+    graph,
     `MATCH ({id: $id})-[r]->(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
-    { id: input.id },
+    { id },
   );
   const inc = await run(
-    input.graph,
+    graph,
     `MATCH ({id: $id})<-[r]-(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
-    { id: input.id },
+    { id },
   );
-  return { status: "found", node: node[0], outgoing: out, incoming: inc };
+  return { status: "found" as const, id, node: node[0], outgoing: out, incoming: inc };
+}
+
+async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
+  if (input.id === undefined && input.ids === undefined) {
+    return { status: "error", error: "Pass `id` (single) or `ids` (batch, up to 15)." };
+  }
+  // Single form stays byte-for-byte compatible: {status, node, outgoing, incoming}.
+  if (input.id !== undefined) {
+    const { id: _id, ...rest } = await getEntityOne(input.graph, input.id);
+    return rest;
+  }
+
+  // Batch: results in REQUEST ORDER, one section per id. A missing id is an
+  // explicit "not_found" entry (never silently dropped); a per-id failure is
+  // isolated to that section. Duplicate ids in the request are honored as-is —
+  // the model asked for them, and dropping would break positional pairing.
+  const ids = input.ids as string[];
+  const settled = await mapWithConcurrency(ids, BATCH_CONCURRENCY, (id) => getEntityOne(input.graph, id));
+  const results = settled.map((r, i) =>
+    r.ok ? r.value : { status: "error" as const, id: ids[i], error: r.error },
+  );
+  return {
+    status: "batch",
+    count: results.length,
+    found: results.filter((r) => r.status === "found").length,
+    not_found: results.filter((r) => r.status === "not_found").map((r) => r.id),
+    results,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -774,24 +884,38 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 // silence gate, FTS exact-match bypass). Search it like you grep: symptoms,
 // identifiers, and file paths are the reliable path.
 
+const SEARCH_MEMORY_MAX_BATCH = 10;
+
 const searchMemoryInput = {
-  query: z.string().min(1).describe("What to look up. Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
+  // Single query OR a batch: pass `queries` to look up several things in one
+  // call. At least one form is required; `query` wins when both are given.
+  query: z.string().min(1).optional().describe("What to look up (single form). Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
+  queries: z.array(z.string().min(1)).min(1).max(SEARCH_MEMORY_MAX_BATCH).optional().describe(`Several things to look up in one call (batch form, ≤${SEARCH_MEMORY_MAX_BATCH}) — prefer one batched call over sequential single searches. Results come back grouped per query.`),
   repo: z.string().optional().describe("Repository name to scope to (defaults from the session's env). Cross-repo memories in the same product family are still eligible; unrelated repos are hard-filtered out."),
-  limit: z.number().int().min(1).max(50).optional().describe("Max memories to return (default 8)."),
+  limit: z.number().int().min(1).max(50).optional().describe("Max memories to return per query (default 8)."),
 };
 
 async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>>) {
+  if (input.query === undefined && input.queries === undefined) {
+    return { status: "error", error: "Pass `query` (single) or `queries` (batch, up to 10)." };
+  }
   const repo = input.repo || process.env.FLOW_REPO || "";
   const url =
     process.env.FLOW_MEMORY_URL ||
     (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/search` : "");
   const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   if (!url) return { status: "error", error: "No orchestrator configured for memory search (FLOW_MEMORY_URL unset)." };
+  // Proxy whichever form the caller sent — the orchestrator owns the batch
+  // fan-out, grouping, and ranking. `query` wins if both are present.
+  const payload =
+    input.query !== undefined
+      ? { query: input.query, repo: repo || null, limit: input.limit }
+      : { queries: input.queries, repo: repo || null, limit: input.limit };
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ query: input.query, repo: repo || null, limit: input.limit }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(6000),
     });
     const body = (await res.json().catch(() => ({}))) as { lines?: string; error?: string };
@@ -1058,7 +1182,7 @@ export const verbs = {
   },
   find_entity: {
     description:
-      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating.",
+      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating. BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: findEntityInput,
     handler: findEntity,
   },
@@ -1073,7 +1197,8 @@ export const verbs = {
     handler: upsertRelation,
   },
   get_entity: {
-    description: "Fetch one node with all its incoming and outgoing relationships.",
+    description:
+      "Fetch a node with all its incoming and outgoing relationships. BATCH: pass ids:[…] (up to 15) to fetch several nodes in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
     shape: getEntityInput,
     handler: getEntity,
   },
@@ -1124,7 +1249,7 @@ export const verbs = {
   },
   search_memory: {
     description:
-      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled.",
+      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: searchMemoryInput,
     handler: searchMemory,
   },
