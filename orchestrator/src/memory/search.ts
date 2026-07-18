@@ -201,6 +201,46 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   };
 }
 
+// Batch search: run several queries in one call, reusing the single-query core
+// per query so ranking/gating logic is never forked. Results are grouped and
+// kept in REQUEST ORDER. Concurrency is bounded — each query is a full FTS +
+// vector pass, so a small pool keeps a batch from monopolizing the event loop.
+export const SEARCH_MEMORY_MAX_BATCH = 10;
+const BATCH_CONCURRENCY = 4;
+
+export interface BatchSearchInput {
+  queries: string[];
+  repo?: string | null;
+  limit?: number;
+}
+
+export interface SearchGroup {
+  query: string;
+  result: SearchResult;
+}
+
+export interface BatchSearchResult {
+  groups: SearchGroup[];
+  durationMs: number;
+}
+
+export async function searchMemoryBatch(input: BatchSearchInput): Promise<BatchSearchResult> {
+  const t0 = Date.now();
+  const queries = input.queries;
+  const groups: SearchGroup[] = new Array(queries.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(BATCH_CONCURRENCY, queries.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= queries.length) return;
+      const result = await searchMemory({ query: queries[i], repo: input.repo, limit: input.limit });
+      groups[i] = { query: queries[i], result };
+    }
+  });
+  await Promise.all(workers);
+  return { groups, durationMs: Date.now() - t0 };
+}
+
 function corpusHits(query: string, limit: number): CorpusHit[] {
   const match = ftsQuery(query);
   if (!match) return [];
@@ -232,4 +272,13 @@ export function renderSearchResult(res: SearchResult): string {
     }
   }
   return lines.join("\n");
+}
+
+// Batched search render — one labeled section per query, in request order. Each
+// section is exactly the single-query render (same format), so a batched call
+// reads as several single results stacked under their query headers.
+export function renderBatchSearchResult(res: BatchSearchResult): string {
+  return res.groups
+    .map((g, i) => `=== q${i + 1}: ${g.query} ===\n${renderSearchResult(g.result)}`)
+    .join("\n\n");
 }

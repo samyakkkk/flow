@@ -399,6 +399,123 @@ describe("keyword matching + multi-memory retrieval", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Batched memory search: one call, several queries. Reuses the single-query
+// core per query (no forked ranking), groups results, preserves request order.
+describe("batched memory search", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  async function seed(claim: string, repo: string, keys: string[] = []) {
+    const o = await store.insertObservation({ source: "session", repo, claim, kind: "gotcha", source_weight: "user_stated", retrieval_keys: keys, session_id: "s1" });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("groups per query and preserves request order", async () => {
+    clearMemory();
+    await seed("route all sqlite writes through the shared db singleton", "acme", ["insertObservation", "db.ts", "sqlite"]);
+    await seed("payments verified with an hmac signature", "acme", ["hmac", "webhook"]);
+    const res = await search.searchMemoryBatch({ queries: ["insertObservation", "hmac"], repo: "acme", limit: 10 });
+    assert.equal(res.groups.length, 2);
+    // order preserved: q0 is the sqlite query, q1 the hmac query
+    assert.equal(res.groups[0].query, "insertObservation");
+    assert.equal(res.groups[1].query, "hmac");
+    assert.ok(res.groups[0].result.memories.some((m) => m.claim.includes("db singleton")));
+    assert.ok(res.groups[1].result.memories.some((m) => m.claim.includes("hmac")));
+  });
+
+  test("single-query result equals that query's group in a batch (no forked logic)", async () => {
+    clearMemory();
+    await seed("retries use exponential backoff with jitter", "acme", ["retry", "backoff"]);
+    const single = await search.searchMemory({ query: "backoff", repo: "acme", limit: 10 });
+    const batch = await search.searchMemoryBatch({ queries: ["backoff"], repo: "acme", limit: 10 });
+    assert.deepEqual(
+      batch.groups[0].result.memories.map((m) => m.id),
+      single.memories.map((m) => m.id),
+    );
+  });
+
+  test("a query with no hits still gets an (empty) group in order", async () => {
+    clearMemory();
+    await seed("dashboard uses tailwind for styling", "acme", ["tailwind", "css"]);
+    const res = await search.searchMemoryBatch({ queries: ["tailwind", "zzznonexistentzzz"], repo: "acme", limit: 10 });
+    assert.equal(res.groups.length, 2);
+    assert.ok(res.groups[0].result.memories.length >= 1);
+    assert.equal(res.groups[1].result.memories.length, 0, "empty group is kept, not dropped");
+  });
+
+  test("batch render labels each query section in order", async () => {
+    clearMemory();
+    await seed("ci runs on github-actions with caching", "acme", ["github-actions", "ci"]);
+    const res = await search.searchMemoryBatch({ queries: ["github-actions", "nomatchtoken"], repo: "acme", limit: 10 });
+    const text = search.renderBatchSearchResult(res);
+    assert.match(text, /=== q1: github-actions ===/);
+    assert.match(text, /=== q2: nomatchtoken ===/);
+    assert.ok(text.indexOf("q1:") < text.indexOf("q2:"), "sections in request order");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HTTP surface for batched search: cap enforcement, single-value backward
+// compat, and blank/empty handling live at the route, so exercise them there.
+describe("memory search route: batch shape", () => {
+  let app: any;
+  let routes: typeof import("../src/memory/routes.js");
+  let fastify: any;
+
+  before(async () => {
+    store.setEmbedder(stubEmbedder);
+    fastify = (await import("fastify")).default;
+    routes = await import("../src/memory/routes.js");
+    app = fastify();
+    routes.registerMemoryRoutes(app);
+    await app.ready();
+  });
+
+  async function seed(claim: string, repo: string, keys: string[] = []) {
+    const o = await store.insertObservation({ source: "session", repo, claim, kind: "gotcha", source_weight: "user_stated", retrieval_keys: keys, session_id: "s1" });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("single {query} form still works (backward compatible)", async () => {
+    clearMemory();
+    store.setEmbedder(stubEmbedder);
+    await seed("payments verified with an hmac signature", "acme", ["hmac"]);
+    const res = await app.inject({ method: "POST", url: "/v1/memory/search", payload: { query: "hmac", repo: "acme" } });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.ok("memories" in body, "single form returns flat memories");
+    assert.ok(!("groups" in body), "single form has no groups");
+    assert.ok(typeof body.lines === "string");
+  });
+
+  test("{queries:[…]} form returns grouped results in order", async () => {
+    clearMemory();
+    store.setEmbedder(stubEmbedder);
+    await seed("route sqlite writes through the db singleton", "acme", ["insertObservation", "sqlite"]);
+    await seed("payments verified with an hmac signature", "acme", ["hmac"]);
+    const res = await app.inject({ method: "POST", url: "/v1/memory/search", payload: { queries: ["insertObservation", "hmac"], repo: "acme" } });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.groups.length, 2);
+    assert.equal(body.groups[0].query, "insertObservation");
+    assert.equal(body.groups[1].query, "hmac");
+    assert.match(body.lines, /=== q1: insertObservation ===/);
+  });
+
+  test("over the cap (11 queries) is a clear 400, not truncation", async () => {
+    const queries = Array.from({ length: search.SEARCH_MEMORY_MAX_BATCH + 1 }, (_, i) => `q${i}`);
+    const res = await app.inject({ method: "POST", url: "/v1/memory/search", payload: { queries, repo: "acme" } });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /too many queries/);
+  });
+
+  test("blank query strings are dropped; all-blank is 400", async () => {
+    const res = await app.inject({ method: "POST", url: "/v1/memory/search", payload: { queries: ["", "   "], repo: "acme" } });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /empty/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("migration idempotency", () => {
   test("running migrate twice on an existing pre-v8 DB is a no-op", async () => {
     const Database = (await import("better-sqlite3")).default;
