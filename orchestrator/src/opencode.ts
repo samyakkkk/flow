@@ -231,12 +231,14 @@ export function registerSource(entry: SourceRegistration): RepoEntry {
 }
 
 // Record the commit we just indexed so update.mjs and the orchestrator agree
-// on state. Called after a successful index_repo job.
-export function updateRepoIndexCommit(name: string, commit: string): void {
+// on state. Called after every successful index_repo job — lastIndexedAt is
+// stamped even when no commit resolves (a non-git docs folder), so a
+// successful index is never invisible to the status machine.
+export function updateRepoIndexCommit(name: string, commit: string | null): void {
   const registry = readRepoRegistry();
   const existing = registry.repos.find((r) => r.name === name);
   if (existing) {
-    existing.lastIndexedCommit = commit;
+    if (commit) existing.lastIndexedCommit = commit;
     existing.lastIndexedAt = new Date().toISOString();
     writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
   }
@@ -349,7 +351,9 @@ export function repoStatuses(): RepoStatus[] {
   return readRepoRegistry().repos.map((entry) => {
     const running = (runningJob.get(entry.name) as { id: string } | undefined)?.id ?? null;
     const parked = indexWaitQueue.find((e) => e.repo === entry.name)?.id ?? null;
-    const indexed = Boolean(entry.lastIndexedCommit);
+    // Either field proves a successful index — local-tier repos may lack a
+    // commit (see updateRepoIndexCommit) but always get lastIndexedAt.
+    const indexed = Boolean(entry.lastIndexedCommit || entry.lastIndexedAt);
     let lastError: string | null = null;
     let status: RepoStatus["status"];
     if (running) status = "indexing";
@@ -471,10 +475,15 @@ export function incrementalContext(repo: string, branch: string): { from: string
   }
 }
 
-// Resolve the current HEAD of a managed checkout; null if missing/local.
+// Resolve the commit that was just indexed. Managed clones and the local
+// tier both live at repos/<name>; for a symlink (the user's own checkout,
+// indexed in place) HEAD is read through the link — the target is still a
+// git repo, and it is exactly what the indexer read. Skipping symlinks here
+// left local-only repos showing "never indexed" forever after successful
+// runs. Null only when the folder is missing or not a git repo.
 function repoHeadCommit(name: string): string | null {
   const dest = resolve(WORKSPACE_DIR, "repos", name);
-  if (!existsSync(dest) || lstatSync(dest).isSymbolicLink()) return null;
+  if (!existsSync(dest)) return null;
   try {
     const res = spawnSync("git", ["-C", dest, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 5000 });
     return res.status === 0 ? res.stdout.trim() : null;
@@ -808,7 +817,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     // Record the commit we just indexed so update.mjs and the orchestrator agree.
     if (opts.type === "index_repo" && repo) {
       const head = repoHeadCommit(repo);
-      if (head) updateRepoIndexCommit(repo, head);
+      updateRepoIndexCommit(repo, head);
       const inc = (opts.input as { incremental?: { from: string } }).incremental;
       indexLog(repo, "done", id, {
         ...(head ? { commit: head } : {}),

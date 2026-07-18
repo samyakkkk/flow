@@ -225,9 +225,10 @@ function SourceRow({ s, st, onChanged }: { s: SourceEntry; st?: RepoStatusEntry;
   const { prefix } = useProject();
   const chip = sourceChip(s);
   // Prefer the orchestrator's state machine; fall back to the legacy guess
-  // when the status endpoint hasn't answered yet.
+  // when the status endpoint hasn't answered yet. Local-tier repos may have
+  // lastIndexedAt without a commit — either one means "indexed".
   const status: RepoStatusEntry["status"] | undefined =
-    s.kind === "docs" ? undefined : st?.status ?? (!s.lastIndexedCommit ? "indexing" : "indexed");
+    s.kind === "docs" ? undefined : st?.status ?? (!s.lastIndexedCommit && !s.lastIndexedAt ? "indexing" : "indexed");
   const indexing = status === "indexing";
   const [showLog, setShowLog] = useState(false);
 
