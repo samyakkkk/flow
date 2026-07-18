@@ -4,7 +4,7 @@
 // surprising (first index, branch change, up-to-date) falls back to null =
 // full pass.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -77,5 +77,35 @@ describe("incremental index decision", () => {
     const registry = { repos: [{ name: "inc-repo", url: "x", branch: "main", lastIndexedCommit: "0".repeat(40) }] };
     writeFileSync(join(workspace, "repos.json"), JSON.stringify(registry));
     assert.equal(incrementalContext("inc-repo", "main"), null);
+  });
+
+  test("symlinked local repo records commit + timestamp after a successful index", async () => {
+    // The local tier materializes repos/<name> as a symlink to the user's own
+    // checkout. HEAD must resolve THROUGH the link, or the repo shows "never
+    // indexed" forever despite successful runs (the orbit-package bug).
+    const target = join(workspace, "user-checkout");
+    execSync(`git init -q -b main ${target}`, { env: gitEnv });
+    sh(`git config user.email t@t && git config user.name t`, target);
+    writeFileSync(join(target, "pkg.txt"), "local\n");
+    sh(`git add . && git commit -qm local`, target);
+    const targetHead = sh(`git rev-parse HEAD`, target);
+    symlinkSync(target, join(workspace, "repos", "linked-pkg"));
+
+    const registry = {
+      repos: [{ name: "linked-pkg", url: "", branch: "main", localPath: target, lastIndexedCommit: null }],
+    };
+    writeFileSync(join(workspace, "repos.json"), JSON.stringify(registry));
+
+    const { enqueueJob, getJob, listWorkspaceRepos } = await import("../src/opencode.js");
+    const job = await enqueueJob({ type: "index_repo", input: { repo: "linked-pkg", branch: "main" } });
+    const deadline = Date.now() + 5000;
+    while (getJob(job.id)?.status !== "done") {
+      if (Date.now() > deadline) throw new Error("index job did not finish");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const entry = listWorkspaceRepos().find((r) => r.name === "linked-pkg");
+    assert.equal(entry?.lastIndexedCommit, targetHead);
+    assert.ok(entry?.lastIndexedAt);
   });
 });

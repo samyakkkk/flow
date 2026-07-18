@@ -142,9 +142,9 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
           indexLog(p.repo, "watch", undefined, { branch: p.branch, previous: entry.branch });
         }
         if (entry.url) {
-          const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
-          const ownerRepo = ownerRepoFromUrl(entry.url);
-          if (ownerRepo) watchRepo(ownerRepo, p.branch);
+          const { watchRepo, watchKeyForUrl } = await import("./adapters/github.js");
+          const watchKey = watchKeyForUrl(entry.url);
+          if (watchKey) watchRepo(watchKey, p.branch);
         }
       }
     }
