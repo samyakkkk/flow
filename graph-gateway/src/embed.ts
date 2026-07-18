@@ -119,11 +119,19 @@ export async function embedQuery(text: string): Promise<{ vec: number[] | null; 
 
 // Batched embedding for backfill. Returns one slot per input (null where a
 // chunk failed) so callers can align results with their node list.
+// Remote path runs a bounded window of concurrent requests — serial round
+// trips make big backfills crawl, unbounded fan-out floods the gateway.
+const REMOTE_BATCH_CONCURRENCY = 8;
+
 export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> {
   if (texts.length === 0) return [];
   if (REMOTE_EMBED_URL) {
-    const out: (number[] | null)[] = [];
-    for (const text of texts) out.push((await embedRemote(text.trim() || " ")).vec);
+    const out: (number[] | null)[] = new Array(texts.length).fill(null);
+    for (let i = 0; i < texts.length; i += REMOTE_BATCH_CONCURRENCY) {
+      const window = texts.slice(i, i + REMOTE_BATCH_CONCURRENCY);
+      const vecs = await Promise.all(window.map((text) => embedRemote(text.trim() || " ").then((r) => r.vec)));
+      for (let j = 0; j < vecs.length; j++) out[i + j] = vecs[j];
+    }
     return out;
   }
   return embedBatchLocal(texts.map((t) => t.trim() || " "));
