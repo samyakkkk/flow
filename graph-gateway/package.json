@@ -10,7 +10,7 @@
     "start": "tsx src/server.ts",
     "mcp": "tsx src/mcp.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-test-module-mocks --import tsx/esm --test test/verbs-batch.test.ts"
+    "test": "node --experimental-test-module-mocks --import tsx/esm --test test/verbs-batch.test.ts test/verbs-memory.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

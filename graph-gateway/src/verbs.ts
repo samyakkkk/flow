@@ -3,6 +3,13 @@ import { DEFAULT_GRAPH, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
 import { embedQuery, embedText, embeddingsEnabled, entityText } from "./embed.js";
+import {
+  fetchHeadline,
+  fetchCard,
+  fetchMemoryHits,
+  parseCardId,
+  type MemoryHitGroup,
+} from "./memory-client.js";
 
 // Cosine-distance ceiling for semantic matches. Tuned on the flow graph (156
 // nodes) by sweeping a 24-query labelled set: recall climbs steeply up to ~0.65
@@ -203,13 +210,32 @@ async function findEntityOne(graph: string, q: string, type: string | undefined,
   };
 }
 
+// The repo scope for memory hits — session env, since find_entity has no repo
+// param. The orchestrator's family gate is lenient (same product family) so a
+// missing repo just widens eligibility.
+function memoryRepo(): string | null {
+  return process.env.FLOW_REPO || null;
+}
+
 async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
   if (input.q === undefined && input.qs === undefined) {
     return { status: "error", error: "Pass `q` (single) or `qs` (batch, up to 10)." };
   }
-  // Single form stays byte-for-byte compatible: {status, matches, warning?}.
+  // UNIFIED find_entity (Section D): graph nodes AND memory hits in one result.
+  // Memory hits are fetched from the orchestrator (family gate + 0.55 silence
+  // gate + meaningful-token FTS reused, not forked) with the type QUOTA applied
+  // there; the gateway just splices them in as `memory_hits`. Graph node search
+  // is unchanged — memory is additive, never replaces code nodes.
+
+  // Single form stays byte-for-byte compatible for graph fields ({status,
+  // matches, warning?}); `memory_hits` is an additive field.
   if (input.q !== undefined) {
-    return findEntityOne(input.graph, input.q, input.type, input.limit);
+    const [graphRes, hitGroups] = await Promise.all([
+      findEntityOne(input.graph, input.q, input.type, input.limit),
+      fetchMemoryHits([input.q], memoryRepo()),
+    ]);
+    const hits = hitGroups[0]?.hits ?? [];
+    return hits.length ? { ...graphRes, memory_hits: hits.map((h) => h.line) } : graphRes;
   }
 
   // Batch: one group per query, in REQUEST ORDER. Cross-group duplicate node
@@ -217,13 +243,17 @@ async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
   // entry — the first group to surface an id owns the full match; later groups
   // just point back. A per-query failure is isolated to that group.
   const qs = input.qs as string[];
-  const settled = await mapWithConcurrency(qs, BATCH_CONCURRENCY, (q) =>
-    findEntityOne(input.graph, q, input.type, input.limit),
-  );
+  const [settled, hitGroups] = await Promise.all([
+    mapWithConcurrency(qs, BATCH_CONCURRENCY, (q) => findEntityOne(input.graph, q, input.type, input.limit)),
+    fetchMemoryHits(qs, memoryRepo()),
+  ]);
+  const hitsByQuery = memoryHitsByQuery(qs, hitGroups);
 
   const firstSeenIn = new Map<string, number>(); // node id → group index that owns the full entry
   const groups = settled.map((r, i) => {
-    if (!r.ok) return { query: qs[i], status: "error" as const, error: r.error };
+    const memHits = hitsByQuery[i] ?? [];
+    const memField = memHits.length ? { memory_hits: memHits.map((h) => h.line) } : {};
+    if (!r.ok) return { query: qs[i], status: "error" as const, error: r.error, ...memField };
     const res = r.value;
     const matches = res.matches.map((m) => {
       const id = String(m.id);
@@ -235,10 +265,18 @@ async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
       // Terse cross-group dedup note — full entry lives in the owning group.
       return { id: m.id, note: `(also matched q${owner + 1})` };
     });
-    return { query: qs[i], status: res.status, matches, ...("warning" in res ? { warning: res.warning } : {}) };
+    return { query: qs[i], status: res.status, matches, ...("warning" in res ? { warning: res.warning } : {}), ...memField };
   });
 
   return { status: "batch", count: groups.length, groups };
+}
+
+// Align memory-hit groups to the query list by index; the orchestrator returns
+// them in request order, but be defensive (match by query text as a fallback).
+function memoryHitsByQuery(qs: string[], groups: MemoryHitGroup[]): Array<MemoryHitGroup["hits"]> {
+  if (groups.length === qs.length) return groups.map((g) => g.hits);
+  const byQuery = new Map(groups.map((g) => [g.query, g.hits]));
+  return qs.map((q) => byQuery.get(q) ?? []);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +449,21 @@ function stripEmbedding<T extends { props?: unknown }>(row: T): T {
 }
 
 // Single-node fetch — the one code path both the single and batch forms reuse.
+// Also the dispatch point for the memory id NAMESPACES (mem:/obs:/lin:/
+// slackthread:): those aren't graph nodes, so we resolve them to drill-down
+// cards via the orchestrator (Section C). Everything else is a graph node, and
+// after its relations we append the HEADLINE INDEX (Section B) — memories/
+// tickets/threads anchored to it, headlines only. If memory is unreachable the
+// node returns WITHOUT attachments (graceful; a note says so).
 async function getEntityOne(graph: string, id: string) {
+  // Card namespace? Resolve a drill-down card instead of a graph lookup.
+  const card = parseCardId(id);
+  if (card) {
+    const c = await fetchCard(card.type, card.id);
+    if (c.status === "not_found") return { status: "not_found" as const, id };
+    return { status: "found" as const, id, card: c.card, card_type: c.type };
+  }
+
   const node = await run(graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id });
   if (node.length === 0) return { status: "not_found" as const, id };
   stripEmbedding(node[0] as { props?: unknown });
@@ -425,7 +477,15 @@ async function getEntityOne(graph: string, id: string) {
     `MATCH ({id: $id})<-[r]-(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
     { id },
   );
-  return { status: "found" as const, id, node: node[0], outgoing: out, incoming: inc };
+
+  // Headline index (Section B). Best-effort + fast (in-process cache on the
+  // orchestrator, <20ms target). Only attach when there's something to show;
+  // an unreachable source yields a terse "attachments unavailable" note.
+  const base = { status: "found" as const, id, node: node[0], outgoing: out, incoming: inc };
+  const headline = await fetchHeadline(id);
+  if (headline === null) return { ...base, attachments: "unavailable" };
+  if (!headline.hasAttachments) return base;
+  return { ...base, attachments: headline.rendered, attachment_counts: headline.counts };
 }
 
 async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
@@ -1148,10 +1208,16 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     out.push(
       `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
         (srcBits ? ` from ${srcBits} observations` : "") +
-        `. Search it like you grep — symptoms, identifiers, file paths work best (search_memory).`,
+        `. Search it like you grep — symptoms, identifiers, file paths work best (search_memory). ` +
+        `get_entity on a node also shows a headline index of the memories/tickets/threads anchored to it. ` +
+        `Drill into any [mem:…]/[obs:…]/[lin:…] with get_entity (batch ids[] works). ` +
+        `Scope a search to a node with search_memory node:<node_id> (composes with type:memory|ticket|thread).`,
     );
   } else {
-    out.push("MEMORY: none yet — it fills as sessions end. Query with search_memory (symptoms, identifiers, file paths work best).");
+    out.push(
+      "MEMORY: none yet — it fills as sessions end. Query with search_memory (symptoms, identifiers, file paths work best); " +
+        "get_entity shows a per-node headline index once memories anchor to nodes.",
+    );
   }
   out.push("");
   out.push(
@@ -1182,7 +1248,7 @@ export const verbs = {
   },
   find_entity: {
     description:
-      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating. BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating. Relevant distilled memories are blended in as `memory_hits` (typed terse lines, capped at 3 unless the query says type:memory). BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: findEntityInput,
     handler: findEntity,
   },
@@ -1198,7 +1264,7 @@ export const verbs = {
   },
   get_entity: {
     description:
-      "Fetch a node with all its incoming and outgoing relationships. BATCH: pass ids:[…] (up to 15) to fetch several nodes in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
+      "Fetch a node with all its incoming and outgoing relationships, plus a headline INDEX of the memories/tickets/threads anchored to it (headlines only, ~300 tokens; a '+N more' line is a working search_memory node:<id> query). Also resolves memory drill-down ids — mem:<id> (memory card: strength breakdown, anchors, evidence), obs:<id>, lin:<identifier>, slackthread:<ts>. BATCH: pass ids:[…] (up to 15) to fetch several nodes/cards in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
     shape: getEntityInput,
     handler: getEntity,
   },
@@ -1249,7 +1315,7 @@ export const verbs = {
   },
   search_memory: {
     description:
-      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: searchMemoryInput,
     handler: searchMemory,
   },
