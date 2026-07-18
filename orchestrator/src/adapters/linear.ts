@@ -18,6 +18,7 @@ import { createHmac } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { processEvent } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
+import { observeCorpus, repoForTicket } from "../memory/corpus-observe.js";
 import db from "../db.js";
 import { registerPoller, pollNow } from "../pollers/engine.js";
 import { getSetting } from "../settings.js";
@@ -282,6 +283,10 @@ function mirrorTicket(issue: LinearIssueForPoller): void {
     url: issue.url ?? null,
     updated_at: issue.updatedAt ? Math.floor(new Date(issue.updatedAt).getTime() / 1000) : null,
   });
+  // Memory enrichment: mirror the ticket into the observations corpus so
+  // search_memory can surface it. repo_family inferred from the team prefix.
+  const text = [issue.title, issue.description].filter(Boolean).join(" — ");
+  void observeCorpus({ source: "linear", text, repo: repoForTicket(issue.identifier ?? null) });
 }
 
 // ------------------------------------------------------------------

@@ -13,6 +13,7 @@ import { addLinearComment, updateLinearTicketContext, createLinearTicket } from 
 import { proposeAction } from "./dm.js";
 import { upsertContextBlock, renderContextBlock } from "./contextblock.js";
 import { enqueueJob } from "../opencode.js";
+import { observeCorpus, repoForChannel } from "../memory/corpus-observe.js";
 
 const insertAudit = db.prepare(`
   INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail)
@@ -145,6 +146,9 @@ async function handleSlackAuto(event: NormalizedEvent, cls: ClassificationResult
       thread_ts: p.thread_ts ?? null,
       permalink: p.permalink ?? null,
     });
+    // Memory enrichment: mirror the message into the observations corpus so
+    // search_memory can surface it (embedded + FTS). Non-blocking, best-effort.
+    void observeCorpus({ source: "slack", text: p.text ?? "", repo: repoForChannel(p.channel) });
   }
 
   if (c === "knowledge_claim" || c === "correction") {

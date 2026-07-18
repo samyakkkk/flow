@@ -139,7 +139,123 @@ export const MIGRATIONS: Migration[] = [
       db.exec("ALTER TABLE agent_sessions ADD COLUMN worktree_id TEXT");
     },
   },
+  {
+    id: 8,
+    name: "memory v1: observations + memories + FTS5, distill bookkeeping",
+    up: (db) => {
+      // Keep this schema IDENTICAL to the baseline block in db.ts (MEMORY_SCHEMA
+      // there) — fresh DBs are born from the baseline and skip this migration,
+      // so drift between the two would go unnoticed until an existing DB upgrades.
+      db.exec(MEMORY_SCHEMA);
+      db.exec(MEMORY_TRIGGERS);
+      // Idle-sweep bookkeeping: the highest transcript seq the distiller has
+      // already consumed for a session. NULL = never distilled.
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN last_distilled_seq INTEGER");
+    },
+  },
+  {
+    id: 9,
+    name: "memory v1: anchors join table (item ↔ graph node)",
+    up: (db) => {
+      // Keep byte-identical to ANCHORS_SCHEMA in db.ts (see migration 8 note).
+      db.exec(ANCHORS_SCHEMA);
+    },
+  },
 ];
+
+// Anchors: the join between a memory/observation (flow.db PRIMARY) and a graph
+// node (a rebuildable projection). flow.db owns the edge; any graph
+// representation is derivable. item_type distinguishes distilled memories from
+// raw corpus observations (linear/slack) so a node's headline index can pull
+// the right kind. node_id is the graph node id string (e.g. 'svc:users',
+// 'api:dashboard:GET /agents'); source records HOW the edge was inferred
+// (deterministic file match vs. semantic). resolved_at is the epoch the edge
+// was last (re)resolved — re-resolution deletes+reinserts. Cap of 3 anchors per
+// item is enforced in code, not schema. UNIQUE keeps re-resolution idempotent.
+export const ANCHORS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS anchors (
+    id          TEXT PRIMARY KEY,
+    item_type   TEXT NOT NULL,   -- 'memory' | 'observation'
+    item_id     TEXT NOT NULL,
+    node_id     TEXT NOT NULL,   -- graph node id string
+    source      TEXT NOT NULL,   -- 'files' | 'semantic'
+    resolved_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(item_type, item_id, node_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_anchors_item ON anchors(item_type, item_id);
+  CREATE INDEX IF NOT EXISTS idx_anchors_node ON anchors(node_id);
+`;
+
+// Memory v1 storage. observations = raw per-session/corpus claims (the corpus,
+// FTS-mirrored); memories = consolidated canonical claims an observation attaches
+// to. Both carry a 768-dim Gemma embedding BLOB (see embed.ts). repo_family is
+// the normalized repo name (suffixes like -backend stripped) — the retrieval
+// hard gate keys on it. Kept in one exported string so db.ts's baseline and
+// migration 8 stay byte-identical.
+export const MEMORY_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS observations (
+    id             TEXT PRIMARY KEY,
+    source         TEXT NOT NULL,   -- session | slack | linear | meeting
+    repo           TEXT,
+    repo_family    TEXT,            -- normalized repo (e.g. foo-backend -> foo); NULL = match-all
+    branch         TEXT,
+    session_id     TEXT,
+    claim          TEXT NOT NULL,
+    kind           TEXT NOT NULL,   -- decision|constraint|gotcha|how_to|preference|plan
+    source_weight  TEXT NOT NULL DEFAULT 'agent_inferred', -- user_stated|agent_inferred|error_proven
+    context_files  TEXT,            -- JSON array
+    retrieval_keys TEXT,            -- JSON array
+    embedding      BLOB,
+    memory_id      TEXT,            -- FK -> memories.id, nullable until consolidated
+    created_at     INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_observations_family ON observations(repo_family, memory_id);
+  CREATE INDEX IF NOT EXISTS idx_observations_memory ON observations(memory_id);
+
+  CREATE TABLE IF NOT EXISTS memories (
+    id                 TEXT PRIMARY KEY,
+    claim              TEXT NOT NULL,   -- canonical
+    kind               TEXT NOT NULL,
+    repo               TEXT,
+    repo_family        TEXT,
+    strength           REAL NOT NULL DEFAULT 0,
+    evidence_count     INTEGER NOT NULL DEFAULT 0,
+    people_count       INTEGER NOT NULL DEFAULT 0,
+    contradiction_count INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_at INTEGER,
+    status             TEXT NOT NULL DEFAULT 'active', -- active | sunk
+    embedding          BLOB,
+    retrieval_keys     TEXT,            -- JSON array (union of attached observations)
+    max_source_weight  TEXT NOT NULL DEFAULT 'agent_inferred',
+    created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at         INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_memories_family ON memories(repo_family, status);
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+    id UNINDEXED, claim, retrieval_keys,
+    content='observations', content_rowid='rowid'
+  );
+`;
+
+// FTS triggers mirroring the corpus.ts pattern — kept out of MEMORY_SCHEMA so
+// they can be created once (baseline + migration both call ensureMemoryTriggers).
+export const MEMORY_TRIGGERS = `
+  CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
+    INSERT INTO observations_fts(rowid, id, claim, retrieval_keys)
+      VALUES (new.rowid, new.id, new.claim, new.retrieval_keys);
+  END;
+  CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, id, claim, retrieval_keys)
+      VALUES ('delete', old.rowid, old.id, old.claim, old.retrieval_keys);
+  END;
+  CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, id, claim, retrieval_keys)
+      VALUES ('delete', old.rowid, old.id, old.claim, old.retrieval_keys);
+    INSERT INTO observations_fts(rowid, id, claim, retrieval_keys)
+      VALUES (new.rowid, new.id, new.claim, new.retrieval_keys);
+  END;
+`;
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);
 
