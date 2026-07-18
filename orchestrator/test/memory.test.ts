@@ -27,6 +27,10 @@ let search: typeof import("../src/memory/search.js");
 let distiller: typeof import("../src/memory/distiller.js");
 let llm: typeof import("../src/memory/llm.js");
 let migrations: typeof import("../src/migrations.js");
+let anchors: typeof import("../src/memory/anchors.js");
+let headline: typeof import("../src/memory/headline.js");
+let cards: typeof import("../src/memory/cards.js");
+let findHits: typeof import("../src/memory/find-hits.js");
 let cosine: (a: Float32Array, b: Float32Array) => number;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -53,8 +57,9 @@ function stubVec(text: string): Float32Array {
 const stubEmbedder = async (t: string) => stubVec(t);
 
 function clearMemory(): void {
-  db.exec("DELETE FROM observations; DELETE FROM memories;");
+  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
   store.invalidateVectorCache();
+  headline?.invalidateHeadlineCache();
 }
 
 before(async () => {
@@ -70,6 +75,10 @@ before(async () => {
   distiller = await import("../src/memory/distiller.js");
   llm = await import("../src/memory/llm.js");
   migrations = await import("../src/migrations.js");
+  anchors = await import("../src/memory/anchors.js");
+  headline = await import("../src/memory/headline.js");
+  cards = await import("../src/memory/cards.js");
+  findHits = await import("../src/memory/find-hits.js");
   cosine = (await import("../src/embed.js")).cosine;
   store.setEmbedder(stubEmbedder);
 });
@@ -572,5 +581,375 @@ describe("distiller end-to-end (injected LLM + judge)", () => {
     } finally {
       process.env.FLOW_DISTILLER = prev;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section A — anchor resolution. Deterministic file matching against a STUBBED
+// NodeAnchorProvider (no graph, no gateway). Covers: file match, most-specific
+// preference (endpoint over service), cap 3, idempotent re-resolve after a node
+// disappears → fallback to repo-level, never lost.
+describe("anchor resolution (Section A)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  // A provider whose node set we control per-test. Returns nodes anchored to the
+  // given files; the specificity is derived by the ranker from id/path shape
+  // unless we set it explicitly.
+  function stubProvider(nodes: Array<{ node_id: string; paths: string[]; specificity?: number }>) {
+    anchors.setNodeAnchorProvider({
+      nodesForFiles: async (_repo, _files) => nodes,
+    });
+  }
+
+  async function seedMemory(claim: string, repo: string, contextFiles: string[], keys: string[] = []) {
+    const o = await store.insertObservation({
+      source: "session", repo, claim, kind: "decision", source_weight: "user_stated",
+      context_files: contextFiles, retrieval_keys: keys, session_id: "s1",
+    });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("rankAnchors: pure file match, most-specific first, cap 3", () => {
+    // basename match: memory touches store.ts; nodes anchored at that path.
+    const files = ["orchestrator/src/store.ts", "utils.ts"];
+    const nodes = [
+      { node_id: "svc:orchestrator", paths: ["orchestrator/src/store.ts"], specificity: 10 },
+      { node_id: "api:orchestrator:POST /store", paths: ["orchestrator/src/store.ts"], specificity: 30 },
+      { node_id: "svc:utils", paths: ["utils.ts"], specificity: 10 },
+      { node_id: "svc:unrelated", paths: ["other/thing.ts"], specificity: 10 },
+    ];
+    const ranked = anchors.rankAnchors(files, nodes);
+    assert.ok(ranked.length <= anchors.MAX_ANCHORS_PER_ITEM, "cap 3");
+    assert.equal(ranked[0], "api:orchestrator:POST /store", "most specific (endpoint) ranks first");
+    assert.ok(ranked.includes("svc:utils"));
+    assert.ok(!ranked.includes("svc:unrelated"), "a node with no matching file is excluded");
+  });
+
+  test("cap of 3 enforced even when more than 3 nodes match", () => {
+    const files = ["a.ts"];
+    const nodes = Array.from({ length: 6 }, (_, i) => ({ node_id: `svc:n${i}`, paths: ["a.ts"], specificity: 6 - i }));
+    const ranked = anchors.rankAnchors(files, nodes);
+    assert.equal(ranked.length, 3, "never more than 3 anchors");
+  });
+
+  test("consolidation resolves a memory's anchors deterministically from context_files", async () => {
+    clearMemory();
+    stubProvider([
+      { node_id: "svc:store", paths: ["orchestrator/src/store.ts"], specificity: 10 },
+      { node_id: "api:store:GET /x", paths: ["orchestrator/src/store.ts"], specificity: 30 },
+    ]);
+    const res = await seedMemory("route writes through the db singleton", "acme", ["orchestrator/src/store.ts"], ["insertObservation"]);
+    const nodeIds = anchors.nodeIdsForItem("memory", res.memoryId);
+    assert.ok(nodeIds.includes("api:store:GET /x"), "most-specific node anchored");
+    assert.ok(nodeIds.length <= 3);
+  });
+
+  test("re-resolve after a node disappears drops the edge; item falls back to repo-level, never lost", async () => {
+    clearMemory();
+    stubProvider([{ node_id: "svc:gone", paths: ["orchestrator/src/store.ts"] }]);
+    const res = await seedMemory("some durable claim about the store", "acme", ["orchestrator/src/store.ts"]);
+    assert.deepEqual(anchors.nodeIdsForItem("memory", res.memoryId), ["svc:gone"], "anchored initially");
+
+    // Node disappears from the graph → provider no longer returns it.
+    stubProvider([]);
+    const after = await anchors.resolveMemoryAnchors(res.memoryId);
+    assert.deepEqual(after, [], "re-resolve drops the stale edge");
+    assert.deepEqual(anchors.nodeIdsForItem("memory", res.memoryId), [], "edge gone");
+
+    // The memory itself still exists (repo-level fallback = the memory is intact).
+    const mem = store.getMemory(res.memoryId);
+    assert.ok(mem, "memory is never lost when its anchor disappears");
+    assert.equal(mem.repo_family, "acme");
+  });
+
+  test("no file-ish context → no anchors (stays repo-level), not an error", async () => {
+    clearMemory();
+    stubProvider([{ node_id: "svc:x", paths: ["a.ts"] }]);
+    const res = await seedMemory("a preference with no files", "acme", [], ["justwords"]);
+    assert.deepEqual(anchors.nodeIdsForItem("memory", res.memoryId), []);
+  });
+
+  test("reresolveAllMemoryAnchors is idempotent (reindex-safe)", async () => {
+    clearMemory();
+    stubProvider([{ node_id: "svc:store", paths: ["store.ts"] }]);
+    const res = await seedMemory("claim about store", "acme", ["store.ts"]);
+    await anchors.reresolveAllMemoryAnchors();
+    await anchors.reresolveAllMemoryAnchors();
+    // idempotent: exactly one edge, not duplicated.
+    assert.deepEqual(anchors.nodeIdsForItem("memory", res.memoryId), ["svc:store"]);
+  });
+
+  // Reset to a no-op provider so later suites aren't affected.
+  test("teardown: restore no-op provider", () => {
+    anchors.setNodeAnchorProvider({ nodesForFiles: async () => [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section B — node headline index. Typed sections, hard char cap, +N more line,
+// graceful fallback (empty when no attachments). Anchors are written directly so
+// the test doesn't depend on the provider.
+describe("node headline index (Section B)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  async function seedAnchoredMemory(claim: string, repo: string, nodeId: string, keys: string[] = []) {
+    const o = await store.insertObservation({
+      source: "session", repo, claim, kind: "gotcha", source_weight: "user_stated",
+      retrieval_keys: keys, session_id: "s1",
+    });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    anchors.setAnchors("memory", res.memoryId, [nodeId], "files");
+    headline.invalidateHeadlineCache(nodeId);
+    return res.memoryId;
+  }
+
+  test("renders typed MEMORIES section with tier glyph, kind, and [mem:id]; never blends sections", async () => {
+    clearMemory();
+    await seedAnchoredMemory("payments verified with an hmac signature", "acme", "svc:payments", ["hmac"]);
+    const h = headline.getNodeHeadline("svc:payments");
+    assert.ok(h.hasAttachments);
+    assert.match(h.rendered, /MEMORIES:/);
+    assert.match(h.rendered, /\[mem:/);
+    assert.match(h.rendered, /\[gotcha\]/);
+    // no TICKETS/THREADS headers when there are none.
+    assert.ok(!/TICKETS:/.test(h.rendered));
+    assert.ok(!/THREADS:/.test(h.rendered));
+  });
+
+  test("hard char cap (~1200) enforced; overflow becomes a working +N more query", async () => {
+    clearMemory();
+    // Seed many memories on one node; the render must cap and emit +N more.
+    for (let i = 0; i < 40; i++) {
+      await seedAnchoredMemory(`durable claim number ${i} about the payments service and its many behaviors and edge cases`, "acme", "svc:payments", [`k${i}`]);
+    }
+    const h = headline.getNodeHeadline("svc:payments");
+    assert.ok(h.rendered.length <= headline.HEADLINE_CHAR_CAP, `render ${h.rendered.length} within cap ${headline.HEADLINE_CHAR_CAP}`);
+    assert.match(h.rendered, /\+\d+ more: search_memory node:svc:payments type:memory/, "overflow is a working node-scoped query");
+  });
+
+  test("memories are strength-ranked (strong first)", async () => {
+    clearMemory();
+    // A weak memory (single agent_inferred observation) and a strong one (many
+    // people). Reinforce the strong one so its strength dominates.
+    const weak = await store.insertObservation({ source: "session", repo: "acme", claim: "weak claim about caching layer", kind: "gotcha", source_weight: "agent_inferred", session_id: "sw" });
+    const wr = await consolidate.consolidateObservation(weak, async () => ({ verdict: "new" as const }));
+    anchors.setAnchors("memory", wr.memoryId, ["svc:cache"], "files");
+
+    // Strong: three distinct people reinforce it.
+    const s1 = await store.insertObservation({ source: "session", repo: "acme", claim: "strong claim about caching invalidation", kind: "gotcha", source_weight: "error_proven", session_id: "sa" });
+    const sr = await consolidate.consolidateObservation(s1, async () => ({ verdict: "new" as const }));
+    for (const sess of ["sb", "sc"]) {
+      const o = await store.insertObservation({ source: "session", repo: "acme", claim: "strong claim about caching invalidation", kind: "gotcha", source_weight: "error_proven", session_id: sess });
+      await consolidate.consolidateObservation(o, async () => ({ verdict: "same" as const }));
+    }
+    anchors.setAnchors("memory", sr.memoryId, ["svc:cache"], "files");
+    headline.invalidateHeadlineCache("svc:cache");
+
+    const h = headline.getNodeHeadline("svc:cache");
+    const strongIdx = h.rendered.indexOf("invalidation");
+    const weakIdx = h.rendered.indexOf("caching layer");
+    assert.ok(strongIdx >= 0 && weakIdx >= 0);
+    assert.ok(strongIdx < weakIdx, "the stronger memory ranks above the weaker one");
+  });
+
+  test("unanchored node → empty headline, hasAttachments false (graceful)", () => {
+    clearMemory();
+    const h = headline.getNodeHeadline("svc:nothing-here");
+    assert.equal(h.hasAttachments, false);
+    assert.equal(h.rendered, "");
+    assert.deepEqual(h.counts, { memories: 0, tickets: 0, threads: 0 });
+  });
+
+  test("cache invalidates on consolidation so a new memory shows up", async () => {
+    clearMemory();
+    await seedAnchoredMemory("first claim on svc:api", "acme", "svc:api");
+    const before = headline.getNodeHeadline("svc:api");
+    assert.equal(before.counts.memories, 1);
+    // add another, invalidate, re-read.
+    await seedAnchoredMemory("second claim on svc:api", "acme", "svc:api");
+    const after = headline.getNodeHeadline("svc:api");
+    assert.equal(after.counts.memories, 2, "cache reflects the new anchored memory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section C — drill-down cards for each id namespace + not_found.
+describe("drill-down cards (Section C)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  test("mem:<id> card carries claim, strength+tier, breakdown, born, anchors, evidence [obs:id]", async () => {
+    clearMemory();
+    const o = await store.insertObservation({ source: "session", repo: "acme", branch: "main", claim: "auth uses jwt in httpOnly cookies", kind: "decision", source_weight: "user_stated", context_files: ["auth.ts"], retrieval_keys: ["jwt"], session_id: "s1" });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    anchors.setAnchors("memory", res.memoryId, ["svc:auth"], "files");
+
+    const card = cards.getCard("mem", res.memoryId);
+    assert.equal(card.status, "found");
+    const c = card.card as any;
+    assert.equal(c.kind, "memory");
+    assert.match(c.claim, /jwt/);
+    assert.ok(typeof c.strength.value === "number" && c.strength.tier);
+    assert.ok("people_count" in c.breakdown && "evidence_count" in c.breakdown && "contradiction_count" in c.breakdown);
+    assert.equal(c.born.repo, "acme");
+    assert.equal(c.born.branch, "main");
+    assert.deepEqual(c.anchors, ["svc:auth"], "anchors are node ids");
+    assert.ok(Array.isArray(c.evidence) && c.evidence[0].id.startsWith("obs:"));
+    assert.ok(c.context_files.includes("auth.ts"));
+  });
+
+  test("obs:<id> card carries full text, source, session, parent memory id", async () => {
+    clearMemory();
+    const o = await store.insertObservation({ source: "session", repo: "acme", claim: "the flaky test is a race in WorktreePruner", kind: "gotcha", source_weight: "error_proven", session_id: "sess-42" });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    const card = cards.getCard("obs", o.id);
+    assert.equal(card.status, "found");
+    const c = card.card as any;
+    assert.equal(c.kind, "observation");
+    assert.match(c.text, /WorktreePruner/);
+    assert.equal(c.source, "session");
+    assert.equal(c.session, "sess-42");
+    assert.equal(c.parent_memory, `mem:${res.memoryId}`);
+  });
+
+  test("lin:<identifier> card: title/status/description(truncated)/permalink + anchored nodes", async () => {
+    clearMemory();
+    db.prepare("INSERT INTO linear_tickets (id, identifier, title, description, state, url, updated_at) VALUES (?,?,?,?,?,?,?)")
+      .run("t1", "ACME-123", "Fix the webhook retry", "x".repeat(600), "In Progress", "https://linear.app/acme/ACME-123", 1700000000);
+    // A corpus observation derived from the ticket, anchored to a node.
+    const o = await store.insertObservation({ source: "linear", repo: "acme", claim: "ACME-123 webhook retry work", kind: "gotcha", source_weight: "user_stated", retrieval_keys: ["ACME-123"] });
+    anchors.setAnchors("observation", o.id, ["svc:webhooks"], "files");
+
+    const card = cards.getCard("lin", "ACME-123");
+    assert.equal(card.status, "found");
+    const c = card.card as any;
+    assert.equal(c.identifier, "ACME-123");
+    assert.equal(c.status, "In Progress");
+    assert.ok(c.description.length <= 401 && c.description.endsWith("…"), "description truncated");
+    assert.match(c.permalink, /ACME-123/);
+    assert.ok(c.anchored_nodes.includes("svc:webhooks"));
+  });
+
+  test("slackthread:<ts> card: root text, participants, messages, permalink", async () => {
+    clearMemory();
+    db.prepare("INSERT INTO slack_messages (id, channel, user_id, text, ts, thread_ts, permalink) VALUES (?,?,?,?,?,?,?)")
+      .run("m1", "C1", "U1", "should we switch to JWT?", "1700000000.001", null, "https://slack/1");
+    db.prepare("INSERT INTO slack_messages (id, channel, user_id, text, ts, thread_ts, permalink) VALUES (?,?,?,?,?,?,?)")
+      .run("m2", "C1", "U2", "yes, httpOnly cookies", "1700000001.002", "1700000000.001", "https://slack/2");
+    const card = cards.getCard("slackthread", "1700000000.001");
+    assert.equal(card.status, "found");
+    const c = card.card as any;
+    assert.equal(c.kind, "thread");
+    assert.match(c.root_text, /JWT/);
+    assert.ok(c.participants.includes("U1") && c.participants.includes("U2"));
+    assert.equal(c.messages.length, 2);
+    assert.match(c.permalink, /slack/);
+  });
+
+  test("unknown id / missing row → not_found (never throws)", () => {
+    assert.equal(cards.getCard("mem", "nope").status, "not_found");
+    assert.equal(cards.getCard("lin", "NOPE-999").status, "not_found");
+    assert.equal(cards.getCard("bogus", "x").status, "not_found");
+  });
+
+  test("parseCardId splits namespaces (node ids with colons stay intact for lin/slackthread)", () => {
+    assert.deepEqual(cards.parseCardId("mem:abc-123"), { type: "mem", id: "abc-123" });
+    assert.deepEqual(cards.parseCardId("slackthread:1700000000.001"), { type: "slackthread", id: "1700000000.001" });
+    assert.equal(cards.parseCardId("svc:users"), null, "graph node ids are not card namespaces");
+    assert.equal(cards.parseCardId("noColon"), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section E — node-scoped search composes with type filter + keywords.
+describe("node-scoped search (Section E)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  async function seedAnchored(claim: string, repo: string, nodeId: string | null, keys: string[] = []) {
+    const o = await store.insertObservation({ source: "session", repo, claim, kind: "decision", source_weight: "user_stated", retrieval_keys: keys, session_id: "s1" });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    if (nodeId) anchors.setAnchors("memory", res.memoryId, [nodeId], "files");
+    return res.memoryId;
+  }
+
+  test("parseSearchTokens pulls node:/type: out; node ids with colons survive", () => {
+    const p = search.parseSearchTokens("node:api:dashboard:GET /agents type:memory hmac verify");
+    assert.equal(p.node, "api:dashboard:GET /agents");
+    assert.equal(p.type, "memory");
+    assert.equal(p.query, "hmac verify");
+  });
+
+  test("node: token filters to items anchored to that node", async () => {
+    clearMemory();
+    const onNode = await seedAnchored("payments verified with hmac on svc:payments", "acme", "svc:payments", ["hmac"]);
+    await seedAnchored("unrelated caching claim elsewhere", "acme", "svc:cache", ["cache"]);
+    const res = await search.searchMemory({ query: "node:svc:payments hmac", repo: "acme", limit: 10 });
+    const ids = res.memories.map((m) => m.id);
+    assert.ok(ids.includes(onNode));
+    assert.equal(ids.length, 1, "only the node-anchored memory surfaces");
+  });
+
+  test("empty query under a node scope returns the node's memories (the +N more query)", async () => {
+    clearMemory();
+    await seedAnchored("first anchored claim", "acme", "svc:payments", ["k1"]);
+    await seedAnchored("second anchored claim", "acme", "svc:payments", ["k2"]);
+    const res = await search.searchMemory({ query: "node:svc:payments", repo: "acme", limit: 10 });
+    assert.equal(res.memories.length, 2, "the anchored set IS the answer for a bare node scope");
+  });
+
+  test("type:memory composes with node scope; keeps only memory hits", async () => {
+    clearMemory();
+    await seedAnchored("anchored memory claim", "acme", "svc:payments", ["hmac"]);
+    const res = await search.searchMemory({ query: "node:svc:payments type:memory hmac", repo: "acme", limit: 10 });
+    assert.ok(res.memories.length >= 1);
+    assert.equal(res.corpus.length, 0, "type:memory excludes corpus");
+  });
+
+  test("node scope drops memories anchored to OTHER nodes even on a keyword hit", async () => {
+    clearMemory();
+    await seedAnchored("hmac claim on the wrong node", "acme", "svc:other", ["hmac"]);
+    const res = await search.searchMemory({ query: "node:svc:payments hmac", repo: "acme", limit: 10 });
+    assert.equal(res.memories.length, 0, "keyword hit on a non-scoped node is filtered out");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section D (orchestrator half) — find_entity memory hits + type quota. The
+// gateway merge is tested on the gateway side; here we verify the quota and the
+// typed terse line shape produced by find-hits.ts (reusing search ranking/gates).
+describe("find_entity memory hits + quota (Section D)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  async function seed(claim: string, repo: string, keys: string[]) {
+    const o = await store.insertObservation({ source: "session", repo, claim, kind: "gotcha", source_weight: "user_stated", retrieval_keys: keys, session_id: "s1" });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("terse typed line shape: [Memory:<kind>] headline (tier) [mem:id]", async () => {
+    clearMemory();
+    await seed("payments verified with hmac signature", "acme", ["hmac"]);
+    const hits = await findHits.memoryHitsForQuery("hmac", "acme");
+    assert.ok(hits.length >= 1);
+    assert.match(hits[0].line, /^\[Memory:gotcha\] .+ \((strong|medium|weak)\) \[mem:[0-9a-f-]+\]$/);
+  });
+
+  test("quota caps memory hits at 3 for an untyped query", async () => {
+    clearMemory();
+    for (let i = 0; i < 6; i++) await seed(`hmac related claim ${i}`, "acme", ["hmac", `k${i}`]);
+    const hits = await findHits.memoryHitsForQuery("hmac", "acme");
+    assert.equal(hits.length, findHits.MEMORY_HIT_QUOTA, "untyped query is capped at the quota");
+  });
+
+  test("quota LIFTS when the query carries a type filter", async () => {
+    clearMemory();
+    for (let i = 0; i < 6; i++) await seed(`hmac related claim ${i}`, "acme", ["hmac", `k${i}`]);
+    const hits = await findHits.memoryHitsForQuery("type:memory hmac", "acme", { limit: 10 });
+    assert.ok(hits.length > findHits.MEMORY_HIT_QUOTA, "a typed query lifts the quota");
+  });
+
+  test("the 0.55 silence gate still applies to hits (no keyword → no noise)", async () => {
+    clearMemory();
+    await seed("we chose tailwind css for styling", "acme", ["tailwind"]);
+    const hits = await findHits.memoryHitsForQuery("database migration rollback", "acme");
+    assert.equal(hits.length, 0, "a weak vector-only match is silenced, so no memory hit blends in");
   });
 });

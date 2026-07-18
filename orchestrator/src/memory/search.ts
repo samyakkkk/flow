@@ -38,25 +38,42 @@ export interface ParsedQuery {
   type: SearchTypeFilter | null;
 }
 
-// `node:` values are graph node ids which themselves contain colons
-// (api:dashboard:GET /agents), so we capture the rest of that whitespace-
-// delimited token, not just up to the next colon.
+// `node:` values are graph node ids which contain colons AND, for endpoints, a
+// single space between the HTTP method and the path ('api:dashboard:GET
+// /agents'). A naive whitespace split severs that id. So on hitting `node:` we
+// absorb ONE following token into the id when it's a path continuation — the
+// last part is an HTTP method OR the next token starts with '/'. Everything else
+// (real keywords like 'hmac') stays a keyword. `type:` is a plain leading token
+// that also ends node absorption. This matches the "+N more" line the headline
+// emits: `search_memory node:<id> type:<t>`.
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 export function parseSearchTokens(raw: string): ParsedQuery {
   let node: string | null = null;
   let type: SearchTypeFilter | null = null;
   const kept: string[] = [];
-  for (const tok of raw.split(/\s+/)) {
-    if (!tok) continue;
-    if (tok.startsWith("node:") && tok.length > 5) {
-      node = tok.slice(5);
+  const toks = raw.split(/\s+/).filter(Boolean);
+  const isTypeTok = (t: string) =>
+    t.startsWith("type:") && TYPE_FILTERS.has(t.slice(5).toLowerCase() as SearchTypeFilter);
+
+  for (let i = 0; i < toks.length; i++) {
+    const tok = toks[i];
+    if (node === null && tok.startsWith("node:") && tok.length > 5) {
+      const parts = [tok.slice(5)];
+      // Absorb a path continuation for endpoint ids: '<...>:GET' + '/agents'.
+      while (i + 1 < toks.length && !isTypeTok(toks[i + 1])) {
+        const next = toks[i + 1];
+        const last = parts[parts.length - 1];
+        const lastSeg = last.slice(last.lastIndexOf(":") + 1);
+        const continues = next.startsWith("/") || HTTP_METHODS.has(lastSeg);
+        if (!continues) break;
+        parts.push(toks[++i]);
+      }
+      node = parts.join(" ");
       continue;
     }
-    if (tok.startsWith("type:") && tok.length > 5) {
-      const t = tok.slice(5).toLowerCase();
-      if (TYPE_FILTERS.has(t as SearchTypeFilter)) {
-        type = t as SearchTypeFilter;
-        continue;
-      }
+    if (isTypeTok(tok)) {
+      type = tok.slice(5).toLowerCase() as SearchTypeFilter;
+      continue;
     }
     kept.push(tok);
   }

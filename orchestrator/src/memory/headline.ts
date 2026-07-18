@@ -163,62 +163,55 @@ export function renderNodeHeadline(h: NodeHeadline): string {
   const lines: string[] = [];
   let budget = HEADLINE_CHAR_CAP;
 
-  // Each section renders as many lines as the SHARED budget allows, then an
-  // overflow "+N more" line if truncated. The overflow line is a working query.
-  const emit = (line: string): boolean => {
-    if (line.length + 1 > budget) return false;
-    lines.push(line);
-    budget -= line.length + 1;
-    return true;
-  };
   const moreLine = (remaining: number, type: string): string =>
     `  +${remaining} more: search_memory node:${h.node_id} type:${type}`;
 
-  // MEMORIES (strength-ranked)
-  if (h.memories.length) {
-    lines.push("MEMORIES:");
-    budget -= "MEMORIES:".length + 1;
-    let shown = 0;
-    for (const m of h.memories) {
-      const glyph = TIER_GLYPH[m.tier] ?? "○";
-      const line = `  ${glyph} ${trunc(m.claim, CLAIM_TRUNC)} [${m.kind}] [mem:${m.id}]`;
-      if (!emit(line)) break;
-      shown++;
-    }
-    if (shown < h.memories.length) emit(moreLine(h.memories.length - shown, "memory"));
-  }
+  // Render one typed section. RESERVES room for a "+N more" line before the last
+  // item that would fit, so the overflow line ALWAYS fits within the cap (a
+  // silently-dropped +N more would be a dead end). Header + blank separator are
+  // charged to the shared budget. Returns nothing; mutates `lines`/`budget`.
+  const renderSection = <T>(header: string, items: T[], type: string, line: (item: T) => string): void => {
+    if (items.length === 0) return;
+    const sep = lines.length ? 1 : 0; // blank line before a non-first section
+    const headerCost = sep + header.length + 1;
+    if (headerCost > budget) return;
+    if (sep) lines.push("");
+    lines.push(header);
+    budget -= headerCost;
 
-  // TICKETS (recency + status)
-  if (h.tickets.length) {
-    if (lines.length) lines.push("");
-    if (lines.length) budget -= 1;
-    lines.push("TICKETS:");
-    budget -= "TICKETS:".length + 1;
     let shown = 0;
-    for (const t of h.tickets) {
-      const status = t.state ? ` (${t.state})` : "";
-      const line = `  ${trunc(t.title, CLAIM_TRUNC)}${status} [lin:${t.identifier}]`;
-      if (!emit(line)) break;
+    for (let i = 0; i < items.length; i++) {
+      const text = line(items[i]);
+      const cost = text.length + 1;
+      const remainingAfter = items.length - (i + 1);
+      // If more items remain, reserve room for the overflow line we'd need next.
+      const reserve = remainingAfter > 0 ? moreLine(remainingAfter, type).length + 1 : 0;
+      if (cost + reserve > budget) break;
+      lines.push(text);
+      budget -= cost;
       shown++;
     }
-    if (shown < h.tickets.length) emit(moreLine(h.tickets.length - shown, "ticket"));
-  }
+    if (shown < items.length) {
+      const ml = moreLine(items.length - shown, type);
+      if (ml.length + 1 <= budget) {
+        lines.push(ml);
+        budget -= ml.length + 1;
+      }
+    }
+  };
 
-  // THREADS (recency)
-  if (h.threads.length) {
-    if (lines.length) lines.push("");
-    if (lines.length) budget -= 1;
-    lines.push("THREADS:");
-    budget -= "THREADS:".length + 1;
-    let shown = 0;
-    for (const th of h.threads) {
-      const link = th.permalink ? ` ${th.permalink}` : "";
-      const line = `  ${trunc(th.text, CLAIM_TRUNC)}${link} [slackthread:${th.ts}]`;
-      if (!emit(line)) break;
-      shown++;
-    }
-    if (shown < h.threads.length) emit(moreLine(h.threads.length - shown, "thread"));
-  }
+  renderSection("MEMORIES:", h.memories, "memory", (m) => {
+    const glyph = TIER_GLYPH[m.tier] ?? "○";
+    return `  ${glyph} ${trunc(m.claim, CLAIM_TRUNC)} [${m.kind}] [mem:${m.id}]`;
+  });
+  renderSection("TICKETS:", h.tickets, "ticket", (t) => {
+    const status = t.state ? ` (${t.state})` : "";
+    return `  ${trunc(t.title, CLAIM_TRUNC)}${status} [lin:${t.identifier}]`;
+  });
+  renderSection("THREADS:", h.threads, "thread", (th) => {
+    const link = th.permalink ? ` ${th.permalink}` : "";
+    return `  ${trunc(th.text, CLAIM_TRUNC)}${link} [slackthread:${th.ts}]`;
+  });
 
   return lines.join("\n");
 }
