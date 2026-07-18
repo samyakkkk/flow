@@ -11,7 +11,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -520,9 +520,9 @@ export async function connectGithubRepo(
   const entry = registerRepo(url, resolvedBranch);
   if (localPath) registerSource({ name: entry.name, localPath });
   // registeredRepos is otherwise only seeded at boot — watch this branch now.
-  const { watchRepo, ownerRepoFromUrl } = await import("./adapters/github.js");
-  const ownerRepo = ownerRepoFromUrl(url);
-  if (ownerRepo) watchRepo(ownerRepo, entry.branch);
+  const { watchRepo, watchKeyForUrl } = await import("./adapters/github.js");
+  const watchKey = watchKeyForUrl(url);
+  if (watchKey) watchRepo(watchKey, entry.branch);
   const job = await enqueueJob({
     type: "index_repo",
     input: { repo: entry.name, url: entry.url, branch: entry.branch },
@@ -535,36 +535,43 @@ export async function connectGithubRepo(
 // multi-minute clone must never block the event loop. Private repos: the
 // GITHUB_TOKEN (settings or env) is injected into the clone URL only; it is
 // never written to disk, the registry, or error messages.
-async function ensureRepoClone(entry: { name: string; url?: string; branch?: string }): Promise<string> {
-  // Local tier: an entry with no url but a localPath is the user's own checkout
-  // — index in place from that folder (there is nothing to clone). Materialize
-  // repos/<name> as a symlink to it, because downstream consumers (the index
-  // prompt, the corrections verifier) address checkouts as repos/<name>
-  // relative paths and must not care which tier a repo is.
-  if (!entry.url) {
-    const reg = readRepoRegistry().repos.find((r) => r.name === entry.name);
+export async function ensureRepoClone(entry: { name: string; url?: string; branch?: string }): Promise<string> {
+  // One tier, one mechanism: every indexable source is a git repo we CLONE
+  // from — a remote URL or a local filesystem path (git treats a path as a
+  // remote). The old local tier symlinked repos/<name> to the user's checkout,
+  // which broke commit bookkeeping and read uncommitted state; a clone from
+  // the path gives local repos the exact same fetch/reset/poll machinery.
+  const dest = resolve(WORKSPACE_DIR, "repos", entry.name);
+
+  // Legacy migration: a symlinked checkout from the old local tier is
+  // replaced by a real clone on the next index.
+  let isLink = false;
+  try {
+    isLink = lstatSync(dest).isSymbolicLink();
+  } catch {
+    /* nothing at dest */
+  }
+  if (isLink) unlinkSync(dest);
+  else if (existsSync(dest)) return dest;
+
+  // Clone source: the entry's url (remote or path). Legacy local-only entries
+  // registered url:"" with only a localPath — use the path and self-heal the
+  // registry so pollers and future jobs see it as the clone source.
+  let cloneSrc = entry.url ?? "";
+  if (!cloneSrc) {
+    const registry = readRepoRegistry();
+    const reg = registry.repos.find((r) => r.name === entry.name);
     if (reg?.localPath && existsSync(reg.localPath)) {
-      const dest = resolve(WORKSPACE_DIR, "repos", entry.name);
-      if (!existsSync(dest)) {
-        mkdirSync(resolve(WORKSPACE_DIR, "repos"), { recursive: true });
-        try {
-          symlinkSync(reg.localPath, dest);
-        } catch (err) {
-          // A dangling symlink at dest fails existsSync yet blocks creation —
-          // anything other than "already there" is a real error.
-          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        }
-      }
-      return dest;
+      cloneSrc = reg.localPath;
+      reg.url = reg.localPath;
+      writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
     }
   }
-  const dest = resolve(WORKSPACE_DIR, "repos", entry.name);
-  if (existsSync(dest)) return dest;
-  if (!entry.url) throw new Error(`repo '${entry.name}' has no checkout and no url to clone from`);
+  if (!cloneSrc) throw new Error(`repo '${entry.name}' has no checkout and no url to clone from`);
   mkdirSync(resolve(WORKSPACE_DIR, "repos"), { recursive: true });
 
   const token = getSetting("GITHUB_TOKEN");
-  let cloneUrl = entry.url;
+  let cloneUrl = cloneSrc;
   if (token && /^https:\/\/github\.com\//.test(cloneUrl)) {
     cloneUrl = cloneUrl.replace("https://github.com/", `https://x-access-token:${token}@github.com/`);
   }

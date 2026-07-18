@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA } from "./migrations.js";
+import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA, WORK_FOLDERS_SCHEMA } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -274,6 +274,9 @@ db.exec(ANCHORS_SCHEMA);
 // index_log: indexer lifecycle trail (migration 11). Kept byte-identical to
 // the migration via the shared INDEX_LOG_SCHEMA string.
 db.exec(INDEX_LOG_SCHEMA);
+// work_folders: per-user agent work surfaces (migration 12). Kept
+// byte-identical to the migration via the shared WORK_FOLDERS_SCHEMA string.
+db.exec(WORK_FOLDERS_SCHEMA);
 
 // FTS triggers to keep virtual tables in sync with base tables
 db.exec(`

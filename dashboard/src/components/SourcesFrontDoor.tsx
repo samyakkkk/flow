@@ -55,7 +55,7 @@ interface IndexLogRow {
 function sourceChip(s: SourceEntry): string {
   if (s.kind === "docs") return "docs · ingestion pending";
   if (s.localPath) return "your folder";
-  return "GitHub-synced";
+  return "remote-synced";
 }
 
 function timeAgo(iso?: string): string | null {

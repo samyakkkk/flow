@@ -84,6 +84,13 @@ export function AgentsView() {
 
   const [backend, setBackend] = useState("");
   const [repo, setRepo] = useState("");
+  // Work folder: "" = the repo's default surface (Flow's managed clone or the
+  // registered checkout). A picked folder means "use this repo's knowledge,
+  // but make the changes over THERE" — folders are per-user, never shared.
+  const [workFolders, setWorkFolders] = useState<{ path: string; repo: string | null }[]>([]);
+  const [workFolder, setWorkFolder] = useState("");
+  const [newFolderPath, setNewFolderPath] = useState("");
+  const [addingFolder, setAddingFolder] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
@@ -100,6 +107,7 @@ export function AgentsView() {
       ]);
       setAgents(a.agents ?? []);
       setRepos((a.repos ?? []).filter((r: RepoOption) => r.cloned));
+      setWorkFolders(a.workFolders ?? []);
       setSessions(s.sessions ?? []);
       setBackend((prev) => prev || (a.agents ?? []).find((x: DetectedAgent) => x.installed)?.id || "");
       setRepo((prev) => prev || (a.repos ?? [])[0]?.name || "");
@@ -135,7 +143,13 @@ export function AgentsView() {
       const res = await fetch(prefix("/api/agents/sessions"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend, repo, prompt, ...(placement ? { placement } : {}) }),
+        body: JSON.stringify({
+          backend,
+          repo,
+          prompt,
+          ...(placement ? { placement } : {}),
+          ...(workFolder ? { workFolder } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `status ${res.status}`);
@@ -222,6 +236,62 @@ export function AgentsView() {
               </option>
             ))}
           </select>
+          {/* Work folder — YOUR checkouts (per-user, never a teammate's paths).
+              Default = the repo's own surface; picking a folder means "use this
+              repo's knowledge, but make the changes over there". */}
+          <select
+            value={workFolder}
+            onChange={(e) => setWorkFolder(e.target.value)}
+            className="rounded-lg border border-line bg-cream px-3 py-2 text-[13px] text-ink"
+            style={{ fontFamily: "var(--font-mono)" }}
+            data-testid="work-folder-select"
+            title="Where the agent makes its changes — your folders, on your machine"
+          >
+            <option value="">work in: {repo || "repo"} (default)</option>
+            {workFolders.map((f) => (
+              <option key={f.path} value={f.path}>
+                work in: {f.path}
+              </option>
+            ))}
+          </select>
+          <span className="flex items-center gap-1">
+            <input
+              value={newFolderPath}
+              onChange={(e) => setNewFolderPath(e.target.value)}
+              placeholder="/path/to/another/checkout"
+              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-ink w-56"
+              style={{ fontFamily: "var(--font-mono)" }}
+              data-testid="work-folder-input"
+            />
+            <button
+              onClick={async () => {
+                const path = newFolderPath.trim();
+                if (!path) return;
+                setAddingFolder(true);
+                try {
+                  const res = await fetch(prefix("/api/work-folders"), {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ path, repo: repo || undefined }),
+                  });
+                  const d = (await res.json()) as { folders?: { path: string; repo: string | null }[] };
+                  if (res.ok && d.folders) {
+                    setWorkFolders(d.folders);
+                    setWorkFolder(path);
+                    setNewFolderPath("");
+                  }
+                } finally {
+                  setAddingFolder(false);
+                }
+              }}
+              disabled={addingFolder || !newFolderPath.trim()}
+              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-text-muted hover:text-ink"
+              style={{ fontFamily: "var(--font-mono)" }}
+              title="Remember this folder as a place agents can work"
+            >
+              + folder
+            </button>
+          </span>
         </div>
         <MentionTextarea
           value={prompt}

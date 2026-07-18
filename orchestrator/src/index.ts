@@ -272,6 +272,9 @@ const start = async (): Promise<void> => {
 
     // Register all pollers with the engine (enabled() checks gating at tick time)
     await seedWatchedRepos();
+    // Legacy localPath entries become the "local" owner's work folders.
+    const { seedWorkFoldersFromRegistry } = await import("./work-folders.js");
+    seedWorkFoldersFromRegistry();
     registerGithubPoller();
     registerLinearPoller();
     registerFirefliesPoller();

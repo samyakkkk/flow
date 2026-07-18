@@ -184,7 +184,31 @@ export const MIGRATIONS: Migration[] = [
       db.exec(INDEX_LOG_SCHEMA);
     },
   },
+  {
+    id: 12,
+    name: "work_folders: per-user agent work surfaces",
+    up: (db) => {
+      // Keep byte-identical to WORK_FOLDERS_SCHEMA in db.ts (see migration 8 note).
+      db.exec(WORK_FOLDERS_SCHEMA);
+    },
+  },
 ];
+
+// Per-user WORK surfaces (where agent sessions run) — deliberately separate
+// from repos.json so one user's local paths never leak into a teammate's
+// dashboard on a shared deployment. owner = dashboard session user in prod,
+// "local" in local mode. UNIQUE keeps re-registration idempotent.
+export const WORK_FOLDERS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS work_folders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner      TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    repo       TEXT,
+    added_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(owner, path)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_folders_owner ON work_folders(owner);
+`;
 
 // Indexer lifecycle trail — one row per transition (enqueued, parked,
 // superseded, started, done, failed, recovered, watch, removed) so

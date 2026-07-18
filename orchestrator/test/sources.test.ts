@@ -117,12 +117,20 @@ describe("inspectSource", () => {
     assert.equal(r.repo.remoteUrl, null);
   });
 
-  test("git_repo_local_only — non-GitHub remote keeps url for display", async () => {
+  test("git_repo — any remote counts, not just GitHub (ls-remote is provider-agnostic)", async () => {
     const dir = join(TMP, "gitlab-repo");
     gitInit(dir, "https://gitlab.com/acme/tool.git");
     const r = await inspectSource(dir);
-    assert.equal(r.kind, "git_repo_local_only");
+    assert.equal(r.kind, "git_repo");
     assert.equal(r.repo.remoteUrl, "https://gitlab.com/acme/tool");
+  });
+
+  test("git_repo_local_only — no remote at all (the path becomes the clone source)", async () => {
+    const dir = join(TMP, "noremote-repo");
+    gitInit(dir);
+    const r = await inspectSource(dir);
+    assert.equal(r.kind, "git_repo_local_only");
+    assert.equal(r.repo.remoteUrl, null);
   });
 
   test("folder — junk-defended docs counts", async () => {
@@ -277,20 +285,28 @@ describe("already-connected identity + name collisions", () => {
   });
 
   test("add refuses a name collision with a different source", async () => {
-    const docsDir = join(TMP, "col-docs");
-    mkdirSync(docsDir, { recursive: true });
-    const r = await addSources([{ type: "docs", path: docsDir, name: "colwidgets" }]);
+    const repoDir = join(TMP, "col-repo");
+    gitInit(repoDir);
+    const r = await addSources([{ type: "repo", localPath: repoDir, name: "colwidgets", branch: "main" }]);
     assert.equal(r.added.length, 0);
     assert.equal(r.errors.length, 1);
     assert.match(r.errors[0].error, /already connected/);
   });
 
   test("re-adding the same identity is a harmless update, not an error", async () => {
-    const docsDir = join(TMP, "col-notes");
-    mkdirSync(docsDir, { recursive: true });
-    registerSource({ kind: "docs", name: "col-notes", path: docsDir, status: "pending_ingestion" });
-    const r = await addSources([{ type: "docs", path: docsDir, name: "col-notes" }]);
+    const repoDir = join(TMP, "col-notes");
+    gitInit(repoDir);
+    registerSource({ kind: "code", name: "col-notes", url: repoDir, localPath: repoDir, branch: "main" });
+    const r = await addSources([{ type: "repo", localPath: repoDir, name: "col-notes", branch: "main" }]);
     assert.equal(r.errors.length, 0);
     assert.equal(r.added.length, 1);
+  });
+
+  test("non-git folders are refused — no commits, no change tracking", async () => {
+    const docsDir = join(TMP, "plain-folder");
+    mkdirSync(docsDir, { recursive: true });
+    const r = await addSources([{ type: "docs", path: docsDir, name: "plain-folder" }]);
+    assert.equal(r.added.length, 0);
+    assert.match(r.errors[0].error, /can't be indexed/);
   });
 });

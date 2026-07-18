@@ -91,8 +91,9 @@ export function ghAuthOk(): boolean {
 export async function seedWatchedRepos(): Promise<void> {
   const { listWorkspaceRepos } = await import("../opencode.js");
   for (const r of listWorkspaceRepos()) {
-    const ownerRepo = r.url ? ownerRepoFromUrl(r.url) : null;
-    if (ownerRepo) registeredRepos.set(ownerRepo, r.branch || "main");
+    if (r.kind === "docs") continue;
+    const key = watchKeyForUrl(r.url);
+    if (key) registeredRepos.set(key, r.branch || "main");
   }
 }
 
@@ -260,8 +261,19 @@ function verifyGithubSignature(secret: string, rawBody: Buffer, sigHeader: strin
 // Subsequent polls: emit push event only when SHA differs from cursor.
 // ------------------------------------------------------------------
 
+// Watch keys are "owner/repo" for GitHub, or a full clone source (any remote
+// URL, or a local filesystem path — git treats a path as a remote) for
+// everything else. ls-remote works identically against all three.
 function repoUrl(repo: string): string {
+  if (repo.includes("://") || repo.startsWith("/") || repo.startsWith("git@")) return repo;
   return `https://github.com/${repo}.git`;
+}
+
+// The watch key for a registry url: GitHub shorthand when parseable, else the
+// url/path itself. Null only for empty urls (nothing to poll).
+export function watchKeyForUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  return ownerRepoFromUrl(url) ?? url;
 }
 
 export async function githubFetchSince(cursor: string): Promise<FetchResult> {
