@@ -325,7 +325,6 @@ async function inspectGitRepo(repoPath: string): Promise<GitRepoResult> {
   const name = basename(repoPath);
   const remoteRes = await git(repoPath, ["remote", "get-url", "origin"]);
   const remoteRaw = remoteRes.ok ? remoteRes.out : "";
-  const isGithub = remoteRaw ? /github\.com[/:]/i.test(remoteRaw) : false;
   const remoteUrl = remoteRaw ? normalizeRemote(remoteRaw) : null;
 
   // Default branch: origin/HEAD's target, else the current branch, else main.
@@ -345,9 +344,11 @@ async function inspectGitRepo(repoPath: string): Promise<GitRepoResult> {
     dirty,
     alreadyConnected: !!findRegistered({ name, url: remoteUrl, path: repoPath }),
   };
-  // A GitHub remote → git_repo (has a BRAIN via the managed clone). No remote,
-  // or a non-GitHub remote → local_only tier (we keep remoteUrl for display).
-  return { kind: isGithub ? "git_repo" : "git_repo_local_only", repo };
+  // Any remote → git_repo (the BRAIN clones from it; ls-remote polling is
+  // provider-agnostic, GitHub gets no special treatment here). No remote →
+  // local_only tier: still fully indexable — git treats a filesystem path as
+  // a remote, so the BRAIN clones from the path itself.
+  return { kind: remoteUrl ? "git_repo" : "git_repo_local_only", repo };
 }
 
 async function inspectContainer(containerPath: string, repoPaths: string[]): Promise<ContainerResult> {
@@ -489,14 +490,13 @@ export async function addSources(sources: AddSource[]): Promise<AddResult> {
     const name = (src as { name?: string }).name ?? "(unnamed)";
     try {
       if (src.type === "docs") {
-        // Docs always live on the local filesystem.
-        if (prod) throw new Error("local paths aren't available on a remote Flow — connect GitHub repos or upload files");
-        if (!src.path || !src.name) throw new Error("docs source needs a name and a path");
-        assertNameFree({ name: src.name, path: src.path });
-        registerSource({ kind: "docs", name: src.name, path: src.path, status: "pending_ingestion" });
-        auditSource("docs_registered", src.name, { path: src.path });
-        out.added.push({ name: src.name, kind: "docs" });
-        continue;
+        // Folders without git are not indexable: no commits means no stable
+        // identity, no diffs, and no change signal to hang knowledge off.
+        // The old "pending_ingestion" registration was a door to nowhere —
+        // nothing ever consumed it. Refuse honestly instead.
+        throw new Error(
+          "folders without a git repository can't be indexed — no commits means no change tracking. Initialize a git repo in it, or connect the repositories inside it.",
+        );
       }
 
       if (src.type === "repo") {
@@ -518,14 +518,16 @@ export async function addSources(sources: AddSource[]): Promise<AddResult> {
         }
 
         if (localPath) {
-          // Local-only (no remote) repo — index in place from the user's
-          // folder (the local tier). runJob's ensureRepoClone resolves the
-          // localPath from the registry.
+          // No-remote local repo — the path IS the remote: the BRAIN clones
+          // from it and the poller ls-remotes it, exactly like a hosted repo.
+          // localPath doubles as the WORK surface for agent sessions.
           assertNameFree({ name: src.name, path: localPath });
-          registerSource({ kind: "code", name: src.name, url: "", localPath, branch: src.branch });
+          registerSource({ kind: "code", name: src.name, url: localPath, localPath, branch: src.branch });
+          const { watchRepo } = await import("./adapters/github.js");
+          watchRepo(localPath, src.branch);
           const job = await enqueueJob({
             type: "index_repo",
-            input: { repo: src.name, branch: src.branch },
+            input: { repo: src.name, url: localPath, branch: src.branch },
             repo: src.name,
           });
           auditSource("index_job", src.name, { job: job.id, branch: src.branch, localPath: true });

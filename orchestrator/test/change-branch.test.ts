@@ -5,7 +5,7 @@
 // creates the remote-tracking ref and every reindex after a branch change
 // fails until the clone dir is deleted by hand.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -62,5 +62,53 @@ describe("change_branch survives single-branch clones", () => {
 
     // The checkout now sits on origin/dev's tip (the "two" commit).
     assert.equal(sh(`git log -1 --format=%s`, clone), "two");
+  });
+});
+
+describe("path-as-remote: local repos ride the clone machinery", () => {
+  let ensureRepoClone: (entry: { name: string; url?: string; branch?: string }) => Promise<string>;
+  let refreshRepoCheckout: (name: string, branch: string) => Promise<void>;
+  let src: string;
+
+  before(async () => {
+    ({ ensureRepoClone, refreshRepoCheckout } = await import("../src/opencode.js"));
+    // A no-remote local repo — the user's own project folder.
+    src = join(workspace, "local-src");
+    execSync(`git init -q -b main ${src}`, { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } });
+    sh(`git config user.email t@t && git config user.name t`, src);
+    writeFileSync(join(src, "code.txt"), "v1\n");
+    sh(`git add . && git commit -qm v1`, src);
+  });
+
+  test("clones from a filesystem path exactly like a remote, then tracks new commits", async () => {
+    const dest = await ensureRepoClone({ name: "local-src", url: src, branch: "main" });
+    // A real clone, not a symlink — committed state only.
+    assert.equal(sh(`git rev-parse --is-inside-work-tree`, dest), "true");
+    assert.throws(() => execSync(`test -L ${dest}`));
+    assert.equal(sh(`git log -1 --format=%s`, dest), "v1");
+
+    // New commit in the user's folder → refresh picks it up via fetch/reset.
+    writeFileSync(join(src, "code.txt"), "v2\n");
+    sh(`git add . && git commit -qm v2`, src);
+    await refreshRepoCheckout("local-src", "main");
+    assert.equal(sh(`git log -1 --format=%s`, dest), "v2");
+  });
+
+  test("legacy symlinked checkout migrates to a clone and self-heals the registry url", async () => {
+    const { symlinkSync } = await import("node:fs");
+    symlinkSync(src, join(workspace, "repos", "legacy"));
+    writeFileSync(
+      join(workspace, "repos.json"),
+      JSON.stringify({ repos: [{ name: "legacy", url: "", localPath: src, branch: "main" }] }),
+    );
+
+    const dest = await ensureRepoClone({ name: "legacy", branch: "main" });
+
+    assert.throws(() => execSync(`test -L ${dest}`), "symlink replaced by a real clone");
+    assert.equal(sh(`git log -1 --format=%s`, dest), "v2");
+    const registry = JSON.parse(readFileSync(join(workspace, "repos.json"), "utf8")) as {
+      repos: { url: string }[];
+    };
+    assert.equal(registry.repos[0].url, src);
   });
 });

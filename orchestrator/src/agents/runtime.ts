@@ -1154,10 +1154,21 @@ export async function createSession(opts: {
   repo: string;
   prompt: string;
   placement?: SessionPlacement;
+  // Explicit per-user WORK surface (a registered work folder): "use this
+  // repo's knowledge, but make the changes in THIS checkout." Overrides the
+  // repo's default surface.
+  workFolder?: string;
 }): Promise<CreateSessionResult> {
-  const repoOpt = listRepoOptions().find((r) => r.name === opts.repo);
-  if (!repoOpt) return { error: `Unknown repo "${opts.repo}" — connect it first` };
-  if (!repoOpt.cloned) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  const found = listRepoOptions().find((r) => r.name === opts.repo);
+  if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
+  if (!found.cloned && !opts.workFolder) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  let repoOpt = found;
+  if (opts.workFolder) {
+    if (!existsSync(opts.workFolder)) {
+      return { error: `Work folder "${opts.workFolder}" doesn't exist on this machine` };
+    }
+    repoOpt = { ...found, path: opts.workFolder, cloned: true };
+  }
 
   const title = opts.prompt.length > 80 ? opts.prompt.slice(0, 77) + "…" : opts.prompt;
 

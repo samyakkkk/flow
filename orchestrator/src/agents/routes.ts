@@ -54,9 +54,36 @@ import {
 } from "./runtime.js";
 
 export function registerAgentRoutes(app: FastifyInstance): void {
-  app.get("/v1/agents", async () => {
+  app.get<{ Querystring: { owner?: string } }>("/v1/agents", async (req) => {
     const agents = await detectAgents();
-    return { agents, repos: listRepoOptions() };
+    const owner = req.query.owner || "local";
+    const { listWorkFolders } = await import("../work-folders.js");
+    return { agents, repos: listRepoOptions(), workFolders: listWorkFolders(owner) };
+  });
+
+  // Per-user work folders — where THIS user's agent sessions run. Owner is
+  // supplied by the dashboard from its session identity ("local" in local
+  // mode); folders are never shared across owners.
+  app.get<{ Querystring: { owner?: string } }>("/v1/work-folders", async (req) => {
+    const { listWorkFolders } = await import("../work-folders.js");
+    return { folders: listWorkFolders(req.query.owner || "local") };
+  });
+
+  app.post("/v1/work-folders", async (req, reply) => {
+    const body = req.body as { owner?: string; path?: string; repo?: string };
+    const path = body.path?.trim();
+    if (!path) return reply.code(400).send({ error: "path is required" });
+    const { addWorkFolder, listWorkFolders } = await import("../work-folders.js");
+    addWorkFolder(body.owner?.trim() || "local", path, body.repo?.trim() || undefined);
+    return { folders: listWorkFolders(body.owner?.trim() || "local") };
+  });
+
+  app.delete("/v1/work-folders", async (req, reply) => {
+    const body = req.body as { owner?: string; path?: string };
+    if (!body.path) return reply.code(400).send({ error: "path is required" });
+    const { removeWorkFolder, listWorkFolders } = await import("../work-folders.js");
+    removeWorkFolder(body.owner?.trim() || "local", body.path);
+    return { folders: listWorkFolders(body.owner?.trim() || "local") };
   });
 
   app.get("/v1/agents/sessions", async () => ({ sessions: listSessions() }));
@@ -73,7 +100,14 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   // `placement` (optional): "in_place" starts anyway in the same folder;
   // "separate_copy" branches the checkout into a worktree and runs there.
   app.post("/v1/agents/sessions", async (req, reply) => {
-    const body = req.body as { backend?: string; repo?: string; prompt?: string; placement?: string };
+    const body = req.body as {
+      backend?: string;
+      repo?: string;
+      prompt?: string;
+      placement?: string;
+      workFolder?: string;
+      owner?: string;
+    };
     const backend = body.backend as AgentBackend;
     if (!backend || !(backend in BACKENDS)) {
       return reply.code(400).send({ error: `backend must be one of ${Object.keys(BACKENDS).join(", ")}` });
@@ -85,7 +119,16 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     if (placement !== undefined && placement !== "in_place" && placement !== "separate_copy") {
       return reply.code(400).send({ error: "placement must be 'in_place' or 'separate_copy'" });
     }
-    const result = await createSession({ backend, repo: body.repo, prompt: body.prompt.trim(), placement });
+    // A work folder must be one the requesting owner registered — sessions
+    // never run in a path some other user (or nobody) vouched for.
+    let workFolder: string | undefined;
+    if (body.workFolder?.trim()) {
+      const { listWorkFolders } = await import("../work-folders.js");
+      const owned = listWorkFolders(body.owner?.trim() || "local").some((f) => f.path === body.workFolder);
+      if (!owned) return reply.code(400).send({ error: "workFolder is not registered for this user" });
+      workFolder = body.workFolder.trim();
+    }
+    const result = await createSession({ backend, repo: body.repo, prompt: body.prompt.trim(), placement, workFolder });
     if ("error" in result) return reply.code(400).send(result);
     return result;
   });

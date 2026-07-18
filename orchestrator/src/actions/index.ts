@@ -235,9 +235,9 @@ async function handleGithubAuto(event: NormalizedEvent, cls: ClassificationResul
   // ensureRepoClone throws "no checkout and no url" and the job dies.
   const p = event.payload as Record<string, string | undefined>;
   const { listWorkspaceRepos } = await import("../opencode.js");
-  const { ownerRepoFromUrl } = await import("../adapters/github.js");
+  const { watchKeyForUrl } = await import("../adapters/github.js");
   const entry = listWorkspaceRepos().find(
-    (r) => r.url && ownerRepoFromUrl(r.url) === p.repo
+    (r) => r.url && watchKeyForUrl(r.url) === p.repo
   );
   const repoName = entry?.name ?? p.repo ?? "";
   const job = await enqueueJob({

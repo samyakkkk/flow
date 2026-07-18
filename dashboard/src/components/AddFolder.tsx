@@ -51,8 +51,6 @@ function SourceConfigModal({
   setBranch,
   childRepos,
   setChildRepos,
-  docsChecked,
-  setDocsChecked,
   showSkipped,
   setShowSkipped,
   adding,
@@ -66,8 +64,6 @@ function SourceConfigModal({
   setBranch: (v: string) => void;
   childRepos: Record<number, { checked: boolean; branch: string }>;
   setChildRepos: React.Dispatch<React.SetStateAction<Record<number, { checked: boolean; branch: string }>>>;
-  docsChecked: boolean;
-  setDocsChecked: React.Dispatch<React.SetStateAction<boolean>>;
   showSkipped: boolean;
   setShowSkipped: React.Dispatch<React.SetStateAction<boolean>>;
   adding: boolean;
@@ -109,7 +105,7 @@ function SourceConfigModal({
   function renderGitRepo(repo: RepoInfo) {
     return (
       <>
-        <Kicker>Code · GitHub-synced, using your folder</Kicker>
+        <Kicker>Code · remote-synced, using your folder</Kicker>
         <div style={{ ...mono, fontSize: 14, color: "var(--ink)", margin: "6px 0 4px" }}>{repo.name}</div>
         <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>{repo.path}</div>
         {repo.remoteUrl && (
@@ -168,7 +164,7 @@ function SourceConfigModal({
         ) : (
           <>
             <div style={{ display: "inline-block", fontSize: 12, color: "var(--text)", background: "var(--sand)", border: "1px solid var(--line)", borderRadius: 6, padding: "6px 10px", lineHeight: 1.5 }}>
-              Local-only — the brain rescans on demand; push it to GitHub anytime to upgrade to auto-sync.
+              No remote — the brain clones from the folder itself and follows your commits. Add a remote anytime; nothing changes for Flow.
             </div>
             <div style={{ fontSize: 13, color: "var(--text)", marginTop: 10 }}>
               Base branch: <span style={{ ...mono, color: "var(--ink)" }}>{repo.currentBranch}</span>
@@ -191,31 +187,26 @@ function SourceConfigModal({
   function renderFolder(docs: DocsInfo) {
     return (
       <>
-        <Kicker>Docs &amp; files — becomes searchable knowledge</Kicker>
+        <Kicker>No git repositories here</Kicker>
         <div style={{ ...mono, fontSize: 14, color: "var(--ink)", margin: "6px 0 4px" }}>{docs.name}</div>
         <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>{docs.path}</div>
-        <div style={{ fontSize: 13, color: "var(--text)" }}>
-          {docs.fileCount} file{docs.fileCount === 1 ? "" : "s"} · {money(docs.totalBytes)}
+        <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.6 }}>
+          Flow indexes git repositories — commits are how it tracks what changed and when.
+          This folder has no repository, so there is nothing Flow can follow.
         </div>
-        {renderSkipped(docs.skipped)}
-        <div style={{ marginTop: 14 }}>
-          <ConfirmBtn
-            loading={adding}
-            label="Add source"
-            onClick={() => onAdd([{ type: "docs", path: docs.path, name: docs.name }])}
-          />
+        <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 8, lineHeight: 1.6 }}>
+          Run <span style={{ ...mono, color: "var(--ink)" }}>git init</span> inside it, or pick a folder
+          that contains repositories.
         </div>
       </>
     );
   }
 
   function renderContainer(children: Children) {
-    const withGithub = children.repos.filter((r) => r.remoteUrl).length;
     const own = children.repos.map((r, i) => ({ r, i })).filter(({ r }) => !r.thirdParty);
     const third = children.repos.map((r, i) => ({ r, i })).filter(({ r }) => r.thirdParty);
 
-    const checkedCount =
-      Object.values(childRepos).filter((c) => c.checked).length + (docsChecked ? 1 : 0);
+    const checkedCount = Object.values(childRepos).filter((c) => c.checked).length;
 
     const repoRow = ({ r, i }: { r: ChildRepo; i: number }) => {
       const st = childRepos[i] ?? { checked: false, branch: r.remoteUrl ? r.defaultBranch : r.currentBranch };
@@ -266,12 +257,10 @@ function SourceConfigModal({
     return (
       <>
         <Kicker>
-          {withGithub > 0
-            ? `Found ${withGithub} GitHub repo${withGithub === 1 ? "" : "s"} in this folder`
-            : "A folder with several things inside"}
+          Found {children.repos.length} git repositor{children.repos.length === 1 ? "y" : "ies"} in this folder
         </Kicker>
-        <div style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "6px 0 4px" }}>
-          Pick what Flow should take on.
+        <div style={{ fontSize: 12.5, color: "var(--ink)", margin: "6px 0 4px", fontWeight: 500 }}>
+          These repositories will be indexed — nothing else in this folder.
         </div>
 
         {own.length > 0 && (
@@ -289,23 +278,6 @@ function SourceConfigModal({
             <div style={{ marginTop: 6 }}>{third.map(repoRow)}</div>
           </details>
         )}
-
-        {/* Everything else → docs */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid var(--line)", marginTop: 14 }}>
-          <input
-            type="checkbox"
-            checked={docsChecked}
-            onChange={() => setDocsChecked((c) => !c)}
-            style={{ width: 14, height: 14, accentColor: "var(--ink)", flexShrink: 0 }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, color: "var(--ink)", fontWeight: 500 }}>Everything else</div>
-            <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-              everything except the repos above · {children.docs.fileCount} file
-              {children.docs.fileCount === 1 ? "" : "s"} · {money(children.docs.totalBytes)}
-            </div>
-          </div>
-        </div>
 
         <div style={{ marginTop: 16 }}>
           <ConfirmBtn
@@ -326,9 +298,6 @@ function SourceConfigModal({
                   });
                 }
               });
-              if (docsChecked) {
-                sources.push({ type: "docs", path: children.docs.path, name: children.docs.name });
-              }
               onAdd(sources);
             }}
           />
@@ -420,7 +389,6 @@ export function AddFolder({
 
   const [branch, setBranch] = useState("");
   const [childRepos, setChildRepos] = useState<Record<number, { checked: boolean; branch: string }>>({});
-  const [docsChecked, setDocsChecked] = useState(true);
   const [showSkipped, setShowSkipped] = useState(false);
 
   function seedForm(data: Inspect) {
@@ -434,10 +402,8 @@ export function AddFolder({
         init[i] = { checked: r.checkedDefault && !r.alreadyConnected, branch: seedBranch };
       });
       setChildRepos(init);
-      setDocsChecked(!isProd);
     } else {
       setChildRepos({});
-      setDocsChecked(true);
     }
   }
 
@@ -538,8 +504,6 @@ export function AddFolder({
           setBranch={setBranch}
           childRepos={childRepos}
           setChildRepos={setChildRepos}
-          docsChecked={docsChecked}
-          setDocsChecked={setDocsChecked}
           showSkipped={showSkipped}
           setShowSkipped={setShowSkipped}
           adding={adding}
