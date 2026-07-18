@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { callVerb, verbs } from "./verbs.js";
-import { tail } from "./journal.js";
-import { DEFAULT_GRAPH } from "./graph.js";
+import { record, tail } from "./journal.js";
+import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
 import { reconcileEmbeddings, runBootTasks } from "./reconcile.js";
 import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled, EMBED_DIM } from "./embed.js";
@@ -91,6 +91,37 @@ const server = createServer(async (req, res) => {
       }
       const result = await reconcileEmbeddings(DEFAULT_GRAPH);
       return json(res, 200, { status: "ok", graph: DEFAULT_GRAPH, ...result });
+    }
+    // Admin-only entity deletion — deliberately NOT a verb, so no MCP mode
+    // (session, builder, or full) can reach it; only bearer-authed services.
+    // Used by the orchestrator's repo_removed cleanup to drop the Repository
+    // node of a disconnected repo. DETACH DELETE, journaled like every write.
+    if (req.method === "POST" && url.pathname === "/v1/admin/delete-entity") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      let body: { graph?: string; id?: string; actor?: string } = {};
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return json(res, 400, { status: "error", error: "Body must be valid JSON" });
+      }
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      if (!id) return json(res, 400, { status: "error", error: "id is required" });
+      const graph = typeof body.graph === "string" && body.graph.trim() ? body.graph.trim() : DEFAULT_GRAPH;
+      // Even a MATCH auto-creates the graph in FalkorDB — don't resurrect a
+      // tombstoned graph just to delete a node from it.
+      if (await deletedGraphError(graph)) return json(res, 200, { status: "not_found", id });
+      const found = await run(graph, `MATCH (n {id: $id}) RETURN n.id`, { id });
+      if (found.length === 0) return json(res, 200, { status: "not_found", id });
+      await run(graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id });
+      await record({
+        graph,
+        actor: body.actor ?? "admin",
+        verb: "admin_delete_entity",
+        input: { id },
+        status: "deleted",
+      });
+      return json(res, 200, { status: "deleted", id });
     }
     const verbMatch = url.pathname.match(/^\/v1\/verbs\/([a-z_]+)$/);
     if (req.method === "POST" && verbMatch) {

@@ -29,6 +29,28 @@ export interface SourceEntry {
   lastIndexedAt?: string;
 }
 
+// Per-repo indexer state machine from /api/repos/status — richer than the
+// legacy !lastIndexedCommit guess, which can never show a reindex, a queued
+// job, or a failure.
+export interface RepoStatusEntry {
+  name: string;
+  branch: string;
+  status: "never_indexed" | "queued" | "indexing" | "indexed" | "failed";
+  lastIndexedCommit: string | null;
+  lastIndexedAt: string | null;
+  lastError: string | null;
+  upstreamDefaultBranch?: string;
+}
+
+// One row of the durable indexer trail (GET /api/index-log).
+interface IndexLogRow {
+  id: number;
+  event: string;
+  job_id: string | null;
+  detail: Record<string, unknown> | null;
+  created_at: number;
+}
+
 // One quiet chip per source, keyed on what the entry actually is.
 function sourceChip(s: SourceEntry): string {
   if (s.kind === "docs") return "docs · ingestion pending";
@@ -148,10 +170,66 @@ const branchSelectStyle: React.CSSProperties = {
   maxWidth: 140,
 };
 
-function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) {
+// The durable indexer trail for one repo — when the last index ran, what got
+// queued behind what, why a job failed. Fetched once when the panel opens so
+// self-deployers can debug indexing without shell access.
+function IndexLogPanel({ repo }: { repo: string }) {
+  const { prefix } = useProject();
+  const [rows, setRows] = useState<IndexLogRow[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(prefix(`/api/index-log?repo=${encodeURIComponent(repo)}&limit=40`))
+      .then((r) => r.json())
+      .then((d) => { if (alive) setRows(((d as { rows?: IndexLogRow[] }).rows) ?? []); })
+      .catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, [repo, prefix]);
+
+  const terse = (r: IndexLogRow): string => {
+    if (!r.detail) return "";
+    return Object.entries(r.detail)
+      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+      .join(" ");
+  };
+
+  return (
+    <div
+      className="px-3 py-2 flex flex-col gap-1 max-h-56 overflow-y-auto"
+      style={{ borderTop: "1px solid var(--line)", background: "var(--paper)" }}
+      data-testid="index-log-panel"
+    >
+      {rows === null ? (
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Loading…</span>
+      ) : rows.length === 0 ? (
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>No index events yet.</span>
+      ) : (
+        rows.map((r) => (
+          <div key={r.id} className="flex items-baseline gap-2" style={{ fontFamily: "var(--font-mono)", fontSize: 10 }}>
+            <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>
+              {new Date(r.created_at * 1000).toLocaleString()}
+            </span>
+            <span style={{ color: r.event === "failed" ? "var(--danger)" : "var(--ink)", flexShrink: 0 }}>
+              {r.event}
+            </span>
+            <span style={{ color: "var(--text-muted)" }} className="truncate" title={terse(r)}>
+              {terse(r)}
+            </span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function SourceRow({ s, st, onChanged }: { s: SourceEntry; st?: RepoStatusEntry; onChanged: () => void }) {
   const { prefix } = useProject();
   const chip = sourceChip(s);
-  const indexing = s.kind !== "docs" && !s.lastIndexedCommit;
+  // Prefer the orchestrator's state machine; fall back to the legacy guess
+  // when the status endpoint hasn't answered yet.
+  const status: RepoStatusEntry["status"] | undefined =
+    s.kind === "docs" ? undefined : st?.status ?? (!s.lastIndexedCommit ? "indexing" : "indexed");
+  const indexing = status === "indexing";
+  const [showLog, setShowLog] = useState(false);
 
   const [reindexing, setReindexing] = useState(false);
   const [reindexMsg, setReindexMsg] = useState("");
@@ -248,15 +326,36 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
           >
             {s.name}
           </span>
-          {indexing ? (
+          {status === "indexing" ? (
             <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] text-text-muted flex-shrink-0">
               indexing…
+            </span>
+          ) : status === "queued" ? (
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] text-text-muted flex-shrink-0">
+              reindex queued
+            </span>
+          ) : status === "failed" ? (
+            <span
+              style={{ fontFamily: "var(--font-mono)", color: "var(--danger)" }}
+              className="text-[10px] flex-shrink-0"
+              title={st?.lastError ?? undefined}
+            >
+              index failed
             </span>
           ) : timeAgo(s.lastIndexedAt) ? (
             <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] text-text-muted flex-shrink-0">
               indexed {timeAgo(s.lastIndexedAt)}
             </span>
           ) : null}
+          {st?.upstreamDefaultBranch && (
+            <span
+              style={{ fontFamily: "var(--font-mono)" }}
+              className="text-[10px] text-text-muted flex-shrink-0"
+              title={`GitHub's default branch is now ${st.upstreamDefaultBranch}; Flow still indexes ${st.branch}. Change the branch if you want to follow it.`}
+            >
+              ⚠ default → {st.upstreamDefaultBranch}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span
@@ -266,6 +365,8 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
             {chip}
           </span>
           {indexing && <StatusPill kind="live">Indexing</StatusPill>}
+          {status === "queued" && <StatusPill kind="idle">Queued</StatusPill>}
+          {status === "failed" && <StatusPill kind="warn">Failed</StatusPill>}
 
           {/* Actions — only for non-docs sources */}
           {s.kind !== "docs" && (
@@ -290,6 +391,25 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
                   {s.branch ?? "main"}
                 </button>
               ) : null}
+
+              {/* Index history toggle */}
+              <button
+                onClick={() => setShowLog((v) => !v)}
+                title="Index history"
+                style={{
+                  fontSize: 12,
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  border: "1px solid var(--line)",
+                  background: showLog ? "var(--sand)" : "var(--paper)",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  lineHeight: 1,
+                }}
+                data-testid="index-log-toggle"
+              >
+                ≡
+              </button>
 
               {/* Reindex button */}
               <button
@@ -369,6 +489,9 @@ function SourceRow({ s, onChanged }: { s: SourceEntry; onChanged: () => void }) 
 
       {/* Live indexer activity — appears while an index job runs */}
       {s.kind !== "docs" && <IndexActivityStrip repo={s.name} active={indexing || watchActivity} />}
+
+      {/* Durable index history */}
+      {showLog && s.kind !== "docs" && <IndexLogPanel repo={s.name} />}
 
       {/* Branch edit inline panel */}
       {editingBranch && (
@@ -490,6 +613,36 @@ interface Props {
 
 export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
   const [open, setOpen] = useState(false);
+  const { prefix } = useProject();
+
+  // Per-repo indexer state machine — polls faster while anything is running
+  // or queued so "indexing → indexed" flips without a page refresh.
+  const [statuses, setStatuses] = useState<Record<string, RepoStatusEntry>>({});
+  useEffect(() => {
+    if (variant !== "strip") return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      let busy = false;
+      try {
+        const res = await fetch(prefix("/api/repos/status"));
+        const d = (await res.json()) as { repos?: RepoStatusEntry[] };
+        if (!alive) return;
+        const map: Record<string, RepoStatusEntry> = {};
+        for (const r of d.repos ?? []) map[r.name] = r;
+        setStatuses(map);
+        busy = (d.repos ?? []).some((r) => r.status === "indexing" || r.status === "queued");
+      } catch {
+        /* orchestrator briefly unreachable — keep last statuses */
+      }
+      if (alive) timer = setTimeout(tick, busy ? 5000 : 30000);
+    };
+    void tick();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [variant, prefix]);
 
   // ── First run: welcome + the two doors, full width ─────────────────────────
   if (variant === "hero") {
@@ -520,7 +673,7 @@ export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
       {repos.length > 0 && (
         <div className="flex flex-col gap-1.5">
           {repos.map((s, i) => (
-            <SourceRow key={i} s={s} onChanged={onChanged} />
+            <SourceRow key={i} s={s} st={statuses[s.name]} onChanged={onChanged} />
           ))}
         </div>
       )}

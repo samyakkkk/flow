@@ -24,10 +24,38 @@ export async function deleteProjectGraph({ graph, host = "localhost", port = 637
     const existed = graphs.includes(graph);
     if (existed) await db.selectGraph(graph).delete();
 
-    // Gateway migrations live in a plain Redis key rather than in the graph.
+    // Gateway bookkeeping lives in plain Redis keys rather than in the graph.
     const connection = await db.connection;
     await connection.del(`flow:graph-version:${graph}`);
+    await connection.del(`flow:embed-stamp:${graph}`);
+    // Tombstone: FalkorDB auto-creates a graph on first query, so a client
+    // that survives the delete (an in-flight indexer CLI) would silently
+    // resurrect it as an untracked orphan. The gateway refuses writes to
+    // tombstoned graphs; `flow up` clears the tombstone when the graph name
+    // is legitimately used again.
+    await connection.set(`flow:graph-deleted:${graph}`, new Date().toISOString());
     return { existed };
+  } finally {
+    await db.close();
+  }
+}
+
+/**
+ * Clear a graph's deletion tombstone — called by `flow up` so a project that
+ * legitimately reuses the name (recreate after rm) can write again.
+ */
+export async function clearGraphTombstone({ graph, host = "localhost", port = 6379 }) {
+  const db = await FalkorDB.connect({
+    socket: {
+      host,
+      port: Number(port),
+      connectTimeout: 3000,
+      reconnectStrategy: false,
+    },
+  });
+  try {
+    const connection = await db.connection;
+    await connection.del(`flow:graph-deleted:${graph}`);
   } finally {
     await db.close();
   }
