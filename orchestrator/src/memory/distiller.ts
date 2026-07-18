@@ -45,7 +45,7 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
   const prompt = buildDistillerPrompt(slimmed);
   let reply: string;
   try {
-    reply = await callLlm(prompt, distillerModel());
+    reply = await callLlm(prompt, { tier: "smart", feature: "distiller", model: distillerModel() });
   } catch (err) {
     return { ran: false, observations: 0, actions: {}, reason: `llm-error: ${err instanceof Error ? err.message : String(err)}` };
   }

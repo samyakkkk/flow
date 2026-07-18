@@ -163,6 +163,21 @@ export const MIGRATIONS: Migration[] = [
   },
   {
     id: 10,
+    name: "observations: citation source refs (source_id, source_url)",
+    up: (db) => {
+      // A DB below version 8 walks migration 8 first, which executes the
+      // SHARED MEMORY_SCHEMA string — already containing these columns — so a
+      // bare ALTER here would crash on "duplicate column". Guard on the actual
+      // table shape; anything else that fails still crashes boot loudly.
+      const cols = db.prepare(`SELECT name FROM pragma_table_info('observations')`).all() as Array<{ name: string }>;
+      const has = new Set(cols.map((c) => c.name));
+      if (!has.has("source_id")) db.exec("ALTER TABLE observations ADD COLUMN source_id TEXT");
+      if (!has.has("source_url")) db.exec("ALTER TABLE observations ADD COLUMN source_url TEXT");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source, source_id)");
+    },
+  },
+  {
+    id: 11,
     name: "index_log: durable indexer lifecycle trail",
     up: (db) => {
       // Keep byte-identical to INDEX_LOG_SCHEMA in db.ts (see migration 8 note).
@@ -225,6 +240,8 @@ export const MEMORY_SCHEMA = `
     repo_family    TEXT,            -- normalized repo (e.g. foo-backend -> foo); NULL = match-all
     branch         TEXT,
     session_id     TEXT,
+    source_id      TEXT,            -- id of the source artifact (slack event id, linear issue id); citation + dedupe key
+    source_url     TEXT,            -- permalink back to the original (slack permalink, linear url)
     claim          TEXT NOT NULL,
     kind           TEXT NOT NULL,   -- decision|constraint|gotcha|how_to|preference|plan
     source_weight  TEXT NOT NULL DEFAULT 'agent_inferred', -- user_stated|agent_inferred|error_proven
@@ -236,6 +253,7 @@ export const MEMORY_SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_observations_family ON observations(repo_family, memory_id);
   CREATE INDEX IF NOT EXISTS idx_observations_memory ON observations(memory_id);
+  CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source, source_id);
 
   CREATE TABLE IF NOT EXISTS memories (
     id                 TEXT PRIMARY KEY,

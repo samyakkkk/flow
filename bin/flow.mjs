@@ -787,9 +787,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     FLOW_PROJECT_NAME: name,
     NODE_ENV: "production",
   };
-  // Embeddings (semantic find_entity + embed-on-write) need an LLM API key —
-  // LLM_API_KEY for any OpenAI-compatible provider, or the OpenRouter key.
-  // Fall back to the machine default / ambient env when it isn't in the .env.
+  // Direct LLM callers (classification) may use an OpenAI-compatible provider.
+  // Embeddings are local and need no key; these remain gateway-compatible env
+  // for deployments that still override other LLM behavior.
   for (const key of ["LLM_API_KEY", "LLM_BASE_URL", "OPENROUTER_API_KEY"]) {
     if (!gwEnv[key]) {
       const k = readGlobalKey(dir, key) ?? process.env[key];
@@ -814,10 +814,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
-    // Inherited down to the gateway MCP subprocesses that indexer jobs spawn
-    // (opencode via workspace opencode.json; claude/codex directly) — the MCP
-    // opens FalkorDB directly, so it needs the project's graph name and
-    // journal, or indexer writes land in the default graph and journal.
+    // Inherited down to gateway MCP subprocesses spawned by indexer jobs.
+    // Graph operations still use FalkorDB directly; embeddings borrow this
+    // project's long-lived gateway model through GATEWAY_URL.
     GRAPH_NAME: graph,
     JOURNAL_PATH: journalPath,
     NODE_ENV: "production",

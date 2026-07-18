@@ -790,6 +790,13 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
 
     const { result, sessionId } = runResult;
 
+    // Entity writes come from short-lived MCP processes. They normally embed
+    // each node through the gateway immediately; this final pass catches any
+    // writes made while the local model was still loading.
+    if (opts.type === "index_repo" && !process.env.FLOW_FAKE_OPENCODE) {
+      await reconcileGraphEmbeddings();
+    }
+
     // Persist session_id on the job row
     if (sessionId) {
       updateJobSession.run({ id, session_id: sessionId });
@@ -900,6 +907,28 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
         }
       }
     }
+  }
+}
+
+async function reconcileGraphEmbeddings(): Promise<void> {
+  const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
+  const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(`${gatewayUrl}/v1/reconcile/embeddings`, {
+      method: "POST",
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      console.warn(`[embed] post-index reconcile returned HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      return;
+    }
+    const result = (await res.json()) as { total?: number; embedded?: number; failed?: number };
+    console.log(`[embed] post-index reconcile: embedded ${result.embedded ?? 0}/${result.total ?? 0}${result.failed ? `, failed ${result.failed}` : ""}`);
+  } catch (err) {
+    // Indexing remains useful in lexical-only mode; surface the degradation
+    // without turning an otherwise successful graph build into a failed job.
+    console.warn(`[embed] post-index reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1132,6 +1161,8 @@ function indexerTimeout(opts: JobInput): number {
 // used by opencode's workspace graph tools and are harmless for the others.
 function indexerChildEnv(opts: JobInput, jobId: string, actor: string): NodeJS.ProcessEnv {
   const port = process.env.ORCHESTRATOR_PORT ?? "7500";
+  const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
+  const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   const openrouterKey =
     getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? "";
   const env: NodeJS.ProcessEnv = {
@@ -1139,7 +1170,11 @@ function indexerChildEnv(opts: JobInput, jobId: string, actor: string): NodeJS.P
     ORCHESTRATOR_URL: process.env.ORCHESTRATOR_URL ?? `http://127.0.0.1:${port}`,
     // The session's graph tools read GRAPH_GATEWAY_URL — it MUST be this
     // project's gateway, or agents write into another project's graph.
-    GRAPH_GATEWAY_URL: process.env.GATEWAY_URL ?? "http://127.0.0.1:7433",
+    GRAPH_GATEWAY_URL: gatewayUrl,
+    // The MCP subprocess uses the gateway-owned Gemma model for semantic
+    // queries and embed-on-write. This avoids one model per CLI process.
+    FLOW_EMBED_URL: `${gatewayUrl}/v1/embed`,
+    FLOW_EMBED_TOKEN: gatewayToken,
     FLOW_JOB_TOKEN: jobScopedToken(jobId),
     FLOW_JOB_ID: jobId,
     // Stamped by the gateway MCP (builder mode) into every write's provenance,
@@ -1151,7 +1186,7 @@ function indexerChildEnv(opts: JobInput, jobId: string, actor: string): NodeJS.P
     // Graph tools authenticate to the (now bearer-authed) gateway. The
     // subprocess already had full gateway write access by construction; the
     // token gates OTHER local processes, not this one.
-    GRAPH_GATEWAY_TOKEN: process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "",
+    GRAPH_GATEWAY_TOKEN: gatewayToken,
     // Correction verification writes are scoped to the flagged nodes — the
     // job's prompt embeds agent-authored text (prompt-injection surface), so
     // the graph tools refuse writes outside this set (S106-adjacent).

@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { callVerb, verbs } from "./verbs.js";
 import { record, tail } from "./journal.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
-import { runBootTasks } from "./reconcile.js";
+import { reconcileEmbeddings, runBootTasks } from "./reconcile.js";
 import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled, EMBED_DIM } from "./embed.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
@@ -10,6 +10,7 @@ import { isPat, verifyPatForProject } from "./patAuth.js";
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
 //   POST /v1/embed          body: { text }          (bearer-authed)
+//   POST /v1/reconcile/embeddings                    (bearer-authed)
 //   GET  /v1/journal?limit=50                        (bearer-authed)
 //   GET  /health                                     (open)
 //
@@ -80,6 +81,16 @@ const server = createServer(async (req, res) => {
       const ready = embeddingsEnabled();
       const vec = ready ? await embedText(text) : null;
       return json(res, 200, { vec, dim: EMBED_DIM, ready });
+    }
+    // Indexing writes arrive through short-lived MCP processes. A final
+    // reconciliation closes the race where those writes happen while the
+    // gateway's local model is still loading.
+    if (req.method === "POST" && url.pathname === "/v1/reconcile/embeddings") {
+      if (!embeddingsEnabled()) {
+        return json(res, 503, { status: "error", error: "local embedding model not yet loaded" });
+      }
+      const result = await reconcileEmbeddings(DEFAULT_GRAPH);
+      return json(res, 200, { status: "ok", graph: DEFAULT_GRAPH, ...result });
     }
     // Admin-only entity deletion — deliberately NOT a verb, so no MCP mode
     // (session, builder, or full) can reach it; only bearer-authed services.

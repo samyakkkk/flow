@@ -285,8 +285,16 @@ function mirrorTicket(issue: LinearIssueForPoller): void {
   });
   // Memory enrichment: mirror the ticket into the observations corpus so
   // search_knowledge can surface it. repo_family inferred from the team prefix.
+  // source_id keys the dedupe: a ticket re-mirrors on every update, refreshing
+  // its one observation instead of stacking duplicates.
   const text = [issue.title, issue.description].filter(Boolean).join(" — ");
-  void observeCorpus({ source: "linear", text, repo: repoForTicket(issue.identifier ?? null) });
+  void observeCorpus({
+    source: "linear",
+    text,
+    repo: repoForTicket(issue.identifier ?? null),
+    source_id: issue.id,
+    source_url: issue.url ?? null,
+  });
 }
 
 // ------------------------------------------------------------------

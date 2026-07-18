@@ -1,6 +1,7 @@
 // llmlog.ts — LLM observability. Every live model interaction (classifier
-// calls, opencode jobs) is recorded so misclassifications and weird agent runs
-// can be debugged after the fact. Never called for fixture/fake test paths.
+// calls, opencode jobs, and every shared-layer call — distiller, judge) is
+// recorded so misclassifications and weird agent runs can be debugged after
+// the fact. Never called for fixture/fake test paths.
 //
 // GET /v1/llmlog?limit=&kind=&ref=  (bearer) — newest first, full prompt/response.
 
@@ -15,7 +16,7 @@ const insert = db.prepare(`
 `);
 
 export function logLLM(entry: {
-  kind: "classifier" | "opencode_job";
+  kind: string; // "classifier" | "opencode_job" | any shared-layer feature ("distiller", "judge", ...)
   ref?: string;
   model?: string;
   attempt?: number;

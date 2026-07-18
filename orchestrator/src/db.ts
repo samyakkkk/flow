@@ -271,7 +271,7 @@ db.exec(MEMORY_TRIGGERS);
 // a rebuildable projection. Kept byte-identical to the migration via the shared
 // ANCHORS_SCHEMA string.
 db.exec(ANCHORS_SCHEMA);
-// index_log: indexer lifecycle trail (migration 10). Kept byte-identical to
+// index_log: indexer lifecycle trail (migration 11). Kept byte-identical to
 // the migration via the shared INDEX_LOG_SCHEMA string.
 db.exec(INDEX_LOG_SCHEMA);
 

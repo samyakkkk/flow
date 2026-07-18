@@ -13,8 +13,41 @@ import { isLocalEmbedReady, embedTextLocal, embedBatchLocal, LOCAL_EMBED_DIM } f
 
 export const EMBED_DIM = LOCAL_EMBED_DIM; // 768
 
+// The long-lived HTTP gateway owns the local model. Short-lived MCP processes
+// set FLOW_EMBED_URL and borrow that model instead of loading another ~300 MB
+// copy. The gateway process itself leaves this unset and embeds in-process.
+const REMOTE_EMBED_URL = (process.env.FLOW_EMBED_URL ?? "").replace(/\/+$/, "");
+const REMOTE_EMBED_TOKEN = process.env.FLOW_EMBED_TOKEN ?? "";
+
 export function embeddingsEnabled(): boolean {
-  return isLocalEmbedReady();
+  return Boolean(REMOTE_EMBED_URL) || isLocalEmbedReady();
+}
+
+async function embedRemote(text: string): Promise<{ vec: number[] | null; error?: string }> {
+  try {
+    const res = await fetch(REMOTE_EMBED_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(REMOTE_EMBED_TOKEN ? { authorization: `Bearer ${REMOTE_EMBED_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      return { vec: null, error: `embedding gateway returned HTTP ${res.status}${detail ? `: ${detail}` : ""}` };
+    }
+    const body = (await res.json()) as { vec?: number[] | null; dim?: number; ready?: boolean };
+    if (!body.ready) return { vec: null, error: "local embedding model not yet loaded" };
+    if (!Array.isArray(body.vec)) return { vec: null, error: "embedding gateway returned no vector" };
+    if (body.dim !== EMBED_DIM || body.vec.length !== EMBED_DIM) {
+      return { vec: null, error: `embedding gateway dimension mismatch (expected ${EMBED_DIM}, got ${body.dim ?? "unknown"}/${body.vec.length})` };
+    }
+    return { vec: body.vec };
+  } catch (err) {
+    return { vec: null, error: `embedding gateway unavailable: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 // Human-readable words for the schema's machine labels. Embedding "workflow:"
@@ -66,6 +99,7 @@ export function entityText(
 export async function embedText(text: string): Promise<number[] | null> {
   const clean = text.trim();
   if (!clean) return null;
+  if (REMOTE_EMBED_URL) return (await embedRemote(clean)).vec;
   return embedTextLocal(clean);
 }
 
@@ -77,6 +111,7 @@ export async function embedText(text: string): Promise<number[] | null> {
 export async function embedQuery(text: string): Promise<{ vec: number[] | null; error?: string }> {
   const clean = text.trim();
   if (!clean) return { vec: null, error: "empty query" };
+  if (REMOTE_EMBED_URL) return embedRemote(clean);
   if (!isLocalEmbedReady()) return { vec: null, error: "local embedding model not yet loaded" };
   const vec = await embedTextLocal(clean);
   return { vec, error: vec ? undefined : "embedding returned null" };
@@ -84,7 +119,20 @@ export async function embedQuery(text: string): Promise<{ vec: number[] | null; 
 
 // Batched embedding for backfill. Returns one slot per input (null where a
 // chunk failed) so callers can align results with their node list.
+// Remote path runs a bounded window of concurrent requests — serial round
+// trips make big backfills crawl, unbounded fan-out floods the gateway.
+const REMOTE_BATCH_CONCURRENCY = 8;
+
 export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> {
   if (texts.length === 0) return [];
+  if (REMOTE_EMBED_URL) {
+    const out: (number[] | null)[] = new Array(texts.length).fill(null);
+    for (let i = 0; i < texts.length; i += REMOTE_BATCH_CONCURRENCY) {
+      const window = texts.slice(i, i + REMOTE_BATCH_CONCURRENCY);
+      const vecs = await Promise.all(window.map((text) => embedRemote(text.trim() || " ").then((r) => r.vec)));
+      for (let j = 0; j < vecs.length; j++) out[i + j] = vecs[j];
+    }
+    return out;
+  }
   return embedBatchLocal(texts.map((t) => t.trim() || " "));
 }
