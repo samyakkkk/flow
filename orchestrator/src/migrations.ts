@@ -277,7 +277,6 @@ export const MEMORY_SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_observations_family ON observations(repo_family, memory_id);
   CREATE INDEX IF NOT EXISTS idx_observations_memory ON observations(memory_id);
-  CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source, source_id);
 
   CREATE TABLE IF NOT EXISTS memories (
     id                 TEXT PRIMARY KEY,

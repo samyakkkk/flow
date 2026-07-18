@@ -344,4 +344,8 @@ db.exec(`
 // run everything pending. See migrations.ts for the rules.
 migrate(db, { fresh: freshDb });
 
+// Indexes that reference columns added by migrations must be created after
+// migrate() runs so the columns exist on both fresh and upgraded DBs.
+db.exec("CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source, source_id)");
+
 export default db;
