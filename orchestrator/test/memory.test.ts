@@ -31,6 +31,7 @@ let anchors: typeof import("../src/memory/anchors.js");
 let headline: typeof import("../src/memory/headline.js");
 let cards: typeof import("../src/memory/cards.js");
 let findHits: typeof import("../src/memory/find-hits.js");
+let corpusObserve: typeof import("../src/memory/corpus-observe.js");
 let cosine: (a: Float32Array, b: Float32Array) => number;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -79,6 +80,7 @@ before(async () => {
   headline = await import("../src/memory/headline.js");
   cards = await import("../src/memory/cards.js");
   findHits = await import("../src/memory/find-hits.js");
+  corpusObserve = await import("../src/memory/corpus-observe.js");
   cosine = (await import("../src/embed.js")).cosine;
   store.setEmbedder(stubEmbedder);
 });
@@ -856,6 +858,90 @@ describe("drill-down cards (Section C)", () => {
     assert.deepEqual(cards.parseCardId("slackthread:1700000000.001"), { type: "slackthread", id: "1700000000.001" });
     assert.equal(cards.parseCardId("svc:users"), null, "graph node ids are not card namespaces");
     assert.equal(cards.parseCardId("noColon"), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Citation source refs (migration 10): observations carry source_id/source_url
+// back to the original artifact; (source, source_id) dedupes re-mirrored rows.
+describe("citation source refs", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  test("observeCorpus stores source_id + source_url; obs card cites the url", async () => {
+    clearMemory();
+    await corpusObserve.observeCorpus({
+      source: "slack",
+      text: "the deploy failed because of the missing env var",
+      source_id: "ev-1",
+      source_url: "https://slack/permalink/1",
+    });
+    const o = store.getObservationBySource("slack", "ev-1");
+    assert.ok(o, "observation found by (source, source_id)");
+    assert.equal(o!.source_url, "https://slack/permalink/1");
+    const card = cards.getCard("obs", o!.id);
+    assert.equal((card.card as any).source_url, "https://slack/permalink/1");
+  });
+
+  test("re-mirrored source refreshes its one observation instead of duplicating (linear poller shape)", async () => {
+    clearMemory();
+    const base = { source: "linear" as const, source_id: "lin-uuid-1", source_url: "https://linear.app/acme/ACME-9" };
+    await corpusObserve.observeCorpus({ ...base, text: "ACME-9 — fix retries" });
+    await corpusObserve.observeCorpus({ ...base, text: "ACME-9 — fix retries (now with repro steps)" });
+    const rows = db.prepare("SELECT id, claim FROM observations WHERE source = 'linear' AND source_id = 'lin-uuid-1'").all();
+    assert.equal(rows.length, 1, "one observation per source artifact");
+    assert.match(rows[0].claim, /repro steps/, "claim refreshed to the latest mirror");
+    // FTS mirror followed the update (observations_au trigger).
+    const fts = db.prepare("SELECT id FROM observations_fts WHERE observations_fts MATCH 'repro'").all();
+    assert.equal(fts.length, 1);
+  });
+
+  test("unchanged re-mirror is a no-op (no re-embed, claim identical)", async () => {
+    clearMemory();
+    const base = { source: "linear" as const, source_id: "lin-uuid-2", source_url: "https://linear.app/acme/ACME-10", text: "ACME-10 — same text" };
+    await corpusObserve.observeCorpus(base);
+    const before = db.prepare("SELECT id, embedding FROM observations WHERE source_id = 'lin-uuid-2'").get();
+    await corpusObserve.observeCorpus(base);
+    const after = db.prepare("SELECT id, embedding FROM observations WHERE source_id = 'lin-uuid-2'").get();
+    assert.equal(after.id, before.id);
+    assert.deepEqual(after.embedding, before.embedding);
+  });
+
+  test("mem card evidence lines carry the citation url when the observation has one", async () => {
+    clearMemory();
+    const o = await store.insertObservation({
+      source: "slack",
+      repo: "acme",
+      claim: "we always gate deploys on the smoke suite",
+      kind: "decision",
+      source_weight: "user_stated",
+      source_id: "ev-2",
+      source_url: "https://slack/permalink/2",
+    });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    const card = cards.getCard("mem", res.memoryId);
+    const ev = (card.card as any).evidence;
+    assert.equal(ev[0].url, "https://slack/permalink/2", "evidence cites the original message");
+  });
+
+  test("lin card anchored_nodes uses the exact source_id FK (no retrieval_keys needed)", async () => {
+    clearMemory();
+    db.prepare("INSERT INTO linear_tickets (id, identifier, title, description, state, url, updated_at) VALUES (?,?,?,?,?,?,?)")
+      .run("t9", "ACME-77", "Harden pollers", null, "Todo", "https://linear.app/acme/ACME-77", 1700000000);
+    // Observation carries the FK but neither the identifier in its claim nor retrieval keys.
+    const o = await store.insertObservation({ source: "linear", claim: "harden the pollers against cursor loss", kind: "gotcha", source_weight: "user_stated", source_id: "t9", source_url: "https://linear.app/acme/ACME-77" });
+    anchors.setAnchors("observation", o.id, ["svc:pollers"], "semantic");
+    const card = cards.getCard("lin", "ACME-77");
+    assert.ok((card.card as any).anchored_nodes.includes("svc:pollers"));
+  });
+
+  test("pre-migration rows (source_id NULL) still fuzzy-match via retrieval_keys", async () => {
+    clearMemory();
+    db.prepare("INSERT INTO linear_tickets (id, identifier, title, description, state, url, updated_at) VALUES (?,?,?,?,?,?,?)")
+      .run("t10", "ACME-88", "Legacy row", null, "Todo", "https://linear.app/acme/ACME-88", 1700000000);
+    const o = await store.insertObservation({ source: "linear", claim: "ACME-88 legacy observation", kind: "gotcha", source_weight: "user_stated", retrieval_keys: ["ACME-88"] });
+    anchors.setAnchors("observation", o.id, ["svc:legacy"], "files");
+    const card = cards.getCard("lin", "ACME-88");
+    assert.ok((card.card as any).anchored_nodes.includes("svc:legacy"));
   });
 });
 

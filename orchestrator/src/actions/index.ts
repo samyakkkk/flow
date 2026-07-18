@@ -148,7 +148,13 @@ async function handleSlackAuto(event: NormalizedEvent, cls: ClassificationResult
     });
     // Memory enrichment: mirror the message into the observations corpus so
     // search_knowledge can surface it (embedded + FTS). Non-blocking, best-effort.
-    void observeCorpus({ source: "slack", text: p.text ?? "", repo: repoForChannel(p.channel) });
+    void observeCorpus({
+      source: "slack",
+      text: p.text ?? "",
+      repo: repoForChannel(p.channel),
+      source_id: event.id,
+      source_url: p.permalink ?? null,
+    });
   }
 
   if (c === "knowledge_claim" || c === "correction") {

@@ -7,7 +7,7 @@
 // distilled claims) — they live in the observations table with memory_id NULL
 // and surface through FTS + vector search directly.
 
-import { insertObservation } from "./store.js";
+import { getObservationBySource, insertObservation, refreshObservation } from "./store.js";
 import { getSetting } from "../settings.js";
 
 // Optional mapping: JSON in setting CORPUS_REPO_MAP, e.g.
@@ -40,18 +40,35 @@ export function repoForTicket(identifier: string | null | undefined): string | n
 }
 
 // Best-effort: never throws, never blocks the corpus insert (callers `void` it).
+// source_id/source_url are the citation refs back to the original artifact
+// (slack event id + permalink, linear issue id + url). (source, source_id) is
+// also the dedupe key: re-mirrored sources (a linear ticket updates on every
+// poll) refresh their one observation instead of accumulating duplicates.
 export async function observeCorpus(o: {
   source: "slack" | "linear" | "meeting";
   text: string;
   repo?: string | null;
+  source_id?: string | null;
+  source_url?: string | null;
 }): Promise<void> {
   const text = o.text.trim();
   if (!text) return;
+  const claim = text.slice(0, 1000);
   try {
+    if (o.source_id) {
+      const existing = getObservationBySource(o.source, o.source_id);
+      if (existing) {
+        if (existing.claim === claim && existing.source_url === (o.source_url ?? null)) return;
+        await refreshObservation(existing.id, { claim, source_url: o.source_url ?? null });
+        return;
+      }
+    }
     await insertObservation({
       source: o.source,
       repo: o.repo ?? null,
-      claim: text.slice(0, 1000),
+      source_id: o.source_id ?? null,
+      source_url: o.source_url ?? null,
+      claim,
       kind: "gotcha", // corpus rows carry no distilled kind; a neutral bucket
       source_weight: "user_stated", // a human said it in slack/linear
       retrieval_keys: [],

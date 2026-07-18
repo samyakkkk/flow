@@ -79,15 +79,18 @@ function memoryCard(id: string): CardResult {
   if (!m) return { status: "not_found", type: "mem", id };
 
   // Evidence observations attached to this memory — one-liners with [obs:id].
+  // url is the citation back to the original artifact (slack permalink, linear
+  // ticket) when the observation carries one.
   const obsRows = db
     .prepare(
-      `SELECT id, source, claim, branch, context_files FROM observations
+      `SELECT id, source, claim, branch, context_files, source_url FROM observations
        WHERE memory_id = ? ORDER BY created_at DESC LIMIT 12`,
     )
-    .all(id) as Array<{ id: string; source: string; claim: string; branch: string | null; context_files: string | null }>;
+    .all(id) as Array<{ id: string; source: string; claim: string; branch: string | null; context_files: string | null; source_url: string | null }>;
   const evidence = obsRows.map((o) => ({
     id: `obs:${o.id}`,
     line: `[${o.source}] ${trunc(o.claim, LINE_TRUNC)}`,
+    ...(o.source_url ? { url: o.source_url } : {}),
   }));
 
   // Context files = union across attached observations.
@@ -132,6 +135,7 @@ function observationCard(id: string): CardResult {
         repo: string | null;
         branch: string | null;
         session_id: string | null;
+        source_url: string | null;
         claim: string;
         kind: string;
         source_weight: string;
@@ -150,6 +154,7 @@ function observationCard(id: string): CardResult {
       kind: "observation",
       text: o.claim,
       source: o.source,
+      source_url: o.source_url, // citation back to the original artifact
       observation_kind: o.kind,
       source_weight: o.source_weight,
       session: o.session_id,
@@ -181,7 +186,9 @@ function linearCard(identifier: string): CardResult {
   if (!t) return { status: "not_found", type: "lin", id: identifier };
 
   // Anchored nodes: any observation derived from this ticket that got anchored.
-  const anchoredNodes = anchoredNodesForCorpus("linear", identifier);
+  // t.id is the observation's source_id (exact FK); identifier covers rows
+  // written before source refs existed.
+  const anchoredNodes = anchoredNodesForCorpus("linear", identifier, [t.id]);
 
   return {
     status: "found",
@@ -234,7 +241,9 @@ function slackThreadCard(ts: string): CardResult {
         line: trunc(m.text, LINE_TRUNC),
         ts: m.ts,
       })),
-      anchored_nodes: anchoredNodesForCorpus("slack", rootTs),
+      // Slack corpus row ids ARE the observations' source_id (both are the
+      // originating event id), so the thread's messages give the exact keys.
+      anchored_nodes: anchoredNodesForCorpus("slack", rootTs, messages.map((m) => m.id)),
     },
   };
 }
@@ -249,14 +258,22 @@ interface SlackRow {
   permalink: string | null;
 }
 
-// Nodes anchored via a corpus observation matching this source + key. Corpus
-// observations don't carry an FK to the corpus row, so we match on the
-// identifier/ts appearing in the observation's retrieval_keys. Best-effort.
-function anchoredNodesForCorpus(source: string, key: string): string[] {
-  const rows = db
-    .prepare(`SELECT id, retrieval_keys, claim FROM observations WHERE source = ?`)
-    .all(source) as Array<{ id: string; retrieval_keys: string | null; claim: string }>;
+// Nodes anchored via a corpus observation matching this source + key. Since
+// migration 10 corpus observations carry source_id (exact FK to the corpus
+// row); sourceId matches those directly. Rows written before that fall back to
+// the identifier/ts appearing in retrieval_keys or the claim. Best-effort.
+function anchoredNodesForCorpus(source: string, key: string, sourceIds: string[] = []): string[] {
   const nodeIds = new Set<string>();
+  if (sourceIds.length) {
+    const ph = sourceIds.map(() => "?").join(",");
+    const exact = db
+      .prepare(`SELECT id FROM observations WHERE source = ? AND source_id IN (${ph})`)
+      .all(source, ...sourceIds) as Array<{ id: string }>;
+    for (const r of exact) for (const n of nodeIdsForItem("observation", r.id)) nodeIds.add(n);
+  }
+  const rows = db
+    .prepare(`SELECT id, retrieval_keys, claim FROM observations WHERE source = ? AND source_id IS NULL`)
+    .all(source) as Array<{ id: string; retrieval_keys: string | null; claim: string }>;
   for (const r of rows) {
     const keys = parseKeys(r.retrieval_keys);
     const hit = keys.some((k) => k === key || k === `ts:${key}`) || r.claim.includes(key);
