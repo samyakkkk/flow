@@ -27,6 +27,8 @@ export interface ObservationRow {
   repo_family: string | null;
   branch: string | null;
   session_id: string | null;
+  source_id: string | null;
+  source_url: string | null;
   claim: string;
   kind: string;
   source_weight: string;
@@ -58,10 +60,10 @@ export interface MemoryRow {
 
 const insertObservationStmt = db.prepare(`
   INSERT INTO observations
-    (id, source, repo, repo_family, branch, session_id, claim, kind, source_weight,
+    (id, source, repo, repo_family, branch, session_id, source_id, source_url, claim, kind, source_weight,
      context_files, retrieval_keys, embedding, memory_id)
   VALUES
-    (@id, @source, @repo, @repo_family, @branch, @session_id, @claim, @kind, @source_weight,
+    (@id, @source, @repo, @repo_family, @branch, @session_id, @source_id, @source_url, @claim, @kind, @source_weight,
      @context_files, @retrieval_keys, @embedding, @memory_id)
 `);
 
@@ -70,6 +72,8 @@ export interface NewObservation {
   repo?: string | null;
   branch?: string | null;
   session_id?: string | null;
+  source_id?: string | null;
+  source_url?: string | null;
   claim: string;
   kind: string;
   source_weight?: string;
@@ -96,6 +100,8 @@ export async function insertObservation(o: NewObservation): Promise<ObservationR
     repo_family: repoFamily(o.repo),
     branch: o.branch ?? null,
     session_id: o.session_id ?? null,
+    source_id: o.source_id ?? null,
+    source_url: o.source_url ?? null,
     claim: o.claim,
     kind: o.kind,
     source_weight: o.source_weight ?? "agent_inferred",
@@ -107,6 +113,30 @@ export async function insertObservation(o: NewObservation): Promise<ObservationR
   insertObservationStmt.run(row);
   invalidateVectorCache();
   return { ...row, created_at: Math.floor(Date.now() / 1000) };
+}
+
+// Corpus rows re-arrive on every source update (the linear poller re-mirrors a
+// ticket each time it changes) — (source, source_id) is the dedupe key.
+export function getObservationBySource(source: string, sourceId: string): ObservationRow | undefined {
+  return db
+    .prepare(`SELECT * FROM observations WHERE source = ? AND source_id = ? LIMIT 1`)
+    .get(source, sourceId) as ObservationRow | undefined;
+}
+
+// Refresh a corpus observation in place after its source changed. The FTS
+// mirror updates via the observations_au trigger.
+export async function refreshObservation(
+  id: string,
+  fields: { claim: string; source_url?: string | null },
+): Promise<void> {
+  const vec = await _embedder(fields.claim.slice(0, 2000));
+  db.prepare(`UPDATE observations SET claim = @claim, source_url = @source_url, embedding = @embedding WHERE id = @id`).run({
+    id,
+    claim: fields.claim,
+    source_url: fields.source_url ?? null,
+    embedding: vec ? vecToBlob(vec) : null,
+  });
+  invalidateVectorCache();
 }
 
 // Map a distiller RawObservation → NewObservation (source always 'session').
