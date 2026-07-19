@@ -7,7 +7,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-cream">
       <Nav />
       <main
-        className="flex-1 overflow-y-auto relative"
+        className="flex-1 overflow-y-auto relative flex flex-col"
         style={{
           background: "var(--cream)",
           padding: "36px 40px 48px",

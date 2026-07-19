@@ -206,9 +206,18 @@ export function registerAgentRoutes(app: FastifyInstance): void {
 
   app.post("/v1/agents/sessions/:id/prompt", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { text, images } = req.body as { text?: string; images?: Array<{ data: string; mimeType: string }> };
-    if (!text?.trim()) return reply.code(400).send({ error: "text required" });
-    const r = await steer(id, text.trim(), images);
+    const body = req.body as {
+      text?: string;
+      attachments?: Array<{ name?: string; data: string; mimeType: string }>;
+      images?: Array<{ data: string; mimeType: string }>; // back-compat: image-only clients
+    };
+    if (!body.text?.trim()) return reply.code(400).send({ error: "text required" });
+    const attachments = (body.attachments ?? body.images ?? []).map((a, i) => ({
+      name: (a as { name?: string }).name?.trim() || `attachment-${i + 1}`,
+      data: a.data,
+      mimeType: a.mimeType,
+    }));
+    const r = await steer(id, body.text.trim(), attachments.length ? attachments : undefined);
     if ("error" in r) return reply.code(400).send(r);
     return r;
   });
