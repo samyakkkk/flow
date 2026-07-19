@@ -21,7 +21,7 @@ import { isPat, verifyPatForProject } from "./patAuth.js";
 // proxy, indexer) OR a personal access token from the deployment auth store
 // (per-user machine credential, minted in the dashboard) whose user holds a
 // grant on this gateway's project (FLOW_PROJECT_NAME). This closes the local
-// self-bless hole (any process could call review_procedure) and is the
+// unauthenticated-writes hole (any process could call the write verbs) and is the
 // per-user gating for remote MCP clients (EC2 topology). No token in env →
 // open, as before — dev fallback only.
 

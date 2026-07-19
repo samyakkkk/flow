@@ -11,14 +11,11 @@ import { callVerb, verbs } from "./verbs.js";
 // - Builder (GATEWAY_MCP_MODE=builder): the indexer surface — query verbs plus
 //   the three write verbs, with server-side write-scope enforcement and actor
 //   stamping from env. This is what opencode index/enrich/correct_graph jobs
-//   get via the workspace opencode.json; it deliberately excludes the
-//   procedure-governance verbs (review_procedure etc.) because the builder
-//   session reads untrusted repo content (prompt-injection surface).
-// - Session (GATEWAY_MCP_READONLY=1): query verbs plus the two governed
-//   proposal verbs (propose_procedure, correct_graph). This is what gets
-//   injected into coding-agent sessions — agents consult the brain and may
-//   PROPOSE (a pending procedure awaiting human bless; a correction flag the
-//   indexer verifies against the base branch), but never edit it directly.
+//   get via the workspace opencode.json.
+// - Session (GATEWAY_MCP_READONLY=1): query verbs plus correct_graph (a flag
+//   the indexer verifies against the base branch) and remember (text into the
+//   distiller intake). This is what gets injected into coding-agent sessions —
+//   agents consult the brain and contribute back, but never edit it directly.
 //
 // Agent-session observability: when FLOW_ACTIVITY_URL is set, every tool call
 // is reported (fire-and-forget) so the dashboard can highlight the graph
@@ -36,10 +33,8 @@ const SESSION_VERBS = new Set([
   "get_entity",
   "read_query",
   "list_schema",
-  // Governed proposal surface — none of these mutate existing knowledge
-  // directly; procedures enter, change, and leave only through human review.
-  "propose_procedure",
-  "propose_retire_procedure",
+  // Advisory flag — the indexer verifies it against the base branch; agents
+  // never mutate existing knowledge directly.
   "correct_graph",
   // Active capture: "remember this" → distiller intake (extraction and
   // placement happen server-side; the model never classifies).
