@@ -928,10 +928,10 @@ export function AgentSession({ id }: { id: string }) {
               key={o.id}
               value={typeof o.currentValue === "string" ? o.currentValue : ""}
               onChange={(e) => act("config", { configId: o.id, value: e.target.value })}
-              disabled={archived || busy}
+              disabled={archived || busy || view.status === "error"}
               className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
               style={{ fontFamily: "var(--font-mono)" }}
-              title={o.name}
+              title={view.status === "error" ? "Send a message to reconnect the agent first" : o.name}
             >
               {o.options!.map((v) => (
                 <option key={v.value} value={v.value}>
@@ -945,10 +945,10 @@ export function AgentSession({ id }: { id: string }) {
           <select
             value={view.modes.currentModeId ?? ""}
             onChange={(e) => act("mode", { modeId: e.target.value })}
-            disabled={archived}
+            disabled={archived || view.status === "error"}
             className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
             style={{ fontFamily: "var(--font-mono)" }}
-            title="Agent mode"
+            title={view.status === "error" ? "Send a message to reconnect the agent first" : "Agent mode"}
           >
             {view.modes.availableModes.map((m) => (
               <option key={m.id} value={m.id}>
