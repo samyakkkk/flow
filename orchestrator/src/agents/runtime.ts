@@ -12,7 +12,7 @@
 // the same API in front of containers instead of local processes.
 
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -39,10 +39,17 @@ import {
 
 export type AgentBackend = "claude" | "codex" | "opencode";
 
-export interface ImageAttachment {
-  data: string; // base64-encoded
+// A file the user attached to a prompt. Images ride inline as ACP `image`
+// blocks (every adapter renders those); everything else is written to disk in
+// the agent's checkout and referenced by path, because the ACP adapters drop
+// or mangle non-image binary blobs sent inline (Claude ignores them outright).
+export interface PromptAttachment {
+  name: string;
   mimeType: string;
+  data: string; // base64-encoded bytes
 }
+
+const IMAGE_MIME = /^image\//;
 
 export const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
 export const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
@@ -471,7 +478,7 @@ export interface LiveSession {
   error?: string;
   seq: number;
   turnActive: boolean;
-  queue: Array<{ text: string; images?: ImageAttachment[] }>; // queued steering prompts
+  queue: Array<{ text: string; attachments?: PromptAttachment[] }>; // queued steering prompts
   pendingPermissions: Map<string, PendingPermission>;
   subscribers: Set<(ev: SessionEvent) => void>;
   createdAt: number;
@@ -1238,24 +1245,67 @@ export async function createSession(opts: {
   return { id, separateCopy: Boolean(worktreeId) };
 }
 
+// Land a non-image attachment on disk in the agent's checkout so the agent can
+// read it with its own tools. Files go under a gitignored `.flow/attachments/`
+// so they never show up in the session diff or a PR. Returns the absolute path.
+function writeAttachmentToCheckout(cwd: string, name: string, data: string): string {
+  const dir = path.join(cwd, ".flow", "attachments");
+  mkdirSync(dir, { recursive: true });
+  // `*` inside .flow ignores everything under it (including itself) — attachments
+  // never pollute the working tree the agent is meant to be changing.
+  const ignore = path.join(cwd, ".flow", ".gitignore");
+  if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
+  // Sanitize + de-collide: keep the visible name, prefix a short unique token.
+  const safe = (name || "file").replace(/[^A-Za-z0-9._-]/g, "_").slice(-80) || "file";
+  const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const dest = path.join(dir, `${token}-${safe}`);
+  writeFileSync(dest, Buffer.from(data, "base64"));
+  return dest;
+}
+
 // Every turn — first prompt and steers alike — passes through here, so this
 // is where memory arrives: preamble (first turn only) + auto-retrieved memory
 // block + the user's text. Injection matches against the USER's words only,
 // never the preamble.
-async function runTurn(s: LiveSession, text: string, preamble = "", images?: ImageAttachment[]): Promise<void> {
+async function runTurn(s: LiveSession, text: string, preamble = "", attachments?: PromptAttachment[]): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
   setStatus(s, "running");
   const memory = await buildMemoryInjection(s, text);
   const finalText = `${preamble}${memory}${text}`;
-  emit(s, "user_prompt", { text: finalText, images });
-  // Build ACP content blocks: text + optional images.
-  const promptBlocks: acp.ContentBlock[] = [{ type: "text", text: finalText }];
-  if (images) {
-    for (const img of images) {
-      promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
+
+  // Split attachments: images ride inline (adapters render `image` blocks);
+  // everything else is written to the checkout and handed over by path.
+  const images = (attachments ?? []).filter((a) => IMAGE_MIME.test(a.mimeType));
+  const files = (attachments ?? []).filter((a) => !IMAGE_MIME.test(a.mimeType));
+  const fileRefs: Array<{ name: string; mimeType: string; path: string }> = [];
+  for (const f of files) {
+    try {
+      fileRefs.push({ name: f.name, mimeType: f.mimeType, path: writeAttachmentToCheckout(s.cwd, f.name, f.data) });
+    } catch {
+      /* skip a file we couldn't write; the turn still runs */
     }
+  }
+
+  // Transcript shows the human text + thumbnails for images + chips for files;
+  // the path note is appended only to what the agent sees, not the bubble.
+  emit(s, "user_prompt", {
+    text: finalText,
+    images: images.map((a) => ({ data: a.data, mimeType: a.mimeType })),
+    files: fileRefs.map((f) => ({ name: f.name, mimeType: f.mimeType })),
+  });
+
+  const agentText = fileRefs.length
+    ? `${finalText}\n\n[Attached files — read these from disk before responding:]\n${fileRefs
+        .map((f) => `- ${f.path} (${f.mimeType})`)
+        .join("\n")}`
+    : finalText;
+
+  // Build ACP content blocks: text + inline images.
+  const promptBlocks: acp.ContentBlock[] = [{ type: "text", text: agentText }];
+  for (const img of images) {
+    promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
   }
   try {
     const result = await c.conn.prompt({
@@ -1266,7 +1316,7 @@ async function runTurn(s: LiveSession, text: string, preamble = "", images?: Ima
     // Steering queued during the turn? Run it next.
     const next = s.queue.shift();
     if (next !== undefined && s.status !== "closed") {
-      await runTurn(s, next.text, "", next.images);
+      await runTurn(s, next.text, "", next.attachments);
       return;
     }
     if (s.status !== "closed") setStatus(s, "idle", { stopReason: result.stopReason });
@@ -1295,7 +1345,7 @@ function describeError(backend: AgentBackend, e: unknown): string {
 
 // Steering: when idle → new turn immediately. When a turn is active → cancel
 // the current turn and run the steer prompt next (the user changed their mind).
-export async function steer(id: string, text: string, images?: ImageAttachment[]): Promise<{ ok: true } | { error: string }> {
+export async function steer(id: string, text: string, attachments?: PromptAttachment[]): Promise<{ ok: true } | { error: string }> {
   const s = liveSession(id);
   if (!s || !s.acpSessionId) return { error: "Session is not live (reload-only or closed)" };
   let c: Connection;
@@ -1305,11 +1355,11 @@ export async function steer(id: string, text: string, images?: ImageAttachment[]
     return { error: (e as Error).message };
   }
   if (s.turnActive) {
-    s.queue.push({ text, images });
+    s.queue.push({ text, attachments });
     await c.conn.cancel({ sessionId: s.acpSessionId });
     return { ok: true };
   }
-  void runTurn(s, text, "", images).catch(() => {});
+  void runTurn(s, text, "", attachments).catch(() => {});
   return { ok: true };
 }
 

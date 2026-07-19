@@ -2,7 +2,11 @@
 // Textarea with "@" file/folder mention autocomplete — type @ to search the
 // repo's tracked (+ untracked, non-ignored) paths and insert one. The same
 // interaction most editor-integrated coding-agent harnesses offer.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+
+// Grow the textarea to fit its content, up to a cap; scroll past that. Runs in
+// a layout effect so the height is set before paint — no flicker as you type.
+const MAX_TEXTAREA_HEIGHT = 200;
 
 export interface FileEntry {
   path: string;
@@ -19,6 +23,9 @@ interface MentionTextareaProps {
   disabled?: boolean;
   rows?: number;
   className?: string;
+  // Grow to fit content (capped), snapping back when cleared. Opt-in so boxes
+  // that want a fixed/user-resizable size (rows + resize-y) keep it.
+  autoGrow?: boolean;
 }
 
 // The "@token" ending at the cursor, if the caret is mid-mention.
@@ -41,6 +48,7 @@ export function MentionTextarea({
   disabled,
   rows = 1,
   className,
+  autoGrow = false,
 }: MentionTextareaProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
@@ -49,6 +57,18 @@ export function MentionTextarea({
   const [options, setOptions] = useState<FileEntry[]>([]);
   const [active, setActive] = useState(0);
   const reqId = useRef(0);
+
+  // Auto-resize to fit content (capped) whenever the value changes — including
+  // when it's cleared after send, which snaps it back to a single row.
+  useLayoutEffect(() => {
+    if (!autoGrow) return;
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+  }, [value, autoGrow]);
 
   function syncMention() {
     const el = ref.current;
