@@ -17,6 +17,7 @@ import { insertObservation, rawToNewObservation } from "./store.js";
 import { consolidateObservation, type Judge } from "./consolidate.js";
 import { haikuJudge } from "./judge.js";
 import { sweepMemories } from "./maintenance.js";
+import { rebuildOrientDocsFor } from "./orient-doc.js";
 
 export interface DistillContext {
   sessionId: string;
@@ -62,8 +63,10 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
     actions[res.action] = (actions[res.action] ?? 0) + 1;
   }
 
-  // Cheap maintenance sweep on completion (recency decay → sink under floor).
+  // Cheap maintenance sweep on completion (recency decay → sink under floor),
+  // then refresh the ambient tier — membership may have changed either way.
   sweepMemories();
+  rebuildOrientDocsFor(ctx.repo);
 
   return { ran: true, observations: raws.length, actions };
 }
@@ -98,7 +101,7 @@ export async function rememberText(ctx: RememberContext): Promise<DistillOutcome
   }
   const verbatim = raws.length === 0;
   if (verbatim) {
-    raws = [{ claim: ctx.text, kind: "decision", context: {}, source: "user_stated", retrieval_keys: [] }];
+    raws = [{ claim: ctx.text, kind: "decision", context: {}, source: "user_stated", retrieval_keys: [], ambient: false }];
   }
 
   const judge = ctx.judge ?? haikuJudge;
@@ -114,6 +117,7 @@ export async function rememberText(ctx: RememberContext): Promise<DistillOutcome
     actions[res.action] = (actions[res.action] ?? 0) + 1;
   }
   sweepMemories();
+  rebuildOrientDocsFor(ctx.repo);
 
   return { ran: true, observations: raws.length, actions, ...(verbatim ? { reason: "verbatim-fallback" } : {}) };
 }

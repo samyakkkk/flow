@@ -13,6 +13,9 @@
 //   POST /v1/memory/remember {text, repo?, branch?, session?} → {status:"queued"}
 //                                                     active capture: instant
 //                                                     ack, async distillation.
+//   GET  /v1/memory/orient-doc?repo=<name>           → {global, repo} rendered
+//                                                     ambient-tier docs (null
+//                                                     when a scope has none).
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -27,6 +30,7 @@ import { getNodeHeadline } from "./headline.js";
 import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 import { rememberText } from "./distiller.js";
+import { getOrientDocs } from "./orient-doc.js";
 
 export interface MemoryStats {
   memories: number;
@@ -154,4 +158,10 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       return reply.code(202).send({ status: "queued" });
     },
   );
+
+  // The ambient tier — rendered orient docs, served verbatim into the
+  // gateway's orient(). A scope with no members returns null, never "".
+  app.get<{ Querystring: { repo?: string } }>("/v1/memory/orient-doc", async (req) => {
+    return getOrientDocs(req.query.repo?.trim() || null);
+  });
 }

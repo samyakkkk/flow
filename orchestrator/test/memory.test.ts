@@ -58,7 +58,7 @@ function stubVec(text: string): Float32Array {
 const stubEmbedder = async (t: string) => stubVec(t);
 
 function clearMemory(): void {
-  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
+  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM orient_docs; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
   store.invalidateVectorCache();
   headline?.invalidateHeadlineCache();
 }
@@ -676,6 +676,101 @@ describe("distiller trigger: idle sweep", () => {
       .run("sweep-2", "acme", "idle", Date.now(), Date.now());
     const ran = await trigger.idleSweep();
     assert.equal(ran, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orient docs — the ambient tier. Membership is a derived view (nominated +
+// user_stated-or-corroborated + uncontested), the render is deterministic, and
+// docs rebuild from the distiller hook. These tests drive the real
+// consolidation path, never the doc table directly.
+describe("orient docs (ambient tier)", () => {
+  let orientDoc: typeof import("../src/memory/orient-doc.js");
+
+  before(async () => {
+    orientDoc = await import("../src/memory/orient-doc.js");
+    store.setEmbedder(stubEmbedder);
+  });
+
+  type SeedOpts = { repo?: string | null; kind?: string; weight?: string; ambient?: boolean };
+  async function seed(claim: string, { repo = "acme", kind = "decision", weight = "user_stated", ambient = true }: SeedOpts = {}) {
+    const o = await store.insertObservation({
+      source: "session", repo, claim, kind, source_weight: weight, retrieval_keys: [], ambient, session_id: "s1",
+    });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("user_stated + ambient fast-tracks into the repo doc; sections + [mem:id] render", async () => {
+    await seed("agents never run in the managed clone; work folders only", { kind: "constraint" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    const docs = orientDoc.getOrientDocs("acme");
+    assert.ok(docs.repo, "repo doc should exist");
+    assert.match(docs.repo!, /HOW THIS REPO WORKS/);
+    assert.match(docs.repo!, /Constraints:/);
+    assert.match(docs.repo!, /managed clone.*\[mem:[0-9a-f-]+\]/);
+    assert.equal(docs.global, null, "repo-scoped memory must not leak into the global doc");
+  });
+
+  test("agent_inferred waits for corroboration (evidence >= 2), then earns in", async () => {
+    await seed("the graph indexes at capability level, not per-function", { weight: "agent_inferred" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    assert.equal(orientDoc.getOrientDocs("acme").repo, null, "single agent claim must NOT be doctrine yet");
+
+    // A second session observes the same thing → judge says same → evidence 2.
+    const o2 = await store.insertObservation({
+      source: "session", repo: "acme", claim: "the graph indexes at capability level, not per-function",
+      kind: "decision", source_weight: "agent_inferred", retrieval_keys: [], ambient: true, session_id: "s2",
+    });
+    await consolidate.consolidateObservation(o2, async () => ({ verdict: "same" as const }));
+    orientDoc.rebuildOrientDocsFor("acme");
+    assert.match(orientDoc.getOrientDocs("acme").repo ?? "", /capability level/, "corroborated claim earns in");
+  });
+
+  test("plans and non-nominated memories never enter; contradiction evicts", async () => {
+    await seed("next week we migrate the queue", { kind: "plan" });
+    await seed("tabs not spaces in this repo", { ambient: false });
+    const inDoc = await seed("deploys go through staging first", { kind: "constraint" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    let doc = orientDoc.getOrientDocs("acme").repo ?? "";
+    assert.doesNotMatch(doc, /migrate the queue/);
+    assert.doesNotMatch(doc, /tabs not spaces/);
+    assert.match(doc, /staging first/);
+
+    // A contradicting observation lands → the line leaves the doc immediately.
+    const contra = await store.insertObservation({
+      source: "session", repo: "acme", claim: "deploys now go straight to prod",
+      kind: "constraint", source_weight: "user_stated", retrieval_keys: [], ambient: true, session_id: "s3",
+      memory_id: null,
+    });
+    await consolidate.consolidateObservation(contra, async () => ({ verdict: "contradicts" as const }));
+    orientDoc.rebuildOrientDocsFor("acme");
+    doc = orientDoc.getOrientDocs("acme").repo ?? "";
+    assert.doesNotMatch(doc, new RegExp(`mem:${inDoc.memoryId}`), "contested memory must leave the doc");
+  });
+
+  test("repo-less memories land in the global doc; revision bumps only on change", async () => {
+    await seed("the team ships behind PRs, never direct pushes", { repo: null });
+    orientDoc.rebuildOrientDocsFor(null);
+    const docs = orientDoc.getOrientDocs(null);
+    assert.match(docs.global ?? "", /HOW THIS PROJECT WORKS/);
+    const rev = () => (db.prepare("SELECT revision FROM orient_docs WHERE scope = 'global'").get() as any).revision;
+    const r1 = rev();
+    orientDoc.rebuildOrientDocsFor(null); // nothing changed
+    assert.equal(rev(), r1, "no-op rebuild must not bump the revision");
+  });
+
+  test("distiller e2e: an ambient extraction reaches the doc through the hook", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "All background jobs are idempotent by convention", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["idempotent", "jobs"], ambient: true },
+      ]),
+    );
+    const events = [
+      { kind: "user_prompt", data: { text: "Remember that all our background jobs must stay idempotent." } },
+      { kind: "update", data: { sessionUpdate: "agent_message_chunk", content: { text: "Noted and applied." } } },
+    ];
+    await distiller.distillSession({ sessionId: "sess-doc", repo: "acme", branch: "main", events, judge: async () => ({ verdict: "new" as const }) });
+    assert.match(orientDoc.getOrientDocs("acme").repo ?? "", /idempotent by convention/);
   });
 });
 
