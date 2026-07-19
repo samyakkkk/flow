@@ -1057,6 +1057,27 @@ interface MemoryStats {
   bySource: Record<string, number>;
 }
 
+// The ambient tier: rendered orient docs (repo + global), served verbatim and
+// IN FULL — this is the auto-authored AGENTS.md, deliberately uncapped (the
+// curation happened at write time; nothing here is ranked at read time).
+async function fetchOrientDocs(repo: string): Promise<{ global: string | null; repo: string | null } | null> {
+  const url =
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/orient-doc") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/orient-doc` : "");
+  if (!url) return null;
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { global: string | null; repo: string | null };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchMemoryStats(): Promise<MemoryStats | null> {
   const url =
     process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/stats") ||
@@ -1085,7 +1106,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
 
-  const [repoRows, counts, procRows, memStats] = await Promise.all([
+  const [repoRows, counts, procRows, memStats, orientDocs] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
     run(
@@ -1096,6 +1117,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
        ORDER BY p.created_at DESC`,
     ) as Promise<unknown> as Promise<OrientProc[]>,
     fetchMemoryStats(),
+    fetchOrientDocs(repo),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -1147,6 +1169,16 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
   }
   out.push("");
+  // Orient docs — the ambient tier, verbatim and uncapped. Curation happened
+  // at write time (distiller nomination + earned inclusion); serving is dumb.
+  if (orientDocs?.repo) {
+    out.push(orientDocs.repo);
+    out.push("");
+  }
+  if (orientDocs?.global) {
+    out.push(orientDocs.global);
+    out.push("");
+  }
   out.push(
     `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
       ((serviceIds as Array<{ id: string }>).length

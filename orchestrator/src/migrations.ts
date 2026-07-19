@@ -206,7 +206,38 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    id: 14,
+    name: "orient docs: ambient nomination column + rendered doc cache",
+    up: (db) => {
+      // A DB below version 8 walks migration 8 first, which executes the
+      // SHARED MEMORY_SCHEMA string — already containing `ambient` — so a bare
+      // ALTER here would crash on "duplicate column". Same guard as migration 10.
+      const cols = db.prepare(`SELECT name FROM pragma_table_info('observations')`).all() as Array<{ name: string }>;
+      if (!new Set(cols.map((c) => c.name)).has("ambient")) {
+        db.exec("ALTER TABLE observations ADD COLUMN ambient INTEGER NOT NULL DEFAULT 0");
+      }
+      db.exec(ORIENT_DOCS_SCHEMA);
+    },
+  },
 ];
+
+// Orient docs — the AMBIENT memory tier. One rendered document per scope
+// ('global' or 'repo:<name>'), returned verbatim and in full by orient() —
+// the auto-authored AGENTS.md. The doc is a DERIVED VIEW over memories:
+// membership is recomputed from the memories table on every rebuild
+// (ambient-nominated AND (user_stated OR strong tier); kind 'plan' never
+// qualifies), member_ids records the set for provenance, content is the
+// deterministic render. Rebuildable at any time — memories stay primary.
+export const ORIENT_DOCS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS orient_docs (
+    scope      TEXT PRIMARY KEY,   -- 'global' | 'repo:<name>'
+    content    TEXT NOT NULL,
+    member_ids TEXT NOT NULL,      -- JSON array of member memory ids (render provenance)
+    revision   INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+`;
 
 // Per-user WORK surfaces (where agent sessions run) — deliberately separate
 // from repos.json so one user's local paths never leak into a teammate's
@@ -285,6 +316,7 @@ export const MEMORY_SCHEMA = `
     source_weight  TEXT NOT NULL DEFAULT 'agent_inferred', -- user_stated|agent_inferred|error_proven
     context_files  TEXT,            -- JSON array
     retrieval_keys TEXT,            -- JSON array
+    ambient        INTEGER NOT NULL DEFAULT 0, -- distiller nomination: orient-doc tier ("every session here should see this")
     embedding      BLOB,
     memory_id      TEXT,            -- FK -> memories.id, nullable until consolidated
     created_at     INTEGER NOT NULL DEFAULT (unixepoch())

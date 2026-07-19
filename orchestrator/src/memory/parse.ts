@@ -15,6 +15,11 @@ export interface RawObservation {
   context: { repo?: string; branch?: string; files?: string[] };
   source: ObservationSource;
   retrieval_keys: string[];
+  // Orient-doc nomination: "every future session on this repo should see this
+  // before starting." Absent/false = situational (search-only). The nomination
+  // is cheap and recall-oriented; INCLUSION in the doc is earned separately
+  // (user_stated fast-tracks, agent claims wait for strong tier).
+  ambient: boolean;
 }
 
 const KINDS: ReadonlySet<string> = new Set(["decision", "constraint", "gotcha", "how_to", "preference", "plan"]);
@@ -89,6 +94,7 @@ export function validateObservation(raw: unknown): RawObservation | null {
       files: toStringArray(ctx.files),
     },
     retrieval_keys: toStringArray(o.retrieval_keys),
+    ambient: o.ambient === true,
   };
 }
 

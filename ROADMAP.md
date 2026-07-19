@@ -3,6 +3,45 @@
 What's shipped, what's next. See `CHANGELOG.md` for dated change history and
 `docs/ARCHITECTURE.md` for the design.
 
+## Design record — memory v2 final form: distiller-only + orient docs (2026-07-18/19, Samyak — SUPERSEDES the 2026-07-10 three-lane consent model)
+
+The 07-10 record priced consent by blast radius across three lanes (procedures
+command / corrections mutate truth / notes color judgment). Dogfooding killed
+the first lane: agents classifying "is this a procedure?" produced junk
+proposals ("LLM gets confused about what is a procedure and creates random
+procedures"). Final form — ONE writer, the distiller; agents never classify:
+
+- **Branch notes: REMOVED** (PR #41). Observations carry {repo, branch,
+  session} mechanically, so a separate agent-authored note lane was redundant.
+- **`remember`: the one active-capture door** (PR #41). User says "remember
+  this" → the model sends text, nothing else. Instant ack, async distillation,
+  source_weight floors to user_stated, verbatim fallback so an explicit
+  remember is never lost. It feeds the pipeline, not the store.
+- **No repo gating inside a project** (PR #43). The project is the trust
+  boundary (one flow.db per project, physically separate). Within it, repo
+  affinity is RANK (+0.08 same repo, +0.04 family sibling), never eligibility;
+  consolidation candidates are project-wide so cross-repo repetition merges
+  and strengthens. Retrieval-eval re-run still owed to confirm precision.
+- **Orient docs: the ambient tier** (validated 2026-07-19 by rendering the doc
+  from the 47 real bench-store memories BEFORE building — Samyak approved the
+  page). One doc per scope ('global' + 'repo:<name>'), returned verbatim and
+  UNCAPPED by orient() — the auto-authored AGENTS.md (~10k tokens is fine;
+  supersedes the old ~1.5k orient cap). Mechanics: the distiller NOMINATES
+  (`ambient` flag per observation — cheap, recall-oriented); INCLUSION is
+  earned (user_stated fast-tracks; agent/error claims wait for evidence ≥ 2;
+  contradiction_count = 0 required — one contradiction evicts the line; kind
+  'plan' never enters). Membership is a DERIVED VIEW recomputed from the
+  memories table each rebuild — connect/disconnect happens by evidence, no
+  doc-editing machinery, memories stay primary. Render v1 is deterministic
+  (claims grouped by kind, each line carrying [mem:id] for drill-down); an
+  LLM prose-polish can replace the renderer later without touching membership.
+- **Procedures: to be REMOVED once orient docs are live** — the blessed
+  procedure migrates into the flow repo's orient doc, then the proposal verbs,
+  Procedure node type, inbox/retirement lanes, GOVERNS ambush, and insert-mode
+  injection all go. Until then agents must not use propose_procedure.
+- Unchanged: corrections lane (machine-verified, different problem), pull-only
+  retrieval, search_knowledge, anchoring, strength/decay.
+
 ## Notes & cautions — decided-for-now, revisit deliberately
 
 Concerns a human flagged as "keep this in mind" — not rules (procedures), not
