@@ -192,6 +192,20 @@ export const MIGRATIONS: Migration[] = [
       db.exec(WORK_FOLDERS_SCHEMA);
     },
   },
+  {
+    id: 13,
+    name: "drop branch_notes: the lane folded into distiller memory",
+    up: (db) => {
+      // Branch-scoped notes are distilled memory now — observations carry
+      // {repo, branch, session} mechanically, so a separate agent-authored
+      // note store is redundant. Content is dropped deliberately, not
+      // migrated (Samyak, 2026-07-18): working notes were transient by design.
+      db.exec(`
+        DROP INDEX IF EXISTS idx_branch_notes_repo_branch;
+        DROP TABLE IF EXISTS branch_notes;
+      `);
+    },
+  },
 ];
 
 // Per-user WORK surfaces (where agent sessions run) — deliberately separate

@@ -31,16 +31,6 @@ interface ProcedureRow {
   retire_proposed_at?: string | null;
 }
 
-interface NoteRow {
-  id: string;
-  repo: string;
-  branch: string;
-  kind: string;
-  text: string;
-  actor?: string | null;
-  updated_at: number;
-}
-
 interface CorrectionRow {
   id: string;
   target_ids: string;
@@ -305,7 +295,6 @@ export default function InboxPage() {
   const [proposed, setProposed] = useState<ProcedureRow[]>([]);
   const [blessed, setBlessed] = useState<ProcedureRow[]>([]);
   const [retireProposed, setRetireProposed] = useState<ProcedureRow[]>([]);
-  const [notes, setNotes] = useState<NoteRow[]>([]);
   const [corrections, setCorrections] = useState<CorrectionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [retiring, setRetiring] = useState<Record<string, boolean>>({});
@@ -316,9 +305,7 @@ export default function InboxPage() {
     Promise.all([
       fetch(prefix("/api/procedures")).then((r) => r.json()).catch(() => ({ proposed: [], blessed: [] })),
       fetch(prefix("/api/corrections")).then((r) => r.json()).catch(() => ({ rows: [] })),
-      fetch(prefix("/api/notes?limit=30")).then((r) => r.json()).catch(() => ({ rows: [] })),
-    ]).then(([p, c, n]) => {
-      setNotes(((n as { rows?: NoteRow[] }).rows ?? []));
+    ]).then(([p, c]) => {
       const pd = p as { proposed?: ProcedureRow[]; blessed?: ProcedureRow[]; retireProposed?: ProcedureRow[] };
       setProposed(pd.proposed ?? []);
       setBlessed(pd.blessed ?? []);
@@ -494,50 +481,6 @@ export default function InboxPage() {
               </div>
             )}
           </section>
-
-          {/* Branch notes — working memory, ungated; shown for visibility, not approval */}
-          {notes.length > 0 && (
-            <section>
-              <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
-                Branch notes <span style={{ color: "var(--text-muted)" }}>({notes.length})</span>
-              </h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {notes.map((n) => (
-                  <div
-                    key={n.id}
-                    style={{
-                      background: "var(--surface)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      padding: "10px 14px",
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "space-between",
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontFamily: "monospace", fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>
-                        {n.kind} · {n.repo}:{n.branch} · {n.actor ?? "?"} · {timeAgo(n.updated_at)}
-                      </div>
-                      <div style={{ fontSize: 12.5, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-                        {n.text.length > 400 ? n.text.slice(0, 400) + "…" : n.text}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        fetch(prefix(`/api/notes?id=${encodeURIComponent(n.id)}`), { method: "DELETE" }).then(load);
-                      }}
-                      style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 13, lineHeight: 1 }}
-                      aria-label="Delete note"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
 
           {/* Corrections */}
           <section>

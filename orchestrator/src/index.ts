@@ -21,7 +21,6 @@ import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
-import { registerNoteRoutes } from "./notes.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
 import { setNodeAnchorProvider } from "./memory/anchors.js";
 import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
@@ -78,7 +77,6 @@ registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerCorrectionRoutes(app);
-registerNoteRoutes(app);
 registerMemoryRoutes(app);
 // Memory anchors resolve graph node paths through the gateway; a null gateway
 // (no FLOW_GATEWAY_URL) leaves the default no-op provider and items stay
