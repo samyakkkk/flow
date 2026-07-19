@@ -4,7 +4,7 @@ import { ProposalDialog } from "./ProposalDialog";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen bg-cream">
+    <div className="flex h-screen overflow-hidden bg-cream">
       <Nav />
       <main
         className="flex-1 overflow-y-auto relative flex flex-col"
