@@ -91,7 +91,11 @@ export function onSessionClosed(id: string, branch: string | null = null): void 
 // transcript content gets distilled. Runs on an interval; also callable directly.
 export async function idleSweep(now = Date.now()): Promise<number> {
   if (!distillerEnabled()) return 0;
-  const cutoff = Math.floor((now - IDLE_MS) / 1000);
+  // agent_sessions.updated_at is MILLISECONDS (runtime.ts writes Date.now()).
+  // The cutoff must be too — a /1000 here once made the comparison always
+  // false, so the sweep silently matched zero sessions and the distiller
+  // never fired on live deployments.
+  const cutoff = now - IDLE_MS;
   const rows = db
     .prepare(
       `SELECT id FROM agent_sessions
