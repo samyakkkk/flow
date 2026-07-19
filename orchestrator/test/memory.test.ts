@@ -587,6 +587,53 @@ describe("distiller end-to-end (injected LLM + judge)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// remember — active capture. Same pipeline as a session tail, plus the two
+// remember-specific guarantees: source_weight floors to user_stated, and the
+// text survives an LLM failure verbatim (an explicit "remember" is never lost).
+describe("remember (active capture)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  test("LLM path: extracts, floors source_weight to user_stated, consolidates", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "Deploys go through the staging soak for 24h first", kind: "constraint", context: {}, source: "agent_inferred", retrieval_keys: ["staging", "soak", "deploy"] },
+      ]),
+    );
+    const out = await distiller.rememberText({ text: "remember: deploys always soak in staging for 24h", repo: "acme", branch: "main", sessionId: "sess-r1", judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.ran, true);
+    assert.equal(out.observations, 1);
+    assert.equal(out.reason, undefined, "LLM path should not report a fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim LIKE '%soak%'").get() as any;
+    assert.ok(obs, "observation should exist");
+    assert.equal(obs.source_weight, "user_stated", "the human dictated this — weight floors to user_stated");
+    assert.equal(obs.repo, "acme");
+  });
+
+  test("LLM failure: the text is stored verbatim, never lost", async () => {
+    llm.setLlmTransport(async () => {
+      throw new Error("model unavailable");
+    });
+    const text = "remember: the landing .env holds the working OPENROUTER key";
+    const out = await distiller.rememberText({ text, repo: "acme", branch: null, sessionId: null, judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.ran, true);
+    assert.equal(out.observations, 1);
+    assert.equal(out.reason, "verbatim-fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim = ?").get(text) as any;
+    assert.ok(obs, "verbatim observation should exist");
+    assert.equal(obs.source_weight, "user_stated");
+  });
+
+  test("LLM returns empty array: verbatim fallback also fires", async () => {
+    llm.setLlmTransport(async () => "[]");
+    const text = "remember this exact sentence";
+    const out = await distiller.rememberText({ text, repo: null, branch: null, sessionId: null, judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.reason, "verbatim-fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim = ?").get(text) as any;
+    assert.ok(obs);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Section A — anchor resolution. Deterministic file matching against a STUBBED
 // NodeAnchorProvider (no graph, no gateway). Covers: file match, most-specific
 // preference (endpoint over service), cap 3, idempotent re-resolve after a node

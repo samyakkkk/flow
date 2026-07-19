@@ -935,15 +935,6 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 }
 
 // ---------------------------------------------------------------------------
-// note — ungated branch-scoped working memory ("memory must not need
-// maintaining"). The note never touches the graph here: it lands in the
-// orchestrator's branch_notes store, scoped to (repo, branch), surfaced by
-// injection into sessions on that branch, and promoted to the graph only
-// after the base branch is reindexed. {repo, branch} are EXPLICIT args —
-// Flow may run remotely (EC2) and never assumes the agent's filesystem;
-// for Flow-run sessions the runtime injects defaults via env.
-
-// ---------------------------------------------------------------------------
 // search_knowledge — retrieve-only access to Flow's memory (distilled session
 // memories + slack/linear corpus). Thin proxy to the orchestrator, which owns
 // the store, the embeddings, and the eval-calibrated ranking (family hard gate,
@@ -993,56 +984,54 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
 }
 
 // ---------------------------------------------------------------------------
+// remember — active capture into Flow's memory. The model calls this when the
+// user says "remember this" (or something clearly durable surfaces
+// mid-session) instead of waiting for the session-end distiller pass. It is a
+// FUNNEL, not a write: the text lands in the distiller intake, which owns
+// extraction, placement, and consolidation — the model never classifies kind
+// or scope. {repo, branch} default from env when Flow runs the session;
+// external MCP consumers pass them explicitly (Flow may be remote).
 
-const noteInput = {
-  text: z.string().min(1).describe("The note — a discovery, dead end, constraint, decision, or worry, written for whoever works on this branch next"),
-  kind: z.enum(["wip", "note", "caution", "decision"]).default("note").describe("'wip' = rolling state of current work (replaces your previous wip note); others accumulate and get promoted to the graph on merge"),
-  anchor_hint: z.string().optional().describe("Name or id of the entity this is about, if any — resolved at promotion time"),
+const rememberInput = {
+  text: z.string().min(1).describe("What to remember — the user's words plus enough context to stand alone (verbatim quotes beat summaries). Don't classify or format; the distiller does that."),
   repo: z.string().optional().describe("Repository name (defaults from the session's env when Flow runs the session)"),
   branch: z.string().optional().describe("Branch name (defaults from the session's env)"),
-  provenance: z.object(provenanceShape),
 };
 
-async function noteVerb(input: z.infer<z.ZodObject<typeof noteInput>>) {
+async function rememberVerb(input: z.infer<z.ZodObject<typeof rememberInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
-  if (!repo || !branch) {
-    return { status: "error", error: "repo and branch are required (no session defaults available here) — pass them explicitly." };
-  }
   const url =
-    process.env.FLOW_NOTES_URL ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/remember") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/remember` : "");
   const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  if (!url) return { status: "error", error: "No orchestrator configured for notes (FLOW_NOTES_URL unset)." };
+  if (!url) return { status: "error", error: "No orchestrator configured for memory (FLOW_MEMORY_URL unset)." };
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({
-        repo,
-        branch,
-        kind: input.kind,
         text: input.text,
-        anchor_hint: input.anchor_hint ?? null,
-        actor: input.provenance.actor,
+        repo: repo || null,
+        branch: branch || null,
         session: process.env.FLOW_AGENT_SESSION ?? null,
       }),
       signal: AbortSignal.timeout(5000),
     });
-    const body = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
-    if (!res.ok) return { status: "error", error: `Notes dispatch failed (${res.status}): ${body.error ?? ""}` };
-    return { status: "noted", id: body.id, hint: "Saved to this branch's working memory. It will surface for future sessions on this branch." };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) return { status: "error", error: `Memory dispatch failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "sent", hint: "Sent to Flow's memory — the distiller extracts and files it in the background. Nothing else to do." };
   } catch (err) {
-    return { status: "error", error: `Notes dispatch failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { status: "error", error: `Memory dispatch failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 // ---------------------------------------------------------------------------
 // orient — the front desk. One call returns a compact, always-current
 // orientation text: what this repo is, learned rules to follow (insert-mode
-// procedures), on-demand procedures, and this branch's notes. It is the
+// procedures), on-demand procedures, and what memory holds. It is the
 // CLAUDE.md replacement: nothing is authored or synced to agent machines; the
-// text is rendered fresh from the graph + note store on every call, so an
+// text is rendered fresh from the graph + memory store on every call, so an
 // agent can re-orient at any time (e.g. after context compaction).
 //
 // Size is fixed by construction: one line per entry, ORIENT_CAP entries per
@@ -1061,31 +1050,6 @@ const orientInput = {
   branch: z.string().optional().describe("Branch name (defaults from the session's env — pass explicitly otherwise)"),
   graph: z.string().default(DEFAULT_GRAPH),
 };
-
-interface OrientNote {
-  id: string;
-  kind: string;
-  text: string;
-}
-
-async function fetchBranchNotes(repo: string, branch: string): Promise<OrientNote[] | null> {
-  const url =
-    process.env.FLOW_NOTES_URL ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
-  if (!url || !repo || !branch) return null;
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&limit=50`, {
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { rows?: OrientNote[] };
-    return body.rows ?? [];
-  } catch {
-    return null;
-  }
-}
 
 interface MemoryStats {
   memories: number;
@@ -1121,7 +1085,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
 
-  const [repoRows, counts, procRows, notes, memStats] = await Promise.all([
+  const [repoRows, counts, procRows, memStats] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
     run(
@@ -1131,7 +1095,6 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
               coalesce(p.mode, 'retrieve') AS mode, coalesce(p.scope, 'project') AS scope, p.repo AS repo
        ORDER BY p.created_at DESC`,
     ) as Promise<unknown> as Promise<OrientProc[]>,
-    fetchBranchNotes(repo, branch),
     fetchMemoryStats(),
   ]);
 
@@ -1194,15 +1157,6 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(`PROCEDURES${onDemand.length ? ` (${onDemand.length})` : ""}:`);
   out.push(...(onDemand.length ? section(onDemand, procLine, "find_entity type 'Procedure'") : ["(none yet)"]));
   out.push("");
-  out.push(`THIS BRANCH${notes && notes.length ? ` (${notes.length} ${notes.length === 1 ? "note" : "notes"})` : ""}:`);
-  if (notes === null) {
-    out.push(repo && branch ? "(notes unavailable right now)" : "(pass repo + branch to see this branch's notes)");
-  } else if (notes.length === 0) {
-    out.push("(no notes yet)");
-  } else {
-    out.push(...section(notes, (n) => `- [${n.kind}] ${oneLine(n.text, 260)}`, "they continue in this branch's note store"));
-  }
-  out.push("");
   // MEMORY — cross-session distilled knowledge + corpus, reached via
   // search_knowledge (retrieve-only). Counts orient the agent to whether it's
   // worth a look; the one-liner tells it how to query.
@@ -1230,7 +1184,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
       "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract or procedure might govern — contracts and rules hang off nodes, not files. Traverse with read_query. " +
       "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
-      "Store back as you work: note (branch findings, free, no approval), propose_procedure (durable rules — when the user states one, draft it completely), correct_graph (when the graph contradicts the code).",
+      "Store back as you work: remember (when the user says 'remember this' or a durable discovery surfaces — send the text, the distiller files it), propose_procedure (durable rules — when the user states one, draft it completely), correct_graph (when the graph contradicts the code).",
   );
   return out.join("\n");
 }
@@ -1248,7 +1202,7 @@ async function listSchema() {
 export const verbs = {
   orient: {
     description:
-      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: learned project rules to follow, what this repo is, a map of the knowledge graph, procedures, and this branch's notes. Pass {repo, branch} explicitly when Flow doesn't run your session.",
+      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: learned project rules to follow, what this repo is, a map of the knowledge graph, procedures, and what memory holds. Pass {repo, branch} explicitly when Flow doesn't run your session.",
     shape: orientInput,
     handler: orient,
   },
@@ -1313,11 +1267,11 @@ export const verbs = {
     shape: correctGraphInput,
     handler: correctGraph,
   },
-  note: {
+  remember: {
     description:
-      "Save a branch-scoped working note — discoveries, dead ends ('tried X, deadlocked'), constraints, decisions, or current WIP state (kind 'wip' replaces your previous wip note). Free to use, no approval needed; it surfaces automatically for future sessions on this branch. Note things the next session would otherwise re-learn the hard way.",
-    shape: noteInput,
-    handler: noteVerb,
+      "Send something to Flow's long-term memory NOW — call this whenever the user says 'remember this' (or a hard-won discovery/decision/constraint surfaces that a future session would want). Pass the text with enough context to stand alone; verbatim user quotes beat summaries. Free to use, instant, no approval: the distiller extracts, files, and consolidates it in the background — you never classify kind or scope, and you don't wait.",
+    shape: rememberInput,
+    handler: rememberVerb,
   },
   search_knowledge: {
     description:

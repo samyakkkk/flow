@@ -41,8 +41,9 @@ const SESSION_VERBS = new Set([
   "propose_procedure",
   "propose_retire_procedure",
   "correct_graph",
-  // Ungated branch-scoped working memory.
-  "note",
+  // Active capture: "remember this" → distiller intake (extraction and
+  // placement happen server-side; the model never classifies).
+  "remember",
   // Retrieve-only cross-session memory (distilled decisions/gotchas + corpus).
   "search_knowledge",
 ]);

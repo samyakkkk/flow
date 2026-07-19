@@ -11,7 +11,7 @@
 
 import { slimTranscript, type SlimEvent } from "./slim.js";
 import { buildDistillerPrompt } from "./prompt.js";
-import { parseObservations } from "./parse.js";
+import { parseObservations, type RawObservation } from "./parse.js";
 import { callLlm, distillerModel, distillerEnabled } from "./llm.js";
 import { insertObservation, rawToNewObservation } from "./store.js";
 import { consolidateObservation, type Judge } from "./consolidate.js";
@@ -66,4 +66,54 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
   sweepMemories();
 
   return { ran: true, observations: raws.length, actions };
+}
+
+// Active capture — the `remember` verb's write path. The user explicitly said
+// "remember this" (or the model judged something worth keeping NOW), so the
+// text runs through the SAME pipeline as a session tail: prompt → LLM →
+// parse → consolidate, framed as a user prompt. Two deliberate differences
+// from distillSession:
+//   - source_weight floors to user_stated: the human dictated this.
+//   - an explicit "remember" is NEVER lost — if the LLM path fails or
+//     extracts nothing, the text is stored verbatim as one observation
+//     (claim is FTS-indexed, so it stays retrievable either way).
+export interface RememberContext {
+  text: string;
+  repo: string | null;
+  branch: string | null;
+  sessionId: string | null;
+  judge?: Judge; // injectable; defaults to haikuJudge
+}
+
+export async function rememberText(ctx: RememberContext): Promise<DistillOutcome> {
+  let raws: RawObservation[] = [];
+  if (distillerEnabled()) {
+    try {
+      const prompt = buildDistillerPrompt(`### USER PROMPT\nRemember this: ${ctx.text}`);
+      const reply = await callLlm(prompt, { tier: "smart", feature: "remember", model: distillerModel() });
+      raws = parseObservations(reply);
+    } catch {
+      raws = []; // fall through to the verbatim path
+    }
+  }
+  const verbatim = raws.length === 0;
+  if (verbatim) {
+    raws = [{ claim: ctx.text, kind: "decision", context: {}, source: "user_stated", retrieval_keys: [] }];
+  }
+
+  const judge = ctx.judge ?? haikuJudge;
+  const actions: Record<string, number> = {};
+  for (const raw of raws) {
+    const obs = await insertObservation(
+      rawToNewObservation(
+        { ...raw, source: "user_stated" },
+        { repo: ctx.repo, branch: ctx.branch, session_id: ctx.sessionId },
+      ),
+    );
+    const res = await consolidateObservation(obs, judge);
+    actions[res.action] = (actions[res.action] ?? 0) + 1;
+  }
+  sweepMemories();
+
+  return { ran: true, observations: raws.length, actions, ...(verbatim ? { reason: "verbatim-fallback" } : {}) };
 }
