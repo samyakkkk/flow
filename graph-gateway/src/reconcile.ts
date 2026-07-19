@@ -22,7 +22,8 @@
 
 import { run, raw } from "./graph.js";
 import { embedBatch, entityText } from "./embed.js";
-import { startLocalModel, MODEL_STAMP } from "./local-embed.js";
+import { startLocalModel } from "./local-embed.js";
+import { activeEmbeddingModel, activeEmbeddingStamp } from "./embedding-models.js";
 
 const versionKey = (graph: string) => `flow:graph-version:${graph}`;
 // Tracks which embed model's vectors are stored in the graph. When this
@@ -112,18 +113,20 @@ export async function reconcileEmbeddings(
 }
 
 // ---------------------------------------------------------------------------
-// Called after the local model finishes loading. Checks whether the stored
-// embed-model stamp matches the current model — if not (first run, or after a
-// model upgrade), force-re-embeds all nodes so every vector is in the same
-// 768-dim space. On match, only backfills nodes that were written during the
-// download window (embedding IS NULL). Saves the stamp after a force run.
+// Called after the active embedding backend is ready. Checks whether the
+// stored embed-model stamp matches the resolved model's stamp — if not (first
+// run, model upgrade, or a switch between local and an API model), clears every
+// vector and re-embeds so all vectors share one space and dimension. On match,
+// only backfills nodes written during the ready-up window (embedding IS NULL).
+// Saves the stamp after a force run.
 export async function reconcileAfterModelReady(graph: string): Promise<void> {
   try {
     const conn = await raw();
     const saved = await conn.get(embedStampKey(graph));
-    const force = saved !== MODEL_STAMP;
+    const stamp = activeEmbeddingStamp();
+    const force = saved !== stamp;
     if (force) {
-      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${MODEL_STAMP}) — clearing old embeddings before re-embed`);
+      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${stamp}) — clearing old embeddings before re-embed`);
       // Null out ALL stored embeddings before re-embedding. This prevents
       // mixed-dimension state in FalkorDB (cosineDistance throws when stored
       // vectors have a different length than the query). During the re-embed
@@ -136,7 +139,7 @@ export async function reconcileAfterModelReady(graph: string): Promise<void> {
     } else {
       console.log(`[reconcile] graph='${graph}': embedded ${embedded}/${total}${failed ? `, failed ${failed}` : ""}`);
     }
-    if (force) await conn.set(embedStampKey(graph), MODEL_STAMP);
+    if (force) await conn.set(embedStampKey(graph), stamp);
   } catch (err) {
     console.warn(`[reconcile] post-model reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -155,9 +158,14 @@ export function runBootTasks(graph: string): void {
       console.warn(`[graph] migrations for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
-      // startLocalModel() is a singleton — safe to call here even though
-      // server.ts already called it; the same promise is returned.
-      await startLocalModel();
+      // Only wait on the local model download when the active provider is
+      // local. An API model (OpenAI) is ready as soon as a key is set — there's
+      // nothing to download, so skip straight to reconcile.
+      if (activeEmbeddingModel().provider === "local") {
+        // startLocalModel() is a singleton — safe to call here even though
+        // server.ts already called it; the same promise is returned.
+        await startLocalModel();
+      }
       await reconcileAfterModelReady(graph);
     } catch (err) {
       console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);

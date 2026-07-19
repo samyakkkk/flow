@@ -1,26 +1,73 @@
-// Semantic search support. Entities and queries are embedded with a local
-// EmbeddingGemma-300M model (768-dim) via node-llama-cpp — no API key needed.
-// The model downloads from HuggingFace on first run (~300 MB) and is cached
-// locally by node-llama-cpp.
+// Semantic search support. Entities and queries are embedded by the model the
+// gateway resolves from config (embedding-models.ts): the local
+// EmbeddingGemma-300M by default (no API key), or an OpenAI-compatible API
+// model when one is configured. The local model downloads from HuggingFace on
+// first run (~300 MB) and is cached by node-llama-cpp.
 //
-// Deliberately non-fatal: if the model hasn't finished loading yet, every
-// embed function returns null. Writes still succeed (just without a vector)
-// and find_entity falls back to the lexical CONTAINS match it always did.
-// Once the model is ready, reconcile.ts backfills all nodes written during
-// the download window.
+// Deliberately non-fatal: if the active backend isn't ready (local model still
+// downloading, or an API call fails), every embed function returns null. Writes
+// still succeed (just without a vector) and find_entity falls back to the
+// lexical CONTAINS match it always did. Once the backend is ready, reconcile.ts
+// backfills all nodes written during that window.
 
-import { isLocalEmbedReady, embedTextLocal, embedBatchLocal, LOCAL_EMBED_DIM } from "./local-embed.js";
+import { isLocalEmbedReady, embedTextLocal, embedBatchLocal } from "./local-embed.js";
+import {
+  activeEmbeddingModel,
+  embeddingApiBase,
+  embeddingApiKey,
+} from "./embedding-models.js";
 
-export const EMBED_DIM = LOCAL_EMBED_DIM; // 768
-
-// The long-lived HTTP gateway owns the local model. Short-lived MCP processes
-// set FLOW_EMBED_URL and borrow that model instead of loading another ~300 MB
-// copy. The gateway process itself leaves this unset and embeds in-process.
+// The long-lived HTTP gateway owns the active backend. Short-lived MCP
+// processes set FLOW_EMBED_URL and borrow the gateway (whatever model it
+// resolved) instead of standing up their own backend or holding API keys. The
+// gateway process itself leaves this unset and embeds in-process.
 const REMOTE_EMBED_URL = (process.env.FLOW_EMBED_URL ?? "").replace(/\/+$/, "");
 const REMOTE_EMBED_TOKEN = process.env.FLOW_EMBED_TOKEN ?? "";
 
 export function embeddingsEnabled(): boolean {
-  return Boolean(REMOTE_EMBED_URL) || isLocalEmbedReady();
+  if (REMOTE_EMBED_URL) return true;
+  const model = activeEmbeddingModel();
+  // API models are ready as soon as a key exists — no download to wait on.
+  if (model.provider === "openai") return Boolean(embeddingApiKey());
+  return isLocalEmbedReady();
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible embeddings API backend. Used when the resolved model's
+// provider is "openai". Points at embeddingApiBase() (OpenAI by default) —
+// deliberately separate from the chat LLM_BASE_URL, since OpenRouter (the chat
+// default) does not serve /embeddings.
+async function embedApiBatch(texts: string[]): Promise<(number[] | null)[]> {
+  const model = activeEmbeddingModel();
+  const key = embeddingApiKey();
+  if (!key) return texts.map(() => null);
+  try {
+    const res = await fetch(`${embeddingApiBase()}/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: model.apiModel ?? model.id, input: texts }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      console.warn(`[embed] API ${model.apiModel} returned HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
+      return texts.map(() => null);
+    }
+    const body = (await res.json()) as { data?: { index: number; embedding: number[] }[] };
+    const out: (number[] | null)[] = new Array(texts.length).fill(null);
+    for (const row of body.data ?? []) {
+      if (typeof row.index !== "number" || !Array.isArray(row.embedding)) continue;
+      if (row.embedding.length !== model.dim) {
+        console.warn(`[embed] API ${model.apiModel} returned dim ${row.embedding.length}, expected ${model.dim}`);
+        continue;
+      }
+      out[row.index] = row.embedding;
+    }
+    return out;
+  } catch (err) {
+    console.warn(`[embed] API embed failed: ${err instanceof Error ? err.message : String(err)}`);
+    return texts.map(() => null);
+  }
 }
 
 async function embedRemote(text: string): Promise<{ vec: number[] | null; error?: string }> {
@@ -39,10 +86,15 @@ async function embedRemote(text: string): Promise<{ vec: number[] | null; error?
       return { vec: null, error: `embedding gateway returned HTTP ${res.status}${detail ? `: ${detail}` : ""}` };
     }
     const body = (await res.json()) as { vec?: number[] | null; dim?: number; ready?: boolean };
-    if (!body.ready) return { vec: null, error: "local embedding model not yet loaded" };
+    if (!body.ready) return { vec: null, error: "embedding backend not yet ready" };
     if (!Array.isArray(body.vec)) return { vec: null, error: "embedding gateway returned no vector" };
-    if (body.dim !== EMBED_DIM || body.vec.length !== EMBED_DIM) {
-      return { vec: null, error: `embedding gateway dimension mismatch (expected ${EMBED_DIM}, got ${body.dim ?? "unknown"}/${body.vec.length})` };
+    // Trust the gateway's dimension: every vector in a graph comes from the same
+    // gateway, so they are self-consistent. The borrower must NOT re-check against
+    // its own compiled-in dim — that reintroduces the mixed-dimension bug when the
+    // gateway runs a different model than the borrower assumes. Just sanity-check
+    // that vec length matches what the gateway reported.
+    if (typeof body.dim === "number" && body.vec.length !== body.dim) {
+      return { vec: null, error: `embedding gateway returned inconsistent vector (dim ${body.dim} vs length ${body.vec.length})` };
     }
     return { vec: body.vec };
   } catch (err) {
@@ -100,6 +152,7 @@ export async function embedText(text: string): Promise<number[] | null> {
   const clean = text.trim();
   if (!clean) return null;
   if (REMOTE_EMBED_URL) return (await embedRemote(clean)).vec;
+  if (activeEmbeddingModel().provider === "openai") return (await embedApiBatch([clean]))[0];
   return embedTextLocal(clean);
 }
 
@@ -112,6 +165,12 @@ export async function embedQuery(text: string): Promise<{ vec: number[] | null; 
   const clean = text.trim();
   if (!clean) return { vec: null, error: "empty query" };
   if (REMOTE_EMBED_URL) return embedRemote(clean);
+  const model = activeEmbeddingModel();
+  if (model.provider === "openai") {
+    if (!embeddingApiKey()) return { vec: null, error: `model '${model.id}' needs an API key` };
+    const vec = (await embedApiBatch([clean]))[0];
+    return { vec, error: vec ? undefined : `API embedding (${model.apiModel}) failed` };
+  }
   if (!isLocalEmbedReady()) return { vec: null, error: "local embedding model not yet loaded" };
   const vec = await embedTextLocal(clean);
   return { vec, error: vec ? undefined : "embedding returned null" };
@@ -131,6 +190,17 @@ export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> 
       const window = texts.slice(i, i + REMOTE_BATCH_CONCURRENCY);
       const vecs = await Promise.all(window.map((text) => embedRemote(text.trim() || " ").then((r) => r.vec)));
       for (let j = 0; j < vecs.length; j++) out[i + j] = vecs[j];
+    }
+    return out;
+  }
+  // API provider: the /embeddings endpoint is natively batched, so send the
+  // whole array in one round trip (chunked to stay under request-size limits).
+  if (activeEmbeddingModel().provider === "openai") {
+    const out: (number[] | null)[] = [];
+    const CHUNK = 256;
+    for (let i = 0; i < texts.length; i += CHUNK) {
+      const window = texts.slice(i, i + CHUNK).map((t) => t.trim() || " ");
+      out.push(...(await embedApiBatch(window)));
     }
     return out;
   }
