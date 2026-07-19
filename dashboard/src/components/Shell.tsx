@@ -1,6 +1,5 @@
 "use client";
 import { Nav } from "./Nav";
-import { ProposalDialog } from "./ProposalDialog";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -16,7 +15,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
       >
         {children}
       </main>
-      <ProposalDialog />
     </div>
   );
 }
