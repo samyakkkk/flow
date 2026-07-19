@@ -53,16 +53,17 @@ The graph is the center. Both you and your agents build from it.
 
 ## Quickstart
 
-**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). On first run the dashboard asks for an [OpenRouter](https://openrouter.ai) key — or skip it if any supported coding CLI (opencode, Codex, or Claude Code) is installed on your machine, since indexing runs through whichever is present (`INDEXER_RUNTIME`, default auto-detects opencode → codex → claude). Any OpenAI-compatible API also works via `LLM_BASE_URL` + `LLM_API_KEY` in Settings. **Nothing else to install** — the graph engine (opencode) is bundled.
-
-To *also* run coding agents from the dashboard, install any of Claude Code, Codex, or OpenCode; Flow detects whatever's already on your machine.
+**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). Indexing runs through whichever coding CLI is on your machine — **opencode, Codex, or Claude Code** (`INDEXER_RUNTIME`, default auto-detects opencode → codex → claude). If none is installed, `setup.sh` installs opencode for you through a signed channel (Homebrew or the official installer — never the npm binary, which macOS kills as unsigned). On first run the dashboard asks for an [OpenRouter](https://openrouter.ai) key — or skip it if your CLI is already signed in. Any OpenAI-compatible API also works via `LLM_BASE_URL` + `LLM_API_KEY` in Settings.
 
 ```bash
 git clone <repo> && cd flow
-npm install && npm install -g .    # deps + `flow` on your PATH
+./setup.sh              # installs deps, verifies Node 22+ / Docker, installs a coding CLI if none found
+npm install -g .        # `flow` on your PATH
 
-flow up mycompany                  # creates it if new, then starts — prints your dashboard URL
+flow up mycompany       # creates it if new, then starts — prints your dashboard URL
 ```
+
+Works on macOS and Linux natively; on Windows use Git Bash or WSL2. Prefer manual steps? `npm install` alone covers the deps — `setup.sh` just adds the environment checks and CLI install on top.
 
 Then it's all in the browser:
 
@@ -172,6 +173,8 @@ Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated hist
 - **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
 - **"Unable to find image 'falkordb/falkordb:latest'" / image download fails** — the first-run image pull failed. `flow up` prints the real cause; if it mentions a rate limit, `docker login` (a free Docker Hub account raises the anonymous pull limit) or wait an hour. Otherwise check connectivity/VPN and re-run `flow up`.
 - **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.
+- **Index jobs fail with "opencode CLI not found on PATH"** — no coding CLI is installed. Run `./setup.sh` (it installs opencode via Homebrew / the official installer), or install Claude Code or Codex yourself. Flow never falls back to the npm-bundled opencode binary — it ships unsigned and macOS kills it at exec.
+- **`tsx` (or another dev dependency) missing after `npm install`** — check for `NODE_ENV=production` in your shell; it makes npm skip devDependencies. `NODE_ENV=development npm install --include=dev` fixes it.
 - **Connecting a repo fails** — cloning needs `git` on your PATH.
 - **"still starting up" when you save your key** — the orchestrator takes a few seconds on first boot; wait and retry.
 - **Don't `docker compose up` for local dev** — use `flow up`. The compose file under `deploy/` is an experimental full-container path, not the local one.
@@ -187,6 +190,17 @@ bash verify-all.sh   # typecheck + orchestrator tests + simulator scenarios + da
 ```
 
 Please run `verify-all.sh` before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first to discuss the approach.
+
+**Testing multiple branches side by side** — `setup.sh` can register a checkout under any command name, so each worktree gets its own CLI:
+
+```bash
+git worktree add ../flow-main main
+(cd ../flow-main && ./setup.sh --alias flow-main)
+./setup.sh --alias flow-dev
+
+flow-main up myproject   # runs the main-branch checkout
+flow-dev  up myproject   # runs this checkout — independently
+```
 
 ## License
 

@@ -30,8 +30,8 @@ docker run --rm node:22-slim bash -lc '
   ! grep -qiE "node-gyp|gyp ERR|make: |g\+\+" /tmp/install.log && echo "✅ no compile"
   echo "--- CHECKPOINT 1b: better-sqlite3 loads and runs ---"
   node -e "const D=require(\"better-sqlite3\");const db=new D(\":memory:\");db.exec(\"create virtual table f using fts5(x)\");db.prepare(\"select 1 as ok\").get();console.log(\"✅ sqlite prebuilt OK\")"
-  echo "--- CHECKPOINT 1c: bundled opencode binary runs ---"
-  node_modules/.bin/opencode --version && echo "✅ opencode bundled OK"
+  echo "--- CHECKPOINT 1c: opencode is NOT bundled (npm binary is unsigned; macOS kills it) ---"
+  [ ! -e node_modules/.bin/opencode ] && ! ls -d node_modules/opencode-* 2>/dev/null && echo "✅ no bundled opencode"
   echo "--- CHECKPOINT 1d: flow CLI parses and prints help ---"
   node bin/flow.mjs --help >/dev/null && echo "✅ flow CLI OK"
 '

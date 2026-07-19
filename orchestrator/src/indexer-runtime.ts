@@ -46,11 +46,10 @@ export async function resolveIndexerBackend(): Promise<IndexerBackend> {
   const pick = BACKEND_ORDER.find((b) => usable.has(b));
   if (pick) return pick;
 
-  // No CLI on PATH: fall back to opencode — Flow bundles the opencode-ai
-  // package as a dependency (the job runner resolves it via OPENCODE_BIN), so
-  // indexing works on a machine with nothing installed. If even the bundled
-  // copy is missing, the spawn failure surfaces its own error.
-  console.warn("[indexer] no coding CLI found on PATH — using bundled opencode");
+  // No CLI on PATH: report opencode anyway — resolveOpencodeBin throws a
+  // clear install-instructions error when the job actually tries to spawn,
+  // which is a better failure than silently picking nothing here.
+  console.warn("[indexer] no coding CLI found on PATH — index jobs will fail until one is installed (run setup.sh)");
   return "opencode";
 }
 
@@ -139,4 +138,18 @@ export async function resolveBackendExecutable(backend: IndexerBackend): Promise
     throw new Error(`"${backend}" CLI not found on PATH — install it or set INDEXER_RUNTIME to an installed backend.`);
   }
   return localPath;
+}
+
+// Resolve the opencode executable on the user's machine. Flow does NOT bundle
+// an opencode binary: the npm-distributed one ships unsigned, and macOS kills
+// unsigned arm64 binaries at exec (SIGKILL) — a fallback to it just trades a
+// clear error for a mysterious one. setup.sh installs a properly signed build
+// (Homebrew / official installer) when no coding CLI is present.
+export async function resolveOpencodeBin(): Promise<string> {
+  const local = await resolveLocalExecutable("opencode");
+  if (local) return local;
+  throw new Error(
+    "opencode CLI not found on PATH — run setup.sh, or install it: " +
+      "`brew install sst/tap/opencode` (macOS) or `curl -fsSL https://opencode.ai/install | bash` (macOS/Linux).",
+  );
 }
