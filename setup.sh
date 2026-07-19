@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
-# setup.sh — Flow development setup
+# setup.sh — Flow one-shot setup: deps, environment checks, coding CLI, and
+# the `flow` command on your PATH. Run it once; you're done.
 #
 # Usage:
 #   ./setup.sh [OPTIONS]
 #
 # Options:
-#   --alias <name>     Register this checkout as a named command (e.g. flow-dev, flow-main).
-#                      Creates a wrapper in ~/bin or ~/.local/bin.
-#   --branch <name>    Check out this git branch before setup (useful for a fresh worktree).
+#   --alias <name>     Command name to register (default: flow). Use flow-dev,
+#                      flow-test-1, … to run several checkouts side by side.
+#   --branch <name>    Clone this branch into its own managed checkout
+#                      (~/.flow/checkouts/<alias>) instead of using the current
+#                      one. Alias defaults to flow-<branch> if --alias is omitted.
 #   --help             Show this help and exit.
 #
 # Examples:
-#   ./setup.sh                                  # Install deps, check CLIs
-#   ./setup.sh --alias flow-dev                 # Also register as 'flow-dev' command
-#   ./setup.sh --alias flow-main --branch main  # Checkout main, install, register
+#   ./setup.sh                                    # this checkout → `flow`
+#   ./setup.sh --alias flow-dev                   # this checkout → `flow-dev`
+#   ./setup.sh --alias flow-test-1 --branch feat  # clone feat → `flow-test-1`
 #
-# Multi-branch dev workflow:
-#   git worktree add ../flow-main main
-#   cd ../flow-main && ../flow/setup.sh --alias flow-main
-#   cd ../flow-dev  && ../flow/setup.sh --alias flow-dev
-#   # Now 'flow-main up myproject' and 'flow-dev up myproject' are independent.
+# Each aliased checkout is fully independent (own deps, own data/ projects).
+# Don't `up` the SAME project name from two checkouts at once — they'd race
+# for the same ports.
 #
-# Platform:
-#   macOS and Linux: run natively.
-#   Windows: use Git Bash or WSL2.
+# Platform: macOS and Linux natively; Windows via Git Bash or WSL2.
 
 set -euo pipefail
 
@@ -31,7 +30,9 @@ ALIAS_NAME=""
 BRANCH=""
 
 show_help() {
-  sed -n '/^# /s/^# //p' "$0" | head -30
+  # Print the header comment block (everything between the shebang and the
+  # first non-comment line), stripping the leading "# ".
+  awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -58,13 +59,34 @@ fail() { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 info() { echo -e "${CYAN}→${NC} $*"; }
 hdr()  { echo -e "\n${BOLD}$*${NC}"; }
 
-# ── 1. Branch checkout ───────────────────────────────────────────────────────
+# ── 1. Resolve the checkout this setup targets ───────────────────────────────
+# No --branch: set up the checkout the script lives in. With --branch: clone
+# that branch into ~/.flow/checkouts/<alias> so every branch/alias pair is a
+# fully independent install (own node_modules, own data/, own projects).
 if [[ -n "$BRANCH" ]]; then
-  hdr "Branch"
-  info "Checking out: $BRANCH"
-  git -C "$SCRIPT_DIR" checkout "$BRANCH" \
-    || fail "Could not check out branch '$BRANCH'. Make sure it exists (git fetch first)."
-  ok "On branch $BRANCH"
+  ALIAS_NAME="${ALIAS_NAME:-flow-$(echo "$BRANCH" | tr '/' '-')}"
+  ROOT_DIR="$HOME/.flow/checkouts/$ALIAS_NAME"
+  ORIGIN="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || echo "$SCRIPT_DIR")"
+
+  hdr "Checkout: $ALIAS_NAME (branch $BRANCH)"
+  if [[ -d "$ROOT_DIR/.git" ]]; then
+    info "Updating existing checkout at $ROOT_DIR"
+    git -C "$ROOT_DIR" fetch origin "$BRANCH" \
+      || fail "Could not fetch branch '$BRANCH' from $ORIGIN"
+    git -C "$ROOT_DIR" checkout "$BRANCH" \
+      || fail "Could not check out branch '$BRANCH' in $ROOT_DIR"
+    git -C "$ROOT_DIR" pull --ff-only origin "$BRANCH" \
+      || warn "Could not fast-forward — local commits in $ROOT_DIR? Continuing with what's there."
+  else
+    info "Cloning $ORIGIN @ $BRANCH → $ROOT_DIR"
+    mkdir -p "$(dirname "$ROOT_DIR")"
+    git clone --branch "$BRANCH" "$ORIGIN" "$ROOT_DIR" \
+      || fail "Could not clone branch '$BRANCH'. Does it exist on the remote?"
+  fi
+  ok "Checkout ready: $ROOT_DIR"
+else
+  ROOT_DIR="$SCRIPT_DIR"
+  ALIAS_NAME="${ALIAS_NAME:-flow}"
 fi
 
 # ── 2. Node.js version ───────────────────────────────────────────────────────
@@ -79,9 +101,12 @@ fi
 ok "$(node --version)"
 
 # ── 3. npm install ───────────────────────────────────────────────────────────
+# --include=dev ALWAYS: `flow up` runs services through tsx, a devDependency.
+# A shell with NODE_ENV=production would otherwise silently skip it and break
+# the runtime, not just the tests.
 hdr "Dependencies"
 info "Running npm install…"
-npm install --prefix "$SCRIPT_DIR" 2>&1 | tail -3
+npm install --include=dev --prefix "$ROOT_DIR" 2>&1 | tail -3
 ok "Installed"
 
 # ── 4. Coding CLI detection ──────────────────────────────────────────────────
@@ -189,56 +214,47 @@ else
   warn "Install Docker Desktop: https://www.docker.com/products/docker-desktop/"
 fi
 
-# ── 6. Alias registration ────────────────────────────────────────────────────
-if [[ -n "$ALIAS_NAME" ]]; then
-  hdr "Alias: $ALIAS_NAME"
+# ── 6. Register the command ──────────────────────────────────────────────────
+hdr "Command: $ALIAS_NAME"
 
-  FLOW_BIN="$SCRIPT_DIR/bin/flow.mjs"
+FLOW_BIN="$ROOT_DIR/bin/flow.mjs"
+[[ -f "$FLOW_BIN" ]] || fail "bin/flow.mjs not found in $ROOT_DIR — is this a Flow checkout?"
 
-  # Find or create a user bin directory that's on PATH.
-  BIN_DIR=""
-  for candidate_dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
-    if [[ -d "$candidate_dir" ]]; then
-      # Check if it's on PATH.
-      if [[ ":$PATH:" == *":$candidate_dir:"* ]]; then
-        BIN_DIR="$candidate_dir"
-        break
-      fi
-    fi
-  done
-
-  if [[ -z "$BIN_DIR" ]]; then
-    BIN_DIR="$HOME/.local/bin"
-    mkdir -p "$BIN_DIR"
-    warn "Created $BIN_DIR"
-    warn "Add it to your shell profile so the alias is available:"
-    warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc  # or ~/.bashrc"
+# Find or create a user bin directory that's on PATH.
+BIN_DIR=""
+for candidate_dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
+  if [[ -d "$candidate_dir" && ":$PATH:" == *":$candidate_dir:"* && -w "$candidate_dir" ]]; then
+    BIN_DIR="$candidate_dir"
+    break
   fi
+done
 
-  WRAPPER="$BIN_DIR/$ALIAS_NAME"
-  cat > "$WRAPPER" <<WRAPPER_EOF
+if [[ -z "$BIN_DIR" ]]; then
+  BIN_DIR="$HOME/.local/bin"
+  mkdir -p "$BIN_DIR"
+  warn "Created $BIN_DIR"
+  warn "Add it to your shell profile so the command is available:"
+  warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc  # or ~/.bashrc"
+fi
+
+WRAPPER="$BIN_DIR/$ALIAS_NAME"
+cat > "$WRAPPER" <<WRAPPER_EOF
 #!/usr/bin/env bash
-# Flow CLI alias — auto-generated by setup.sh
-# Checkout: $SCRIPT_DIR
+# Flow CLI — auto-generated by setup.sh
+# Checkout: $ROOT_DIR
 exec node "$FLOW_BIN" "\$@"
 WRAPPER_EOF
-  chmod +x "$WRAPPER"
-  ok "Registered '$ALIAS_NAME' → $FLOW_BIN"
+chmod +x "$WRAPPER"
+ok "Registered '$ALIAS_NAME' → $FLOW_BIN"
 
-  if command -v "$ALIAS_NAME" &>/dev/null 2>&1; then
-    ok "'$ALIAS_NAME' is reachable on PATH"
-  else
-    warn "Run 'source ~/.zshrc' (or open a new terminal) to pick up the new command."
-  fi
+if command -v "$ALIAS_NAME" &>/dev/null; then
+  ok "'$ALIAS_NAME' is reachable on PATH"
+else
+  warn "Open a new terminal (or 'source ~/.zshrc') to pick up the new command."
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}Setup complete!${NC}"
-if [[ -n "$ALIAS_NAME" ]]; then
-  echo "  Run: ${BOLD}$ALIAS_NAME --help${NC}"
-  echo "  Run: ${BOLD}$ALIAS_NAME project create <name>${NC}"
-else
-  echo "  Run: ${BOLD}node $SCRIPT_DIR/bin/flow.mjs --help${NC}"
-fi
+echo -e "  Run: ${BOLD}$ALIAS_NAME up mycompany${NC}   # starts Flow, prints your dashboard URL"
 echo ""

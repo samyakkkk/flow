@@ -57,13 +57,12 @@ The graph is the center. Both you and your agents build from it.
 
 ```bash
 git clone <repo> && cd flow
-./setup.sh              # installs deps, verifies Node 22+ / Docker, installs a coding CLI if none found
-npm install -g .        # `flow` on your PATH
+./setup.sh              # one shot: deps, Node 22+ / Docker checks, coding CLI if none found, `flow` on your PATH
 
 flow up mycompany       # creates it if new, then starts — prints your dashboard URL
 ```
 
-Works on macOS and Linux natively; on Windows use Git Bash or WSL2. Prefer manual steps? `npm install` alone covers the deps — `setup.sh` just adds the environment checks and CLI install on top.
+Works on macOS and Linux natively; on Windows use Git Bash or WSL2. Prefer manual steps? `npm install && npm install -g .` still works — `setup.sh` just does everything in one shot.
 
 Then it's all in the browser:
 
@@ -191,16 +190,18 @@ bash verify-all.sh   # typecheck + orchestrator tests + simulator scenarios + da
 
 Please run `verify-all.sh` before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first to discuss the approach.
 
-**Testing multiple branches side by side** — `setup.sh` can register a checkout under any command name, so each worktree gets its own CLI:
+**Testing multiple branches side by side** — `setup.sh` clones any branch into its own managed checkout (`~/.flow/checkouts/<alias>`) and registers it as its own command:
 
 ```bash
-git worktree add ../flow-main main
-(cd ../flow-main && ./setup.sh --alias flow-main)
-./setup.sh --alias flow-dev
+./setup.sh --alias flow-main   --branch main       # clone main → `flow-main`
+./setup.sh --alias flow-test-1 --branch feature-x  # clone feature-x → `flow-test-1`
+./setup.sh --alias flow-dev                        # this checkout → `flow-dev`
 
-flow-main up myproject   # runs the main-branch checkout
-flow-dev  up myproject   # runs this checkout — independently
+flow-main   up demo
+flow-test-1 up demo2    # each checkout is fully independent (own deps, own data/)
 ```
+
+Re-running with the same alias fast-forwards that checkout to the branch tip. Don't `up` the *same* project name from two checkouts at once — they'd race for the same ports.
 
 ## License
 

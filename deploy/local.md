@@ -30,8 +30,7 @@ full-container path (see the bottom of this file).
 
 ```bash
 git clone <repo> && cd flow
-./setup.sh              # deps + environment checks + coding CLI install if none found
-npm install -g .        # `flow` on your PATH
+./setup.sh              # one shot: deps, environment checks, coding CLI if none found, `flow` on your PATH
 
 flow up mycompany       # creates it if new, then starts
 ```
