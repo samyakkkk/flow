@@ -3,7 +3,8 @@
 # the `flow` command on your PATH. Run it once; you're done.
 #
 # Usage:
-#   ./setup.sh [OPTIONS]
+#   ./setup.sh [OPTIONS]                          # from inside a checkout
+#   curl -fsSL https://<host>/setup.sh | bash     # standalone: clones the repo first
 #
 # Options:
 #   --alias <name>     Command name to register (default: flow). Use flow-dev,
@@ -17,6 +18,10 @@
 #   ./setup.sh                                    # this checkout → `flow`
 #   ./setup.sh --alias flow-dev                   # this checkout → `flow-dev`
 #   ./setup.sh --alias flow-test-1 --branch feat  # clone feat → `flow-test-1`
+#   curl -fsSL https://<host>/setup.sh | bash -s -- --branch dev --alias flow-dev
+#
+# Standalone mode (curl | bash, or the script copied outside a checkout) clones
+# from https://github.com/samyakkkk/flow.git — override with FLOW_REPO=<url>.
 #
 # Each aliased checkout is fully independent (own deps, own data/ projects).
 # Don't `up` the SAME project name from two checkouts at once — they'd race
@@ -44,7 +49,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where the script itself lives. Under `curl | bash` BASH_SOURCE is unset and
+# this resolves to the cwd — which is fine, because standalone detection below
+# only cares whether that directory is a Flow checkout.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
+
+# Canonical repo for standalone installs (curl | bash). FLOW_REPO overrides.
+REPO_URL="${FLOW_REPO:-https://github.com/samyakkkk/flow.git}"
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -60,33 +71,54 @@ info() { echo -e "${CYAN}→${NC} $*"; }
 hdr()  { echo -e "\n${BOLD}$*${NC}"; }
 
 # ── 1. Resolve the checkout this setup targets ───────────────────────────────
-# No --branch: set up the checkout the script lives in. With --branch: clone
-# that branch into ~/.flow/checkouts/<alias> so every branch/alias pair is a
-# fully independent install (own node_modules, own data/, own projects).
-if [[ -n "$BRANCH" ]]; then
-  ALIAS_NAME="${ALIAS_NAME:-flow-$(echo "$BRANCH" | tr '/' '-')}"
-  ROOT_DIR="$HOME/.flow/checkouts/$ALIAS_NAME"
-  ORIGIN="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || echo "$SCRIPT_DIR")"
+# Three ways in:
+#   in-checkout, no --branch  → set up the checkout the script lives in
+#   in-checkout, --branch     → clone that branch of THIS repo's origin into
+#                               ~/.flow/checkouts/<alias> (independent install)
+#   standalone (curl | bash)  → clone REPO_URL (--branch or its default branch)
+#                               into ~/.flow/checkouts/<alias>
+command -v git &>/dev/null || fail "git not found — install it first."
 
-  hdr "Checkout: $ALIAS_NAME (branch $BRANCH)"
-  if [[ -d "$ROOT_DIR/.git" ]]; then
-    info "Updating existing checkout at $ROOT_DIR"
-    git -C "$ROOT_DIR" fetch origin "$BRANCH" \
-      || fail "Could not fetch branch '$BRANCH' from $ORIGIN"
-    git -C "$ROOT_DIR" checkout "$BRANCH" \
-      || fail "Could not check out branch '$BRANCH' in $ROOT_DIR"
-    git -C "$ROOT_DIR" pull --ff-only origin "$BRANCH" \
-      || warn "Could not fast-forward — local commits in $ROOT_DIR? Continuing with what's there."
-  else
-    info "Cloning $ORIGIN @ $BRANCH → $ROOT_DIR"
-    mkdir -p "$(dirname "$ROOT_DIR")"
-    git clone --branch "$BRANCH" "$ORIGIN" "$ROOT_DIR" \
-      || fail "Could not clone branch '$BRANCH'. Does it exist on the remote?"
-  fi
-  ok "Checkout ready: $ROOT_DIR"
-else
+IN_CHECKOUT=false
+[[ -f "$SCRIPT_DIR/bin/flow.mjs" ]] && IN_CHECKOUT=true
+
+if [[ "$IN_CHECKOUT" == true && -z "$BRANCH" ]]; then
   ROOT_DIR="$SCRIPT_DIR"
   ALIAS_NAME="${ALIAS_NAME:-flow}"
+else
+  if [[ "$IN_CHECKOUT" == true ]]; then
+    ORIGIN="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || echo "$SCRIPT_DIR")"
+  else
+    ORIGIN="$REPO_URL"
+  fi
+  if [[ -n "$BRANCH" ]]; then
+    ALIAS_NAME="${ALIAS_NAME:-flow-$(echo "$BRANCH" | tr '/' '-')}"
+  else
+    ALIAS_NAME="${ALIAS_NAME:-flow}"
+  fi
+  ROOT_DIR="$HOME/.flow/checkouts/$ALIAS_NAME"
+
+  hdr "Checkout: $ALIAS_NAME (${BRANCH:-default branch})"
+  if [[ -d "$ROOT_DIR/.git" ]]; then
+    info "Updating existing checkout at $ROOT_DIR"
+    if [[ -n "$BRANCH" ]]; then
+      git -C "$ROOT_DIR" fetch origin "$BRANCH" \
+        || fail "Could not fetch branch '$BRANCH' from $ORIGIN"
+      git -C "$ROOT_DIR" checkout "$BRANCH" \
+        || fail "Could not check out branch '$BRANCH' in $ROOT_DIR"
+      git -C "$ROOT_DIR" pull --ff-only origin "$BRANCH" \
+        || warn "Could not fast-forward — local commits in $ROOT_DIR? Continuing with what's there."
+    else
+      git -C "$ROOT_DIR" pull --ff-only \
+        || warn "Could not fast-forward — local commits in $ROOT_DIR? Continuing with what's there."
+    fi
+  else
+    info "Cloning $ORIGIN${BRANCH:+ @ $BRANCH} → $ROOT_DIR"
+    mkdir -p "$(dirname "$ROOT_DIR")"
+    git clone ${BRANCH:+--branch "$BRANCH"} "$ORIGIN" "$ROOT_DIR" \
+      || fail "Could not clone${BRANCH:+ branch '$BRANCH'} from $ORIGIN"
+  fi
+  ok "Checkout ready: $ROOT_DIR"
 fi
 
 # ── 2. Node.js version ───────────────────────────────────────────────────────
