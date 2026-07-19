@@ -948,7 +948,7 @@ const searchMemoryInput = {
   // call. At least one form is required; `query` wins when both are given.
   query: z.string().min(1).optional().describe("What to look up (single form). Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
   queries: z.array(z.string().min(1)).min(1).max(SEARCH_MEMORY_MAX_BATCH).optional().describe(`Several things to look up in one call (batch form, ≤${SEARCH_MEMORY_MAX_BATCH}) — prefer one batched call over sequential single searches. Results come back grouped per query.`),
-  repo: z.string().optional().describe("Repository name to scope to (defaults from the session's env). Cross-repo memories in the same product family are still eligible; unrelated repos are hard-filtered out."),
+  repo: z.string().optional().describe("Repository name for ranking (defaults from the session's env). Same-repo memories rank first, same-family next — but every memory in the project stays eligible; nothing is filtered out by repo."),
   limit: z.number().int().min(1).max(50).optional().describe("Max memories to return per query (default 8)."),
 };
 

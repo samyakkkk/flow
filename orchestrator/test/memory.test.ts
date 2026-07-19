@@ -182,12 +182,6 @@ describe("repo family", () => {
     assert.equal(repoFamily.repoFamily(null), null);
   });
 
-  test("family gate: null matches all; mismatch drops", () => {
-    assert.equal(repoFamily.familyMatches("acme", "acme"), true);
-    assert.equal(repoFamily.familyMatches("acme", "other"), false);
-    assert.equal(repoFamily.familyMatches(null, "acme"), true);
-    assert.equal(repoFamily.familyMatches("acme", null), true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -316,18 +310,19 @@ describe("search ranking", () => {
     return consolidate.consolidateObservation(o, judge);
   }
 
-  test("family hard gate drops cross-family memories", async () => {
+  test("repo affinity ranks — cross-repo memories stay eligible, same-family first", async () => {
+    // Two repos in one project learn about the same area. The project is the
+    // trust boundary: NOTHING is filtered by repo; family affinity only orders.
     await seed("payment webhooks are verified with an hmac signature", "acme-backend", ["hmac", "webhook"]);
-    await seed("payment webhooks are verified with an hmac signature", "other-repo", ["hmac", "webhook"]);
+    await seed("payment webhooks retry with exponential backoff", "other-repo", ["hmac", "webhook", "retry"]);
     store.setEmbedder(stubEmbedder);
     const res = await search.searchMemory({ query: "payment webhooks hmac signature verified", repo: "acme-frontend", limit: 10 });
-    // acme-frontend shares family "acme" with acme-backend, NOT with other-repo.
-    assert.ok(res.memories.length >= 1);
-    assert.ok(res.memories.every((m) => m.claim.includes("hmac")));
-    // Ensure the other-repo memory is absent: only acme-family survives the gate.
-    const ids = new Set(res.memories.map((m) => m.id));
-    const otherFamily = db.prepare("SELECT id FROM memories WHERE repo_family = 'other'").all() as Array<{ id: string }>;
-    for (const m of otherFamily) assert.ok(!ids.has(m.id), "other-family memory must be gated out");
+    const ids = res.memories.map((m) => m.id);
+    const acme = db.prepare("SELECT id FROM memories WHERE repo_family = 'acme' AND claim LIKE '%hmac%'").get() as { id: string };
+    const other = db.prepare("SELECT id FROM memories WHERE repo_family = 'other-repo'").get() as { id: string };
+    assert.ok(ids.includes(acme.id), "same-family memory surfaces");
+    assert.ok(ids.includes(other.id), "cross-repo memory must NOT be gated out — all repos in a project share memories");
+    assert.ok(ids.indexOf(acme.id) < ids.indexOf(other.id), "same-family ranks above rest-of-project");
   });
 
   test("silence gate drops weak vector-only hits", async () => {

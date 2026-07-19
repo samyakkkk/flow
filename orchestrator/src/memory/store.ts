@@ -164,16 +164,6 @@ export function getMemory(id: string): MemoryRow | undefined {
   return db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id) as MemoryRow | undefined;
 }
 
-export function memoriesInFamily(family: string | null): MemoryRow[] {
-  // family null (unattributed observation) → compare against all active memories.
-  if (family === null) {
-    return db.prepare(`SELECT * FROM memories WHERE status = 'active'`).all() as MemoryRow[];
-  }
-  return db
-    .prepare(`SELECT * FROM memories WHERE status = 'active' AND (repo_family = ? OR repo_family IS NULL)`)
-    .all(family) as MemoryRow[];
-}
-
 export function createMemory(o: ObservationRow): MemoryRow {
   const id = randomUUID();
   const now = Math.floor(Date.now() / 1000);

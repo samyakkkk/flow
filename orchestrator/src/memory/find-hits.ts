@@ -6,7 +6,7 @@
 // MERGES memory hits into find_entity results by asking the orchestrator here.
 //
 // This REUSES search.ts's ranking/gating verbatim (meaningful-token FTS + the
-// 0.55 silence gate + family gate) — no forked logic. On top of it we apply the
+// 0.55 silence gate; repo affinity ranks, never gates) — no forked logic. On top of it we apply the
 // TYPE QUOTA: at most MEMORY_HIT_QUOTA memory hits per query UNLESS the caller
 // passed a type filter (a typed query is deliberately memory-first, so the quota
 // lifts). Batching (qs[]) works because it's just several single calls.
