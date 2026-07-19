@@ -36,9 +36,23 @@ interface GraphMigration {
   up: (graph: string) => Promise<void>;
 }
 
-// Append-only, next integer id. None yet — the embeddings rollout is a
-// reconciler (convergent), not a migration (one-way).
-const GRAPH_MIGRATIONS: GraphMigration[] = [];
+// Append-only, next integer id.
+const GRAPH_MIGRATIONS: GraphMigration[] = [
+  {
+    id: 1,
+    name: "clear-stale-embeddings-for-model-upgrade",
+    async up(graph: string): Promise<void> {
+      // The embedding model changed dimension (e.g. OpenAI 1536-dim → local
+      // EmbeddingGemma-300M 768-dim). FalkorDB throws on cosineDistance when
+      // stored vectors mix dimensions. Wipe everything so the embed-stamp
+      // reconciler re-embeds all nodes cleanly in the correct space.
+      await run(graph, `MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL`);
+      const conn = await raw();
+      await conn.del(embedStampKey(graph));
+      console.log(`[graph] migration 1 applied to '${graph}': cleared all embeddings for dimension-safe re-embed`);
+    },
+  },
+];
 
 const LATEST = GRAPH_MIGRATIONS.reduce((m, x) => Math.max(m, x.id), 0);
 
@@ -109,7 +123,12 @@ export async function reconcileAfterModelReady(graph: string): Promise<void> {
     const saved = await conn.get(embedStampKey(graph));
     const force = saved !== MODEL_STAMP;
     if (force) {
-      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${MODEL_STAMP}) — re-embedding all nodes`);
+      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${MODEL_STAMP}) — clearing old embeddings before re-embed`);
+      // Null out ALL stored embeddings before re-embedding. This prevents
+      // mixed-dimension state in FalkorDB (cosineDistance throws when stored
+      // vectors have a different length than the query). During the re-embed
+      // window, find_entity falls back to lexical search — acceptable.
+      await run(graph, `MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL`);
     }
     const { total, embedded, failed } = await reconcileEmbeddings(graph, { force });
     if (total === 0) {

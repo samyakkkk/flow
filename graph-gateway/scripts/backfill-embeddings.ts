@@ -1,7 +1,13 @@
 // Manual entry point for the embeddings reconciler. The gateway already runs
 // this automatically at boot (src/reconcile.ts) — reach for the script when you
-// want it NOW without a restart, or need --force after changing the embedding
-// text/model.
+// want it NOW without a restart, or need --force after changing the embedding text.
+//
+// After a MODEL change (different dimension): prefer a gateway restart — boot
+// tasks run the graph migration that clears stale vectors first, preventing
+// FalkorDB dimension-mismatch errors during re-embed. If you must use this
+// script after a model switch, null out existing embeddings manually first:
+//   graph-gateway$ tsx -e "import {run} from './src/graph.js'; run('GRAPH', \`MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL\`)"
+// then run with --force.
 //
 //   tsx scripts/backfill-embeddings.ts [--graph <name>] [--force]
 //
