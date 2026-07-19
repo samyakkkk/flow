@@ -24,7 +24,8 @@ export type SettingScope =
   | "poller:github"
   | "poller:fireflies"
   | "slack"
-  | "pipeline";
+  | "pipeline"
+  | "embeddings";
 
 export interface SettingDef {
   key: string;
@@ -48,7 +49,7 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "LLM_BASE_URL",
     secret: false,
-    description: "OpenAI-compatible API base URL for the classifier and embeddings (any provider works)",
+    description: "OpenAI-compatible API base URL for the classifier and single-shot LLM calls (any provider works). NOTE: embeddings do NOT use this — see EMBEDDING_MODEL / EMBEDDING_API_BASE.",
     default: "https://openrouter.ai/api/v1",
     appliesTo: "classifier",
   },
@@ -108,6 +109,27 @@ export const SETTINGS: SettingDef[] = [
     description:
       "Overrides the per-backend default model for indexing jobs. A thin or noisy graph is usually fixed by setting this to a stronger model.",
     appliesTo: "builder",
+  },
+  {
+    key: "EMBEDDING_MODEL",
+    secret: false,
+    description:
+      "Which embedding model powers semantic search. Unset = smart default: the local EmbeddingGemma (no key) for dev, or OpenAI text-embedding-3-small when an embedding API key is set. Pick a specific id from the registry to override (e.g. openai:text-embedding-3-large for best quality). Changing this re-embeds the whole graph in the new vector space.",
+    appliesTo: "embeddings",
+  },
+  {
+    key: "EMBEDDING_API_KEY",
+    secret: true,
+    description:
+      "API key for API-based embedding models (OpenAI by default). Falls back to OPENAI_API_KEY, then LLM_API_KEY, then OPENROUTER_API_KEY. NOTE: OpenRouter does not serve an embeddings endpoint — use an OpenAI (or OpenAI-compatible) key here.",
+    appliesTo: "embeddings",
+  },
+  {
+    key: "EMBEDDING_API_BASE",
+    secret: false,
+    description:
+      "OpenAI-compatible /embeddings base URL for API embedding models. Defaults to https://api.openai.com/v1. Point at Azure OpenAI or a proxy if needed. Deliberately separate from LLM_BASE_URL (which is often OpenRouter, and cannot embed).",
+    appliesTo: "embeddings",
   },
   {
     key: "LINEAR_API_KEY",

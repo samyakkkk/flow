@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA, WORK_FOLDERS_SCHEMA } from "./migrations.js";
+import { migrate, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA, WORK_FOLDERS_SCHEMA, ORIENT_DOCS_SCHEMA } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -215,31 +215,6 @@ db.exec(`
   );
 
   -- ------------------------------------------------------------------
-  -- Branch notes: Flow-side working memory scoped to (repo, branch) —
-  -- never committed into the user's repo. kind 'wip' is rolling state
-  -- (supersedes itself per session, swept at promotion); note/caution/
-  -- decision accumulate and promote to graph Note nodes after the repo's
-  -- base branch is reindexed (entities exist by then). embedding is a
-  -- Float32Array BLOB, matched in-process for turn-boundary injection.
-  -- ------------------------------------------------------------------
-
-  CREATE TABLE IF NOT EXISTS branch_notes (
-    id          TEXT PRIMARY KEY,
-    repo        TEXT NOT NULL,
-    branch      TEXT NOT NULL,
-    kind        TEXT NOT NULL DEFAULT 'note',  -- wip|note|caution|decision
-    text        TEXT NOT NULL,
-    anchor_hint TEXT,             -- entity name/id hint, resolved at promotion
-    actor       TEXT,
-    session     TEXT,
-    status      TEXT NOT NULL DEFAULT 'active', -- active|ready|promoted|swept
-    embedding   BLOB,
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
-  );
-  CREATE INDEX IF NOT EXISTS idx_branch_notes_repo_branch ON branch_notes(repo, branch, status);
-
-  -- ------------------------------------------------------------------
   -- LLM observability: one row per live model interaction, so wrong
   -- classifications and misbehaving agent runs are debuggable after the
   -- fact. prompt/response are size-capped at write time. Full opencode
@@ -271,6 +246,9 @@ db.exec(MEMORY_TRIGGERS);
 // a rebuildable projection. Kept byte-identical to the migration via the shared
 // ANCHORS_SCHEMA string.
 db.exec(ANCHORS_SCHEMA);
+// orient_docs: rendered ambient-tier docs (migration 14). Kept byte-identical
+// to the migration via the shared ORIENT_DOCS_SCHEMA string.
+db.exec(ORIENT_DOCS_SCHEMA);
 // index_log: indexer lifecycle trail (migration 11). Kept byte-identical to
 // the migration via the shared INDEX_LOG_SCHEMA string.
 db.exec(INDEX_LOG_SCHEMA);

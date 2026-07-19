@@ -8,7 +8,7 @@ import { registerOutboxRoutes } from "./outbox-routes.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
-import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses, checkDefaultBranchDrift } from "./opencode.js";
+import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses } from "./opencode.js";
 import { activityForRepo } from "./job-activity.js";
 import { readIndexLog } from "./index-log.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
@@ -21,7 +21,6 @@ import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
-import { registerNoteRoutes } from "./notes.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
 import { setNodeAnchorProvider } from "./memory/anchors.js";
 import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
@@ -78,7 +77,6 @@ registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerCorrectionRoutes(app);
-registerNoteRoutes(app);
 registerMemoryRoutes(app);
 // Memory anchors resolve graph node paths through the gateway; a null gateway
 // (no FLOW_GATEWAY_URL) leaves the default no-op provider and items stay
@@ -281,14 +279,6 @@ const start = async (): Promise<void> => {
 
     // Start all registered pollers (no-ops if FLOW_POLL_DISABLE=1)
     startAllPollers();
-
-    // Default-branch drift check: shortly after boot, then daily. Records
-    // drift on the registry entry (never auto-switches); the dashboard shows
-    // "default → <branch>" so a human can decide. Skipped in tests.
-    if (!process.env.FLOW_FAKE_OPENCODE && process.env.FLOW_POLL_DISABLE !== "1") {
-      setTimeout(() => void checkDefaultBranchDrift(), 30_000);
-      setInterval(() => void checkDefaultBranchDrift(), 24 * 60 * 60 * 1000);
-    }
 
     // Boot Slack Socket Mode adapter (no-op if tokens absent)
     bootSlackAdapter().catch((err) =>

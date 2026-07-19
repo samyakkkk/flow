@@ -39,7 +39,6 @@ export interface RepoStatusEntry {
   lastIndexedCommit: string | null;
   lastIndexedAt: string | null;
   lastError: string | null;
-  upstreamDefaultBranch?: string;
 }
 
 // One row of the durable indexer trail (GET /api/index-log).
@@ -348,15 +347,6 @@ function SourceRow({ s, st, onChanged }: { s: SourceEntry; st?: RepoStatusEntry;
               indexed {timeAgo(s.lastIndexedAt)}
             </span>
           ) : null}
-          {st?.upstreamDefaultBranch && (
-            <span
-              style={{ fontFamily: "var(--font-mono)" }}
-              className="text-[10px] text-text-muted flex-shrink-0"
-              title={`GitHub's default branch is now ${st.upstreamDefaultBranch}; Flow still indexes ${st.branch}. Change the branch if you want to follow it.`}
-            >
-              ⚠ default → {st.upstreamDefaultBranch}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span

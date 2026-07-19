@@ -1,11 +1,16 @@
 // search.ts — retrieval for search_knowledge. Eval-calibrated ranking:
 //
-//   HARD GATE on repo_family mismatch — drop, never downweight. (null family on
-//     either side = match-all.)
+//   REPO AFFINITY IS RANK, NEVER A GATE (Samyak, 2026-07-19). The project is
+//     the trust boundary — one flow.db per project — and every memory in it is
+//     eligible from any repo's session. Same repo ranks first, same family
+//     next; nothing is invisible. (Supersedes the eval-era repo_family hard
+//     gate, which predates the meaningful-tokens FTS fix that closed the
+//     actual noise hole.)
 //   score = cosine
 //         + 0.15 * retrieval_keys_overlap
 //         + 0.10 * file_mention_overlap
 //         + 0.08 * same_repo_exact
+//         + 0.04 * same_family (sibling repo, e.g. acme-backend from acme-frontend)
 //   SILENCE GATE: drop results under ~0.55 cosine UNLESS they are an FTS5 exact
 //     hit. FTS candidates are ALWAYS eligible (identifiers/error strings are the
 //     reliable path); vector-only candidates must clear the cosine floor.
@@ -17,7 +22,7 @@
 import db from "../db.js";
 import { cosine, blobToVec } from "../embed.js";
 import { getEmbedder, memoryVectors, type MemoryRow } from "./store.js";
-import { repoFamily, familyMatches } from "./repo-family.js";
+import { repoFamily } from "./repo-family.js";
 import { strengthTier } from "./strength.js";
 import { searchCorpus } from "../corpus.js";
 import { itemsAnchoredToNode } from "./anchors.js";
@@ -263,9 +268,6 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
     // Node scope: drop memories not anchored to the node.
     if (nodeMemoryIds && !nodeMemoryIds.has(m.id)) continue;
 
-    // HARD family gate — drop, don't downweight.
-    if (!familyMatches(queryFamily, m.repo_family)) continue;
-
     const cos = cosById.get(m.id) ?? 0;
     const isFts = ftsIds.has(m.id);
     // Silence gate: vector-only candidates must clear the cosine floor; FTS
@@ -277,9 +279,12 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
     const keyOverlap = overlap(queryTokens, keys);
     const files = keys.filter((k) => k.includes("/") || k.includes("."));
     const fileOverlap = overlap(queryTokens, files);
+    // Repo affinity: rank, never gate — same repo first, family sibling next,
+    // rest of the project after. All eligible.
     const sameRepoExact = input.repo && m.repo && input.repo.toLowerCase() === m.repo.toLowerCase() ? 1 : 0;
+    const sameFamily = !sameRepoExact && queryFamily && m.repo_family && queryFamily === m.repo_family ? 1 : 0;
 
-    const score = cos + 0.15 * keyOverlap + 0.1 * fileOverlap + 0.08 * sameRepoExact;
+    const score = cos + 0.15 * keyOverlap + 0.1 * fileOverlap + 0.08 * sameRepoExact + 0.04 * sameFamily;
     hits.push({
       id: m.id,
       claim: m.claim,

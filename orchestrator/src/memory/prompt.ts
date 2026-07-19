@@ -22,8 +22,11 @@ Each observation is an object:
   "kind": "decision | constraint | gotcha | how_to | preference | plan",
   "context": { "repo": "<repo name>", "branch": "<branch if known, else omit>", "files": ["<paths central to the claim>"] },
   "source": "user_stated | agent_inferred | error_proven",
-  "retrieval_keys": ["5-10 short strings: file paths, error symptoms (INCLUDE VERBATIM ERROR SNIPPETS when present), command names, and ALTERNATE PHRASINGS a future agent might search for"]
+  "retrieval_keys": ["5-10 short strings: file paths, error symptoms (INCLUDE VERBATIM ERROR SNIPPETS when present), command names, and ALTERNATE PHRASINGS a future agent might search for"],
+  "ambient": false
 }
+
+ambient guide: set true ONLY when EVERY future session on this repo should see this before starting any work — how the system works overall, standing conventions, durable design principles, deployment-wide constraints (the AGENTS.md tier). Set false for anything situational: specific bugs, API shapes, one-off findings, anything only relevant when touching a particular area (those are found via search instead). MOST observations are false.
 
 kind guide:
 - decision: a chosen approach / architecture / tradeoff that was settled ("we use X not Y because Z").

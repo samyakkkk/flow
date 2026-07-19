@@ -6,9 +6,9 @@
 // download. isLocalEmbedReady() flips to true once the model is loaded;
 // callers (embed.ts, reconcile.ts) poll this before using embed functions.
 
-// Model identifier stamped in Redis so a changed model triggers a full
-// re-embed of all graph nodes (different dim = stale vectors are useless).
-export const MODEL_STAMP = "local:embeddinggemma-300M-Q8_0";
+// The local model's native output dimension. This is the source of truth for
+// the local model's dim — the embedding registry (embedding-models.ts) imports
+// it. The model's id/stamp lives in the registry (LOCAL_MODEL_ID).
 export const LOCAL_EMBED_DIM = 768;
 
 const HF_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";

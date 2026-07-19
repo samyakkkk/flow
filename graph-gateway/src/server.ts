@@ -4,7 +4,8 @@ import { record, tail } from "./journal.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
 import { reconcileEmbeddings, runBootTasks } from "./reconcile.js";
 import { startLocalModel } from "./local-embed.js";
-import { embedText, embeddingsEnabled, EMBED_DIM } from "./embed.js";
+import { embedText, embeddingsEnabled } from "./embed.js";
+import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
 
 // HTTP face of the gateway — bind to localhost only.
@@ -80,7 +81,7 @@ const server = createServer(async (req, res) => {
       if (!text.trim()) return json(res, 400, { status: "error", error: "text is required" });
       const ready = embeddingsEnabled();
       const vec = ready ? await embedText(text) : null;
-      return json(res, 200, { vec, dim: EMBED_DIM, ready });
+      return json(res, 200, { vec, dim: activeEmbeddingDim(), ready });
     }
     // Indexing writes arrive through short-lived MCP processes. A final
     // reconciliation closes the race where those writes happen while the
@@ -147,11 +148,13 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
+  const model = activeEmbeddingModel();
+  console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}', embed model: ${model.id}, dim: ${model.dim})`);
   // Start the local embedding model download immediately so it runs in
-  // parallel with migrations. runBootTasks awaits the same singleton promise
-  // before it reconciles embeddings — nodes indexed during the download are
-  // backfilled automatically once the model is ready. See reconcile.ts.
-  startLocalModel();
+  // parallel with migrations — but only when the local model is the active
+  // provider. An API model has nothing to download. runBootTasks awaits the
+  // same singleton promise before it reconciles embeddings — nodes indexed
+  // during the download are backfilled once the model is ready. See reconcile.ts.
+  if (model.provider === "local") startLocalModel();
   runBootTasks(DEFAULT_GRAPH);
 });

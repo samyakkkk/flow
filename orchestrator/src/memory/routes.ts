@@ -10,6 +10,12 @@
 //   POST /v1/memory/hits    {query|queries, repo?, limit?} → find_entity memory
 //                                                     merge (Section D): typed
 //                                                     terse lines + quota.
+//   POST /v1/memory/remember {text, repo?, branch?, session?} → {status:"queued"}
+//                                                     active capture: instant
+//                                                     ack, async distillation.
+//   GET  /v1/memory/orient-doc?repo=<name>           → {global, repo} rendered
+//                                                     ambient-tier docs (null
+//                                                     when a scope has none).
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -23,6 +29,8 @@ import {
 import { getNodeHeadline } from "./headline.js";
 import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
+import { rememberText } from "./distiller.js";
+import { getOrientDocs } from "./orient-doc.js";
 
 export interface MemoryStats {
   memories: number;
@@ -124,4 +132,36 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       return reply.send({ quota: MEMORY_HIT_QUOTA, hits: groups[0].hits });
     },
   );
+
+  // Active capture — the gateway's `remember` verb lands here. Ack instantly
+  // (the agent should never wait on an LLM call); extraction + consolidation
+  // run async. rememberText itself guarantees the text survives an LLM
+  // failure (verbatim fallback), so a queued ack is an honest promise.
+  app.post<{ Body: { text?: string; repo?: string | null; branch?: string | null; session?: string | null } }>(
+    "/v1/memory/remember",
+    async (req, reply) => {
+      const b = req.body ?? {};
+      const text = String(b.text ?? "").trim();
+      if (!text) return reply.code(400).send({ error: "text is required" });
+      if (text.length > 20_000) return reply.code(400).send({ error: "text too long (20k max)" });
+      const ctx = {
+        text,
+        repo: b.repo ? String(b.repo) : null,
+        branch: b.branch ? String(b.branch) : null,
+        sessionId: b.session ? String(b.session) : null,
+      };
+      setImmediate(() => {
+        rememberText(ctx)
+          .then((out) => console.log(`[memory] remember distilled: ${out.observations} observation(s)${out.reason ? ` (${out.reason})` : ""}`))
+          .catch((err) => console.warn(`[memory] remember failed: ${err instanceof Error ? err.message : String(err)}`));
+      });
+      return reply.code(202).send({ status: "queued" });
+    },
+  );
+
+  // The ambient tier — rendered orient docs, served verbatim into the
+  // gateway's orient(). A scope with no members returns null, never "".
+  app.get<{ Querystring: { repo?: string } }>("/v1/memory/orient-doc", async (req) => {
+    return getOrientDocs(req.query.repo?.trim() || null);
+  });
 }

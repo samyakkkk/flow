@@ -34,6 +34,7 @@ export interface ObservationRow {
   source_weight: string;
   context_files: string | null;
   retrieval_keys: string | null;
+  ambient: number; // 0 | 1 — orient-doc nomination
   embedding: Buffer | null;
   memory_id: string | null;
   created_at: number;
@@ -61,10 +62,10 @@ export interface MemoryRow {
 const insertObservationStmt = db.prepare(`
   INSERT INTO observations
     (id, source, repo, repo_family, branch, session_id, source_id, source_url, claim, kind, source_weight,
-     context_files, retrieval_keys, embedding, memory_id)
+     context_files, retrieval_keys, ambient, embedding, memory_id)
   VALUES
     (@id, @source, @repo, @repo_family, @branch, @session_id, @source_id, @source_url, @claim, @kind, @source_weight,
-     @context_files, @retrieval_keys, @embedding, @memory_id)
+     @context_files, @retrieval_keys, @ambient, @embedding, @memory_id)
 `);
 
 export interface NewObservation {
@@ -79,6 +80,7 @@ export interface NewObservation {
   source_weight?: string;
   context_files?: string[];
   retrieval_keys?: string[];
+  ambient?: boolean;
   memory_id?: string | null;
 }
 
@@ -107,6 +109,7 @@ export async function insertObservation(o: NewObservation): Promise<ObservationR
     source_weight: o.source_weight ?? "agent_inferred",
     context_files: o.context_files && o.context_files.length ? JSON.stringify(o.context_files) : null,
     retrieval_keys: keys.length ? JSON.stringify(keys) : null,
+    ambient: o.ambient ? 1 : 0,
     embedding: vec ? vecToBlob(vec) : null,
     memory_id: o.memory_id ?? null,
   };
@@ -154,6 +157,7 @@ export function rawToNewObservation(
     source_weight: raw.source,
     context_files: raw.context.files ?? [],
     retrieval_keys: raw.retrieval_keys ?? [],
+    ambient: raw.ambient,
   };
 }
 
@@ -162,16 +166,6 @@ export function rawToNewObservation(
 
 export function getMemory(id: string): MemoryRow | undefined {
   return db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id) as MemoryRow | undefined;
-}
-
-export function memoriesInFamily(family: string | null): MemoryRow[] {
-  // family null (unattributed observation) → compare against all active memories.
-  if (family === null) {
-    return db.prepare(`SELECT * FROM memories WHERE status = 'active'`).all() as MemoryRow[];
-  }
-  return db
-    .prepare(`SELECT * FROM memories WHERE status = 'active' AND (repo_family = ? OR repo_family IS NULL)`)
-    .all(family) as MemoryRow[];
 }
 
 export function createMemory(o: ObservationRow): MemoryRow {

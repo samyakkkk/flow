@@ -23,7 +23,7 @@ import {
   type ObservationRow,
   type MemoryRow,
   createMemory,
-  memoriesInFamily,
+  activeMemoryRows,
   updateMemory,
   attachObservation,
   recomputePeopleCount,
@@ -85,8 +85,12 @@ export function recomputeStrength(memoryId: string): MemoryRow {
 }
 
 export async function consolidateObservation(obs: ObservationRow, judge: Judge): Promise<ConsolidateResult> {
-  const candidates = memoriesInFamily(obs.repo_family);
-  const match = bestMatch(obs, candidates);
+  // Candidates are PROJECT-WIDE, not family-scoped: all repos in a project
+  // share memories (Samyak, 2026-07-19), so the same fact learned from two
+  // repos merges and strengthens instead of duplicating per family. The T_LO
+  // band + judge already own the same/new decision; widening candidates only
+  // adds cheap in-process cosine comparisons.
+  const match = bestMatch(obs, activeMemoryRows());
 
   // No candidate at all, or below T_LO → brand-new memory.
   if (!match || match.sim < T_LO) {

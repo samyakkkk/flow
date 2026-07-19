@@ -58,7 +58,7 @@ function stubVec(text: string): Float32Array {
 const stubEmbedder = async (t: string) => stubVec(t);
 
 function clearMemory(): void {
-  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
+  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM orient_docs; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
   store.invalidateVectorCache();
   headline?.invalidateHeadlineCache();
 }
@@ -182,12 +182,6 @@ describe("repo family", () => {
     assert.equal(repoFamily.repoFamily(null), null);
   });
 
-  test("family gate: null matches all; mismatch drops", () => {
-    assert.equal(repoFamily.familyMatches("acme", "acme"), true);
-    assert.equal(repoFamily.familyMatches("acme", "other"), false);
-    assert.equal(repoFamily.familyMatches(null, "acme"), true);
-    assert.equal(repoFamily.familyMatches("acme", null), true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -316,18 +310,19 @@ describe("search ranking", () => {
     return consolidate.consolidateObservation(o, judge);
   }
 
-  test("family hard gate drops cross-family memories", async () => {
+  test("repo affinity ranks — cross-repo memories stay eligible, same-family first", async () => {
+    // Two repos in one project learn about the same area. The project is the
+    // trust boundary: NOTHING is filtered by repo; family affinity only orders.
     await seed("payment webhooks are verified with an hmac signature", "acme-backend", ["hmac", "webhook"]);
-    await seed("payment webhooks are verified with an hmac signature", "other-repo", ["hmac", "webhook"]);
+    await seed("payment webhooks retry with exponential backoff", "other-repo", ["hmac", "webhook", "retry"]);
     store.setEmbedder(stubEmbedder);
     const res = await search.searchMemory({ query: "payment webhooks hmac signature verified", repo: "acme-frontend", limit: 10 });
-    // acme-frontend shares family "acme" with acme-backend, NOT with other-repo.
-    assert.ok(res.memories.length >= 1);
-    assert.ok(res.memories.every((m) => m.claim.includes("hmac")));
-    // Ensure the other-repo memory is absent: only acme-family survives the gate.
-    const ids = new Set(res.memories.map((m) => m.id));
-    const otherFamily = db.prepare("SELECT id FROM memories WHERE repo_family = 'other'").all() as Array<{ id: string }>;
-    for (const m of otherFamily) assert.ok(!ids.has(m.id), "other-family memory must be gated out");
+    const ids = res.memories.map((m) => m.id);
+    const acme = db.prepare("SELECT id FROM memories WHERE repo_family = 'acme' AND claim LIKE '%hmac%'").get() as { id: string };
+    const other = db.prepare("SELECT id FROM memories WHERE repo_family = 'other-repo'").get() as { id: string };
+    assert.ok(ids.includes(acme.id), "same-family memory surfaces");
+    assert.ok(ids.includes(other.id), "cross-repo memory must NOT be gated out — all repos in a project share memories");
+    assert.ok(ids.indexOf(acme.id) < ids.indexOf(other.id), "same-family ranks above rest-of-project");
   });
 
   test("silence gate drops weak vector-only hits", async () => {
@@ -583,6 +578,199 @@ describe("distiller end-to-end (injected LLM + judge)", () => {
     } finally {
       process.env.FLOW_DISTILLER = prev;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// remember — active capture. Same pipeline as a session tail, plus the two
+// remember-specific guarantees: source_weight floors to user_stated, and the
+// text survives an LLM failure verbatim (an explicit "remember" is never lost).
+describe("remember (active capture)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  test("LLM path: extracts, floors source_weight to user_stated, consolidates", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "Deploys go through the staging soak for 24h first", kind: "constraint", context: {}, source: "agent_inferred", retrieval_keys: ["staging", "soak", "deploy"] },
+      ]),
+    );
+    const out = await distiller.rememberText({ text: "remember: deploys always soak in staging for 24h", repo: "acme", branch: "main", sessionId: "sess-r1", judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.ran, true);
+    assert.equal(out.observations, 1);
+    assert.equal(out.reason, undefined, "LLM path should not report a fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim LIKE '%soak%'").get() as any;
+    assert.ok(obs, "observation should exist");
+    assert.equal(obs.source_weight, "user_stated", "the human dictated this — weight floors to user_stated");
+    assert.equal(obs.repo, "acme");
+  });
+
+  test("LLM failure: the text is stored verbatim, never lost", async () => {
+    llm.setLlmTransport(async () => {
+      throw new Error("model unavailable");
+    });
+    const text = "remember: the landing .env holds the working OPENROUTER key";
+    const out = await distiller.rememberText({ text, repo: "acme", branch: null, sessionId: null, judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.ran, true);
+    assert.equal(out.observations, 1);
+    assert.equal(out.reason, "verbatim-fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim = ?").get(text) as any;
+    assert.ok(obs, "verbatim observation should exist");
+    assert.equal(obs.source_weight, "user_stated");
+  });
+
+  test("LLM returns empty array: verbatim fallback also fires", async () => {
+    llm.setLlmTransport(async () => "[]");
+    const text = "remember this exact sentence";
+    const out = await distiller.rememberText({ text, repo: null, branch: null, sessionId: null, judge: async () => ({ verdict: "new" as const }) });
+    assert.equal(out.reason, "verbatim-fallback");
+    const obs = db.prepare("SELECT * FROM observations WHERE claim = ?").get(text) as any;
+    assert.ok(obs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Distiller triggers — the idle sweep. Regression: agent_sessions.updated_at
+// is written in MILLISECONDS (runtime.ts uses Date.now()); the sweep's cutoff
+// once divided by 1000, so the ms-vs-seconds comparison was always false and
+// the sweep matched ZERO sessions — the distiller never fired on live
+// deployments. These tests insert rows exactly as the runtime does (ms).
+describe("distiller trigger: idle sweep", () => {
+  let trigger: typeof import("../src/memory/trigger.js");
+
+  before(async () => {
+    trigger = await import("../src/memory/trigger.js");
+    store.setEmbedder(stubEmbedder);
+    // memory.test.ts never imports runtime.ts (which owns this table), so
+    // create the columns the trigger touches, shaped like the real thing.
+    db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY, backend TEXT, repo TEXT, cwd TEXT, title TEXT,
+      status TEXT, updated_at INTEGER, created_at INTEGER, last_distilled_seq INTEGER
+    )`);
+    trigger.setTranscriptReader(() => [
+      { seq: 1, kind: "user_prompt", data: { text: "Switch the auth flow to JWT stored in httpOnly cookies, not localStorage." } },
+      { seq: 2, kind: "update", data: { sessionUpdate: "agent_message_chunk", content: { text: "Done — JWT now lives in an httpOnly cookie." } } },
+    ]);
+  });
+
+  beforeEach(() => db.exec("DELETE FROM agent_sessions"));
+
+  test("sweeps an idle session whose updated_at (ms) is older than IDLE_MS", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "Auth uses JWT in httpOnly cookies", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["jwt", "cookie"] },
+      ]),
+    );
+    const staleMs = Date.now() - trigger.IDLE_MS - 60_000; // ms, as runtime writes
+    db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
+      .run("sweep-1", "acme", "idle", staleMs, staleMs);
+    const ran = await trigger.idleSweep();
+    assert.equal(ran, 1, "the stale idle session must be swept (ms cutoff regression)");
+    const obs = db.prepare("SELECT * FROM observations WHERE session_id = 'sweep-1'").get() as any;
+    assert.ok(obs, "distilled observation should exist");
+    const meta = db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'sweep-1'").get() as any;
+    assert.equal(meta.last_distilled_seq, 2, "high-water mark advances to the max transcript seq");
+  });
+
+  test("leaves recently-active sessions alone", async () => {
+    db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
+      .run("sweep-2", "acme", "idle", Date.now(), Date.now());
+    const ran = await trigger.idleSweep();
+    assert.equal(ran, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orient docs — the ambient tier. Membership is a derived view (nominated +
+// user_stated-or-corroborated + uncontested), the render is deterministic, and
+// docs rebuild from the distiller hook. These tests drive the real
+// consolidation path, never the doc table directly.
+describe("orient docs (ambient tier)", () => {
+  let orientDoc: typeof import("../src/memory/orient-doc.js");
+
+  before(async () => {
+    orientDoc = await import("../src/memory/orient-doc.js");
+    store.setEmbedder(stubEmbedder);
+  });
+
+  type SeedOpts = { repo?: string | null; kind?: string; weight?: string; ambient?: boolean };
+  async function seed(claim: string, { repo = "acme", kind = "decision", weight = "user_stated", ambient = true }: SeedOpts = {}) {
+    const o = await store.insertObservation({
+      source: "session", repo, claim, kind, source_weight: weight, retrieval_keys: [], ambient, session_id: "s1",
+    });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("user_stated + ambient fast-tracks into the repo doc; sections + [mem:id] render", async () => {
+    await seed("agents never run in the managed clone; work folders only", { kind: "constraint" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    const docs = orientDoc.getOrientDocs("acme");
+    assert.ok(docs.repo, "repo doc should exist");
+    assert.match(docs.repo!, /HOW THIS REPO WORKS/);
+    assert.match(docs.repo!, /Constraints:/);
+    assert.match(docs.repo!, /managed clone.*\[mem:[0-9a-f-]+\]/);
+    assert.equal(docs.global, null, "repo-scoped memory must not leak into the global doc");
+  });
+
+  test("agent_inferred waits for corroboration (evidence >= 2), then earns in", async () => {
+    await seed("the graph indexes at capability level, not per-function", { weight: "agent_inferred" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    assert.equal(orientDoc.getOrientDocs("acme").repo, null, "single agent claim must NOT be doctrine yet");
+
+    // A second session observes the same thing → judge says same → evidence 2.
+    const o2 = await store.insertObservation({
+      source: "session", repo: "acme", claim: "the graph indexes at capability level, not per-function",
+      kind: "decision", source_weight: "agent_inferred", retrieval_keys: [], ambient: true, session_id: "s2",
+    });
+    await consolidate.consolidateObservation(o2, async () => ({ verdict: "same" as const }));
+    orientDoc.rebuildOrientDocsFor("acme");
+    assert.match(orientDoc.getOrientDocs("acme").repo ?? "", /capability level/, "corroborated claim earns in");
+  });
+
+  test("plans and non-nominated memories never enter; contradiction evicts", async () => {
+    await seed("next week we migrate the queue", { kind: "plan" });
+    await seed("tabs not spaces in this repo", { ambient: false });
+    const inDoc = await seed("deploys go through staging first", { kind: "constraint" });
+    orientDoc.rebuildOrientDocsFor("acme");
+    let doc = orientDoc.getOrientDocs("acme").repo ?? "";
+    assert.doesNotMatch(doc, /migrate the queue/);
+    assert.doesNotMatch(doc, /tabs not spaces/);
+    assert.match(doc, /staging first/);
+
+    // A contradicting observation lands → the line leaves the doc immediately.
+    const contra = await store.insertObservation({
+      source: "session", repo: "acme", claim: "deploys now go straight to prod",
+      kind: "constraint", source_weight: "user_stated", retrieval_keys: [], ambient: true, session_id: "s3",
+      memory_id: null,
+    });
+    await consolidate.consolidateObservation(contra, async () => ({ verdict: "contradicts" as const }));
+    orientDoc.rebuildOrientDocsFor("acme");
+    doc = orientDoc.getOrientDocs("acme").repo ?? "";
+    assert.doesNotMatch(doc, new RegExp(`mem:${inDoc.memoryId}`), "contested memory must leave the doc");
+  });
+
+  test("repo-less memories land in the global doc; revision bumps only on change", async () => {
+    await seed("the team ships behind PRs, never direct pushes", { repo: null });
+    orientDoc.rebuildOrientDocsFor(null);
+    const docs = orientDoc.getOrientDocs(null);
+    assert.match(docs.global ?? "", /HOW THIS PROJECT WORKS/);
+    const rev = () => (db.prepare("SELECT revision FROM orient_docs WHERE scope = 'global'").get() as any).revision;
+    const r1 = rev();
+    orientDoc.rebuildOrientDocsFor(null); // nothing changed
+    assert.equal(rev(), r1, "no-op rebuild must not bump the revision");
+  });
+
+  test("distiller e2e: an ambient extraction reaches the doc through the hook", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "All background jobs are idempotent by convention", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["idempotent", "jobs"], ambient: true },
+      ]),
+    );
+    const events = [
+      { kind: "user_prompt", data: { text: "Remember that all our background jobs must stay idempotent." } },
+      { kind: "update", data: { sessionUpdate: "agent_message_chunk", content: { text: "Noted and applied." } } },
+    ];
+    await distiller.distillSession({ sessionId: "sess-doc", repo: "acme", branch: "main", events, judge: async () => ({ verdict: "new" as const }) });
+    assert.match(orientDoc.getOrientDocs("acme").repo ?? "", /idempotent by convention/);
   });
 });
 
