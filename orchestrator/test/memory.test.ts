@@ -629,6 +629,57 @@ describe("remember (active capture)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Distiller triggers — the idle sweep. Regression: agent_sessions.updated_at
+// is written in MILLISECONDS (runtime.ts uses Date.now()); the sweep's cutoff
+// once divided by 1000, so the ms-vs-seconds comparison was always false and
+// the sweep matched ZERO sessions — the distiller never fired on live
+// deployments. These tests insert rows exactly as the runtime does (ms).
+describe("distiller trigger: idle sweep", () => {
+  let trigger: typeof import("../src/memory/trigger.js");
+
+  before(async () => {
+    trigger = await import("../src/memory/trigger.js");
+    store.setEmbedder(stubEmbedder);
+    // memory.test.ts never imports runtime.ts (which owns this table), so
+    // create the columns the trigger touches, shaped like the real thing.
+    db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY, backend TEXT, repo TEXT, cwd TEXT, title TEXT,
+      status TEXT, updated_at INTEGER, created_at INTEGER, last_distilled_seq INTEGER
+    )`);
+    trigger.setTranscriptReader(() => [
+      { seq: 1, kind: "user_prompt", data: { text: "Switch the auth flow to JWT stored in httpOnly cookies, not localStorage." } },
+      { seq: 2, kind: "update", data: { sessionUpdate: "agent_message_chunk", content: { text: "Done — JWT now lives in an httpOnly cookie." } } },
+    ]);
+  });
+
+  beforeEach(() => db.exec("DELETE FROM agent_sessions"));
+
+  test("sweeps an idle session whose updated_at (ms) is older than IDLE_MS", async () => {
+    llm.setLlmTransport(async () =>
+      JSON.stringify([
+        { claim: "Auth uses JWT in httpOnly cookies", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["jwt", "cookie"] },
+      ]),
+    );
+    const staleMs = Date.now() - trigger.IDLE_MS - 60_000; // ms, as runtime writes
+    db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
+      .run("sweep-1", "acme", "idle", staleMs, staleMs);
+    const ran = await trigger.idleSweep();
+    assert.equal(ran, 1, "the stale idle session must be swept (ms cutoff regression)");
+    const obs = db.prepare("SELECT * FROM observations WHERE session_id = 'sweep-1'").get() as any;
+    assert.ok(obs, "distilled observation should exist");
+    const meta = db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'sweep-1'").get() as any;
+    assert.equal(meta.last_distilled_seq, 2, "high-water mark advances to the max transcript seq");
+  });
+
+  test("leaves recently-active sessions alone", async () => {
+    db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
+      .run("sweep-2", "acme", "idle", Date.now(), Date.now());
+    const ran = await trigger.idleSweep();
+    assert.equal(ran, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Section A — anchor resolution. Deterministic file matching against a STUBBED
 // NodeAnchorProvider (no graph, no gateway). Covers: file match, most-specific
 // preference (endpoint over service), cap 3, idempotent re-resolve after a node
