@@ -12,7 +12,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +26,7 @@ import {
   mcpServerSpec,
   resolveBackendExecutable,
   resolveIndexerBackend,
+  resolveOpencodeBin,
 } from "./indexer-runtime.js";
 import { finishActivity, recordActivityLine, startActivity } from "./job-activity.js";
 import { indexLog } from "./index-log.js";
@@ -37,24 +37,6 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const WORKSPACE_DIR =
   process.env.OPENCODE_WORKSPACE_DIR ?? resolve(__dirname, "../../index-workspace");
 
-// The opencode runtime the graph builder + Ask shell out to. We bundle
-// `opencode-ai` (its platform binary arrives via optionalDependencies, like
-// esbuild), so users never install opencode themselves. Resolve the bundled
-// binary; fall back to a system `opencode` on PATH if resolution ever fails.
-const OPENCODE_BIN = ((): string => {
-  try {
-    const pkgPath = createRequire(import.meta.url).resolve("opencode-ai/package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { bin?: string | Record<string, string> };
-    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.opencode;
-    if (binRel) {
-      const binAbs = resolve(pkgPath, "..", binRel);
-      if (existsSync(binAbs)) return binAbs;
-    }
-  } catch {
-    /* opencode-ai not resolvable — fall back to PATH */
-  }
-  return "opencode";
-})();
 
 // Per-repo mutex: set of repos currently being indexed
 const runningRepos = new Set<string>();
@@ -1206,9 +1188,10 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   // have no such shared lock, so they don't stagger.
   await acquireSpawnSlot();
 
+  const opencodeBin = await resolveOpencodeBin();
   startActivity(jobId, opts.repo ?? "", "opencode");
   const t0 = Date.now();
-  const spawned = await spawnAsync(OPENCODE_BIN, args, env, timeoutMs, undefined, (line) =>
+  const spawned = await spawnAsync(opencodeBin, args, env, timeoutMs, undefined, (line) =>
     recordActivityLine(jobId, "opencode", line), jobId
   );
   const latencyMs = Date.now() - t0;

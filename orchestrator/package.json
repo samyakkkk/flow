@@ -21,8 +21,7 @@
     "@slack/web-api": "^7.18.0",
     "@agentclientprotocol/codex-acp": "^1.1.0",
     "better-sqlite3": "^12.11.1",
-    "fastify": "^4.28.0",
-    "opencode-ai": "^1.17.14"
+    "fastify": "^4.28.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

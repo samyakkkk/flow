@@ -15,12 +15,14 @@ full-container path (see the bottom of this file).
 - **Docker running** — Flow starts FalkorDB (its graph database) in a container.
   Already run FalkorDB yourself? Point Flow at it and skip Docker:
   `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
+- A **coding CLI** — indexing runs through whichever of opencode, Codex, or
+  Claude Code is on your machine (`INDEXER_RUNTIME`, default auto-detects
+  opencode → codex → claude). None installed? `./setup.sh` installs opencode
+  through a signed channel (Homebrew / the official installer — never the npm
+  binary, which macOS kills as unsigned).
 - An **LLM provider** — paste an OpenRouter key into the dashboard on first run,
-  skip if any supported coding CLI (opencode, Codex, or Claude Code) is installed
-  on your machine (indexing runs through whichever is present — `INDEXER_RUNTIME`,
-  default auto-detects opencode → codex → claude), or point Flow at any
-  OpenAI-compatible API (`LLM_BASE_URL` + `LLM_API_KEY` in Settings). Nothing else
-  to install: the graph engine (opencode) is bundled as a dependency.
+  skip if your coding CLI is already signed in, or point Flow at any
+  OpenAI-compatible API (`LLM_BASE_URL` + `LLM_API_KEY` in Settings).
 
 ---
 
@@ -28,9 +30,10 @@ full-container path (see the bottom of this file).
 
 ```bash
 git clone <repo> && cd flow
-npm install && npm install -g .     # deps + `flow` on your PATH
+./setup.sh              # deps + environment checks + coding CLI install if none found
+npm install -g .        # `flow` on your PATH
 
-flow up mycompany                   # creates it if new, then starts
+flow up mycompany       # creates it if new, then starts
 ```
 
 `flow up` prints your dashboard URL. In local mode you're already signed in — no
