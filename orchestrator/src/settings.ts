@@ -121,14 +121,14 @@ export const SETTINGS: SettingDef[] = [
     key: "EMBEDDING_API_KEY",
     secret: true,
     description:
-      "API key for API-based embedding models (OpenAI by default). Falls back to OPENAI_API_KEY, then LLM_API_KEY, then OPENROUTER_API_KEY. NOTE: OpenRouter does not serve an embeddings endpoint — use an OpenAI (or OpenAI-compatible) key here.",
+      "API key for API-based embedding models. Falls back to OPENAI_API_KEY, then LLM_API_KEY, then OPENROUTER_API_KEY. The base URL auto-tracks the key's provider: an OpenRouter key (sk-or-…) is sent to OpenRouter's /embeddings endpoint, an OpenAI key to OpenAI. Set EMBEDDING_API_BASE to override.",
     appliesTo: "embeddings",
   },
   {
     key: "EMBEDDING_API_BASE",
     secret: false,
     description:
-      "OpenAI-compatible /embeddings base URL for API embedding models. Defaults to https://api.openai.com/v1. Point at Azure OpenAI or a proxy if needed. Deliberately separate from LLM_BASE_URL (which is often OpenRouter, and cannot embed).",
+      "OpenAI-compatible /embeddings base URL for API embedding models. If unset, auto-selects by key provider: OpenRouter (https://openrouter.ai/api/v1) for an sk-or-… key, else OpenAI (https://api.openai.com/v1). Set explicitly for Azure OpenAI or a proxy.",
     appliesTo: "embeddings",
   },
   {

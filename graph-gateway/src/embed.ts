@@ -34,9 +34,10 @@ export function embeddingsEnabled(): boolean {
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible embeddings API backend. Used when the resolved model's
-// provider is "openai". Points at embeddingApiBase() (OpenAI by default) —
-// deliberately separate from the chat LLM_BASE_URL, since OpenRouter (the chat
-// default) does not serve /embeddings.
+// provider is "openai". Points at embeddingApiBase(), which tracks the resolved
+// key's provider — so an OpenRouter key hits OpenRouter's /embeddings and an
+// OpenAI key hits OpenAI. Deliberately separate from the chat LLM_BASE_URL so
+// the two can diverge (e.g. OpenRouter chat + OpenAI embeddings).
 async function embedApiBatch(texts: string[]): Promise<(number[] | null)[]> {
   const model = activeEmbeddingModel();
   const key = embeddingApiKey();
