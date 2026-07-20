@@ -78,13 +78,18 @@ export function findEmbeddingModel(id: string): EmbeddingModelSpec | undefined {
   return EMBEDDING_MODELS.find((m) => m.id === id);
 }
 
-// The API embedding endpoint. NOTE: this is deliberately NOT the chat
-// LLM_BASE_URL — OpenRouter (the chat default) does not serve an /embeddings
-// endpoint, so embeddings need an embeddings-capable provider. Defaults to
-// OpenAI; override the base URL to point at any OpenAI-compatible embeddings
-// API (Azure OpenAI, a proxy, etc.).
+// The API embedding endpoint. Explicit overrides win; otherwise the base MUST
+// track the provider of the key we actually resolved (embeddingApiKey), so we
+// never send a key to a host it wasn't issued for. In particular an OpenRouter
+// key (sk-or-…) goes to OpenRouter — which DOES serve /embeddings (verified
+// 2026-07-20; it accepts the same model ids, e.g. text-embedding-3-small) — and
+// never to api.openai.com, which 401s on a foreign key. Point EMBEDDING_API_BASE
+// at any OpenAI-compatible embeddings API (Azure, a proxy, etc.) to override.
 export function embeddingApiBase(): string {
-  return (process.env.EMBEDDING_API_BASE || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const explicit = process.env.EMBEDDING_API_BASE || process.env.OPENAI_BASE_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  if (embeddingApiKey().startsWith("sk-or-")) return "https://openrouter.ai/api/v1";
+  return "https://api.openai.com/v1";
 }
 
 export function embeddingApiKey(): string {
