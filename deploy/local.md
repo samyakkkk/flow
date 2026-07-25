@@ -29,11 +29,12 @@ full-container path (see the bottom of this file).
 ## Start it
 
 ```bash
-git clone <repo> && cd flow
-./setup.sh              # one shot: deps, environment checks, coding CLI if none found, `flow` on your PATH
+curl -fsSL https://www.flow.engineer/install.sh | bash   # one shot: clones the repo, deps, environment checks, coding CLI if none found, `flow` on your PATH
 
 flow up mycompany       # creates it if new, then starts
 ```
+
+(Already have a checkout? `./setup.sh` from inside it does the same without cloning.)
 
 `flow up` prints your dashboard URL. In local mode you're already signed in — no
 token to paste. Then, in the browser:

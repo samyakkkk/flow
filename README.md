@@ -56,10 +56,16 @@ The graph is the center. Both you and your agents build from it.
 **Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). Indexing runs through whichever coding CLI is on your machine — **opencode, Codex, or Claude Code** (`INDEXER_RUNTIME`, default auto-detects opencode → codex → claude). If none is installed, `setup.sh` installs opencode for you through a signed channel (Homebrew or the official installer — never the npm binary, which macOS kills as unsigned). On first run the dashboard asks for an [OpenRouter](https://openrouter.ai) key — or skip it if your CLI is already signed in. Any OpenAI-compatible API also works via `LLM_BASE_URL` + `LLM_API_KEY` in Settings.
 
 ```bash
-git clone <repo> && cd flow
-./setup.sh              # one shot: deps, Node 22+ / Docker checks, coding CLI if none found, `flow` on your PATH
+curl -fsSL https://www.flow.engineer/install.sh | bash   # one shot: clones the repo, deps, Node 22+ / Docker checks, coding CLI if none found, `flow` on your PATH
 
 flow up mycompany       # creates it if new, then starts — prints your dashboard URL
+```
+
+Already have a checkout? `./setup.sh` from inside it does the same thing without cloning:
+
+```bash
+git clone https://github.com/samyakkkk/flow.git && cd flow
+./setup.sh
 ```
 
 Works on macOS and Linux natively; on Windows use Git Bash or WSL2. Prefer manual steps? `npm install && npm install -g .` still works — `setup.sh` just does everything in one shot.
@@ -190,16 +196,18 @@ bash verify-all.sh   # typecheck + orchestrator tests + simulator scenarios + da
 
 Please run `verify-all.sh` before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first to discuss the approach.
 
-**Testing multiple branches side by side** — `setup.sh` clones any branch into its own managed checkout (`~/.flow/checkouts/<alias>`) and registers it as its own command:
+**Testing multiple branches side by side** — `setup.sh` clones any branch into its own managed checkout (`~/.flow/checkouts/<alias>`) and registers it as its own command. No checkout needed — the hosted installer takes the same flags:
 
 ```bash
-./setup.sh --alias flow-main   --branch main       # clone main → `flow-main`
-./setup.sh --alias flow-test-1 --branch feature-x  # clone feature-x → `flow-test-1`
+curl -fsSL https://www.flow.engineer/install.sh | bash -s -- --alias flow-main   --branch main       # clone main → `flow-main`
+curl -fsSL https://www.flow.engineer/install.sh | bash -s -- --alias flow-test-1 --branch feature-x  # clone feature-x → `flow-test-1`
 ./setup.sh --alias flow-dev                        # this checkout → `flow-dev`
 
 flow-main   up demo
 flow-test-1 up demo2    # each checkout is fully independent (own deps, own data/)
 ```
+
+To run a test deployment *alongside* your main one (own ports, optionally its own FalkorDB), see `docs/testing.md` — `--port-offset` and `--fresh-db`.
 
 Re-running with the same alias fast-forwards that checkout to the branch tip. Don't `up` the *same* project name from two checkouts at once — they'd race for the same ports.
 
