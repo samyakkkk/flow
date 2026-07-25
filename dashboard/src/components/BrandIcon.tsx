@@ -82,6 +82,29 @@ export function OpenCodeIcon(props: IconProps) {
   );
 }
 
+// OpenRouter is not in Simple Icons. This is the official OpenRouter mark (two
+// routing arrows). It has its own viewBox and mixes strokes with fills, so it
+// can't use the shared Svg wrapper — but it still renders in currentColor to
+// stay monochrome with the rest of the UI.
+export function OpenRouterIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="-45 32.23 556.5 433.48"
+      fill="none"
+      stroke="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945" strokeWidth="90" />
+      <path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z" fill="currentColor" stroke="none" />
+      <path d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377" strokeWidth="90" />
+      <path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 // Fireflies.ai is not in Simple Icons. This is a clean spark/firefly mark (a
 // glowing dot with four rays) that reads as a logo in the ink color.
 // TODO: replace with official mark
@@ -101,6 +124,7 @@ const ICONS = {
   anthropic: AnthropicIcon,
   openai: OpenAIIcon,
   opencode: OpenCodeIcon,
+  openrouter: OpenRouterIcon,
   fireflies: FirefliesIcon,
 } as const;
 
