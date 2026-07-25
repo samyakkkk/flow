@@ -48,7 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
-import { deleteProjectGraph } from "./lib/falkordb.mjs";
+import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -520,6 +520,8 @@ FLOW_ADMIN_TOKEN=${adminToken}
 # SLACK_APP_TOKEN=        # prod-mode only
 # LINEAR_API_KEY=
 # OPENROUTER_API_KEY=
+# LLM_BASE_URL=           # any OpenAI-compatible API (classifier + embeddings)
+# LLM_API_KEY=
 # GITHUB_TOKEN=
 `,
     { encoding: "utf-8", mode: 0o600 }
@@ -713,6 +715,17 @@ async function upProject(name, { rebuilt = false } = {}) {
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
 
+  // This project is (re)using its graph on purpose — clear any deletion
+  // tombstone a previous `flow rm` left, or the gateway will refuse writes.
+  // Best-effort: if FalkorDB isn't up yet the services will say so loudly.
+  try {
+    const falkorHost = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+    const falkorPort = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    await clearGraphTombstone({ graph, host: falkorHost, port: falkorPort });
+  } catch {
+    /* FalkorDB not reachable yet — nothing to clear */
+  }
+
   // Determine paths for this project
   const dbPath = join(dir, "flow.db");
   const journalPath = join(dir, "journal.jsonl");
@@ -729,12 +742,36 @@ async function upProject(name, { rebuilt = false } = {}) {
   if (existsSync(workspaceDir)) {
     const templateOpencode = join(indexWorkspaceDir(), ".opencode");
     if (existsSync(templateOpencode)) {
+      // Plugin-era tool files must be actively removed: cpSync overwrites but
+      // never deletes, and a leftover graph.ts/notify.ts re-triggers opencode's
+      // per-workspace @opencode-ai/plugin install — whose transitive deps carry
+      // Node engines constraints we don't control (the exact failure the MCP
+      // config below replaces).
+      rmSync(join(workspaceDir, ".opencode", "tools", "graph.ts"), { force: true });
+      rmSync(join(workspaceDir, ".opencode", "tools", "notify.ts"), { force: true });
       cpSync(templateOpencode, join(workspaceDir, ".opencode"), { recursive: true });
     }
     const templateAgentsMd = join(indexWorkspaceDir(), "AGENTS.md");
     if (existsSync(templateAgentsMd)) {
       writeFileSync(join(workspaceDir, "AGENTS.md"), readFileSync(templateAgentsMd, "utf-8"), "utf-8");
     }
+    // Graph tools reach the workspace as MCP, not as plugin tool files: point
+    // opencode at the gateway's MCP server in builder mode. Generated (not
+    // copied from the template) because the command needs absolute paths into
+    // THIS checkout. Per-job env (graph name, journal, tokens, write scope,
+    // actor) is inherited from the spawning opencode process, which gets it
+    // from the orchestrator.
+    const opencodeConfig = {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        graph: {
+          type: "local",
+          command: [nodeBin(gatewayDir(), "tsx"), join(gatewayDir(), "src", "mcp.ts")],
+          environment: { GATEWAY_MCP_MODE: "builder" },
+        },
+      },
+    };
+    writeFileSync(join(workspaceDir, "opencode.json"), JSON.stringify(opencodeConfig, null, 2) + "\n", "utf-8");
   }
 
   // ── Gateway ────────────────────────────────────────────────────────────────
@@ -750,11 +787,14 @@ async function upProject(name, { rebuilt = false } = {}) {
     FLOW_PROJECT_NAME: name,
     NODE_ENV: "production",
   };
-  // Embeddings (semantic find_entity + embed-on-write) need the OpenRouter key.
-  // Fall back to the machine default / ambient env when it isn't in the .env.
-  if (!gwEnv.OPENROUTER_API_KEY) {
-    const k = readGlobalKey(dir, "OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-    if (k) gwEnv.OPENROUTER_API_KEY = k;
+  // Direct LLM callers (classification) may use an OpenAI-compatible provider.
+  // Embeddings are local and need no key; these remain gateway-compatible env
+  // for deployments that still override other LLM behavior.
+  for (const key of ["LLM_API_KEY", "LLM_BASE_URL", "OPENROUTER_API_KEY"]) {
+    if (!gwEnv[key]) {
+      const k = readGlobalKey(dir, key) ?? process.env[key];
+      if (k) gwEnv[key] = k;
+    }
   }
 
   const gwPid = spawnService({
@@ -774,6 +814,11 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
+    // Inherited down to gateway MCP subprocesses spawned by indexer jobs.
+    // Graph operations still use FalkorDB directly; embeddings borrow this
+    // project's long-lived gateway model through GATEWAY_URL.
+    GRAPH_NAME: graph,
+    JOURNAL_PATH: journalPath,
     NODE_ENV: "production",
   };
 
@@ -823,8 +868,28 @@ async function cmdDown(args) {
   }
   // Whole-deployment down also stops THE dashboard. A single-project down
   // leaves it running — it serves the other projects.
-  if (!targetName) stopDashboard();
+  if (!targetName) {
+    stopDashboard();
+    stopOwnedFalkordb();
+  }
   console.log("");
+}
+
+// TESTING-ONLY: stop this deployment's private FalkorDB container on a
+// whole-deployment down. Applies ONLY when FALKOR_CONTAINER is set — which
+// only a `setup.sh --fresh-db` launcher bakes in — marking this deployment as
+// the container's sole owner. The default shared flow-falkordb container is
+// substrate for every deployment on the machine and is NEVER touched here,
+// even if someone points FALKOR_CONTAINER at it. `docker stop`, not `rm`:
+// graph data survives, and the next `flow up` restarts the container.
+function stopOwnedFalkordb() {
+  const container = process.env.FALKOR_CONTAINER;
+  if (!container || container === "flow-falkordb") return;
+  const res = spawnSync("docker", ["stop", container], { encoding: "utf8" });
+  const stopped = res.status === 0;
+  console.log(
+    `  ${c.bold("falkordb".padEnd(16))} ${stopped ? `${OK} ${c.dim(`stopped (${container})`)}` : c.dim("· not running")}`
+  );
 }
 
 function stopDashboard() {

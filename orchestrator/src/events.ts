@@ -127,15 +127,56 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
   // Deterministic dashboard commands skip the classifier entirely.
   if (event.source === "dashboard" && event.type === "reindex_request") {
     const p = event.payload as { repo?: string; branch?: string };
-    const { enqueueJob } = await import("./opencode.js");
+    const { enqueueJob, listWorkspaceRepos, registerSource } = await import("./opencode.js");
+    // Branch change: sync the durable registry and the in-memory push poller
+    // so merges to the new branch trigger reindexes immediately — the poller
+    // map is only re-seeded from repos.json at boot. watchRepo is idempotent,
+    // so re-watching on every reindex also heals a map that went stale when
+    // the dashboard edited repos.json directly.
+    if (p.repo && p.branch) {
+      const entry = listWorkspaceRepos().find((r) => r.name === p.repo);
+      if (entry) {
+        if (entry.branch !== p.branch) {
+          registerSource({ name: p.repo, branch: p.branch });
+          const { indexLog } = await import("./index-log.js");
+          indexLog(p.repo, "watch", undefined, { branch: p.branch, previous: entry.branch });
+        }
+        if (entry.url) {
+          const { watchRepo, watchKeyForUrl } = await import("./adapters/github.js");
+          const watchKey = watchKeyForUrl(entry.url);
+          if (watchKey) watchRepo(watchKey, p.branch);
+        }
+      }
+    }
     const job = await enqueueJob({
       type: "index_repo",
-      input: { repo: p.repo ?? "", branch: p.branch ?? "main" },
+      input: { repo: p.repo ?? "", branch: p.branch },
       repo: p.repo,
     });
     db.prepare(
       `INSERT INTO audit_log (event_id, classification, confidence, action, target, status) VALUES (?, 'reindex_request', 1.0, 'index_job', ?, 'ok')`
     ).run(event.id, job.id);
+    return;
+  }
+
+  // Disconnecting a repo is a button click too — never classify it. The
+  // dashboard already dropped the registry entry; this cleans up everything
+  // else (poller watch, parked/queued jobs, clone dir, graph node) so a
+  // removed repo doesn't keep being polled, indexed, and served as knowledge.
+  if (event.source === "dashboard" && event.type === "repo_removed") {
+    const p = event.payload as { repoName?: string; repo?: string };
+    const name = (p.repoName ?? p.repo ?? "").trim();
+    if (!name) {
+      db.prepare(
+        `INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail) VALUES (?, 'repo_removed', 1.0, 'rejected', '-', 'error', ?)`
+      ).run(event.id, JSON.stringify({ error: "missing repoName" }));
+      return;
+    }
+    const { removeRepo } = await import("./opencode.js");
+    const summary = await removeRepo(name);
+    db.prepare(
+      `INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail) VALUES (?, 'repo_removed', 1.0, 'repo_cleanup', ?, 'ok', ?)`
+    ).run(event.id, name, JSON.stringify(summary));
     return;
   }
 
@@ -151,9 +192,18 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
       return;
     }
     // Register + watch + queue the index job via the shared connection path
-    // (also used by the sources front door), then audit.
+    // (also used by the sources front door), then audit. A name collision
+    // (two owners, same repo name) is refused, not silently overwritten.
     const { connectGithubRepo } = await import("./opencode.js");
-    const { entry, jobId } = await connectGithubRepo(p.url, p.branch ?? "main");
+    let entry, jobId;
+    try {
+      ({ entry, jobId } = await connectGithubRepo(p.url, p.branch));
+    } catch (err) {
+      db.prepare(
+        `INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail) VALUES (?, 'repo_added', 1.0, 'rejected', '-', 'error', ?)`
+      ).run(event.id, JSON.stringify({ error: String(err) }));
+      return;
+    }
     // target = the human-facing repo name (the dashboard shows it verbatim);
     // the job id lives in detail for debugging.
     db.prepare(

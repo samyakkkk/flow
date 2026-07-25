@@ -50,6 +50,20 @@ export function watchRepo(ownerRepo: string, branch: string): void {
   registeredRepos.set(ownerRepo, branch);
 }
 
+// Stop watching (repo_removed flow). Accepts either the exact "owner/repo"
+// key or a bare repo name — the caller may no longer know the URL because
+// the registry entry was already deleted by the dashboard.
+export function unwatchRepo(ownerRepoOrName: string): boolean {
+  if (registeredRepos.delete(ownerRepoOrName)) return true;
+  for (const key of registeredRepos.keys()) {
+    if (key.endsWith(`/${ownerRepoOrName}`)) {
+      registeredRepos.delete(key);
+      return true;
+    }
+  }
+  return false;
+}
+
 // "owner/repo" from an https or ssh GitHub URL; null for non-GitHub URLs.
 export function ownerRepoFromUrl(url: string): string | null {
   const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim());
@@ -77,8 +91,9 @@ export function ghAuthOk(): boolean {
 export async function seedWatchedRepos(): Promise<void> {
   const { listWorkspaceRepos } = await import("../opencode.js");
   for (const r of listWorkspaceRepos()) {
-    const ownerRepo = r.url ? ownerRepoFromUrl(r.url) : null;
-    if (ownerRepo) registeredRepos.set(ownerRepo, r.branch || "main");
+    if (r.kind === "docs") continue;
+    const key = watchKeyForUrl(r.url);
+    if (key) registeredRepos.set(key, r.branch || "main");
   }
 }
 
@@ -246,8 +261,19 @@ function verifyGithubSignature(secret: string, rawBody: Buffer, sigHeader: strin
 // Subsequent polls: emit push event only when SHA differs from cursor.
 // ------------------------------------------------------------------
 
+// Watch keys are "owner/repo" for GitHub, or a full clone source (any remote
+// URL, or a local filesystem path — git treats a path as a remote) for
+// everything else. ls-remote works identically against all three.
 function repoUrl(repo: string): string {
+  if (repo.includes("://") || repo.startsWith("/") || repo.startsWith("git@")) return repo;
   return `https://github.com/${repo}.git`;
+}
+
+// The watch key for a registry url: GitHub shorthand when parseable, else the
+// url/path itself. Null only for empty urls (nothing to poll).
+export function watchKeyForUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  return ownerRepoFromUrl(url) ?? url;
 }
 
 export async function githubFetchSince(cursor: string): Promise<FetchResult> {

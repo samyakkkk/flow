@@ -21,6 +21,10 @@ interface DetectedAgent {
 interface RepoOption {
   name: string;
   cloned: boolean;
+  // "folder" = the user connected their own checkout (it's the automatic work
+  // surface). "managed" = GitHub-added, index-only: sessions need one of the
+  // user's own folders.
+  surface?: "folder" | "managed";
 }
 interface SessionRow {
   id: string;
@@ -84,6 +88,14 @@ export function AgentsView() {
 
   const [backend, setBackend] = useState("");
   const [repo, setRepo] = useState("");
+  // Work folder: "" = the folder the user connected as the source (only valid
+  // for folder-connected repos). GitHub-added repos are index-only — Flow's
+  // internal clone is never a work surface, so those require picking one of
+  // YOUR folders here. Folders are per-user, never shared.
+  const [workFolders, setWorkFolders] = useState<{ path: string; repo: string | null }[]>([]);
+  const [workFolder, setWorkFolder] = useState("");
+  const [newFolderPath, setNewFolderPath] = useState("");
+  const [addingFolder, setAddingFolder] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
@@ -100,6 +112,7 @@ export function AgentsView() {
       ]);
       setAgents(a.agents ?? []);
       setRepos((a.repos ?? []).filter((r: RepoOption) => r.cloned));
+      setWorkFolders(a.workFolders ?? []);
       setSessions(s.sessions ?? []);
       setBackend((prev) => prev || (a.agents ?? []).find((x: DetectedAgent) => x.installed)?.id || "");
       setRepo((prev) => prev || (a.repos ?? [])[0]?.name || "");
@@ -114,14 +127,30 @@ export function AgentsView() {
     return () => clearInterval(iv);
   }, [refresh]);
 
+  // GitHub-added repos are index-only: no default surface, a work folder is
+  // required. Folder-connected repos carry their own surface (the folder the
+  // user picked as the source).
+  const needsFolder = repos.find((r) => r.name === repo)?.surface === "managed";
+
+  // Switching to a GitHub-added repo: auto-pick the user's folder that was
+  // registered against it, if there is one — never leave "" meaning nothing.
+  useEffect(() => {
+    if (needsFolder && !workFolder) {
+      const match = workFolders.find((f) => f.repo === repo);
+      if (match) setWorkFolder(match.path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, needsFolder, workFolders]);
+
   const fetchFiles = useCallback(
     (q: string) => {
       if (!repo) return Promise.resolve([]);
-      return fetch(prefix(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}`))
+      const folder = workFolder ? `&folder=${encodeURIComponent(workFolder)}` : "";
+      return fetch(prefix(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}${folder}`))
         .then((r) => (r.ok ? r.json() : { entries: [] }))
         .then((d: { entries?: FileEntry[] }) => d.entries ?? []);
     },
-    [repo, prefix]
+    [repo, workFolder, prefix]
   );
 
   // `placement` is passed only after the user answers a collision prompt:
@@ -135,7 +164,13 @@ export function AgentsView() {
       const res = await fetch(prefix("/api/agents/sessions"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend, repo, prompt, ...(placement ? { placement } : {}) }),
+        body: JSON.stringify({
+          backend,
+          repo,
+          prompt,
+          ...(placement ? { placement } : {}),
+          ...(workFolder ? { workFolder } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `status ${res.status}`);
@@ -222,6 +257,69 @@ export function AgentsView() {
               </option>
             ))}
           </select>
+          {/* Work folder — YOUR checkouts (per-user, never a teammate's paths).
+              Folder-connected repos default to the folder the user picked as
+              the source. GitHub-added repos have no default — Flow only
+              indexes them, so one of your folders must be chosen. */}
+          <select
+            value={workFolder}
+            onChange={(e) => setWorkFolder(e.target.value)}
+            className="rounded-lg border border-line bg-cream px-3 py-2 text-[13px] text-ink"
+            style={{ fontFamily: "var(--font-mono)" }}
+            data-testid="work-folder-select"
+            title="Where the agent makes its changes — your folders, on your machine"
+          >
+            {needsFolder ? (
+              <option value="" disabled>
+                pick a folder to work in…
+              </option>
+            ) : (
+              <option value="">work in: {repo || "repo"} (your connected folder)</option>
+            )}
+            {workFolders.map((f) => (
+              <option key={f.path} value={f.path}>
+                work in: {f.path}
+              </option>
+            ))}
+          </select>
+          <span className="flex items-center gap-1">
+            <input
+              value={newFolderPath}
+              onChange={(e) => setNewFolderPath(e.target.value)}
+              placeholder="/path/to/another/checkout"
+              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-ink w-56"
+              style={{ fontFamily: "var(--font-mono)" }}
+              data-testid="work-folder-input"
+            />
+            <button
+              onClick={async () => {
+                const path = newFolderPath.trim();
+                if (!path) return;
+                setAddingFolder(true);
+                try {
+                  const res = await fetch(prefix("/api/work-folders"), {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ path, repo: repo || undefined }),
+                  });
+                  const d = (await res.json()) as { folders?: { path: string; repo: string | null }[] };
+                  if (res.ok && d.folders) {
+                    setWorkFolders(d.folders);
+                    setWorkFolder(path);
+                    setNewFolderPath("");
+                  }
+                } finally {
+                  setAddingFolder(false);
+                }
+              }}
+              disabled={addingFolder || !newFolderPath.trim()}
+              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-text-muted hover:text-ink"
+              style={{ fontFamily: "var(--font-mono)" }}
+              title="Remember this folder as a place agents can work"
+            >
+              + folder
+            </button>
+          </span>
         </div>
         <MentionTextarea
           value={prompt}
@@ -231,6 +329,12 @@ export function AgentsView() {
           rows={3}
           className="w-full rounded-lg border border-line bg-cream px-3.5 py-3 text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none focus:border-black/20 resize-y mb-3"
         />
+        {needsFolder && !workFolder && (
+          <p className="text-[12px] text-text-muted mb-3">
+            {repo} came from GitHub, so Flow only indexes it. Pick one of your folders above (or add
+            one) — that&apos;s where the agent will work.
+          </p>
+        )}
         {error && <p className="text-[12px] mb-3" style={{ color: "#b3261e" }}>{error}</p>}
 
         {/* Collision prompt — another live session is already working in this
@@ -263,7 +367,11 @@ export function AgentsView() {
             </div>
           </div>
         ) : (
-          <Button onClick={() => start()} disabled={starting || !prompt.trim() || !backend || !repo} arrow>
+          <Button
+            onClick={() => start()}
+            disabled={starting || !prompt.trim() || !backend || !repo || (needsFolder && !workFolder)}
+            arrow
+          >
             {starting ? "Starting…" : "Start agent"}
           </Button>
         )}

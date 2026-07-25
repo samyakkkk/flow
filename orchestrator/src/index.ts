@@ -8,7 +8,9 @@ import { registerOutboxRoutes } from "./outbox-routes.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
-import { getJob, enqueueJob, recoverStalledJobs } from "./opencode.js";
+import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses } from "./opencode.js";
+import { activityForRepo } from "./job-activity.js";
+import { readIndexLog } from "./index-log.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
 import { registerGithubWebhook, registerGithubPoller, seedWatchedRepos } from "./adapters/github.js";
 import { registerMeetingRoutes, registerFirefliesPoller } from "./adapters/meetings.js";
@@ -19,7 +21,9 @@ import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
-import { registerNoteRoutes } from "./notes.js";
+import { registerMemoryRoutes } from "./memory/routes.js";
+import { setNodeAnchorProvider } from "./memory/anchors.js";
+import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
@@ -73,7 +77,11 @@ registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerCorrectionRoutes(app);
-registerNoteRoutes(app);
+registerMemoryRoutes(app);
+// Memory anchors resolve graph node paths through the gateway; a null gateway
+// (no FLOW_GATEWAY_URL) leaves the default no-op provider and items stay
+// repo-level. flow.db is primary — this is a read-only projection lookup.
+setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
 
 // ------------------------------------------------------------------
@@ -153,6 +161,48 @@ app.get<{ Params: { id: string } }>(
 );
 
 // ------------------------------------------------------------------
+// Live indexer activity — what the current/latest index job for a repo is
+// doing right now (terse tool-call labels + counts). In-memory and live-only:
+// the ticker empties when the job ends; job-logs/ keeps the full transcript.
+// ------------------------------------------------------------------
+app.get<{ Querystring: { repo?: string } }>(
+  "/v1/index-activity",
+  async (req, reply) => {
+    const repo = req.query.repo ?? "";
+    if (!repo) return reply.code(400).send({ error: "repo query param required" });
+    const activity = activityForRepo(repo);
+    if (!activity) return reply.send({ status: "idle" });
+    return reply.send(activity);
+  }
+);
+
+// ------------------------------------------------------------------
+// Repo status — the per-repo state machine (never_indexed | queued |
+// indexing | indexed | failed) derived from the registry + jobs table.
+// The dashboard's source of truth for "is this repo fresh?".
+// ------------------------------------------------------------------
+app.get("/v1/repos/status", async (_req, reply) => {
+  return reply.send({ repos: repoStatuses() });
+});
+
+// ------------------------------------------------------------------
+// Indexer event log — the durable lifecycle trail (enqueued, parked,
+// superseded, started, done, failed, recovered, watch, removed) so a
+// self-deployer can reconstruct what the indexer did and when. Unlike
+// /v1/index-activity this survives restarts and job completion.
+// ------------------------------------------------------------------
+app.get<{ Querystring: { repo?: string; limit?: string } }>(
+  "/v1/index-log",
+  async (req, reply) => {
+    const rows = readIndexLog({
+      repo: req.query.repo || undefined,
+      limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined,
+    });
+    return reply.send({ rows, count: rows.length });
+  }
+);
+
+// ------------------------------------------------------------------
 // Audit log
 // ------------------------------------------------------------------
 app.get<{ Querystring: { limit?: string } }>(
@@ -186,7 +236,21 @@ app.get<{ Querystring: { status?: string } }>(
 app.addHook("onClose", async () => {
   stopDrainer();
   stopAllPollers();
+  // Kill live indexer CLIs (and their process groups) — an orphaned indexer
+  // surviving a restart would keep writing to the graph while boot recovery
+  // re-queues a duplicate job for the same repo.
+  const killed = killRunningJobChildren();
+  if (killed > 0) console.warn(`[orchestrator] killed ${killed} live job child process(es) on shutdown`);
 });
+
+// Without these handlers a SIGTERM (flow down / flow rm / systemd stop)
+// hard-kills the process and onClose never runs — leaving indexer CLI
+// children orphaned and still writing to the graph.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => {
+    void app.close().finally(() => process.exit(0));
+  });
+}
 
 // ------------------------------------------------------------------
 // Boot
@@ -206,6 +270,9 @@ const start = async (): Promise<void> => {
 
     // Register all pollers with the engine (enabled() checks gating at tick time)
     await seedWatchedRepos();
+    // Legacy localPath entries become the "local" owner's work folders.
+    const { seedWorkFoldersFromRegistry } = await import("./work-folders.js");
+    seedWorkFoldersFromRegistry();
     registerGithubPoller();
     registerLinearPoller();
     registerFirefliesPoller();

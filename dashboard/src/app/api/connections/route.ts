@@ -42,9 +42,10 @@ export async function POST(req: NextRequest) {
     const existing: Array<Record<string, unknown>> = cfg["pending_repos"]
       ? JSON.parse(cfg["pending_repos"])
       : [];
+    const branch = typeof body.branch === "string" ? body.branch.trim() || undefined : undefined;
     const entry = {
       url: body.url,
-      branch: body.branch ?? "main",
+      branch,
       localClone: body.localClone ?? false,
       addedAt: new Date().toISOString(),
       status: "pending",
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
         source: "dashboard",
         type: "repo_added",
         ts: Date.now(),
-        payload: { url: body.url, branch: body.branch ?? "main", localClone: body.localClone ?? false },
+        payload: { url: body.url, branch, localClone: body.localClone ?? false },
       }),
     });
 

@@ -1,16 +1,22 @@
 // Manual entry point for the embeddings reconciler. The gateway already runs
 // this automatically at boot (src/reconcile.ts) — reach for the script when you
-// want it NOW without a restart, or need --force after changing the embedding
-// text/model.
+// want it NOW without a restart, or need --force after changing the embedding text.
 //
-//   OPENROUTER_API_KEY=... tsx scripts/backfill-embeddings.ts [--graph <name>] [--force]
+// After a MODEL change (different dimension): prefer a gateway restart — boot
+// tasks run the graph migration that clears stale vectors first, preventing
+// FalkorDB dimension-mismatch errors during re-embed. If you must use this
+// script after a model switch, null out existing embeddings manually first:
+//   graph-gateway$ tsx -e "import {run} from './src/graph.js'; run('GRAPH', \`MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL\`)"
+// then run with --force.
+//
+//   tsx scripts/backfill-embeddings.ts [--graph <name>] [--force]
 //
 // --graph  target named graph (default: $GRAPH_NAME or 'memory')
 // --force  re-embed every node, not just those missing an embedding
 
 import { close } from "../src/graph.js";
-import { embeddingsEnabled } from "../src/embed.js";
 import { reconcileEmbeddings } from "../src/reconcile.js";
+import { isLocalEmbedReady, startLocalModel } from "../src/local-embed.js";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -21,8 +27,9 @@ async function main() {
   const graph = arg("--graph") ?? process.env.GRAPH_NAME ?? "memory";
   const force = process.argv.includes("--force");
 
-  if (!embeddingsEnabled()) {
-    console.error("OPENROUTER_API_KEY is not set — nothing to do.");
+  await startLocalModel();
+  if (!isLocalEmbedReady()) {
+    console.error("Local embedding model failed to load — see the error above.");
     process.exit(1);
   }
 

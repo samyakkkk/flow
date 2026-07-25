@@ -15,25 +15,34 @@ full-container path (see the bottom of this file).
 - **Docker running** — Flow starts FalkorDB (its graph database) in a container.
   Already run FalkorDB yourself? Point Flow at it and skip Docker:
   `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
-- An **OpenRouter API key** — you'll paste it into the dashboard on first run
-  (not an env var). Nothing else to install: the graph engine (opencode) is
-  bundled as a dependency.
+- A **coding CLI** — indexing runs through whichever of opencode, Codex, or
+  Claude Code is on your machine (`INDEXER_RUNTIME`, default auto-detects
+  opencode → codex → claude). None installed? `./setup.sh` installs opencode
+  through a signed channel (Homebrew / the official installer — never the npm
+  binary, which macOS kills as unsigned).
+- An **LLM provider** — paste an OpenRouter key into the dashboard on first run,
+  skip if your coding CLI is already signed in, or point Flow at any
+  OpenAI-compatible API (`LLM_BASE_URL` + `LLM_API_KEY` in Settings).
 
 ---
 
 ## Start it
 
 ```bash
-git clone <repo> && cd flow
-npm install && npm install -g .     # deps + `flow` on your PATH
+curl -fsSL https://www.flow.engineer/install.sh | bash   # one shot: clones the repo, deps, environment checks, coding CLI if none found, `flow` on your PATH
 
-flow up mycompany                   # creates it if new, then starts
+flow up myproject       # creates it if new, then starts
 ```
+
+(Already have a checkout? `./setup.sh` from inside it does the same without cloning.)
 
 `flow up` prints your dashboard URL. In local mode you're already signed in — no
 token to paste. Then, in the browser:
 
-1. Add your **OpenRouter key** (nothing else is reachable until the brain has a model).
+1. **Give Flow a brain** — paste an OpenRouter key, or skip if a supported coding
+   CLI (opencode, Codex, or Claude Code) is installed, since indexing runs through
+   whichever is present (`INDEXER_RUNTIME`, default auto-detects opencode → codex →
+   claude). Classification and semantic search stay off until an LLM key is set.
 2. **Connect a repo** from the Home picker and watch the graph build.
 3. **Ask** from the floating bar, or head to **Agents** to run a coding task.
 

@@ -18,7 +18,6 @@ export const NODE_TYPES = [
   "ExternalService",
   "Workflow",
   "Concept",
-  "Procedure",
   "Note",
 ] as const;
 
@@ -42,7 +41,6 @@ export const EDGE_TYPES = [
   "PUBLISHES",
   "DISPATCHES_TO",
   "RELATES_TO",
-  "GOVERNS",
   "ANNOTATES",
 ] as const;
 

@@ -13,6 +13,7 @@ import { addLinearComment, updateLinearTicketContext, createLinearTicket } from 
 import { proposeAction } from "./dm.js";
 import { upsertContextBlock, renderContextBlock } from "./contextblock.js";
 import { enqueueJob } from "../opencode.js";
+import { observeCorpus, repoForChannel } from "../memory/corpus-observe.js";
 
 const insertAudit = db.prepare(`
   INSERT INTO audit_log (event_id, classification, confidence, action, target, status, detail)
@@ -145,6 +146,15 @@ async function handleSlackAuto(event: NormalizedEvent, cls: ClassificationResult
       thread_ts: p.thread_ts ?? null,
       permalink: p.permalink ?? null,
     });
+    // Memory enrichment: mirror the message into the observations corpus so
+    // search_knowledge can surface it (embedded + FTS). Non-blocking, best-effort.
+    void observeCorpus({
+      source: "slack",
+      text: p.text ?? "",
+      repo: repoForChannel(p.channel),
+      source_id: event.id,
+      source_url: p.permalink ?? null,
+    });
   }
 
   if (c === "knowledge_claim" || c === "correction") {
@@ -225,14 +235,16 @@ async function handleGithubAuto(event: NormalizedEvent, cls: ClassificationResul
   // ensureRepoClone throws "no checkout and no url" and the job dies.
   const p = event.payload as Record<string, string | undefined>;
   const { listWorkspaceRepos } = await import("../opencode.js");
-  const { ownerRepoFromUrl } = await import("../adapters/github.js");
+  const { watchKeyForUrl } = await import("../adapters/github.js");
   const entry = listWorkspaceRepos().find(
-    (r) => r.url && ownerRepoFromUrl(r.url) === p.repo
+    (r) => r.url && watchKeyForUrl(r.url) === p.repo
   );
   const repoName = entry?.name ?? p.repo ?? "";
   const job = await enqueueJob({
     type: "index_repo",
-    input: { repo: repoName, url: entry?.url, branch: p.branch ?? entry?.branch ?? "main", commit: p.commit },
+    // trigger:"push" opts the run into the incremental (diff-only) path when
+    // the last indexed commit is an ancestor of the new HEAD.
+    input: { repo: repoName, url: entry?.url, branch: p.branch ?? entry?.branch, commit: p.commit, trigger: "push" },
     repo: repoName,
   });
   audit(event.id, c, cls.confidence, "index_job", job.id, "ok");

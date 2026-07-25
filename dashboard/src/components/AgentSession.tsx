@@ -13,23 +13,69 @@ import { DiffView, type DiffFile } from "@/components/DiffView";
 import { BranchSelect } from "@/components/BranchSelect";
 
 // ---------------------------------------------------------------------------
-// Image helpers
+// Attachment helpers — any file type, not just images. Images ride inline to
+// the agent; other files are written into its checkout and read from disk.
 
-function readFileAsBase64(file: File): Promise<{ data: string; mimeType: string }> {
+interface Attachment {
+  name: string;
+  mimeType: string;
+  data: string; // base64-encoded
+}
+
+const IMAGE_MIME_RE = /^image\//;
+
+function isImageAttachment(a: { mimeType: string }): boolean {
+  return IMAGE_MIME_RE.test(a.mimeType);
+}
+
+function readFileAsAttachment(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // strip the data:image/...;base64, prefix
-      const base64 = result.split(",")[1];
-      resolve({ data: base64, mimeType: file.type });
+      // strip the data:<mime>;base64, prefix
+      const base64 = result.split(",")[1] ?? "";
+      resolve({ name: file.name || "file", mimeType: file.type || "application/octet-stream", data: base64 });
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
 
-const IMAGE_MIME_RE = /^image\//;
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Rough byte size of a base64 payload (for the file-chip label).
+function base64Bytes(data: string): number {
+  const len = data.length;
+  if (len === 0) return 0;
+  const pad = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.floor((len * 3) / 4) - pad;
+}
+
+function FileIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="flex-shrink-0 text-text-muted"
+      aria-hidden
+    >
+      <path d="M9 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.5z" />
+      <path d="M9 1.5V5.5h4" />
+    </svg>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Event → transcript reduction
@@ -49,18 +95,19 @@ interface ToolCallRow {
 }
 
 type Block =
-  | { type: "user"; text: string; key: string; images?: Array<{ data: string; mimeType: string }> }
+  | {
+      type: "user";
+      text: string;
+      key: string;
+      images?: Array<{ data: string; mimeType: string }>;
+      files?: Array<{ name: string; mimeType: string }>;
+    }
   | { type: "agent"; text: string; key: string }
   | { type: "thought"; text: string; key: string }
   | { type: "tools"; calls: ToolCallRow[]; key: string }
   | { type: "graph"; verb: string; nodeIds: string[]; key: string }
   | { type: "plan"; entries: Array<{ content: string; status: string }>; key: string }
   | { type: "error"; text: string; key: string };
-
-interface ImageAttachment {
-  data: string; // base64-encoded
-  mimeType: string;
-}
 
 interface PermissionReq {
   requestId: string;
@@ -145,10 +192,11 @@ function reduceEvents(events: SessionEvent[]): {
       case "user_prompt": {
         const text = String(d.text ?? "");
         const images = Array.isArray(d.images) ? (d.images as Array<{ data: string; mimeType: string }>) : undefined;
+        const files = Array.isArray(d.files) ? (d.files as Array<{ name: string; mimeType: string }>) : undefined;
         // Hide the injected graph preamble — show only the human part.
         const idx = text.indexOf("\n\n");
         const shown = text.startsWith("You have access to") && idx > 0 ? text.slice(idx + 2) : text;
-        blocks.push({ type: "user", text: shown, key: `u${ev.seq}`, images });
+        blocks.push({ type: "user", text: shown, key: `u${ev.seq}`, images, files });
         break;
       }
       case "status": {
@@ -318,7 +366,8 @@ export function AgentSession({ id }: { id: string }) {
 	  const [exitConflict, setExitConflict] = useState<{ targetBranch: string; files: string[] } | null>(null);
 	  const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [sendError, setSendError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -394,16 +443,6 @@ export function AgentSession({ id }: { id: string }) {
           es.close();
           setConnected(true); // not an error — just a finished recording
           return;
-        }
-        // A proposal verb just fired in this session — poke the Shell's
-        // proposal dialog so it appears immediately, not on the next poll.
-        // (Replayed events poke too; harmless — the dialog only shows items
-        // that are still pending.)
-        if (ev.kind === "graph") {
-          const verb = String((ev.data as { verb?: string } | null)?.verb ?? "");
-          if (verb === "propose_procedure" || verb === "propose_retire_procedure") {
-            window.dispatchEvent(new CustomEvent("flow:proposals-changed"));
-          }
         }
         buffer.push(ev);
       } catch {
@@ -590,8 +629,8 @@ export function AgentSession({ id }: { id: string }) {
         return next;
       });
     try {
-      const body: { text: string; images?: ImageAttachment[] } = { text };
-      if (currentAttachments.length > 0) body.images = currentAttachments;
+      const body: { text: string; attachments?: Attachment[] } = { text };
+      if (currentAttachments.length > 0) body.attachments = currentAttachments;
       const res = await fetch(prefix(`/api/agents/sessions/${id}/prompt`), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -712,36 +751,59 @@ export function AgentSession({ id }: { id: string }) {
     !archived && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0); // dragenter/leave fire per child — count to know when we truly left
+
+  // One path for every way a file arrives: picker, paste, or drop. Any file
+  // type is accepted — the agent decides what to do with it.
+  const addFiles = useCallback(async (files: File[]) => {
+    if (archived || files.length === 0) return;
+    const read = await Promise.all(files.map((f) => readFileAsAttachment(f)));
+    const valid = read.filter((a) => a.data.length > 0);
+    if (valid.length > 0) setAttachments((prev) => [...prev, ...valid]);
+  }, [archived]);
 
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const items = Array.from(e.clipboardData.items);
-    const imageItems = items.filter((item) => IMAGE_MIME_RE.test(item.type));
-    if (imageItems.length === 0) return; // let default paste behavior handle text
+    // Pasted files (screenshots, copied files) arrive as clipboard items with a
+    // File; plain text has none, so we don't disturb normal text paste.
+    const files = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length === 0) return; // let default paste behavior handle text
     e.preventDefault();
-    const newAttachments: ImageAttachment[] = [];
-    for (const item of imageItems) {
-      const file = item.getAsFile();
-      if (!file) continue;
-      newAttachments.push(await readFileAsBase64(file));
-    }
-    if (newAttachments.length > 0) {
-      setAttachments((prev) => [...prev, ...newAttachments]);
-    }
+    await addFiles(files);
   }
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    const newAttachments: ImageAttachment[] = [];
-    for (const file of files) {
-      if (IMAGE_MIME_RE.test(file.type)) {
-        newAttachments.push(await readFileAsBase64(file));
-      }
-    }
-    if (newAttachments.length > 0) {
-      setAttachments((prev) => [...prev, ...newAttachments]);
-    }
+    await addFiles(Array.from(e.target.files ?? []));
     // reset so re-selecting the same file works
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // Drag-and-drop onto the composer. Track a depth counter so the highlight
+  // doesn't flicker as the cursor moves between the textarea and its siblings.
+  function handleDragEnter(e: React.DragEvent) {
+    if (archived || !Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  }
+  function handleDragOver(e: React.DragEvent) {
+    if (archived || !Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+  function handleDragLeave() {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  }
+  async function handleDrop(e: React.DragEvent) {
+    dragDepth.current = 0;
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    await addFiles(files);
   }
 
   const startBrainDrag = useCallback((e: React.MouseEvent) => {
@@ -788,7 +850,7 @@ export function AgentSession({ id }: { id: string }) {
   })();
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 140px)" }}>
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
@@ -922,6 +984,20 @@ export function AgentSession({ id }: { id: string }) {
                               alt={`Attachment ${i + 1}`}
                               className="max-h-40 max-w-[200px] object-contain rounded-md border border-line"
                             />
+                          ))}
+                        </div>
+                      )}
+                      {b.files && b.files.length > 0 && (
+                        <div className="flex gap-1.5 flex-wrap mb-2">
+                          {b.files.map((f, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-text max-w-[220px]"
+                              title={f.name}
+                            >
+                              <FileIcon />
+                              <span className="truncate">{f.name}</span>
+                            </span>
                           ))}
                         </div>
                       )}
@@ -1166,17 +1242,30 @@ export function AgentSession({ id }: { id: string }) {
               {sendError}
             </p>
           )}
-          <div className="border-t border-line px-4 py-3 flex flex-col gap-2" style={{ background: "var(--cream)" }}>
-            {/* Image previews */}
+          <div
+            className="relative border-t border-line px-4 py-3 flex flex-col gap-2"
+            style={{ background: "var(--cream)" }}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            {/* Drag-and-drop overlay — drop any files to attach them. */}
+            {dragOver && (
+              <div
+                className="absolute inset-1 z-10 rounded-lg border-2 border-dashed flex items-center justify-center pointer-events-none"
+                style={{ borderColor: "var(--accent)", background: "rgba(255,247,129,0.35)" }}
+              >
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[12px] uppercase tracking-wider text-ink">
+                  Drop files to attach
+                </span>
+              </div>
+            )}
+            {/* Attachment previews — thumbnails for images, chips for other files. */}
             {attachments.length > 0 && (
               <div className="flex gap-2 flex-wrap">
-                {attachments.map((img, i) => (
-                  <div key={i} className="relative group">
-                    <img
-                      src={`data:${img.mimeType};base64,${img.data}`}
-                      alt={`Attachment ${i + 1}`}
-                      className="h-16 w-16 object-cover rounded-md border border-line"
-                    />
+                {attachments.map((att, i) => {
+                  const remove = (
                     <button
                       type="button"
                       onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
@@ -1184,15 +1273,39 @@ export function AgentSession({ id }: { id: string }) {
                     >
                       ×
                     </button>
-                  </div>
-                ))}
+                  );
+                  return isImageAttachment(att) ? (
+                    <div key={i} className="relative group">
+                      <img
+                        src={`data:${att.mimeType};base64,${att.data}`}
+                        alt={att.name || `Attachment ${i + 1}`}
+                        className="h-16 w-16 object-cover rounded-md border border-line"
+                      />
+                      {remove}
+                    </div>
+                  ) : (
+                    <div
+                      key={i}
+                      className="relative group flex items-center gap-2 h-16 max-w-[200px] rounded-md border border-line bg-paper px-2.5"
+                      title={att.name}
+                    >
+                      <FileIcon />
+                      <span className="min-w-0">
+                        <span className="block text-[11.5px] text-text truncate">{att.name}</span>
+                        <span className="block text-[10px] text-text-muted" style={{ fontFamily: "var(--font-mono)" }}>
+                          {formatBytes(base64Bytes(att.data))}
+                        </span>
+                      </span>
+                      {remove}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="flex gap-2 items-end">
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
                 multiple
                 onChange={handleFileSelect}
                 className="hidden"
@@ -1201,13 +1314,12 @@ export function AgentSession({ id }: { id: string }) {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={archived}
-                className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border border-line hover:bg-paper transition text-text-muted hover:text-ink disabled:opacity-50"
-                title="Attach image"
+                className="flex-shrink-0 h-9 w-9 flex items-center justify-center rounded-lg border border-line hover:bg-paper transition text-text-muted hover:text-ink disabled:opacity-50"
+                title="Attach files"
               >
+                {/* Paperclip — any file type, not just images. */}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="2" width="12" height="12" rx="2" />
-                  <circle cx="5.5" cy="5.5" r="1.5" />
-                  <path d="M14 10.5l-3.5-3.5L4 14" />
+                  <path d="M13 6.5l-5.5 5.5a2.5 2.5 0 0 1-3.5-3.5l6-6a1.6 1.6 0 0 1 2.3 2.3l-6 6a0.7 0.7 0 0 1-1-1L11 5" />
                 </svg>
               </button>
               <MentionTextarea
@@ -1228,12 +1340,13 @@ export function AgentSession({ id }: { id: string }) {
                   archived
                     ? "This session ended before the last restart — start a new one to continue."
                     : running
-                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, paste images)"
-                    : "Send a follow-up… (@ to tag a file, paste images)"
+                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, drop or paste files)"
+                    : "Send a follow-up… (@ to tag a file, drop or paste files)"
                 }
                 rows={1}
+                autoGrow
                 disabled={archived}
-                className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
+                className="block w-full min-h-9 rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] leading-5 text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
               />
               <Button onClick={send} disabled={archived || (!input.trim() && attachments.length === 0) || busy}>
                 {running ? "Steer" : "Send"}

@@ -1,13 +1,12 @@
 "use client";
 import { Nav } from "./Nav";
-import { ProposalDialog } from "./ProposalDialog";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen bg-cream">
+    <div className="flex h-screen overflow-hidden bg-cream">
       <Nav />
       <main
-        className="flex-1 overflow-y-auto relative"
+        className="flex-1 overflow-y-auto relative flex flex-col"
         style={{
           background: "var(--cream)",
           padding: "36px 40px 48px",
@@ -16,7 +15,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
       >
         {children}
       </main>
-      <ProposalDialog />
     </div>
   );
 }

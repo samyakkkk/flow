@@ -3,20 +3,53 @@
 What's shipped, what's next. See `CHANGELOG.md` for dated change history and
 `docs/ARCHITECTURE.md` for the design.
 
+## Design record — memory v2 final form: distiller-only + orient docs (2026-07-18/19, Samyak — SUPERSEDES the 2026-07-10 three-lane consent model)
+
+The 07-10 record priced consent by blast radius across three lanes (procedures
+command / corrections mutate truth / notes color judgment). Dogfooding killed
+the first lane: agents classifying "is this a procedure?" produced junk
+proposals ("LLM gets confused about what is a procedure and creates random
+procedures"). Final form — ONE writer, the distiller; agents never classify:
+
+- **Branch notes: REMOVED** (PR #41). Observations carry {repo, branch,
+  session} mechanically, so a separate agent-authored note lane was redundant.
+- **`remember`: the one active-capture door** (PR #41). User says "remember
+  this" → the model sends text, nothing else. Instant ack, async distillation,
+  source_weight floors to user_stated, verbatim fallback so an explicit
+  remember is never lost. It feeds the pipeline, not the store.
+- **No repo gating inside a project** (PR #43). The project is the trust
+  boundary (one flow.db per project, physically separate). Within it, repo
+  affinity is RANK (+0.08 same repo, +0.04 family sibling), never eligibility;
+  consolidation candidates are project-wide so cross-repo repetition merges
+  and strengthens. Retrieval-eval re-run still owed to confirm precision.
+- **Orient docs: the ambient tier** (validated 2026-07-19 by rendering the doc
+  from the 47 real bench-store memories BEFORE building — Samyak approved the
+  page). One doc per scope ('global' + 'repo:<name>'), returned verbatim and
+  UNCAPPED by orient() — the auto-authored AGENTS.md (~10k tokens is fine;
+  supersedes the old ~1.5k orient cap). Mechanics: the distiller NOMINATES
+  (`ambient` flag per observation — cheap, recall-oriented); INCLUSION is
+  earned (user_stated fast-tracks; agent/error claims wait for evidence ≥ 2;
+  contradiction_count = 0 required — one contradiction evicts the line; kind
+  'plan' never enters). Membership is a DERIVED VIEW recomputed from the
+  memories table each rebuild — connect/disconnect happens by evidence, no
+  doc-editing machinery, memories stay primary. Render v1 is deterministic
+  (claims grouped by kind, each line carrying [mem:id] for drill-down); an
+  LLM prose-polish can replace the renderer later without touching membership.
+- **Procedures: REMOVED (2026-07-19)** — the proposal/review/retire verbs,
+  Procedure node type, GOVERNS edge, inbox + instant-dialog lanes, and
+  insert-mode injection are gone; the one blessed procedure migrated into
+  memory via `remember`. Durable rules now enter exclusively through the
+  distiller and earn their way into the orient docs.
+- Unchanged: corrections lane (machine-verified, different problem), pull-only
+  retrieval, search_knowledge, anchoring, strength/decay.
+
 ## Notes & cautions — decided-for-now, revisit deliberately
 
-Concerns a human flagged as "keep this in mind" — not rules (procedures), not
-tasks (roadmap items). Each entry: the concern, who raised it, when, and what
+Concerns a human flagged as "keep this in mind" — not rules, not tasks
+(roadmap items). Each entry: the concern, who raised it, when, and what
 triggers the revisit. Remove when resolved (note the resolution in the
 changelog).
 
-- **External-CLI procedure proposals: inbox vs direct accept** (Samyak,
-  2026-07-10). A proposal from an external MCP client (Claude Code CLI etc.)
-  is gated only by that client's own yes/no tool prompt, then waits in the
-  Inbox/dialog as `proposed`; dashboard sessions get the instant dialog. The
-  two lanes carry different consent strengths for the same outcome. Revisit
-  after dogfooding: if pending proposals pile up unreviewed, or double-approval
-  annoys, pick one strong consent moment per lane.
 - **Corpus exposure to sessions widens exfiltration** (2026-07-10). When
   `search_corpus`/ticket reads land on the session MCP, a prompt-injected
   agent can read Slack history, not just code+graph. Fine local/single-user;
@@ -51,29 +84,14 @@ insert-mode injection at session start. Open follow-ups, priority order:
 7. **Surfaced-vs-followed analytics** for injected procedures (activity stream
    records surfacing; nothing measures follow-through).
 
-## UNDER REVIEW — turn-boundary memory injection (DISABLED 2026-07-10, Samyak)
-The auto-injection of memory into every turn (procedures + branch notes as a
-`[flow memory]` block) is BUILT and shipped but **disabled by default**
-(`FLOW_MEMORY_INJECTION=1` to enable) pending Samyak's review — he has
-thoughts on what should be injected and how it's ranked. Dogfooding surfaced
-the concern immediately: it fired on his own working session and surfaced
-half-relevant WIP notes (the rolling WIP notes are noisy injection candidates
-by nature — they're state, not insight).
-
-What to decide before re-enabling:
-- **What's eligible to inject** — should `wip` notes inject at all, or only
-  note/caution/decision + procedures? (wip is arguably pull-only: useful when
-  a NEW session resumes a branch, noise when injected into the same session
-  that wrote it.)
-- **Ranking / threshold** — 0.35 cosine was a guess; tune on real data, and
-  weight blessed procedures + cautions above wip.
-- **Dedup across a session's own output** — don't inject a note back into the
-  session that just wrote it.
-- **Push vs pull** — maybe injection is only for session-START (resume
-  context) and every other turn is pull-only. Samyak's call.
-Nothing else in the memory system depends on this being on — procedures,
-corrections, notes, and promotion all work; only the automatic per-turn push
-is paused.
+## RESOLVED 2026-07-19 — turn-boundary memory injection REMOVED
+The per-turn `[flow memory]` push (disabled by default since 2026-07-10) is
+deleted along with its two content sources (branch notes in PR #41, the
+procedures lane in the memory-v2 final form). The design questions it posed
+are answered by the two-tier model instead: ambient knowledge is ALWAYS
+present via the orient docs (curated at write time, no ranking at read time),
+and everything situational is pull-only (search_knowledge / find_entity).
+`FLOW_MEMORY_INJECTION` no longer exists.
 
 ## Next — memory system v2: FINAL decisions (2026-07-10, supersedes the section below where they differ)
 

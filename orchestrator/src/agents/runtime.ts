@@ -1,26 +1,24 @@
 // Agents v1 — ACP runtime. The orchestrator is the ACP client for every
 // coding agent on this machine (Claude Code, Codex, OpenCode): it spawns the
 // agent's ACP adapter as a subprocess, creates sessions in connected-repo
-// checkouts, injects Flow's graph MCP into each session (read verbs plus the
-// two governed proposal verbs — propose_procedure and correct_graph — which
-// file proposals but never mutate knowledge directly), streams every session
-// update to subscribers (SSE), and relays steering (follow-up prompts,
-// cancel, permission replies, mode changes).
+// checkouts, injects Flow's graph MCP into each session (read verbs plus
+// correct_graph — an advisory flag, never a direct write — and remember,
+// which feeds the distiller intake), streams every session update to
+// subscribers (SSE), and relays steering (follow-up prompts, cancel,
+// permission replies, mode changes).
 //
 // Cloud shape: nothing in here is reachable except through the orchestrator's
 // HTTP API — the dashboard never spawns agents itself. Later, "cloud mode" is
 // the same API in front of containers instead of local processes.
 
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
-import { getSetting } from "../settings.js";
-import { addNote, matchNotes } from "../notes.js";
-import { embedText } from "../embed.js";
+import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
 import {
   createSessionWorktree,
   listWorktrees,
@@ -41,13 +39,20 @@ import {
 
 export type AgentBackend = "claude" | "codex" | "opencode";
 
-export interface ImageAttachment {
-  data: string; // base64-encoded
+// A file the user attached to a prompt. Images ride inline as ACP `image`
+// blocks (every adapter renders those); everything else is written to disk in
+// the agent's checkout and referenced by path, because the ACP adapters drop
+// or mangle non-image binary blobs sent inline (Claude ignores them outright).
+export interface PromptAttachment {
+  name: string;
   mimeType: string;
+  data: string; // base64-encoded bytes
 }
 
-const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
-const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
+const IMAGE_MIME = /^image\//;
+
+export const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
+export const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 
 // npm workspaces hoist bins to the root node_modules; fall back to the
 // orchestrator's own node_modules for non-workspace installs.
@@ -56,7 +61,7 @@ const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 // captured this path once kept serving a location that a later reinstall
 // removed — every new agent session then injected an MCP server with a dead
 // command, which failed SILENTLY (the agent just had no flow-graph tools).
-function binPath(name: string): string {
+export function binPath(name: string): string {
   const hoisted = path.join(FLOW_ROOT, "node_modules", ".bin", name);
   if (existsSync(hoisted)) return hoisted;
   const local = path.join(FLOW_ROOT, "orchestrator", "node_modules", ".bin", name);
@@ -202,7 +207,7 @@ function compareVersionParts(a: number[] | null, b: number[] | null): number {
   return 0;
 }
 
-async function resolveLocalExecutable(command: string): Promise<string | null> {
+export async function resolveLocalExecutable(command: string): Promise<string | null> {
   const candidates = localExecutableCandidates(command);
   if (candidates.length <= 1) return candidates[0] ?? null;
 
@@ -331,7 +336,7 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 const PROJECT_DIR = path.dirname(process.env.DB_PATH ?? path.join(FLOW_ROOT, "data", "flow.db"));
 const SESSIONS_DIR = path.join(PROJECT_DIR, "agent-sessions");
 
-function projectGraphName(): string {
+export function projectGraphName(): string {
   try {
     const pj = JSON.parse(readFileSync(path.join(PROJECT_DIR, "project.json"), "utf8"));
     if (typeof pj.graph === "string" && pj.graph) return pj.graph;
@@ -348,6 +353,12 @@ export interface RepoOption {
   // The repo's registered base branch (repos.json `branch`) — the BASE-scope
   // diff resolves against this. Undefined for entries that never recorded one.
   branch?: string;
+  // Whether sessions may run at `path`. "folder" = the user connected their
+  // own checkout, so it doubles as the WORK surface. "managed" = GitHub-added:
+  // `path` is Flow's BRAIN clone, kept for indexing and git metadata (branch
+  // lists) only — sessions never run there and never browse its files; they
+  // need an explicit per-user work folder.
+  surface: "folder" | "managed";
 }
 
 export function listRepoOptions(): RepoOption[] {
@@ -367,11 +378,11 @@ export function listRepoOptions(): RepoOption[] {
         // run in-place there (the in-place default) rather than in Flow's
         // managed clone.
         if (r.localPath && existsSync(r.localPath)) {
-          out.push({ name: r.name, path: r.localPath, cloned: true, branch });
+          out.push({ name: r.name, path: r.localPath, cloned: true, branch, surface: "folder" });
           continue;
         }
         const p = path.join(reposDir, r.name);
-        out.push({ name: r.name, path: p, cloned: existsSync(p), branch });
+        out.push({ name: r.name, path: p, cloned: existsSync(p), branch, surface: "managed" });
       }
     } catch {
       /* empty list */
@@ -406,6 +417,7 @@ db.exec(`
     start_sha TEXT,
     start_untracked TEXT,
     worktree_id TEXT,
+    last_distilled_seq INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
@@ -444,9 +456,7 @@ export interface LiveSession {
   id: string;
   backend: AgentBackend;
   repo: string;
-  branch?: string; // git branch of the checkout at session create (WIP notes + note-verb defaults)
-  turnText: string; // agent message text accumulated over the current turn (rolling WIP note source)
-  injectedIds: Set<string>; // memory items already injected this session — never repeat
+  branch?: string; // git branch of the checkout at session create (remember-verb default + distiller context)
   cwd: string;
   // Working-tree snapshot captured at session start, for the SESSION-scope
   // diff. startSha is a git commit object (stash-create or HEAD); null in an
@@ -467,7 +477,7 @@ export interface LiveSession {
   error?: string;
   seq: number;
   turnActive: boolean;
-  queue: Array<{ text: string; images?: ImageAttachment[] }>; // queued steering prompts
+  queue: Array<{ text: string; attachments?: PromptAttachment[] }>; // queued steering prompts
   pendingPermissions: Map<string, PendingPermission>;
   subscribers: Set<(ev: SessionEvent) => void>;
   createdAt: number;
@@ -539,12 +549,17 @@ export function emit(s: LiveSession, kind: SessionEvent["kind"], data: unknown):
 }
 
 function setStatus(s: LiveSession, status: SessionStatus, extra?: { stopReason?: string; error?: string }): void {
+  const wasClosed = s.status === "closed";
   s.status = status;
   if (extra?.stopReason) s.stopReason = extra.stopReason;
   if (extra?.error) s.error = extra.error;
   s.updatedAt = Date.now();
   updateSessionRow.run(status, s.acpSessionId ?? null, s.stopReason ?? null, s.error ?? null, s.updatedAt, s.id);
   emit(s, "status", { status, stopReason: s.stopReason, error: s.error });
+  // Memory v1 write path: a session going closed is distilled (non-blocking,
+  // off the hot path). The idle sweep (trigger.ts) covers sessions that end by
+  // going quiet rather than by an explicit close.
+  if (status === "closed" && !wasClosed) onSessionClosed(s.id, s.branch ?? null);
 }
 
 const rehydrateRow = db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`);
@@ -578,8 +593,6 @@ function rehydrate(id: string): LiveSession | undefined {
     id: row.id,
     backend: row.backend,
     repo: row.repo,
-    turnText: "",
-    injectedIds: new Set(),
     cwd: row.cwd,
     startSha: row.start_sha ?? null,
     startUntracked: parseUntracked(row.start_untracked),
@@ -659,6 +672,12 @@ export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
   return out;
 }
 
+// Wire the memory distiller's triggers: give it the transcript reader (avoids an
+// import cycle) and start the idle sweep. Guarded so tests that never touch
+// sessions don't spin up a timer; FLOW_DISTILLER=0 disables both.
+setTranscriptReader((id) => readTranscript(id).map((e) => ({ seq: e.seq, kind: e.kind, data: e.data })));
+startIdleSweep();
+
 // ---------------------------------------------------------------------------
 // ACP connections — one adapter process per backend, shared across sessions
 
@@ -715,7 +734,7 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       const title = String(params.toolCall?.title ?? "");
       // Title formats vary by adapter: "flow-graph_<verb>" (older) vs
       // "mcp__flow-graph__<verb>" (current claude-agent-acp). Match both.
-      if (/^(?:mcp__)?flow-graph_{1,2}(orient|find_entity|get_entity|read_query|list_schema|correct_graph|propose_procedure|propose_retire_procedure|note)$/.test(title)) {
+      if (/^(?:mcp__)?flow-graph_{1,2}(orient|find_entity|get_entity|read_query|list_schema|correct_graph|remember|search_knowledge)$/.test(title)) {
         const opt =
           params.options.find((o) => o.kind === "allow_always") ??
           params.options.find((o) => o.kind === "allow_once");
@@ -745,12 +764,6 @@ function makeClientHandler(backend: AgentBackend): acp.Client {
       const u = params.update as { sessionUpdate?: string; configOptions?: unknown; content?: { type?: string; text?: string } };
       if (u.sessionUpdate === "config_option_update" && u.configOptions) {
         s.configOptions = u.configOptions;
-      }
-      // Accumulate the agent's own words this turn — the free source for the
-      // rolling WIP note (the agent already summarizes what it did; harvest,
-      // don't re-derive). Capped; we only ever use the tail.
-      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text" && u.content.text) {
-        s.turnText = (s.turnText + u.content.text).slice(-4000);
       }
       emit(s, "update", params.update);
     },
@@ -927,16 +940,19 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 
 function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
+  const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
+  const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   const env: Array<{ name: string; value: string }> = [
     { name: "GATEWAY_MCP_READONLY", value: "1" },
     { name: "GRAPH_NAME", value: projectGraphName() },
     { name: "FLOW_AGENT_SESSION", value: flowSessionId },
-    // note-verb defaults: Flow runs this session, so it knows the checkout.
+    // remember-verb defaults: Flow runs this session, so it knows the checkout.
     // External MCP consumers pass {repo, branch} explicitly instead (Flow may
     // be remote — never assume a shared filesystem).
     { name: "FLOW_REPO", value: repo },
     { name: "FLOW_BRANCH", value: branch },
-    { name: "FLOW_NOTES_URL", value: `http://127.0.0.1:${orchPort}/v1/notes` },
+    // Base for search_knowledge (used as-is) and remember (/search → /remember).
+    { name: "FLOW_MEMORY_URL", value: `http://127.0.0.1:${orchPort}/v1/memory/search` },
     { name: "FLOW_ACTIVITY_URL", value: `http://127.0.0.1:${orchPort}/v1/agents/graph-activity` },
     // The EFFECTIVE bearer, matching auth.ts's fallback: an empty string here
     // means the MCP omits the Authorization header and every activity report
@@ -945,14 +961,13 @@ function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpSer
     // correct_graph dispatch target — flags land in the corrections queue and
     // get verified against the base-branch checkout by the indexer.
     { name: "FLOW_CORRECTIONS_URL", value: `http://127.0.0.1:${orchPort}/v1/corrections` },
+    // The gateway owns the local embedding model. Agent MCP subprocesses use
+    // it over HTTP instead of loading one model copy per active session.
+    { name: "FLOW_EMBED_URL", value: `${gatewayUrl}/v1/embed` },
   ];
+  if (gatewayToken) env.push({ name: "FLOW_EMBED_TOKEN", value: gatewayToken });
   if (process.env.FALKOR_HOST) env.push({ name: "FALKOR_HOST", value: process.env.FALKOR_HOST });
   if (process.env.FALKOR_PORT) env.push({ name: "FALKOR_PORT", value: process.env.FALKOR_PORT });
-  // Give the read-only MCP the embeddings key so find_entity can do semantic
-  // search — without it, the vector fallback silently no-ops and agents get the
-  // old substring-only behaviour. Same key used everywhere (getSetting → DB/env).
-  const embedKey = getSetting("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY;
-  if (embedKey) env.push({ name: "OPENROUTER_API_KEY", value: embedKey });
   return { name: "flow-graph", command: binPath("tsx"), args: [GATEWAY_MCP], env };
 }
 
@@ -975,152 +990,13 @@ export function recordGraphActivity(body: {
 }
 
 // ---------------------------------------------------------------------------
-// Insert-mode procedures — blessed rules whose author asked Flow to push them
-// into sessions when the task matches. v1 injects at session start (the first
-// turn boundary): semantic-match the prompt against Procedure nodes via the
-// gateway, then one read_query fetches the matched candidates' fields and
-// filters to blessed insert-mode server-side. Exactly two bounded round-trips
-// and strictly best-effort: a gateway hiccup degrades to retrieve-mode
-// behaviour, it never blocks or fails the session.
-
-const MAX_INJECTED_PROCEDURES = 2;
-// Wider than the injection budget on purpose: insert-mode rules are the rare
-// minority and must not lose their candidate slots to retrieve-mode matches.
-const PROCEDURE_MATCH_POOL = 20;
-
-async function gatewayVerb(name: string, input: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  const base = process.env.GATEWAY_URL ?? "http://127.0.0.1:7433";
-  const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(`${base}/v1/verbs/${name}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify(input),
-      signal: AbortSignal.timeout(3500),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-interface ProcedureCandidate {
-  id: string;
-  name: string;
-  trigger: string;
-  steps: string;
-  scope: string;
-  repo: string | null;
-}
-
-async function insertModeProcedures(prompt: string, repo: string): Promise<Array<{ id: string; block: string }>> {
-  const graph = projectGraphName();
-  const found = await gatewayVerb("find_entity", {
-    q: prompt.slice(0, 500),
-    type: "Procedure",
-    limit: PROCEDURE_MATCH_POOL,
-    graph,
-  });
-  const ids = ((found?.matches ?? []) as Array<{ id?: string }>)
-    .map((m) => m.id)
-    .filter((id): id is string => typeof id === "string" && /^[\w:./ -]+$/.test(id));
-  if (ids.length === 0) return [];
-
-  // read_query takes no params — inline the id list. Ids come from our own
-  // graph and are shape-checked above; quotes are escaped regardless.
-  const idList = ids.map((id) => `'${id.replace(/'/g, "\\'")}'`).join(", ");
-  const detail = await gatewayVerb("read_query", {
-    graph,
-    // retire_proposed stays in force until a human confirms the retirement.
-    cypher: `MATCH (n:Procedure) WHERE n.id IN [${idList}] AND n.status IN ['blessed', 'retire_proposed'] AND n.mode = 'insert'
-             RETURN n.id AS id, n.name AS name, n.trigger AS trigger, n.steps AS steps, n.scope AS scope, n.repo AS repo`,
-  });
-  return ((detail?.rows ?? []) as ProcedureCandidate[])
-    .filter((r) => !(r.scope === "repo" && r.repo && r.repo !== repo))
-    // Preserve the semantic-match ranking from find_entity.
-    .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
-    .slice(0, MAX_INJECTED_PROCEDURES)
-    .map((r) => ({
-      id: r.id,
-      block: `- PROCEDURE (human-blessed) ${r.name} (${r.id})\n  When: ${r.trigger ?? ""}\n  ${String(r.steps ?? "")
-        .split("\n")
-        .map((s, i) => `${i + 1}. ${s}`)
-        .join("\n  ")}`,
-    }));
-}
-
-// ---------------------------------------------------------------------------
-// Turn-boundary memory injection — the Claude-style recall lane, no LLM in
-// the path: one local embedding of the user's message (procedure matching
-// embeds server-side in parallel), cosine over the branch's notes in-process,
-// top items as a clearly-marked block. Per-session dedup (never re-inject the
-// same item), hard overall time bound, strictly best-effort.
-
-const INJECTION_BUDGET = 3; // total items per turn across procedures + notes
-const INJECTION_TIMEOUT_MS = 4000;
-
-// Turn-boundary injection is DISABLED by default pending design review (see
-// ROADMAP — Samyak wants to rethink what gets injected and how it's ranked
-// before it runs against real sessions). Opt in with FLOW_MEMORY_INJECTION=1.
-// Note: this only gates the automatic per-turn PUSH; agents can still PULL
-// procedures/notes explicitly via the graph tools, and insert-mode procedures
-// remain available on demand.
-const INJECTION_ENABLED = process.env.FLOW_MEMORY_INJECTION === "1";
-
-async function buildMemoryInjection(s: LiveSession, userText: string): Promise<string> {
-  if (!INJECTION_ENABLED) return "";
-  try {
-    const gather = (async () => {
-      const [procedures, noteVec] = await Promise.all([
-        insertModeProcedures(userText, s.repo),
-        embedLocal(userText.slice(0, 2000)),
-      ]);
-      const notes =
-        noteVec && s.branch
-          ? matchNotes(noteVec, s.repo, s.branch, { limit: 2, minSimilarity: 0.35 }).map((n) => ({
-              id: n.id,
-              block: `- NOTE (${n.kind}, this branch): ${n.text.length > 500 ? n.text.slice(0, 500) + "…" : n.text}`,
-            }))
-          : [];
-      return [...procedures, ...notes];
-    })();
-    const items = (await Promise.race([
-      gather,
-      new Promise<[]>((r) => setTimeout(() => r([]), INJECTION_TIMEOUT_MS)),
-    ])) as Array<{ id: string; block: string }>;
-
-    const fresh = items.filter((i) => !s.injectedIds.has(i.id)).slice(0, INJECTION_BUDGET);
-    if (fresh.length === 0) return "";
-    for (const i of fresh) s.injectedIds.add(i.id);
-    // Visible in the session view as brain activity (same channel as MCP reads).
-    emit(s, "graph", { verb: "memory_inject", args: "", nodeIds: fresh.map((i) => i.id), ok: true });
-    return `[flow memory — auto-retrieved for this turn; weigh it, it may be stale]\n${fresh
-      .map((i) => i.block)
-      .join("\n")}\n[/flow memory]\n\n`;
-  } catch {
-    return "";
-  }
-}
-
-async function embedLocal(text: string): Promise<Float32Array | null> {
-  try {
-    return await embedText(text);
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Session lifecycle
 
-const GRAPH_PREAMBLE = `Call the flow-graph "orient" tool FIRST — before anything else — for your bearings (learned project rules, repo summary, procedures, this branch's notes); call it again after context compaction or whenever you feel lost.
+const GRAPH_PREAMBLE = `Call the flow-graph "orient" tool FIRST — before anything else — for your bearings (what this repo is, how it works, what memory holds); call it again after context compaction or whenever you feel lost.
 You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
-Two proposal tools let you contribute back — use them sparingly and precisely:
+Tools that contribute back — use them sparingly and precisely:
 - correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
-- propose_procedure: when the user states a durable rule ("always X", "the way we do Y"), draft the COMPLETE procedure (trigger, steps, scope, mode) while the context is fresh, propose it, and tell the user what you proposed so they can review it. Never propose branch- or task-local instructions.
-- propose_retire_procedure: when the user indicates an existing procedure no longer applies ("we don't do that anymore"), nominate it for retirement with the reason and their words. It stays active until a human confirms — never treat a nomination as removal.
-- note: save branch-scoped working memory freely (no approval) — discoveries, dead ends ("tried X, deadlocked"), constraints, decisions. Note what the next session on this branch would otherwise re-learn the hard way.`;
+- remember: when the user says "remember this", states a durable rule ("always X", "we never Y"), or something clearly worth keeping surfaces, send the text — verbatim quotes plus enough context to stand alone — to Flow's memory. The distiller extracts and files it; you never classify or wait.`;
 
 // PLACEMENT resolves a collision:
 //   undefined       — normal start; but if the folder is already in use by a
@@ -1141,10 +1017,29 @@ export async function createSession(opts: {
   repo: string;
   prompt: string;
   placement?: SessionPlacement;
+  // Explicit per-user WORK surface (a registered work folder): "use this
+  // repo's knowledge, but make the changes in THIS checkout." Overrides the
+  // repo's default surface.
+  workFolder?: string;
 }): Promise<CreateSessionResult> {
-  const repoOpt = listRepoOptions().find((r) => r.name === opts.repo);
-  if (!repoOpt) return { error: `Unknown repo "${opts.repo}" — connect it first` };
-  if (!repoOpt.cloned) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  const found = listRepoOptions().find((r) => r.name === opts.repo);
+  if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
+  if (!found.cloned && !opts.workFolder) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  // BRAIN/WORK separation: a GitHub-added repo's only checkout is Flow's
+  // managed clone, which the indexer force-resets at will — never a place to
+  // run agents. Sessions over these repos require an explicit work folder.
+  if (found.surface === "managed" && !opts.workFolder) {
+    return {
+      error: `"${opts.repo}" was connected from GitHub, so Flow only indexes it. Pick one of your folders to run the agent in.`,
+    };
+  }
+  let repoOpt = found;
+  if (opts.workFolder) {
+    if (!existsSync(opts.workFolder)) {
+      return { error: `Work folder "${opts.workFolder}" doesn't exist on this machine` };
+    }
+    repoOpt = { ...found, path: opts.workFolder, cloned: true };
+  }
 
   const title = opts.prompt.length > 80 ? opts.prompt.slice(0, 77) + "…" : opts.prompt;
 
@@ -1183,8 +1078,6 @@ export async function createSession(opts: {
     id,
     backend: opts.backend,
     repo: opts.repo,
-    turnText: "",
-    injectedIds: new Set(),
     cwd,
     worktreeId,
     title,
@@ -1233,50 +1126,65 @@ export async function createSession(opts: {
   return { id, separateCopy: Boolean(worktreeId) };
 }
 
-// Rolling WIP note — the free tier of branch memory. Assembled from what the
-// session already produced (title + the agent's own latest words + diff
-// stat); zero LLM, zero agent discipline. kind='wip' supersedes this
-// session's previous note, so the branch always carries its CURRENT state
-// for the next session's injection. Fire-and-forget: never blocks a turn.
-async function writeWipNote(s: LiveSession): Promise<void> {
-  if (!s.branch || !s.turnText.trim()) return;
-  try {
-    const diff = await sessionDiff(s.id);
-    const files = "files" in diff ? diff.files.map((f) => f.path) : [];
-    const fileLine =
-      files.length > 0 ? `\nChanged: ${files.slice(0, 12).join(", ")}${files.length > 12 ? ` (+${files.length - 12} more)` : ""}` : "";
-    await addNote({
-      repo: s.repo,
-      branch: s.branch,
-      kind: "wip",
-      text: `WIP — ${s.title}\n${s.turnText.slice(-1200).trim()}${fileLine}`,
-      actor: "flow:auto-wip",
-      session: s.id,
-    });
-  } catch {
-    /* working memory is best-effort */
-  }
+// Land a non-image attachment on disk in the agent's checkout so the agent can
+// read it with its own tools. Files go under a gitignored `.flow/attachments/`
+// so they never show up in the session diff or a PR. Returns the absolute path.
+function writeAttachmentToCheckout(cwd: string, name: string, data: string): string {
+  const dir = path.join(cwd, ".flow", "attachments");
+  mkdirSync(dir, { recursive: true });
+  // `*` inside .flow ignores everything under it (including itself) — attachments
+  // never pollute the working tree the agent is meant to be changing.
+  const ignore = path.join(cwd, ".flow", ".gitignore");
+  if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
+  // Sanitize + de-collide: keep the visible name, prefix a short unique token.
+  const safe = (name || "file").replace(/[^A-Za-z0-9._-]/g, "_").slice(-80) || "file";
+  const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const dest = path.join(dir, `${token}-${safe}`);
+  writeFileSync(dest, Buffer.from(data, "base64"));
+  return dest;
 }
 
-// Every turn — first prompt and steers alike — passes through here, so this
-// is where memory arrives: preamble (first turn only) + auto-retrieved memory
-// block + the user's text. Injection matches against the USER's words only,
-// never the preamble.
-async function runTurn(s: LiveSession, text: string, preamble = "", images?: ImageAttachment[]): Promise<void> {
+// Every turn — first prompt and steers alike — passes through here: preamble
+// (first turn only) + the user's text. Memory is pull-only — agents consult
+// orient/search_knowledge themselves; nothing is auto-injected per turn.
+async function runTurn(s: LiveSession, text: string, preamble = "", attachments?: PromptAttachment[]): Promise<void> {
   const c = connections.get(s.backend);
   if (!c || !s.acpSessionId) throw new Error("session has no live connection");
   s.turnActive = true;
-  s.turnText = "";
   setStatus(s, "running");
-  const memory = await buildMemoryInjection(s, text);
-  const finalText = `${preamble}${memory}${text}`;
-  emit(s, "user_prompt", { text: finalText, images });
-  // Build ACP content blocks: text + optional images.
-  const promptBlocks: acp.ContentBlock[] = [{ type: "text", text: finalText }];
-  if (images) {
-    for (const img of images) {
-      promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
+  const finalText = `${preamble}${text}`;
+
+  // Split attachments: images ride inline (adapters render `image` blocks);
+  // everything else is written to the checkout and handed over by path.
+  const images = (attachments ?? []).filter((a) => IMAGE_MIME.test(a.mimeType));
+  const files = (attachments ?? []).filter((a) => !IMAGE_MIME.test(a.mimeType));
+  const fileRefs: Array<{ name: string; mimeType: string; path: string }> = [];
+  for (const f of files) {
+    try {
+      fileRefs.push({ name: f.name, mimeType: f.mimeType, path: writeAttachmentToCheckout(s.cwd, f.name, f.data) });
+    } catch {
+      /* skip a file we couldn't write; the turn still runs */
     }
+  }
+
+  // Transcript shows the human text + thumbnails for images + chips for files;
+  // the path note is appended only to what the agent sees, not the bubble.
+  emit(s, "user_prompt", {
+    text: finalText,
+    images: images.map((a) => ({ data: a.data, mimeType: a.mimeType })),
+    files: fileRefs.map((f) => ({ name: f.name, mimeType: f.mimeType })),
+  });
+
+  const agentText = fileRefs.length
+    ? `${finalText}\n\n[Attached files — read these from disk before responding:]\n${fileRefs
+        .map((f) => `- ${f.path} (${f.mimeType})`)
+        .join("\n")}`
+    : finalText;
+
+  // Build ACP content blocks: text + inline images.
+  const promptBlocks: acp.ContentBlock[] = [{ type: "text", text: agentText }];
+  for (const img of images) {
+    promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
   }
   try {
     const result = await c.conn.prompt({
@@ -1284,11 +1192,10 @@ async function runTurn(s: LiveSession, text: string, preamble = "", images?: Ima
       prompt: promptBlocks,
     });
     s.turnActive = false;
-    void writeWipNote(s);
     // Steering queued during the turn? Run it next.
     const next = s.queue.shift();
     if (next !== undefined && s.status !== "closed") {
-      await runTurn(s, next.text, "", next.images);
+      await runTurn(s, next.text, "", next.attachments);
       return;
     }
     if (s.status !== "closed") setStatus(s, "idle", { stopReason: result.stopReason });
@@ -1317,7 +1224,7 @@ function describeError(backend: AgentBackend, e: unknown): string {
 
 // Steering: when idle → new turn immediately. When a turn is active → cancel
 // the current turn and run the steer prompt next (the user changed their mind).
-export async function steer(id: string, text: string, images?: ImageAttachment[]): Promise<{ ok: true } | { error: string }> {
+export async function steer(id: string, text: string, attachments?: PromptAttachment[]): Promise<{ ok: true } | { error: string }> {
   const s = liveSession(id);
   if (!s || !s.acpSessionId) return { error: "Session is not live (reload-only or closed)" };
   let c: Connection;
@@ -1327,11 +1234,11 @@ export async function steer(id: string, text: string, images?: ImageAttachment[]
     return { error: (e as Error).message };
   }
   if (s.turnActive) {
-    s.queue.push({ text, images });
+    s.queue.push({ text, attachments });
     await c.conn.cancel({ sessionId: s.acpSessionId });
     return { ok: true };
   }
-  void runTurn(s, text, "", images).catch(() => {});
+  void runTurn(s, text, "", attachments).catch(() => {});
   return { ok: true };
 }
 
@@ -1742,11 +1649,18 @@ export async function listSessionFiles(
 export async function listRepoFiles(
   repo: string,
   query: string,
-  limit = 40
+  limit = 40,
+  dir?: string
 ): Promise<{ entries: FileEntry[] } | { error: string }> {
   const repoOpt = listRepoOptions().find((r) => r.name === repo);
   if (!repoOpt || !repoOpt.cloned) return { error: `Unknown repo "${repo}"` };
-  return { entries: await filesUnder(repoOpt.path, query, limit) };
+  // Autocomplete from where the session will actually run: the caller's work
+  // folder when one is chosen, else the user's connected folder. A managed
+  // (GitHub-only) repo has no browsable surface — the BRAIN clone is for
+  // indexing, not for peeking.
+  const root = dir ?? (repoOpt.surface === "folder" ? repoOpt.path : null);
+  if (!root) return { error: `"${repo}" is index-only — pick a work folder to browse its files` };
+  return { entries: await filesUnder(root, query, limit) };
 }
 
 // Open the session's repo folder in the OS file manager or VS Code. Local-mode

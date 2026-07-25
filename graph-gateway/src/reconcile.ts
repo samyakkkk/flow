@@ -13,7 +13,7 @@
 //   2. RECONCILERS — unversioned, convergent, idempotent, run in the
 //      background on every boot. For enrichment where "check what's missing
 //      and fill it" is cheap and safe to re-run. They self-heal: a reconciler
-//      also catches nodes written while a dependency (say, the OpenRouter key)
+//      also catches nodes written while a dependency (say, the local model)
 //      was missing. Never block startup, never crash the gateway.
 //
 // Only the long-lived HTTP gateway runs this — the per-session MCP subprocess
@@ -21,9 +21,15 @@
 // across concurrent agent sessions.
 
 import { run, raw } from "./graph.js";
-import { embedBatch, embeddingsEnabled, entityText } from "./embed.js";
+import { embedBatch, entityText } from "./embed.js";
+import { startLocalModel } from "./local-embed.js";
+import { activeEmbeddingModel, activeEmbeddingStamp } from "./embedding-models.js";
 
 const versionKey = (graph: string) => `flow:graph-version:${graph}`;
+// Tracks which embed model's vectors are stored in the graph. When this
+// stamp changes (model upgrade or switch from OpenRouter), we force-re-embed
+// all nodes so query and document vectors stay in the same space.
+const embedStampKey = (graph: string) => `flow:embed-stamp:${graph}`;
 
 interface GraphMigration {
   id: number;
@@ -31,9 +37,23 @@ interface GraphMigration {
   up: (graph: string) => Promise<void>;
 }
 
-// Append-only, next integer id. None yet — the embeddings rollout is a
-// reconciler (convergent), not a migration (one-way).
-const GRAPH_MIGRATIONS: GraphMigration[] = [];
+// Append-only, next integer id.
+const GRAPH_MIGRATIONS: GraphMigration[] = [
+  {
+    id: 1,
+    name: "clear-stale-embeddings-for-model-upgrade",
+    async up(graph: string): Promise<void> {
+      // The embedding model changed dimension (e.g. OpenAI 1536-dim → local
+      // EmbeddingGemma-300M 768-dim). FalkorDB throws on cosineDistance when
+      // stored vectors mix dimensions. Wipe everything so the embed-stamp
+      // reconciler re-embeds all nodes cleanly in the correct space.
+      await run(graph, `MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL`);
+      const conn = await raw();
+      await conn.del(embedStampKey(graph));
+      console.log(`[graph] migration 1 applied to '${graph}': cleared all embeddings for dimension-safe re-embed`);
+    },
+  },
+];
 
 const LATEST = GRAPH_MIGRATIONS.reduce((m, x) => Math.max(m, x.id), 0);
 
@@ -53,7 +73,7 @@ export async function runGraphMigrations(graph: string): Promise<void> {
 
 // ---------------------------------------------------------------------------
 // Reconciler: semantic embeddings. Nodes written before the embeddings
-// feature (or while OPENROUTER_API_KEY was unset / an embed call failed) have
+// feature (or while the local model was loading / an embed call failed) have
 // no vector; find_entity's semantic fallback can't see them. Converge here.
 // Returns counts so the manual script (scripts/backfill-embeddings.ts) can
 // report; `force` re-embeds everything (after an embed-text or model change).
@@ -93,8 +113,42 @@ export async function reconcileEmbeddings(
 }
 
 // ---------------------------------------------------------------------------
-// Boot entry point. Migrations first (they're ordering-sensitive), then
-// reconcilers fire-and-forget. Any failure is logged, never fatal — a gateway
+// Called after the active embedding backend is ready. Checks whether the
+// stored embed-model stamp matches the resolved model's stamp — if not (first
+// run, model upgrade, or a switch between local and an API model), clears every
+// vector and re-embeds so all vectors share one space and dimension. On match,
+// only backfills nodes written during the ready-up window (embedding IS NULL).
+// Saves the stamp after a force run.
+export async function reconcileAfterModelReady(graph: string): Promise<void> {
+  try {
+    const conn = await raw();
+    const saved = await conn.get(embedStampKey(graph));
+    const stamp = activeEmbeddingStamp();
+    const force = saved !== stamp;
+    if (force) {
+      console.log(`[reconcile] embed model changed (${saved ?? "none"} → ${stamp}) — clearing old embeddings before re-embed`);
+      // Null out ALL stored embeddings before re-embedding. This prevents
+      // mixed-dimension state in FalkorDB (cosineDistance throws when stored
+      // vectors have a different length than the query). During the re-embed
+      // window, find_entity falls back to lexical search — acceptable.
+      await run(graph, `MATCH (n) WHERE n.embedding IS NOT NULL SET n.embedding = NULL`);
+    }
+    const { total, embedded, failed } = await reconcileEmbeddings(graph, { force });
+    if (total === 0) {
+      console.log(`[reconcile] graph='${graph}': all nodes already embedded`);
+    } else {
+      console.log(`[reconcile] graph='${graph}': embedded ${embedded}/${total}${failed ? `, failed ${failed}` : ""}`);
+    }
+    if (force) await conn.set(embedStampKey(graph), stamp);
+  } catch (err) {
+    console.warn(`[reconcile] post-model reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Boot entry point. Migrations first (ordering-sensitive, blocking), then
+// fire-and-forget: wait for the local embedding model (downloading if needed),
+// then reconcile embeddings. Any failure is logged, never fatal — a gateway
 // that can't converge is still a working gateway.
 export function runBootTasks(graph: string): void {
   void (async () => {
@@ -103,14 +157,18 @@ export function runBootTasks(graph: string): void {
     } catch (err) {
       console.warn(`[graph] migrations for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (embeddingsEnabled()) {
-      try {
-        await reconcileEmbeddings(graph);
-      } catch (err) {
-        console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
+    try {
+      // Only wait on the local model download when the active provider is
+      // local. An API model (OpenAI) is ready as soon as a key is set — there's
+      // nothing to download, so skip straight to reconcile.
+      if (activeEmbeddingModel().provider === "local") {
+        // startLocalModel() is a singleton — safe to call here even though
+        // server.ts already called it; the same promise is returned.
+        await startLocalModel();
       }
-    } else {
-      console.log(`[reconcile] OPENROUTER_API_KEY not set — semantic search disabled for '${graph}'`);
+      await reconcileAfterModelReady(graph);
+    } catch (err) {
+      console.warn(`[reconcile] embeddings for '${graph}' failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   })();
 }

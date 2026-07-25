@@ -1,8 +1,15 @@
 import { z } from "zod";
-import { DEFAULT_GRAPH, run } from "./graph.js";
+import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
 import { embedQuery, embedText, embeddingsEnabled, entityText } from "./embed.js";
+import {
+  fetchHeadline,
+  fetchCard,
+  fetchMemoryHits,
+  parseCardId,
+  type MemoryHitGroup,
+} from "./memory-client.js";
 
 // Cosine-distance ceiling for semantic matches. Tuned on the flow graph (156
 // nodes) by sweeping a 24-query labelled set: recall climbs steeply up to ~0.65
@@ -54,15 +61,43 @@ interface ScoredRow extends EntityRow {
 
 const clampLimit = (limit: number) => Math.max(1, Math.min(50, Math.floor(limit)));
 
-// Proposed-but-unblessed procedures are invisible to normal retrieval — they
-// only enter circulation once a human approves them. Label-scoped to Procedure:
-// other node types may legitimately carry a status prop (cleanProps allows it)
-// and must not vanish from search. Dedup paths opt back in (includeProposed)
-// so a second agent proposing the same rule sees the pending one instead of
-// creating a duplicate.
-const HIDE_PROPOSED = `AND NOT (labels(n)[0] = 'Procedure' AND coalesce(n.status, '') = 'proposed')`;
+// Run `fn` over `items` with a small concurrency bound, preserving input order
+// in the result. Used by the batched read verbs so a model can fetch several
+// entities/queries in one call without us firing an unbounded fan-out at the
+// graph. Errors are captured per item (Promise.allSettled semantics), never
+// propagated — a batch is a set of independent reads and one bad item must not
+// sink the rest.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<Array<{ ok: true; value: R } | { ok: false; error: string }>> {
+  const out: Array<{ ok: true; value: R } | { ok: false; error: string }> = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      try {
+        out[i] = { ok: true, value: await fn(items[i], i) };
+      } catch (err) {
+        out[i] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
-async function findSimilar(graph: string, q: string, type?: string, limit = 10, includeProposed = false): Promise<EntityRow[]> {
+// Read verbs accept a single value OR a batch array. These caps bound the
+// server-side fan-out; over the cap is a hard error (clear failure beats a
+// silent truncation the model can't see). Concurrency is deliberately small —
+// a batch is a convenience for the model, not a load-test of the graph.
+const GET_ENTITY_MAX_BATCH = 15;
+const FIND_ENTITY_MAX_BATCH = 10;
+const BATCH_CONCURRENCY = 5;
+
+async function findSimilar(graph: string, q: string, type?: string, limit = 10): Promise<EntityRow[]> {
   // Tokenized match: every query token must appear in the same field. Ids and
   // names carry separator conventions the caller can't guess ("brands-live",
   // "brandsLive", "Brands.Live") — splitting the query on non-alphanumerics
@@ -78,7 +113,7 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10, 
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
-    `MATCH (n) WHERE (${match}) ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
+    `MATCH (n) WHERE (${match}) ${typeFilter}
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor
      LIMIT ${clampLimit(limit)}`,
     {
@@ -97,14 +132,14 @@ async function findSimilar(graph: string, q: string, type?: string, limit = 10, 
 // unconfigured or the query can't be embedded, `degraded` says why — callers
 // that answer retrieval questions must pass that on, because lexical-only
 // results are indistinguishable from "the graph has nothing" otherwise.
-async function findByVector(graph: string, q: string, type: string | undefined, limit: number, includeProposed = false): Promise<{ rows: ScoredRow[]; degraded?: string }> {
-  if (!embeddingsEnabled()) return { rows: [], degraded: "OPENROUTER_API_KEY not configured" };
+async function findByVector(graph: string, q: string, type: string | undefined, limit: number): Promise<{ rows: ScoredRow[]; degraded?: string }> {
+  if (!embeddingsEnabled()) return { rows: [], degraded: "local embedding service is not configured" };
   const { vec, error } = await embedQuery(q);
   if (!vec) return { rows: [], degraded: error ?? "query could not be embedded" };
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
   const rows = await run(
     graph,
-    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter} ${includeProposed ? "" : HIDE_PROPOSED}
+    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter}
      WITH n, vec.cosineDistance(n.embedding, vecf32($vec)) AS d
      WHERE d <= $maxDistance
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor, d AS distance
@@ -123,44 +158,117 @@ async function findByVector(graph: string, q: string, type: string | undefined, 
 // ---------------------------------------------------------------------------
 
 const findEntityInput = {
-  q: z.string().min(1).describe("Name, id, or phrase to look up"),
+  // Single query OR a batch: pass `qs` to look up several phrases in one call.
+  // At least one form is required; `q` wins when both are given.
+  q: z.string().min(1).optional().describe("Name, id, or phrase to look up (single form)"),
+  qs: z.array(z.string().min(1)).min(1).max(FIND_ENTITY_MAX_BATCH).optional().describe(`Phrases to look up in one call (batch form, ≤${FIND_ENTITY_MAX_BATCH}) — prefer one batched call over sequential single searches`),
   type: z.string().optional().describe("Optional node type filter, e.g. 'Service'"),
   limit: z.number().int().min(1).max(50).default(10),
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
-async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
+// Single-query lookup — the one code path both the single and batch forms reuse.
+async function findEntityOne(graph: string, q: string, type: string | undefined, limit: number) {
   const exact = await run(
-    input.graph,
+    graph,
     `MATCH (n {id: $q}) RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor`,
-    { q: input.q },
+    { q },
   );
-  if (exact.length > 0) return { status: "exact", matches: exact };
+  if (exact.length > 0) return { status: "exact" as const, matches: exact as unknown as ScoredRow[] };
 
   // Lexical substring first — it's a high-precision signal when the caller
   // already knows a name/id fragment. Then augment with semantic matches the
   // substring scan can't reach. Lexical hits keep their rank; vector hits fill
   // the remaining slots, deduped by id.
-  const lexical: ScoredRow[] = (await findSimilar(input.graph, input.q, input.type, input.limit)).map(
+  const lexical: ScoredRow[] = (await findSimilar(graph, q, type, limit)).map(
     (r) => ({ ...r, via: "lexical" }),
   );
-  const { rows: vector, degraded } = await findByVector(input.graph, input.q, input.type, input.limit);
+  const { rows: vector, degraded } = await findByVector(graph, q, type, limit);
 
   const seen = new Set(lexical.map((r) => String(r.id)));
   const matches: ScoredRow[] = [...lexical];
   for (const v of vector) {
-    if (matches.length >= input.limit) break;
+    if (matches.length >= limit) break;
     if (seen.has(String(v.id))) continue;
     seen.add(String(v.id));
     matches.push(v);
   }
   return {
-    status: matches.length > 0 ? "similar" : "none",
+    status: (matches.length > 0 ? "similar" : "none") as "similar" | "none",
     matches,
     ...(degraded
       ? { warning: `Semantic search unavailable (${degraded}) — these results are substring-only and may miss related nodes. Do not conclude the graph lacks coverage from this response.` }
       : {}),
   };
+}
+
+// The repo scope for memory hits — session env, since find_entity has no repo
+// param. The orchestrator's family gate is lenient (same product family) so a
+// missing repo just widens eligibility.
+function memoryRepo(): string | null {
+  return process.env.FLOW_REPO || null;
+}
+
+async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
+  if (input.q === undefined && input.qs === undefined) {
+    return { status: "error", error: "Pass `q` (single) or `qs` (batch, up to 10)." };
+  }
+  // UNIFIED find_entity (Section D): graph nodes AND memory hits in one result.
+  // Memory hits are fetched from the orchestrator (family gate + 0.55 silence
+  // gate + meaningful-token FTS reused, not forked) with the type QUOTA applied
+  // there; the gateway just splices them in as `memory_hits`. Graph node search
+  // is unchanged — memory is additive, never replaces code nodes.
+
+  // Single form stays byte-for-byte compatible for graph fields ({status,
+  // matches, warning?}); `memory_hits` is an additive field.
+  if (input.q !== undefined) {
+    const [graphRes, hitGroups] = await Promise.all([
+      findEntityOne(input.graph, input.q, input.type, input.limit),
+      fetchMemoryHits([input.q], memoryRepo()),
+    ]);
+    const hits = hitGroups[0]?.hits ?? [];
+    return hits.length ? { ...graphRes, memory_hits: hits.map((h) => h.line) } : graphRes;
+  }
+
+  // Batch: one group per query, in REQUEST ORDER. Cross-group duplicate node
+  // ids are noted tersely ("(also matched q1)") instead of repeating the full
+  // entry — the first group to surface an id owns the full match; later groups
+  // just point back. A per-query failure is isolated to that group.
+  const qs = input.qs as string[];
+  const [settled, hitGroups] = await Promise.all([
+    mapWithConcurrency(qs, BATCH_CONCURRENCY, (q) => findEntityOne(input.graph, q, input.type, input.limit)),
+    fetchMemoryHits(qs, memoryRepo()),
+  ]);
+  const hitsByQuery = memoryHitsByQuery(qs, hitGroups);
+
+  const firstSeenIn = new Map<string, number>(); // node id → group index that owns the full entry
+  const groups = settled.map((r, i) => {
+    const memHits = hitsByQuery[i] ?? [];
+    const memField = memHits.length ? { memory_hits: memHits.map((h) => h.line) } : {};
+    if (!r.ok) return { query: qs[i], status: "error" as const, error: r.error, ...memField };
+    const res = r.value;
+    const matches = res.matches.map((m) => {
+      const id = String(m.id);
+      const owner = firstSeenIn.get(id);
+      if (owner === undefined) {
+        firstSeenIn.set(id, i);
+        return m;
+      }
+      // Terse cross-group dedup note — full entry lives in the owning group.
+      return { id: m.id, note: `(also matched q${owner + 1})` };
+    });
+    return { query: qs[i], status: res.status, matches, ...("warning" in res ? { warning: res.warning } : {}), ...memField };
+  });
+
+  return { status: "batch", count: groups.length, groups };
+}
+
+// Align memory-hit groups to the query list by index; the orchestrator returns
+// them in request order, but be defensive (match by query text as a fallback).
+function memoryHitsByQuery(qs: string[], groups: MemoryHitGroup[]): Array<MemoryHitGroup["hits"]> {
+  if (groups.length === qs.length) return groups.map((g) => g.hits);
+  const byQuery = new Map(groups.map((g) => [g.query, g.hits]));
+  return qs.map((q) => byQuery.get(q) ?? []);
 }
 
 // ---------------------------------------------------------------------------
@@ -178,14 +286,10 @@ const upsertEntityInput = {
 };
 
 async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (!isNodeType(input.type)) {
     return { status: "error", error: `Unknown node type '${input.type}'. Allowed: ${NODE_TYPES.join(", ")}` };
-  }
-  // The bless lifecycle is enforced HERE, not by prompt discipline: if upsert
-  // could create or update Procedures, any writer could mint a fake-blessed
-  // insert-mode procedure and have it auto-injected into future sessions.
-  if (input.type === "Procedure") {
-    return { status: "error", error: "Procedures enter through propose_procedure (and are edited via human review), never upsert_entity." };
   }
   const props = cleanProps(input.props);
   const aliases = input.aliases?.join(", ");
@@ -216,7 +320,7 @@ async function upsertEntity(input: z.infer<z.ZodObject<typeof upsertEntityInput>
     // Dedup gate: same thing under a different id is the failure mode that
     // rots auto-built graphs. Similar candidates block the write unless the
     // caller confirms it is genuinely new.
-    candidates = (await findSimilar(input.graph, input.name, input.type, 5, true)).filter((c) => c.id !== input.id);
+    candidates = (await findSimilar(input.graph, input.name, input.type, 5)).filter((c) => c.id !== input.id);
     if (candidates.length > 0 && !input.confirm) {
       return {
         status: "similar_exists",
@@ -282,6 +386,8 @@ const upsertRelationInput = {
 };
 
 async function upsertRelation(input: z.infer<z.ZodObject<typeof upsertRelationInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (!isEdgeType(input.type)) {
     return { status: "error", error: `Unknown edge type '${input.type}'. Allowed: ${EDGE_TYPES.join(", ")}` };
   }
@@ -317,7 +423,10 @@ async function upsertRelation(input: z.infer<z.ZodObject<typeof upsertRelationIn
 // ---------------------------------------------------------------------------
 
 const getEntityInput = {
-  id: z.string().min(1),
+  // Single id OR a batch: pass `ids` to fetch several nodes concurrently in one
+  // call. At least one form is required; `id` wins when both are given.
+  id: z.string().min(1).optional().describe("Node id to fetch (single form)"),
+  ids: z.array(z.string().min(1)).min(1).max(GET_ENTITY_MAX_BATCH).optional().describe(`Node ids to fetch in one call (batch form, ≤${GET_ENTITY_MAX_BATCH}) — prefer one batched call over sequential single lookups`),
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
@@ -329,21 +438,72 @@ function stripEmbedding<T extends { props?: unknown }>(row: T): T {
   return row;
 }
 
-async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
-  const node = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id: input.id });
-  if (node.length === 0) return { status: "not_found" };
+// Single-node fetch — the one code path both the single and batch forms reuse.
+// Also the dispatch point for the memory id NAMESPACES (mem:/obs:/lin:/
+// slackthread:): those aren't graph nodes, so we resolve them to drill-down
+// cards via the orchestrator (Section C). Everything else is a graph node, and
+// after its relations we append the HEADLINE INDEX (Section B) — memories/
+// tickets/threads anchored to it, headlines only. If memory is unreachable the
+// node returns WITHOUT attachments (graceful; a note says so).
+async function getEntityOne(graph: string, id: string) {
+  // Card namespace? Resolve a drill-down card instead of a graph lookup.
+  const card = parseCardId(id);
+  if (card) {
+    const c = await fetchCard(card.type, card.id);
+    if (c.status === "not_found") return { status: "not_found" as const, id };
+    return { status: "found" as const, id, card: c.card, card_type: c.type };
+  }
+
+  const node = await run(graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, properties(n) AS props`, { id });
+  if (node.length === 0) return { status: "not_found" as const, id };
   stripEmbedding(node[0] as { props?: unknown });
   const out = await run(
-    input.graph,
+    graph,
     `MATCH ({id: $id})-[r]->(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
-    { id: input.id },
+    { id },
   );
   const inc = await run(
-    input.graph,
+    graph,
     `MATCH ({id: $id})<-[r]-(m) RETURN type(r) AS rel, labels(m)[0] AS type, m.id AS id, m.name AS name, properties(r) AS props`,
-    { id: input.id },
+    { id },
   );
-  return { status: "found", node: node[0], outgoing: out, incoming: inc };
+
+  // Headline index (Section B). Best-effort + fast (in-process cache on the
+  // orchestrator, <20ms target). Only attach when there's something to show;
+  // an unreachable source yields a terse "attachments unavailable" note.
+  const base = { status: "found" as const, id, node: node[0], outgoing: out, incoming: inc };
+  const headline = await fetchHeadline(id);
+  if (headline === null) return { ...base, attachments: "unavailable" };
+  if (!headline.hasAttachments) return base;
+  return { ...base, attachments: headline.rendered, attachment_counts: headline.counts };
+}
+
+async function getEntity(input: z.infer<z.ZodObject<typeof getEntityInput>>) {
+  if (input.id === undefined && input.ids === undefined) {
+    return { status: "error", error: "Pass `id` (single) or `ids` (batch, up to 15)." };
+  }
+  // Single form stays byte-for-byte compatible: {status, node, outgoing, incoming}.
+  if (input.id !== undefined) {
+    const { id: _id, ...rest } = await getEntityOne(input.graph, input.id);
+    return rest;
+  }
+
+  // Batch: results in REQUEST ORDER, one section per id. A missing id is an
+  // explicit "not_found" entry (never silently dropped); a per-id failure is
+  // isolated to that section. Duplicate ids in the request are honored as-is —
+  // the model asked for them, and dropping would break positional pairing.
+  const ids = input.ids as string[];
+  const settled = await mapWithConcurrency(ids, BATCH_CONCURRENCY, (id) => getEntityOne(input.graph, id));
+  const results = settled.map((r, i) =>
+    r.ok ? r.value : { status: "error" as const, id: ids[i], error: r.error },
+  );
+  return {
+    status: "batch",
+    count: results.length,
+    found: results.filter((r) => r.status === "found").length,
+    not_found: results.filter((r) => r.status === "not_found").map((r) => r.id),
+    results,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +535,8 @@ const mergeEntitiesInput = {
 // indexed). Rewires every edge from `remove` onto `keep`, fills props `keep`
 // lacks, folds the removed id/name into aliases, then deletes `remove`.
 async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInput>>) {
+  const deleted = await deletedGraphError(input.graph);
+  if (deleted) return { status: "error", error: deleted };
   if (input.keep === input.remove) return { status: "error", error: "keep and remove are the same id" };
   const nodes = await run(
     input.graph,
@@ -387,13 +549,6 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
   if (!keepProps || !removeProps) {
     return { status: "error", error: `Missing nodes: ${[!keepProps && input.keep, !removeProps && input.remove].filter(Boolean).join(", ")}` };
   }
-  // merge deletes the `remove` node — which would be a back door around the
-  // human-only procedure lifecycle (delete = review_procedure reject, via the
-  // Inbox). Same enforcement rationale as the Procedure check in upsert.
-  if (nodes[0]?.keepType === "Procedure" || nodes[0]?.removeType === "Procedure") {
-    return { status: "error", error: "Procedures cannot be merged — their lifecycle (including deletion) is human-only via review_procedure." };
-  }
-
   const out = await run(input.graph, `MATCH ({id: $id})-[r]->(m) RETURN type(r) AS t, properties(r) AS props, m.id AS other`, { id: input.remove });
   const inc = await run(input.graph, `MATCH ({id: $id})<-[r]-(m) RETURN type(r) AS t, properties(r) AS props, m.id AS other`, { id: input.remove });
   let rewired = 0;
@@ -438,245 +593,12 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
 }
 
 // ---------------------------------------------------------------------------
-// Procedures — prescriptive, human-blessed knowledge ("when you do X, do Y").
-// Unlike code-derived nodes they cannot be verified by reindexing, so they
-// carry a bless lifecycle: agents PROPOSE fully-drafted procedures (status
-// "proposed", invisible to normal retrieval until blessed), humans review in
-// the dashboard inbox and APPROVE (status "blessed") or REJECT (delete; the
-// journal keeps the record). The proposing agent drafts the complete artifact
-// because it alone holds the conversational context the procedure came from.
-
-const procedureSlug = (name: string) =>
-  name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-
 // Partition ids into existing/missing with ONE query instead of one per id.
 async function partitionByExistence(graph: string, ids: string[]): Promise<{ found: string[]; missing: string[] }> {
   if (ids.length === 0) return { found: [], missing: [] };
   const rows = await run(graph, `MATCH (n) WHERE n.id IN $ids RETURN n.id AS id`, { ids });
   const found = new Set(rows.map((r) => String(r.id)));
   return { found: ids.filter((id) => found.has(id)), missing: ids.filter((id) => !found.has(id)) };
-}
-
-const proposeProcedureInput = {
-  name: z.string().min(1).describe("Short imperative title, e.g. 'Run migrations against a prod snapshot before deploy'"),
-  description: z.string().min(1).describe("Why this rule exists — 2-3 sentences a teammate could learn from"),
-  trigger: z.string().min(1).describe("When-clause for retrieval, phrased like a task: 'when adding or changing a DB migration'"),
-  steps: z.array(z.string().min(1)).min(1).describe("The ordered steps, complete enough to act on without asking"),
-  scope: z.enum(["repo", "project"]).default("repo").describe("'repo' = applies to one repository, 'project' = team-wide"),
-  mode: z.enum(["insert", "retrieve"]).default("retrieve").describe("'insert' = Flow pushes this into sessions when the task matches (safety-critical rules); 'retrieve' = found on demand (the default)"),
-  governs: z.array(z.string()).optional().describe("Node ids this procedure governs — ONLY nodes where 'if you touch this, read me first' holds, not everything the text mentions"),
-  source_quote: z.string().optional().describe("What the human actually said, verbatim — the provenance of the rule"),
-  repo: z.string().optional().describe("Repository name this applies to (for scope 'repo')"),
-  provenance: z.object(provenanceShape),
-  confirm: z.boolean().default(false).describe("Set true to propose anyway after reviewing similar_exists candidates"),
-  graph: z.string().default(DEFAULT_GRAPH),
-};
-
-async function proposeProcedure(input: z.infer<z.ZodObject<typeof proposeProcedureInput>>) {
-  const id = `proc:${procedureSlug(input.name)}`;
-  const existing = await run(input.graph, `MATCH (n {id: $id}) RETURN labels(n)[0] AS type`, { id });
-  if (existing.length > 0) {
-    return {
-      status: "error",
-      error: `'${id}' already exists. Procedures are edited through human review (dashboard inbox), not re-proposed — pick a different name if this is genuinely a new rule.`,
-    };
-  }
-  // Dedup: lexical CONTAINS alone misses near-identical names ("…before
-  // deploy" vs "…before deploying"), so also match semantically on name +
-  // trigger. The two passes are independent — run them concurrently.
-  // (findByVector self-noops to no rows when embeddings are unconfigured.)
-  const [lexical, vecResult] = await Promise.all([
-    findSimilar(input.graph, input.name, "Procedure", 5, true),
-    findByVector(input.graph, `${input.name}\n${input.trigger}`, "Procedure", 5, true),
-  ]);
-  const candidates = [
-    ...lexical,
-    ...vecResult.rows.filter((v) => !lexical.some((l) => l.id === v.id)),
-  ].filter((c) => c.id !== id);
-  if (candidates.length > 0 && !input.confirm) {
-    return {
-      status: "similar_exists",
-      candidates,
-      hint: "A similar procedure may already cover this. If it does, stop. If genuinely new, retry with confirm: true.",
-    };
-  }
-
-  // Validate GOVERNS targets now (the proposer should hear about typos), but
-  // store them as a pending prop — edges materialize only on approval, so an
-  // unblessed proposal never ambushes agents reading a governed node.
-  const { found: valid, missing } = await partitionByExistence(input.graph, input.governs ?? []);
-
-  // Steps are stored as plain newline-joined lines; numbering is a rendering
-  // concern (UI / injection), not storage format.
-  const steps = input.steps.join("\n");
-  await run(
-    input.graph,
-    `CREATE (n:Procedure {
-       id: $id, name: $name, description: $description, trigger: $trigger, steps: $steps,
-       scope: $scope, mode: $mode, status: 'proposed', governs_pending: $governs,
-       created_by: $actor, created_at: $ts
-     })
-     ${input.source_quote !== undefined ? "SET n.source_quote = $source_quote" : ""}
-     ${input.repo !== undefined ? "SET n.repo = $repo" : ""}
-     ${input.provenance.evidence !== undefined ? "SET n.evidence = $evidence" : ""}
-     ${input.provenance.confidence !== undefined ? "SET n.confidence = $confidence" : ""}`,
-    {
-      id, name: input.name, description: input.description, trigger: input.trigger, steps,
-      scope: input.scope, mode: input.mode, governs: JSON.stringify(valid),
-      actor: input.provenance.actor, ts: new Date().toISOString(),
-      source_quote: input.source_quote ?? null, repo: input.repo ?? null,
-      evidence: input.provenance.evidence ?? null, confidence: input.provenance.confidence ?? null,
-    },
-  );
-
-  await embedNode(input.graph, id);
-  await record({ graph: input.graph, actor: input.provenance.actor, verb: "propose_procedure", input: { id, name: input.name, mode: input.mode, scope: input.scope, governs: valid }, status: "proposed" });
-  return {
-    status: "proposed",
-    id,
-    governs_pending: valid,
-    governs_missing: missing,
-    hint: "Awaiting human review in the dashboard inbox. Tell the user what you proposed so they can confirm or edit it.",
-  };
-}
-
-// Agents can nominate a blessed procedure for retirement when a discussion
-// reveals it no longer holds ("we don't do that anymore"). The nomination
-// NEVER removes the procedure — it stays in circulation, marked
-// retire_proposed, until a human confirms (review_procedure confirm_retire)
-// or dismisses (dismiss_retire). Deletion remains human-only.
-const proposeRetireProcedureInput = {
-  id: z.string().min(1).describe("Procedure node id to nominate for retirement"),
-  reason: z.string().min(1).describe("Why this procedure no longer applies — be specific"),
-  source_quote: z.string().optional().describe("What the human said that invalidated it, verbatim"),
-  provenance: z.object(provenanceShape),
-  graph: z.string().default(DEFAULT_GRAPH),
-};
-
-async function proposeRetireProcedure(input: z.infer<z.ZodObject<typeof proposeRetireProcedureInput>>) {
-  const rows = await run(
-    input.graph,
-    `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.status AS status`,
-    { id: input.id },
-  );
-  if (rows.length === 0) return { status: "error", error: `No node with id '${input.id}'` };
-  if (rows[0].type !== "Procedure") return { status: "error", error: `'${input.id}' is a ${rows[0].type}, not a Procedure` };
-  if (rows[0].status === "proposed") {
-    return { status: "error", error: "This procedure is still a pending proposal — the user can simply reject it in the Inbox." };
-  }
-  if (rows[0].status === "retire_proposed") {
-    return { status: "already_proposed", id: input.id, hint: "Retirement is already awaiting human review." };
-  }
-  await run(
-    input.graph,
-    `MATCH (n {id: $id})
-     SET n.status = 'retire_proposed', n.retire_reason = $reason, n.retire_proposed_by = $actor, n.retire_proposed_at = $ts
-     ${input.source_quote !== undefined ? ", n.retire_quote = $quote" : ""}`,
-    { id: input.id, reason: input.reason, actor: input.provenance.actor, ts: new Date().toISOString(), quote: input.source_quote ?? null },
-  );
-  await record({ graph: input.graph, actor: input.provenance.actor, verb: "propose_retire_procedure", input: { id: input.id, reason: input.reason }, status: "retire_proposed" });
-  return {
-    status: "retire_proposed",
-    id: input.id,
-    hint: "The procedure STAYS ACTIVE until a human confirms the retirement in the dashboard. Tell the user what you nominated and why.",
-  };
-}
-
-const reviewProcedureInput = {
-  id: z.string().min(1).describe("Procedure node id, e.g. 'proc:run-migrations-before-deploy'"),
-  action: z.enum(["approve", "reject", "confirm_retire", "dismiss_retire"]),
-  edits: z
-    .object({
-      name: z.string().min(1).optional(),
-      description: z.string().min(1).optional(),
-      trigger: z.string().min(1).optional(),
-      steps: z.array(z.string().min(1)).min(1).optional(),
-      scope: z.enum(["repo", "project"]).optional(),
-      mode: z.enum(["insert", "retrieve"]).optional(),
-      governs: z.array(z.string()).optional(),
-    })
-    .optional()
-    .describe("Reviewer edits applied on approve — what is blessed is exactly what was reviewed"),
-  provenance: z.object(provenanceShape),
-  graph: z.string().default(DEFAULT_GRAPH),
-};
-
-async function reviewProcedure(input: z.infer<z.ZodObject<typeof reviewProcedureInput>>) {
-  const rows = await run(
-    input.graph,
-    `MATCH (n {id: $id}) RETURN labels(n)[0] AS type, n.governs_pending AS pending`,
-    { id: input.id },
-  );
-  if (rows.length === 0) return { status: "error", error: `No node with id '${input.id}'` };
-  if (rows[0].type !== "Procedure") return { status: "error", error: `'${input.id}' is a ${rows[0].type}, not a Procedure` };
-
-  if (input.action === "reject" || input.action === "confirm_retire") {
-    // The journal keeps the record; the graph drops the node so rejected
-    // proposals / confirmed retirements never pollute retrieval.
-    await run(input.graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id: input.id });
-    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: input.action }, status: input.action === "reject" ? "rejected" : "retired" });
-    return { status: input.action === "reject" ? "rejected" : "retired", id: input.id };
-  }
-
-  if (input.action === "dismiss_retire") {
-    await run(
-      input.graph,
-      `MATCH (n {id: $id})
-       SET n.status = 'blessed', n.retire_reason = '', n.retire_quote = '', n.retire_proposed_by = '', n.retire_proposed_at = '',
-           n.updated_by = $actor, n.updated_at = $ts`,
-      { id: input.id, actor: input.provenance.actor, ts: new Date().toISOString() },
-    );
-    await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "dismiss_retire" }, status: "blessed" });
-    return { status: "blessed", id: input.id, hint: "Retirement dismissed — the procedure stays in force." };
-  }
-
-  const e = input.edits ?? {};
-  const steps = e.steps ? e.steps.join("\n") : undefined;
-  await run(
-    input.graph,
-    `MATCH (n {id: $id})
-     SET n.status = 'blessed', n.governs_pending = '', n.blessed_by = $actor, n.blessed_at = $ts, n.updated_by = $actor, n.updated_at = $ts
-     ${e.name !== undefined ? ", n.name = $name" : ""}
-     ${e.description !== undefined ? ", n.description = $description" : ""}
-     ${e.trigger !== undefined ? ", n.trigger = $trigger" : ""}
-     ${steps !== undefined ? ", n.steps = $steps" : ""}
-     ${e.scope !== undefined ? ", n.scope = $scope" : ""}
-     ${e.mode !== undefined ? ", n.mode = $mode" : ""}`,
-    {
-      id: input.id, actor: input.provenance.actor, ts: new Date().toISOString(),
-      name: e.name ?? null, description: e.description ?? null, trigger: e.trigger ?? null,
-      steps: steps ?? null, scope: e.scope ?? null, mode: e.mode ?? null,
-    },
-  );
-
-  // Materialize GOVERNS edges now — approval is the moment the procedure
-  // enters circulation. Targets: reviewer override, else what the proposer
-  // staged in governs_pending (JSON array; comma-split fallback for any
-  // pre-JSON rows). Nodes deleted since proposal drop out of the MATCH.
-  let targets = e.governs;
-  if (!targets) {
-    const pendingRaw = String(rows[0].pending ?? "");
-    try {
-      targets = JSON.parse(pendingRaw) as string[];
-    } catch {
-      targets = pendingRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    }
-  }
-  let linked: string[] = [];
-  if (targets.length > 0) {
-    const linkedRows = await run(
-      input.graph,
-      `MATCH (a {id: $from}) MATCH (b) WHERE b.id IN $targets
-       MERGE (a)-[r:GOVERNS]->(b) SET r.updated_by = $actor, r.updated_at = $ts
-       RETURN b.id AS id`,
-      { from: input.id, targets, actor: input.provenance.actor, ts: new Date().toISOString() },
-    );
-    linked = linkedRows.map((r) => String(r.id));
-  }
-
-  await embedNode(input.graph, input.id);
-  await record({ graph: input.graph, actor: input.provenance.actor, verb: "review_procedure", input: { id: input.id, action: "approve", edited: Object.keys(e), governs: linked }, status: "blessed" });
-  return { status: "blessed", id: input.id, governs_linked: linked };
 }
 
 // ---------------------------------------------------------------------------
@@ -759,70 +681,104 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
 }
 
 // ---------------------------------------------------------------------------
-// note — ungated branch-scoped working memory ("memory must not need
-// maintaining"). The note never touches the graph here: it lands in the
-// orchestrator's branch_notes store, scoped to (repo, branch), surfaced by
-// injection into sessions on that branch, and promoted to the graph only
-// after the base branch is reindexed. {repo, branch} are EXPLICIT args —
-// Flow may run remotely (EC2) and never assumes the agent's filesystem;
-// for Flow-run sessions the runtime injects defaults via env.
+// search_knowledge — retrieve-only access to Flow's memory (distilled session
+// memories + slack/linear corpus). Thin proxy to the orchestrator, which owns
+// the store, the embeddings, and the eval-calibrated ranking (family hard gate,
+// silence gate, FTS exact-match bypass). Search it like you grep: symptoms,
+// identifiers, and file paths are the reliable path.
 
-const noteInput = {
-  text: z.string().min(1).describe("The note — a discovery, dead end, constraint, decision, or worry, written for whoever works on this branch next"),
-  kind: z.enum(["wip", "note", "caution", "decision"]).default("note").describe("'wip' = rolling state of current work (replaces your previous wip note); others accumulate and get promoted to the graph on merge"),
-  anchor_hint: z.string().optional().describe("Name or id of the entity this is about, if any — resolved at promotion time"),
-  repo: z.string().optional().describe("Repository name (defaults from the session's env when Flow runs the session)"),
-  branch: z.string().optional().describe("Branch name (defaults from the session's env)"),
-  provenance: z.object(provenanceShape),
+const SEARCH_MEMORY_MAX_BATCH = 10;
+
+const searchMemoryInput = {
+  // Single query OR a batch: pass `queries` to look up several things in one
+  // call. At least one form is required; `query` wins when both are given.
+  query: z.string().min(1).optional().describe("What to look up (single form). Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
+  queries: z.array(z.string().min(1)).min(1).max(SEARCH_MEMORY_MAX_BATCH).optional().describe(`Several things to look up in one call (batch form, ≤${SEARCH_MEMORY_MAX_BATCH}) — prefer one batched call over sequential single searches. Results come back grouped per query.`),
+  repo: z.string().optional().describe("Repository name for ranking (defaults from the session's env). Same-repo memories rank first, same-family next — but every memory in the project stays eligible; nothing is filtered out by repo."),
+  limit: z.number().int().min(1).max(50).optional().describe("Max memories to return per query (default 8)."),
 };
 
-async function noteVerb(input: z.infer<z.ZodObject<typeof noteInput>>) {
+async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>>) {
+  if (input.query === undefined && input.queries === undefined) {
+    return { status: "error", error: "Pass `query` (single) or `queries` (batch, up to 10)." };
+  }
+  const repo = input.repo || process.env.FLOW_REPO || "";
+  const url =
+    process.env.FLOW_MEMORY_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/search` : "");
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  if (!url) return { status: "error", error: "No orchestrator configured for memory search (FLOW_MEMORY_URL unset)." };
+  // Proxy whichever form the caller sent — the orchestrator owns the batch
+  // fan-out, grouping, and ranking. `query` wins if both are present.
+  const payload =
+    input.query !== undefined
+      ? { query: input.query, repo: repo || null, limit: input.limit }
+      : { queries: input.queries, repo: repo || null, limit: input.limit };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(6000),
+    });
+    const body = (await res.json().catch(() => ({}))) as { lines?: string; error?: string };
+    if (!res.ok) return { status: "error", error: `Memory search failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "ok", results: body.lines ?? "(no memories match)" };
+  } catch (err) {
+    return { status: "error", error: `Memory search failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// remember — active capture into Flow's memory. The model calls this when the
+// user says "remember this" (or something clearly durable surfaces
+// mid-session) instead of waiting for the session-end distiller pass. It is a
+// FUNNEL, not a write: the text lands in the distiller intake, which owns
+// extraction, placement, and consolidation — the model never classifies kind
+// or scope. {repo, branch} default from env when Flow runs the session;
+// external MCP consumers pass them explicitly (Flow may be remote).
+
+const rememberInput = {
+  text: z.string().min(1).describe("What to remember — the user's words plus enough context to stand alone (verbatim quotes beat summaries). Don't classify or format; the distiller does that."),
+  repo: z.string().optional().describe("Repository name (defaults from the session's env when Flow runs the session)"),
+  branch: z.string().optional().describe("Branch name (defaults from the session's env)"),
+};
+
+async function rememberVerb(input: z.infer<z.ZodObject<typeof rememberInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
-  if (!repo || !branch) {
-    return { status: "error", error: "repo and branch are required (no session defaults available here) — pass them explicitly." };
-  }
   const url =
-    process.env.FLOW_NOTES_URL ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/remember") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/remember` : "");
   const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  if (!url) return { status: "error", error: "No orchestrator configured for notes (FLOW_NOTES_URL unset)." };
+  if (!url) return { status: "error", error: "No orchestrator configured for memory (FLOW_MEMORY_URL unset)." };
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({
-        repo,
-        branch,
-        kind: input.kind,
         text: input.text,
-        anchor_hint: input.anchor_hint ?? null,
-        actor: input.provenance.actor,
+        repo: repo || null,
+        branch: branch || null,
         session: process.env.FLOW_AGENT_SESSION ?? null,
       }),
       signal: AbortSignal.timeout(5000),
     });
-    const body = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
-    if (!res.ok) return { status: "error", error: `Notes dispatch failed (${res.status}): ${body.error ?? ""}` };
-    return { status: "noted", id: body.id, hint: "Saved to this branch's working memory. It will surface for future sessions on this branch." };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) return { status: "error", error: `Memory dispatch failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "sent", hint: "Sent to Flow's memory — the distiller extracts and files it in the background. Nothing else to do." };
   } catch (err) {
-    return { status: "error", error: `Notes dispatch failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { status: "error", error: `Memory dispatch failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 // ---------------------------------------------------------------------------
-// orient — the front desk. One call returns a compact, always-current
-// orientation text: what this repo is, learned rules to follow (insert-mode
-// procedures), on-demand procedures, and this branch's notes. It is the
-// CLAUDE.md replacement: nothing is authored or synced to agent machines; the
-// text is rendered fresh from the graph + note store on every call, so an
-// agent can re-orient at any time (e.g. after context compaction).
-//
-// Size is fixed by construction: one line per entry, ORIENT_CAP entries per
-// section, overflow shown as an explicit count — the store can grow without
-// the front page growing.
-
-const ORIENT_CAP = 5;
+// orient — the front desk. One call returns an always-current orientation
+// text: what this repo is, the orient docs (the ambient memory tier — the
+// auto-authored AGENTS.md, verbatim and uncapped), the graph map, and what
+// memory holds. Nothing is authored or synced to agent machines; the text is
+// rendered fresh from the graph + memory store on every call, so an agent can
+// re-orient at any time (e.g. after context compaction).
 
 const oneLine = (s: unknown, max = 220): string => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -835,55 +791,57 @@ const orientInput = {
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
-interface OrientNote {
-  id: string;
-  kind: string;
-  text: string;
+interface MemoryStats {
+  memories: number;
+  observations: number;
+  bySource: Record<string, number>;
 }
 
-async function fetchBranchNotes(repo: string, branch: string): Promise<OrientNote[] | null> {
+// The ambient tier: rendered orient docs (repo + global), served verbatim and
+// IN FULL — this is the auto-authored AGENTS.md, deliberately uncapped (the
+// curation happened at write time; nothing here is ranked at read time).
+async function fetchOrientDocs(repo: string): Promise<{ global: string | null; repo: string | null } | null> {
   const url =
-    process.env.FLOW_NOTES_URL ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/notes` : "");
-  if (!url || !repo || !branch) return null;
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/orient-doc") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/orient-doc` : "");
+  if (!url) return null;
   const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   try {
-    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&limit=50`, {
+    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}`, {
       headers: token ? { authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(4000),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { rows?: OrientNote[] };
-    return body.rows ?? [];
+    return (await res.json()) as { global: string | null; repo: string | null };
   } catch {
     return null;
   }
 }
 
-interface OrientProc {
-  id: string;
-  name: string;
-  trigger: string;
-  mode: string;
-  scope: string;
-  repo: string | null;
+async function fetchMemoryStats(): Promise<MemoryStats | null> {
+  const url =
+    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/stats") ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/stats` : "");
+  if (!url) return null;
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(url, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    return (await res.json()) as MemoryStats;
+  } catch {
+    return null;
+  }
 }
 
 async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
 
-  const [repoRows, counts, procRows, notes] = await Promise.all([
+  const [repoRows, counts, memStats, orientDocs] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
-    run(
-      input.graph,
-      `MATCH (p:Procedure) WHERE coalesce(p.status, '') <> 'proposed'
-       RETURN p.id AS id, p.name AS name, p.trigger AS trigger,
-              coalesce(p.mode, 'retrieve') AS mode, coalesce(p.scope, 'project') AS scope, p.repo AS repo
-       ORDER BY p.created_at DESC`,
-    ) as Promise<unknown> as Promise<OrientProc[]>,
-    fetchBranchNotes(repo, branch),
+    fetchMemoryStats(),
+    fetchOrientDocs(repo),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -892,18 +850,6 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repoRow =
     (repoRows as Array<{ id: string; name: string; description: string }>).find((r) => r.name === repo) ??
     (repoRows as Array<{ id: string; name: string; description: string }>)[0];
-
-  // Procedures scoped to another repo are someone else's rules.
-  const relevant = procRows.filter((p) => p.scope === "project" || !p.repo || !repo || p.repo === repo);
-  const behavior = relevant.filter((p) => p.mode === "insert");
-  const onDemand = relevant.filter((p) => p.mode !== "insert");
-
-  const procLine = (p: OrientProc) => `- ${oneLine(p.name, 120)} — trigger: ${oneLine(p.trigger, 140)} [${p.id}]`;
-  const section = <T>(items: T[], render: (item: T) => string, more: string): string[] => {
-    const lines = items.slice(0, ORIENT_CAP).map(render);
-    if (items.length > ORIENT_CAP) lines.push(`…${items.length - ORIENT_CAP} more — ${more}`);
-    return lines;
-  };
 
   const countMap = new Map((counts as Array<{ type: string; count: number }>).map((c) => [c.type, c.count]));
   const total = [...countMap.values()].reduce((a, b) => a + b, 0);
@@ -926,15 +872,22 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const out: string[] = [];
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
-  out.push("BEHAVIOR (learned project rules — follow these):");
-  out.push(...(behavior.length ? section(behavior, procLine, "find_entity type 'Procedure'") : ["(nothing learned yet)"]));
-  out.push("");
   if (repoRow) {
     out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 500)} [${repoRow.id}]`);
   } else {
     out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
   }
   out.push("");
+  // Orient docs — the ambient tier, verbatim and uncapped. Curation happened
+  // at write time (distiller nomination + earned inclusion); serving is dumb.
+  if (orientDocs?.repo) {
+    out.push(orientDocs.repo);
+    out.push("");
+  }
+  if (orientDocs?.global) {
+    out.push(orientDocs.global);
+    out.push("");
+  }
   out.push(
     `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
       ((serviceIds as Array<{ id: string }>).length
@@ -942,23 +895,34 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
         : ""),
   );
   out.push("");
-  out.push(`PROCEDURES${onDemand.length ? ` (${onDemand.length})` : ""}:`);
-  out.push(...(onDemand.length ? section(onDemand, procLine, "find_entity type 'Procedure'") : ["(none yet)"]));
-  out.push("");
-  out.push(`THIS BRANCH${notes && notes.length ? ` (${notes.length} ${notes.length === 1 ? "note" : "notes"})` : ""}:`);
-  if (notes === null) {
-    out.push(repo && branch ? "(notes unavailable right now)" : "(pass repo + branch to see this branch's notes)");
-  } else if (notes.length === 0) {
-    out.push("(no notes yet)");
+  // MEMORY — cross-session distilled knowledge + corpus, reached via
+  // search_knowledge (retrieve-only). Counts orient the agent to whether it's
+  // worth a look; the one-liner tells it how to query.
+  if (memStats && (memStats.memories > 0 || memStats.observations > 0)) {
+    const srcBits = Object.entries(memStats.bySource)
+      .sort((a, b) => b[1] - a[1])
+      .map(([s, n]) => `${n} ${s}`)
+      .join(", ");
+    out.push(
+      `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
+        (srcBits ? ` from ${srcBits} observations` : "") +
+        `. Search it like you grep — symptoms, identifiers, file paths work best (search_knowledge). ` +
+        `get_entity on a node also shows a headline index of the memories/tickets/threads anchored to it. ` +
+        `Drill into any [mem:…]/[obs:…]/[lin:…] with get_entity (batch ids[] works). ` +
+        `Scope a search to a node with search_knowledge node:<node_id> (composes with type:memory|ticket|thread).`,
+    );
   } else {
-    out.push(...section(notes, (n) => `- [${n.kind}] ${oneLine(n.text, 260)}`, "they continue in this branch's note store"));
+    out.push(
+      "MEMORY: none yet — it fills as sessions end. Query with search_knowledge (symptoms, identifiers, file paths work best); " +
+        "get_entity shows a per-node headline index once memories anchor to nodes.",
+    );
   }
   out.push("");
   out.push(
     "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
-      "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract or procedure might govern — contracts and rules hang off nodes, not files. Traverse with read_query. " +
+      "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract might govern — contracts hang off nodes, not files. Traverse with read_query. " +
       "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
-      "Store back as you work: note (branch findings, free, no approval), propose_procedure (durable rules — when the user states one, draft it completely), correct_graph (when the graph contradicts the code).",
+      "Store back as you work: remember (when the user says 'remember this', states a durable rule, or a hard-won discovery surfaces — send the text, the distiller files it), correct_graph (when the graph contradicts the code).",
   );
   return out.join("\n");
 }
@@ -976,13 +940,13 @@ async function listSchema() {
 export const verbs = {
   orient: {
     description:
-      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: learned project rules to follow, what this repo is, a map of the knowledge graph, procedures, and this branch's notes. Pass {repo, branch} explicitly when Flow doesn't run your session.",
+      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: what this repo is, how it works (distilled from real sessions), a map of the knowledge graph, and what memory holds. Pass {repo, branch} explicitly when Flow doesn't run your session.",
     shape: orientInput,
     handler: orient,
   },
   find_entity: {
     description:
-      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating.",
+      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating. Relevant distilled memories are blended in as `memory_hits` (typed terse lines, capped at 3 unless the query says type:memory). BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: findEntityInput,
     handler: findEntity,
   },
@@ -997,7 +961,8 @@ export const verbs = {
     handler: upsertRelation,
   },
   get_entity: {
-    description: "Fetch one node with all its incoming and outgoing relationships.",
+    description:
+      "Fetch a node with all its incoming and outgoing relationships, plus a headline INDEX of the memories/tickets/threads anchored to it (headlines only, ~300 tokens; a '+N more' line is a working search_knowledge node:<id> query). Also resolves memory drill-down ids — mem:<id> (memory card: strength breakdown, anchors, evidence), obs:<id>, lin:<identifier>, slackthread:<ts>. BATCH: pass ids:[…] (up to 15) to fetch several nodes/cards in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
     shape: getEntityInput,
     handler: getEntity,
   },
@@ -1016,35 +981,23 @@ export const verbs = {
     shape: listSchemaInput,
     handler: listSchema,
   },
-  propose_procedure: {
-    description:
-      "Propose a Procedure — a durable 'when you do X, do Y' rule a human stated. Draft it COMPLETELY (you hold the context): trigger, steps, scope, mode. It lands as a pending proposal for human review; show the user what you proposed. Use for general rules, NOT branch-/task-local instructions.",
-    shape: proposeProcedureInput,
-    handler: proposeProcedure,
-  },
-  review_procedure: {
-    description:
-      "Human review surface. approve (with optional edits) blesses a proposal; reject deletes it; confirm_retire deletes a retire-nominated procedure; dismiss_retire restores it to blessed.",
-    shape: reviewProcedureInput,
-    handler: reviewProcedure,
-  },
-  propose_retire_procedure: {
-    description:
-      "Nominate a blessed procedure for retirement when the user indicates it no longer applies ('we don't do that anymore'). The procedure STAYS ACTIVE until a human confirms in the dashboard — tell the user what you nominated and why.",
-    shape: proposeRetireProcedureInput,
-    handler: proposeRetireProcedure,
-  },
   correct_graph: {
     description:
       "Flag graph content that looks wrong or unclear (stale description, missing/incorrect relationship). Advisory: the indexer verifies your flag against the repo's base branch and applies or rejects it — you do not edit the graph. Include the node ids, what's wrong, and file:line evidence.",
     shape: correctGraphInput,
     handler: correctGraph,
   },
-  note: {
+  remember: {
     description:
-      "Save a branch-scoped working note — discoveries, dead ends ('tried X, deadlocked'), constraints, decisions, or current WIP state (kind 'wip' replaces your previous wip note). Free to use, no approval needed; it surfaces automatically for future sessions on this branch. Note things the next session would otherwise re-learn the hard way.",
-    shape: noteInput,
-    handler: noteVerb,
+      "Send something to Flow's long-term memory NOW — call this whenever the user says 'remember this' (or a hard-won discovery/decision/constraint surfaces that a future session would want). Pass the text with enough context to stand alone; verbatim user quotes beat summaries. Free to use, instant, no approval: the distiller extracts, files, and consolidates it in the background — you never classify kind or scope, and you don't wait.",
+    shape: rememberInput,
+    handler: rememberVerb,
+  },
+  search_knowledge: {
+    description:
+      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+    shape: searchMemoryInput,
+    handler: searchMemory,
   },
 } as const;
 

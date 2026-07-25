@@ -24,7 +24,8 @@ export type SettingScope =
   | "poller:github"
   | "poller:fireflies"
   | "slack"
-  | "pipeline";
+  | "pipeline"
+  | "embeddings";
 
 export interface SettingDef {
   key: string;
@@ -46,6 +47,48 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "LLM_BASE_URL",
+    secret: false,
+    description: "OpenAI-compatible API base URL for the classifier and single-shot LLM calls (any provider works). NOTE: embeddings do NOT use this — see EMBEDDING_MODEL / EMBEDDING_API_BASE.",
+    default: "https://openrouter.ai/api/v1",
+    appliesTo: "classifier",
+  },
+  {
+    key: "LLM_API_KEY",
+    secret: true,
+    description: "API key for LLM_BASE_URL; when unset, falls back to OPENROUTER_API_KEY",
+    appliesTo: "classifier",
+  },
+  {
+    key: "BRAIN_MODE",
+    secret: false,
+    description:
+      "Set to 'opencode' when model access comes from opencode's own provider auth — no API key gate; classifier and embeddings stay off until LLM_API_KEY or OPENROUTER_API_KEY is set",
+    appliesTo: "classifier",
+  },
+  {
+    key: "LLM_TRANSPORT",
+    secret: false,
+    description:
+      "Transport for single-shot LLM calls (distiller, judge): auto (installed claude CLI first, else API key), or force 'cli' / 'http'",
+    default: "auto",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "LLM_MODEL_FAST",
+    secret: false,
+    description:
+      "Overrides the fast-tier model for single-shot LLM calls (judge). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "LLM_MODEL_SMART",
+    secret: false,
+    description:
+      "Overrides the smart-tier model for single-shot LLM calls (distiller). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
+    appliesTo: "pipeline",
+  },
+  {
     key: "CLASSIFIER_MODEL",
     secret: false,
     description: "Model ID passed to OpenRouter for the event classifier",
@@ -53,11 +96,40 @@ export const SETTINGS: SettingDef[] = [
     appliesTo: "classifier",
   },
   {
+    key: "INDEXER_RUNTIME",
+    secret: false,
+    description:
+      "Which coding CLI runs indexing jobs: auto (first installed of opencode → codex → claude), or force one",
+    default: "auto",
+    appliesTo: "builder",
+  },
+  {
     key: "GRAPH_BUILDER_MODEL",
     secret: false,
-    description: "Model ID passed to OpenRouter for the graph-builder opencode worker",
-    default: "openrouter/minimax/minimax-m3",
+    description:
+      "Overrides the per-backend default model for indexing jobs. A thin or noisy graph is usually fixed by setting this to a stronger model.",
     appliesTo: "builder",
+  },
+  {
+    key: "EMBEDDING_MODEL",
+    secret: false,
+    description:
+      "Which embedding model powers semantic search. Unset = smart default: the local EmbeddingGemma (no key) for dev, or OpenAI text-embedding-3-small when an embedding API key is set. Pick a specific id from the registry to override (e.g. openai:text-embedding-3-large for best quality). Changing this re-embeds the whole graph in the new vector space.",
+    appliesTo: "embeddings",
+  },
+  {
+    key: "EMBEDDING_API_KEY",
+    secret: true,
+    description:
+      "API key for API-based embedding models. Falls back to OPENAI_API_KEY, then LLM_API_KEY, then OPENROUTER_API_KEY. The base URL auto-tracks the key's provider: an OpenRouter key (sk-or-…) is sent to OpenRouter's /embeddings endpoint, an OpenAI key to OpenAI. Set EMBEDDING_API_BASE to override.",
+    appliesTo: "embeddings",
+  },
+  {
+    key: "EMBEDDING_API_BASE",
+    secret: false,
+    description:
+      "OpenAI-compatible /embeddings base URL for API embedding models. If unset, auto-selects by key provider: OpenRouter (https://openrouter.ai/api/v1) for an sk-or-… key, else OpenAI (https://api.openai.com/v1). Set explicitly for Azure OpenAI or a proxy.",
+    appliesTo: "embeddings",
   },
   {
     key: "LINEAR_API_KEY",
@@ -265,6 +337,18 @@ export function getSetting(key: string): string | undefined {
   return value;
 }
 
+// Shared resolution for the direct LLM API callers (classifier, embeddings).
+// LLM_API_KEY wins; OPENROUTER_API_KEY remains a fallback so existing setups
+// keep working. Empty string = no key (callers degrade, they don't crash).
+export function llmApiKey(): string {
+  return getSetting("LLM_API_KEY") ?? getSetting("OPENROUTER_API_KEY") ?? "";
+}
+
+export function llmBaseUrl(): string {
+  const base = getSetting("LLM_BASE_URL") ?? "https://openrouter.ai/api/v1";
+  return base.replace(/\/+$/, "");
+}
+
 /**
  * Return the source of a setting value.
  */
@@ -423,9 +507,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       for (const [key, value] of Object.entries(body)) {
         putSetting(key, value);
         auditSettingChange(key);
-        // Remember the OpenRouter key as the machine default so new projects
-        // can reuse it instead of re-entering it.
-        if (key === "OPENROUTER_API_KEY" && value) writeGlobalDefault(key, value);
+        // Remember LLM keys as machine defaults so new projects can reuse
+        // them instead of re-entering.
+        if ((key === "OPENROUTER_API_KEY" || key === "LLM_API_KEY") && value) writeGlobalDefault(key, value);
         if (slackKeys.has(key)) slackChanged = true;
       }
 

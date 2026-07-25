@@ -1,12 +1,17 @@
 import { createServer } from "node:http";
 import { callVerb, verbs } from "./verbs.js";
-import { tail } from "./journal.js";
-import { DEFAULT_GRAPH } from "./graph.js";
-import { runBootTasks } from "./reconcile.js";
+import { record, tail } from "./journal.js";
+import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
+import { reconcileEmbeddings, runBootTasks } from "./reconcile.js";
+import { startLocalModel } from "./local-embed.js";
+import { embedText, embeddingsEnabled } from "./embed.js";
+import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
+//   POST /v1/embed          body: { text }          (bearer-authed)
+//   POST /v1/reconcile/embeddings                    (bearer-authed)
 //   GET  /v1/journal?limit=50                        (bearer-authed)
 //   GET  /health                                     (open)
 //
@@ -16,7 +21,7 @@ import { isPat, verifyPatForProject } from "./patAuth.js";
 // proxy, indexer) OR a personal access token from the deployment auth store
 // (per-user machine credential, minted in the dashboard) whose user holds a
 // grant on this gateway's project (FLOW_PROJECT_NAME). This closes the local
-// self-bless hole (any process could call review_procedure) and is the
+// unauthenticated-writes hole (any process could call the write verbs) and is the
 // per-user gating for remote MCP clients (EC2 topology). No token in env →
 // open, as before — dev fallback only.
 
@@ -54,6 +59,71 @@ const server = createServer(async (req, res) => {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return json(res, 200, { entries: await tail(limit) });
     }
+    // Shared embedding endpoint. The gateway is the single owner of the local
+    // model, so other services (the orchestrator's branch-note store) embed
+    // through this hop instead of loading a second copy of Gemma. `ready` lets
+    // callers distinguish "model still downloading" from "embed failed" and
+    // store text without a vector rather than blocking. `dim` is the model's
+    // vector size so callers can guard against mixing embedding spaces.
+    if (req.method === "POST" && url.pathname === "/v1/embed") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: { text?: unknown } = {};
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          return json(res, 400, { status: "error", error: "Body must be valid JSON" });
+        }
+      }
+      const text = typeof body.text === "string" ? body.text : "";
+      if (!text.trim()) return json(res, 400, { status: "error", error: "text is required" });
+      const ready = embeddingsEnabled();
+      const vec = ready ? await embedText(text) : null;
+      return json(res, 200, { vec, dim: activeEmbeddingDim(), ready });
+    }
+    // Indexing writes arrive through short-lived MCP processes. A final
+    // reconciliation closes the race where those writes happen while the
+    // gateway's local model is still loading.
+    if (req.method === "POST" && url.pathname === "/v1/reconcile/embeddings") {
+      if (!embeddingsEnabled()) {
+        return json(res, 503, { status: "error", error: "local embedding model not yet loaded" });
+      }
+      const result = await reconcileEmbeddings(DEFAULT_GRAPH);
+      return json(res, 200, { status: "ok", graph: DEFAULT_GRAPH, ...result });
+    }
+    // Admin-only entity deletion — deliberately NOT a verb, so no MCP mode
+    // (session, builder, or full) can reach it; only bearer-authed services.
+    // Used by the orchestrator's repo_removed cleanup to drop the Repository
+    // node of a disconnected repo. DETACH DELETE, journaled like every write.
+    if (req.method === "POST" && url.pathname === "/v1/admin/delete-entity") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      let body: { graph?: string; id?: string; actor?: string } = {};
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return json(res, 400, { status: "error", error: "Body must be valid JSON" });
+      }
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      if (!id) return json(res, 400, { status: "error", error: "id is required" });
+      const graph = typeof body.graph === "string" && body.graph.trim() ? body.graph.trim() : DEFAULT_GRAPH;
+      // Even a MATCH auto-creates the graph in FalkorDB — don't resurrect a
+      // tombstoned graph just to delete a node from it.
+      if (await deletedGraphError(graph)) return json(res, 200, { status: "not_found", id });
+      const found = await run(graph, `MATCH (n {id: $id}) RETURN n.id`, { id });
+      if (found.length === 0) return json(res, 200, { status: "not_found", id });
+      await run(graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id });
+      await record({
+        graph,
+        actor: body.actor ?? "admin",
+        verb: "admin_delete_entity",
+        input: { id },
+        status: "deleted",
+      });
+      return json(res, 200, { status: "deleted", id });
+    }
     const verbMatch = url.pathname.match(/^\/v1\/verbs\/([a-z_]+)$/);
     if (req.method === "POST" && verbMatch) {
       const chunks: Buffer[] = [];
@@ -78,8 +148,13 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}')`);
-  // Converge this graph in the background: versioned migrations, then
-  // reconcilers (e.g. embedding backfill). See reconcile.ts.
+  const model = activeEmbeddingModel();
+  console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}', embed model: ${model.id}, dim: ${model.dim})`);
+  // Start the local embedding model download immediately so it runs in
+  // parallel with migrations — but only when the local model is the active
+  // provider. An API model has nothing to download. runBootTasks awaits the
+  // same singleton promise before it reconciles embeddings — nodes indexed
+  // during the download are backfilled once the model is ready. See reconcile.ts.
+  if (model.provider === "local") startLocalModel();
   runBootTasks(DEFAULT_GRAPH);
 });
