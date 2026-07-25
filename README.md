@@ -19,7 +19,7 @@ Point Flow at your repos and it builds a living map of your services, APIs, and 
 ```bash
 curl -fsSL https://www.flow.engineer/install.sh | bash
 
-flow up mycompany
+flow up myproject
 ```
 
 That's it. `flow up` prints your dashboard URL — open it, connect a repo, and watch the graph build. Then ask questions from the floating bar or kick off a coding agent from the **Agents** tab.

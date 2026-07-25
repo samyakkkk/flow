@@ -31,7 +31,7 @@ full-container path (see the bottom of this file).
 ```bash
 curl -fsSL https://www.flow.engineer/install.sh | bash   # one shot: clones the repo, deps, environment checks, coding CLI if none found, `flow` on your PATH
 
-flow up mycompany       # creates it if new, then starts
+flow up myproject       # creates it if new, then starts
 ```
 
 (Already have a checkout? `./setup.sh` from inside it does the same without cloning.)
