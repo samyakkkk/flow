@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flow · Give Flow a brain — CLI dropdown mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --cream: rgb(255,255,249);
+    --sand: rgb(234,235,228);
+    --paper: rgb(242,243,235);
+    --ink: rgb(54,55,38);
+    --text: rgb(73,73,57);
+    --text-muted: rgb(133,134,122);
+    --accent: rgb(255,247,129);
+    --line: rgba(0,0,0,0.06);
+    --line-strong: rgba(0,0,0,0.14);
+    --ok: rgb(90,140,90);
+    --font-display: 'Lora', ui-serif, Georgia, serif;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Space Mono', ui-monospace, monospace;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; }
+  body{
+    background: var(--cream); color: var(--text); font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:48px 24px;
+  }
+  body::before{
+    content:""; position:fixed; top:0; left:0; right:0; height:2px;
+    background: linear-gradient(90deg, rgba(255,230,235,0) 0%, rgba(255,214,224,0.9) 50%, rgba(255,230,235,0) 100%);
+  }
+  .wrap{ width:100%; max-width: 512px; }
+  @keyframes rise-in{ from{opacity:0; transform:translateY(16px);} to{opacity:1; transform:translateY(0);} }
+  .rise-in{ animation: rise-in .6s ease-out both; }
+
+  .mark-row{ display:flex; justify-content:center; margin-bottom: 30px; }
+  .mark{
+    width:64px; height:64px; border-radius:9999px; background: var(--paper);
+    border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
+  }
+  .kicker{
+    display:inline-flex; align-items:center; gap:.5rem; font-family: var(--font-mono);
+    font-size:12.5px; text-transform:uppercase; letter-spacing:.12em; color: var(--text-muted);
+  }
+  .kicker::before{ content:""; width:6px; height:6px; border-radius:9999px; background: var(--text-muted); opacity:.6; }
+
+  .head{ text-align:center; margin-bottom: 32px; }
+  .head .kicker-row{ display:flex; justify-content:center; margin-bottom: 16px; }
+  h1{ font-family: var(--font-display); font-weight:600; color: var(--ink); font-size:38px; line-height:1.1; margin:0 0 14px; }
+  .sub{ font-size:16px; color: var(--text-muted); line-height:1.6; max-width: 400px; margin:0 auto; }
+
+  .field-label{
+    font-family: var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+    color: var(--text-muted); margin: 0 0 10px 2px;
+  }
+
+  /* ---- custom dropdown ---- */
+  .dd{ position:relative; }
+  .dd-trigger{
+    width:100%; display:flex; align-items:center; gap:12px; cursor:pointer;
+    background: var(--paper); border:1px solid var(--line-strong); border-radius:12px;
+    padding: 15px 16px; font-family:inherit; font-size:15px; color: var(--ink);
+    transition: border-color .18s, box-shadow .18s;
+  }
+  .dd-trigger:hover{ border-color: var(--ink); }
+  .dd.open .dd-trigger{ border-color: var(--ink); box-shadow: 0 0 0 3px rgba(255,247,129,.55); }
+  .dd-trigger .ic{ flex:0 0 auto; width:22px; height:22px; color: var(--ink); display:flex; align-items:center; justify-content:center; }
+  .dd-trigger .lbl{ flex:1 1 auto; text-align:left; font-weight:600; }
+  .dd-trigger .lbl small{ display:block; font-weight:400; font-size:12.5px; color: var(--text-muted); margin-top:1px; }
+  .dd-trigger .chev{ flex:0 0 auto; color: var(--text-muted); transition: transform .2s; }
+  .dd.open .dd-trigger .chev{ transform: rotate(180deg); }
+
+  .dd-menu{
+    position:absolute; top: calc(100% + 6px); left:0; right:0; z-index:20;
+    background: var(--cream); border:1px solid var(--line-strong); border-radius:12px;
+    box-shadow: 0 12px 40px rgba(54,55,38,.14); padding:6px; display:none;
+  }
+  .dd.open .dd-menu{ display:block; }
+  .dd-item{
+    width:100%; display:flex; align-items:center; gap:12px; cursor:pointer;
+    background:transparent; border:none; border-radius:8px; padding:11px 12px;
+    font-family:inherit; font-size:14.5px; color: var(--ink); text-align:left;
+  }
+  .dd-item:hover{ background: var(--paper); }
+  .dd-item .ic{ flex:0 0 auto; width:22px; height:22px; display:flex; align-items:center; justify-content:center; }
+  .dd-item .lbl{ flex:1 1 auto; font-weight:600; }
+  .dd-item .lbl small{ display:block; font-weight:400; font-size:12px; color: var(--text-muted); margin-top:1px; }
+  .dd-item .pill{
+    font-family: var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em;
+    padding:3px 7px; border-radius:9999px; color: var(--ok); background: rgba(90,140,90,.12); white-space:nowrap;
+  }
+  .dd-item .check{ color: var(--ink); opacity:0; }
+  .dd-item.sel .check{ opacity:1; }
+  .dd-item.disabled{ opacity:.4; cursor:not-allowed; }
+  .dd-item.disabled .pill{ color: var(--text-muted); background: rgba(0,0,0,.05); }
+
+  .dd-trigger:disabled{ opacity:.6; cursor:not-allowed; }
+  .dd-trigger:disabled:hover{ border-color: var(--line-strong); box-shadow:none; }
+
+  /* ---- one primary slot: shows the CLI dropdown OR the key field, swapped by the link ---- */
+  .form{ display:flex; flex-direction:column; }
+  .form[data-active="cli"] .region-key{ display:none; }
+  .form[data-active="key"] .region-cli{ display:none; }
+  .or-toggle{
+    margin-top:16px;
+    display:inline-flex; align-items:center; gap:8px; cursor:pointer; background:none; border:none;
+    font-family: var(--font-mono); font-size:11.5px; text-transform:uppercase; letter-spacing:.08em;
+    color: var(--text-muted); padding: 4px 2px;
+  }
+  .or-toggle:hover{ color: var(--ink); }
+  .keyfield{
+    width:100%; font-family: var(--font-mono); font-size:14px; color: var(--ink);
+    background: var(--paper); border:1px solid var(--line-strong); border-radius:12px;
+    padding:15px 16px; outline:none; transition: border-color .18s, box-shadow .18s;
+  }
+  .keyfield:focus{ border-color: var(--ink); box-shadow: 0 0 0 3px rgba(255,247,129,.55); }
+  .keyfield::placeholder{ color: var(--text-muted); }
+  .keyhelp{
+    display:inline-block; margin-top:10px; font-family: var(--font-mono); font-size:11px;
+    text-transform:uppercase; letter-spacing:.08em; color: var(--text-muted); text-decoration:none;
+  }
+  .keyhelp:hover{ color: var(--ink); }
+
+  .footer{ display:flex; align-items:center; justify-content:flex-end; margin-top:28px; }
+  .btn{
+    font-family: var(--font-mono); font-size:12.5px; text-transform:uppercase; letter-spacing:.08em;
+    color: var(--ink); background: var(--accent); border:none; border-radius:9999px;
+    padding:14px 24px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; transition: filter .18s, opacity .18s;
+  }
+  .btn:hover{ filter: brightness(.97); }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; filter:none; }
+
+  .switch{
+    position:fixed; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:6px;
+    background: var(--paper); border:1px solid var(--line); border-radius:9999px; padding:5px;
+    font-family: var(--font-mono); font-size:11px;
+  }
+  .switch button{ border:none; background:transparent; color: var(--text-muted); cursor:pointer; padding:6px 12px; border-radius:9999px; text-transform:uppercase; letter-spacing:.08em; }
+  .switch button.on{ background: var(--ink); color: var(--cream); }
+</style>
+</head>
+<body>
+  <!-- brand icon symbols (Simple Icons, from BrandIcon.tsx) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden>
+    <symbol id="i-anthropic" viewBox="0 0 24 24"><path fill="currentColor" d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/></symbol>
+    <symbol id="i-openai" viewBox="0 0 24 24"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></symbol>
+    <symbol id="i-opencode" viewBox="0 0 24 24"><path fill="currentColor" d="M22 24H2V0h20zM17 4.8H7v14.4h10z"/></symbol>
+    <symbol id="i-cli" viewBox="0 0 24 24"><path d="M5 7l4 5-4 5M11 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-openrouter" viewBox="-45 32.23 556.5 433.48" fill="none" stroke="currentColor"><path d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945" stroke-width="90"/><path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z" fill="currentColor" stroke="none"/><path d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377" stroke-width="90"/><path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z" fill="currentColor" stroke="none"/></symbol>
+  </svg>
+
+  <div class="wrap rise-in">
+    <div class="mark-row">
+      <div class="mark">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="3" fill="var(--ink)"/>
+          <circle cx="5" cy="7" r="1.6" fill="var(--ink)" opacity=".5"/>
+          <circle cx="19" cy="7" r="1.6" fill="var(--ink)" opacity=".5"/>
+          <circle cx="5" cy="17" r="1.6" fill="var(--ink)" opacity=".5"/>
+          <circle cx="19" cy="17" r="1.6" fill="var(--ink)" opacity=".5"/>
+          <path d="M12 12L5 7M12 12L19 7M12 12L5 17M12 12L19 17" stroke="var(--ink)" stroke-width=".8" opacity=".4"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="head">
+      <div class="kicker-row"><span class="kicker">Step 1 of 2 · Give Flow a brain</span></div>
+      <h1>Let's create your brain.</h1>
+      <p class="sub">Use your installed CLIs or provide an OpenRouter key as your LLM provider.</p>
+    </div>
+
+    <div class="form" id="form" data-active="cli">
+
+      <!-- OpenRouter key — primary when no CLI is detected, collapsed link otherwise -->
+      <div class="region region-key" id="regionKey">
+        <p class="field-label" id="keyLabel">OpenRouter key</p>
+        <input class="keyfield" type="password" placeholder="sk-or-…" id="keyfield" />
+        <a class="keyhelp" href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">Where do I get one? ↗</a>
+      </div>
+
+      <!-- CLI dropdown — primary when CLIs are detected, disabled at the bottom otherwise -->
+      <div class="region region-cli" id="regionCli">
+        <p class="field-label" id="cliLabel">Indexing runs through</p>
+        <div class="dd" id="dd">
+          <button class="dd-trigger" id="ddTrigger">
+            <span class="ic"><svg width="20" height="20"><use href="#i-anthropic"/></svg></span>
+            <span class="lbl" id="ddLabel">Claude Code<small>Uses your existing Claude Code login</small></span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="dd-menu" id="ddMenu" role="listbox">
+        <button class="dd-item sel" data-id="claude" data-icon="i-anthropic" data-name="Claude Code" data-desc="Uses your existing Claude Code login">
+          <span class="ic"><svg width="20" height="20"><use href="#i-anthropic"/></svg></span>
+          <span class="lbl">Claude Code<small>Uses your existing Claude Code login</small></span>
+          <span class="pill">Detected</span>
+          <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="dd-item" data-id="codex" data-icon="i-openai" data-name="Codex" data-desc="Uses your OpenAI Codex CLI auth">
+          <span class="ic"><svg width="20" height="20"><use href="#i-openai"/></svg></span>
+          <span class="lbl">Codex<small>Uses your OpenAI Codex CLI auth</small></span>
+          <span class="pill">Detected</span>
+          <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="dd-item" data-id="opencode" data-icon="i-opencode" data-name="OpenCode" data-desc="Uses your OpenCode CLI provider auth">
+          <span class="ic"><svg width="20" height="20"><use href="#i-opencode"/></svg></span>
+          <span class="lbl">OpenCode<small>Uses your OpenCode CLI provider auth</small></span>
+          <span class="pill">Detected</span>
+          <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        </div>
+      </div>
+
+      <!-- swap link — replaces the primary control with the other option -->
+      <button class="or-toggle" id="orToggle">
+        <svg width="15" height="15" id="orIcon"><use href="#i-openrouter"/></svg>
+        <span id="orText">Use an OpenRouter key instead</span>
+      </button>
+    </div>
+
+    <div class="footer">
+      <button class="btn" id="continue">Continue ↗</button>
+    </div>
+  </div>
+
+  <div class="switch">
+    <button class="on" data-variant="cli">Local · CLIs</button>
+    <button data-variant="none">EC2 · no CLIs</button>
+  </div>
+
+<script>
+  const form = document.getElementById('form');
+  const dd = document.getElementById('dd');
+  const ddTrigger = document.getElementById('ddTrigger');
+  const ddMenu = document.getElementById('ddMenu');
+  const ddLabel = document.getElementById('ddLabel');
+  const cliLabel = document.getElementById('cliLabel');
+  const orToggle = document.getElementById('orToggle');
+  const orIcon = document.getElementById('orIcon');
+  const orText = document.getElementById('orText');
+  const keyfield = document.getElementById('keyfield');
+  const cont = document.getElementById('continue');
+
+  let hasCli = true; // set by the deployment (real component: /api/agents detection)
+
+  function updateContinue(){
+    if(form.dataset.active === 'key') cont.disabled = keyfield.value.trim().length < 3;
+    else cont.disabled = !hasCli; // CLI view can't proceed with nothing detected
+  }
+  function renderToggle(){
+    if(form.dataset.active === 'cli'){
+      orIcon.innerHTML = '<use href="#i-openrouter"/>';
+      orText.textContent = 'Use an OpenRouter key instead';
+    } else {
+      orIcon.innerHTML = '<use href="#i-cli"/>';
+      orText.textContent = 'Use a coding CLI instead';
+    }
+  }
+  function setActive(which){
+    form.dataset.active = which;
+    renderToggle();
+    if(which === 'key') setTimeout(()=>keyfield.focus(),150);
+    updateContinue();
+  }
+
+  // dropdown open/close
+  ddTrigger.addEventListener('click', (e)=>{ if(ddTrigger.disabled) return; e.stopPropagation(); dd.classList.toggle('open'); });
+  document.addEventListener('click', ()=> dd.classList.remove('open'));
+
+  // pick a CLI
+  ddMenu.addEventListener('click', (e)=>{
+    const item = e.target.closest('.dd-item');
+    if(!item || item.classList.contains('disabled')) return;
+    ddMenu.querySelectorAll('.dd-item').forEach(i=>i.classList.remove('sel'));
+    item.classList.add('sel');
+    ddLabel.innerHTML = item.dataset.name + '<small>' + item.dataset.desc + '</small>';
+    ddTrigger.querySelector('.ic').innerHTML = '<svg width="20" height="20"><use href="#'+item.dataset.icon+'"/></svg>';
+    dd.classList.remove('open');
+    updateContinue();
+  });
+
+  // swap the primary control in place
+  orToggle.addEventListener('click', ()=> setActive(form.dataset.active === 'cli' ? 'key' : 'cli'));
+  keyfield.addEventListener('input', updateContinue);
+  renderToggle();
+  updateContinue();
+
+  // mockup-only deployment switcher: local (CLIs) vs EC2 (no CLIs)
+  document.querySelectorAll('.switch button').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('.switch button').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on');
+      const none = b.dataset.variant === 'none';
+      hasCli = !none;
+      ddTrigger.disabled = none;
+      ddMenu.querySelectorAll('.dd-item').forEach(i=>{
+        i.classList.toggle('disabled', none);
+        i.querySelector('.pill').textContent = none ? 'Not found' : 'Detected';
+      });
+      if(none){
+        cliLabel.textContent = 'Coding CLI';
+        ddLabel.innerHTML = 'No coding CLI detected<small>Install opencode, Codex, or Claude Code to use one</small>';
+        ddTrigger.querySelector('.ic').innerHTML = '<span style="opacity:.4">○</span>';
+        setActive('key'); // EC2 default: key is primary
+      } else {
+        cliLabel.textContent = 'Indexing runs through';
+        ddLabel.innerHTML = 'Claude Code<small>Uses your existing Claude Code login</small>';
+        ddTrigger.querySelector('.ic').innerHTML = '<svg width="20" height="20"><use href="#i-anthropic"/></svg>';
+        ddMenu.querySelectorAll('.dd-item').forEach(i=>i.classList.remove('sel'));
+        ddMenu.querySelector('.dd-item').classList.add('sel');
+        setActive('cli'); // local default: dropdown is primary
+      }
+    });
+  });
+</script>
+</body>
+</html>
