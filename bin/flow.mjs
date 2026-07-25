@@ -868,8 +868,28 @@ async function cmdDown(args) {
   }
   // Whole-deployment down also stops THE dashboard. A single-project down
   // leaves it running — it serves the other projects.
-  if (!targetName) stopDashboard();
+  if (!targetName) {
+    stopDashboard();
+    stopOwnedFalkordb();
+  }
   console.log("");
+}
+
+// TESTING-ONLY: stop this deployment's private FalkorDB container on a
+// whole-deployment down. Applies ONLY when FALKOR_CONTAINER is set — which
+// only a `setup.sh --fresh-db` launcher bakes in — marking this deployment as
+// the container's sole owner. The default shared flow-falkordb container is
+// substrate for every deployment on the machine and is NEVER touched here,
+// even if someone points FALKOR_CONTAINER at it. `docker stop`, not `rm`:
+// graph data survives, and the next `flow up` restarts the container.
+function stopOwnedFalkordb() {
+  const container = process.env.FALKOR_CONTAINER;
+  if (!container || container === "flow-falkordb") return;
+  const res = spawnSync("docker", ["stop", container], { encoding: "utf8" });
+  const stopped = res.status === 0;
+  console.log(
+    `  ${c.bold("falkordb".padEnd(16))} ${stopped ? `${OK} ${c.dim(`stopped (${container})`)}` : c.dim("· not running")}`
+  );
 }
 
 function stopDashboard() {

@@ -6,15 +6,22 @@
 // build, Colima/OrbStack, or a remote instance via FALKOR_HOST — Flow uses it
 // and never touches Docker at all.
 //
-// Container name: flow-falkordb   Image: falkordb/falkordb:latest   Port: 6379
+// Container: flow-falkordb (per FalkorDB port; FALKOR_CONTAINER overrides)
+// Image: falkordb/falkordb:latest   Port: FALKOR_PORT (default 6379)
 
 import { spawnSync } from "node:child_process";
 import { createConnection } from "node:net";
 
-const CONTAINER_NAME = "flow-falkordb";
 const IMAGE = "falkordb/falkordb:latest";
 const HOST = process.env.FALKOR_HOST ?? "localhost";
 const PORT = Number(process.env.FALKOR_PORT ?? 6379);
+// One container per FalkorDB port, so an isolated test deployment (a shifted
+// FALKOR_PORT) gets its OWN fresh graph store instead of silently reusing the
+// default container: with a single hardcoded name, `docker inspect` below would
+// find the running default and return early — the gateway would then connect to
+// an empty port. FALKOR_CONTAINER overrides the name explicitly.
+const CONTAINER_NAME =
+  process.env.FALKOR_CONTAINER ?? (PORT === 6379 ? "flow-falkordb" : `flow-falkordb-${PORT}`);
 
 // A friendly, already-explained setup problem. flow.mjs's top-level catch prints
 // err.message behind a ✗ — so these read as guidance, not a stack trace.

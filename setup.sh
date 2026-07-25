@@ -7,25 +7,45 @@
 #   curl -fsSL https://<host>/setup.sh | bash     # standalone: clones the repo first
 #
 # Options:
-#   --alias <name>     Command name to register (default: flow). Use flow-dev,
-#                      flow-test-1, … to run several checkouts side by side.
-#   --branch <name>    Clone this branch into its own managed checkout
-#                      (~/.flow/checkouts/<alias>) instead of using the current
-#                      one. Alias defaults to flow-<branch> if --alias is omitted.
-#   --help             Show this help and exit.
+#   --alias <name>       Command name to register (default: flow). Use flow-dev,
+#                        flow-test-1, … to run several checkouts side by side.
+#   --branch <name>      Clone this branch into its own managed checkout
+#                        (~/.flow/checkouts/<alias>) instead of using the current
+#                        one. Alias defaults to flow-<branch> if --alias is omitted.
+#   --port-offset <n>    Shift this alias's service ports (gateway/orchestrator/
+#                        dashboard) by <n>, so it runs alongside your main Flow
+#                        without collisions. e.g. 1000 → dashboard on :8600.
+#   --fresh-db           TESTING ONLY: give this alias its OWN FalkorDB container
+#                        instead of sharing the default one on :6379. Port
+#                        defaults to 6379+offset (or 6479 when no offset);
+#                        container is flow-falkordb-<alias>. '<alias> down' stops
+#                        it (data kept, '<alias> up' restarts it); destroy with
+#                        docker rm -f. Combine with --falkor-port to pin the port.
+#   --falkor-host <h>    Point this alias at an existing/remote FalkorDB host
+#                        (Flow won't touch Docker). Pair with --falkor-port.
+#   --falkor-port <p>    FalkorDB port for this alias (with --fresh-db: which port
+#                        to launch on; with --falkor-host: which port to dial).
+#   --help               Show this help and exit.
 #
 # Examples:
 #   ./setup.sh                                    # this checkout → `flow`
 #   ./setup.sh --alias flow-dev                   # this checkout → `flow-dev`
 #   ./setup.sh --alias flow-test-1 --branch feat  # clone feat → `flow-test-1`
+#   # isolated test deployment, own ports + own fresh FalkorDB:
+#   ./setup.sh --alias t1 --branch feat --port-offset 1000 --fresh-db
+#   # isolated ports but reuse the shared :6379 FalkorDB:
+#   ./setup.sh --alias t2 --branch feat --port-offset 2000
 #   curl -fsSL https://<host>/setup.sh | bash -s -- --branch dev --alias flow-dev
 #
 # Standalone mode (curl | bash, or the script copied outside a checkout) clones
 # from https://github.com/samyakkkk/flow.git — override with FLOW_REPO=<url>.
 #
-# Each aliased checkout is fully independent (own deps, own data/ projects).
-# Don't `up` the SAME project name from two checkouts at once — they'd race
-# for the same ports.
+# Each aliased checkout is fully independent (own deps, own data/ projects). The
+# test knobs above bake their env into the alias's launcher, so every invocation
+# of that command runs the same isolated config — no need to export anything.
+# Without --port-offset, two checkouts still race for the same ports; without
+# --fresh-db they share the :6379 FalkorDB (use distinct project names so their
+# named graphs don't collide).
 #
 # Platform: macOS and Linux natively; Windows via Git Bash or WSL2.
 
@@ -33,6 +53,10 @@ set -euo pipefail
 
 ALIAS_NAME=""
 BRANCH=""
+PORT_OFFSET=""
+FRESH_DB=false
+FALKOR_HOST_ARG=""
+FALKOR_PORT_ARG=""
 
 show_help() {
   # Print the header comment block (everything between the shebang and the
@@ -42,12 +66,24 @@ show_help() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --alias)   ALIAS_NAME="${2:-}"; shift 2 ;;
-    --branch)  BRANCH="${2:-}"; shift 2 ;;
-    --help|-h) show_help; exit 0 ;;
+    --alias)        ALIAS_NAME="${2:-}"; shift 2 ;;
+    --branch)       BRANCH="${2:-}"; shift 2 ;;
+    --port-offset)  PORT_OFFSET="${2:-}"; shift 2 ;;
+    --fresh-db)     FRESH_DB=true; shift ;;
+    --falkor-host)  FALKOR_HOST_ARG="${2:-}"; shift 2 ;;
+    --falkor-port)  FALKOR_PORT_ARG="${2:-}"; shift 2 ;;
+    --help|-h)      show_help; exit 0 ;;
     *) echo "Unknown option: $1  (run with --help for usage)"; exit 1 ;;
   esac
 done
+
+# Numeric guards — a stray value here would silently produce a broken launcher.
+if [[ -n "$PORT_OFFSET" && ! "$PORT_OFFSET" =~ ^[0-9]+$ ]]; then
+  echo "--port-offset must be a non-negative integer (got '$PORT_OFFSET')"; exit 1
+fi
+if [[ -n "$FALKOR_PORT_ARG" && ! "$FALKOR_PORT_ARG" =~ ^[0-9]+$ ]]; then
+  echo "--falkor-port must be a port number (got '$FALKOR_PORT_ARG')"; exit 1
+fi
 
 # Where the script itself lives. Under `curl | bash` BASH_SOURCE is unset and
 # this resolves to the cwd — which is fine, because standalone detection below
@@ -269,15 +305,41 @@ if [[ -z "$BIN_DIR" ]]; then
   warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc  # or ~/.bashrc"
 fi
 
+# Assemble the isolation env this launcher bakes in. Each `export` reaches the
+# gateway/orchestrator/FalkorDB provisioner because flow.mjs spawns services
+# with { ...process.env, ... } and ensureFalkordb reads FALKOR_* from process.env.
+WRAPPER_ENV=()
+[[ -n "$PORT_OFFSET" ]]     && WRAPPER_ENV+=("export FLOW_PORT_OFFSET=$PORT_OFFSET")
+[[ -n "$FALKOR_HOST_ARG" ]] && WRAPPER_ENV+=("export FALKOR_HOST=$FALKOR_HOST_ARG")
+
+if [[ "$FRESH_DB" == true ]]; then
+  # Own container on its own port so the test graph store is genuinely fresh.
+  # Default port = 6379 + offset; never 6379 (that's the shared default DB).
+  offset_num="${PORT_OFFSET:-0}"
+  fdb_port="${FALKOR_PORT_ARG:-$((6379 + offset_num))}"
+  [[ "$fdb_port" == "6379" ]] && fdb_port=6479
+  WRAPPER_ENV+=("export FALKOR_PORT=$fdb_port")
+  WRAPPER_ENV+=("export FALKOR_CONTAINER=flow-falkordb-$ALIAS_NAME")
+elif [[ -n "$FALKOR_PORT_ARG" ]]; then
+  # No fresh container requested — just dial this port (pairs with --falkor-host).
+  WRAPPER_ENV+=("export FALKOR_PORT=$FALKOR_PORT_ARG")
+fi
+
 WRAPPER="$BIN_DIR/$ALIAS_NAME"
-cat > "$WRAPPER" <<WRAPPER_EOF
-#!/usr/bin/env bash
-# Flow CLI — auto-generated by setup.sh
-# Checkout: $ROOT_DIR
-exec node "$FLOW_BIN" "\$@"
-WRAPPER_EOF
+{
+  echo "#!/usr/bin/env bash"
+  echo "# Flow CLI — auto-generated by setup.sh"
+  echo "# Checkout: $ROOT_DIR"
+  if [[ ${#WRAPPER_ENV[@]} -gt 0 ]]; then
+    for env_line in "${WRAPPER_ENV[@]}"; do echo "$env_line"; done
+  fi
+  echo "exec node \"$FLOW_BIN\" \"\$@\""
+} > "$WRAPPER"
 chmod +x "$WRAPPER"
 ok "Registered '$ALIAS_NAME' → $FLOW_BIN"
+if [[ ${#WRAPPER_ENV[@]} -gt 0 ]]; then
+  for env_line in "${WRAPPER_ENV[@]}"; do info "  baked: ${env_line#export }"; done
+fi
 
 if command -v "$ALIAS_NAME" &>/dev/null; then
   ok "'$ALIAS_NAME' is reachable on PATH"
@@ -289,4 +351,11 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}Setup complete!${NC}"
 echo -e "  Run: ${BOLD}$ALIAS_NAME up mycompany${NC}   # starts Flow, prints your dashboard URL"
+DASH_PORT=$((7600 + ${PORT_OFFSET:-0}))
+[[ -n "$PORT_OFFSET" ]] && echo -e "  Dashboard for this alias: ${BOLD}http://localhost:$DASH_PORT/mycompany${NC}"
+if [[ "$FRESH_DB" == true ]]; then
+  echo -e "  Fresh FalkorDB (testing): container ${BOLD}flow-falkordb-$ALIAS_NAME${NC}"
+  echo -e "    '$ALIAS_NAME down' stops it (data kept); '$ALIAS_NAME up' restarts it"
+  echo -e "    destroy for good: docker rm -f flow-falkordb-$ALIAS_NAME"
+fi
 echo ""
