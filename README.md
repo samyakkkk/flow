@@ -4,142 +4,88 @@
 
 ### Flow knows your stack.
 
-A self-hostable **knowledge graph + agent runner for your codebase.** Point it at your repos and it builds a living graph of your services, capabilities, APIs, and how they connect — then answers questions with citations and runs your existing coding agents (Claude Code, Codex, OpenCode) with that graph injected into every session.
+Point Flow at your repos and it builds a living map of your services, APIs, and how they connect — then answers questions with `file:line` citations and feeds that map to your coding agents (Claude Code, Codex, OpenCode) in every session.
 
 <img src="docs/images/home.png" width="760" alt="Flow dashboard — the live brain graph of your codebase with a floating Ask bar" />
 
-[Quickstart](#quickstart) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md) · AGPL-3.0
+[Install](#install) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md) · AGPL-3.0
 
 </div>
 
 ---
 
-## Why Flow
-
-Coding agents are only as good as the context you feed them, and most of a codebase's real structure — which service owns what, what depends on this API, what breaks if you change a response field — lives in people's heads or scattered across repos.
-
-Flow builds that structure into a graph and puts it at the center of everything. It's genuinely useful for a **solo developer working across several repos** — it maps the connections *between* your services and repositories (which frontend calls which backend capability, what a shared library is used by), so both you and your coding agents reason across the whole system, not one repo at a time. The same graph then **grows into a team brain** as you connect Slack, Linear, and meeting transcripts.
-
-Run it on your laptop, or **host it on your own EC2** (or any always-on box) and drive everything — the graph, agents, and integrations — from the cloud. Your data stays on your infrastructure either way.
-
-The graph is the center. Both you and your agents build from it.
-
----
-
-## What you get
-
-### Understand your codebase
-
-- **A living knowledge graph** — connect a repo and Flow indexes it into a graph of services, capabilities, APIs, resources, and the *usage contracts* between them. Every claim carries evidence, confidence, and provenance, written through a single governed gateway so many writers can't rot the ontology.
-- **Grounded Q&A with citations** — ask from a floating bar on any page. Answers come back with `file:line` evidence, a plain-language confidence, and the answer's subgraph highlighted on the graph — not a guess.
-- **A graph you can actually read** — a force-directed constellation with degree-sized, type-colored nodes and semantic zoom; click any node for a plain-language card.
-
-### Run your coding agents from one place
-
-<img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
-
-- **Claude Code, Codex, and OpenCode**, detected on your machine and driven over the [Agent Client Protocol](https://agentclientprotocol.com) from the dashboard — no terminal juggling.
-- **Pick the model per session** — Claude Code (5 models + effort), Codex (2 models + reasoning effort), OpenCode (500+ models). The choice applies live and survives reload.
-- **Full session control from the browser** — streaming transcript with collapsible thinking and tool rows, follow-up steering when idle, mid-run interrupts, Stop, real permission cards (Allow / Always allow / Reject), and agent-mode switching.
-- **The graph is injected into every session** as a read-only MCP (`find_entity` / `get_entity` / `read_query` / `list_schema`). The agent gets grounded context for free — no config files — and the session view **highlights the exact nodes it consults**, live ("7 nodes consulted by this session"), with "consulted the brain" markers in the transcript.
-
-### Grow into a team brain
-
-- **Connect Slack, Linear, and Fireflies** meeting transcripts alongside your repos, all from the dashboard. Conversational knowledge attaches to the graph without overwriting code-derived truth.
-- **CONTEXT BY FLOW on Linear tickets** — an auto-maintained, idempotent section enriched with code truth and related discussion, so whoever (or whatever) picks up the ticket starts with the full picture.
-- **Everything is a policy toggle** — every automated behavior is auto / propose / off, and every action is audited with provenance.
-
----
-
-## Quickstart
-
-**Prerequisites:** **Node 22+** (`nvm install 22` — there's an `.nvmrc`) and **Docker** running. Flow starts FalkorDB (its graph database) in a container for you — or point it at your own and skip Docker (`FALKOR_HOST=… flow up`). Indexing runs through whichever coding CLI is on your machine — **opencode, Codex, or Claude Code** (`INDEXER_RUNTIME`, default auto-detects opencode → codex → claude). If none is installed, `setup.sh` installs opencode for you through a signed channel (Homebrew or the official installer — never the npm binary, which macOS kills as unsigned). On first run the dashboard asks for an [OpenRouter](https://openrouter.ai) key — or skip it if your CLI is already signed in. Any OpenAI-compatible API also works via `LLM_BASE_URL` + `LLM_API_KEY` in Settings.
+## Install
 
 ```bash
-curl -fsSL https://www.flow.engineer/install.sh | bash   # one shot: clones the repo, deps, Node 22+ / Docker checks, coding CLI if none found, `flow` on your PATH
+curl -fsSL https://www.flow.engineer/install.sh | bash
 
-flow up mycompany       # creates it if new, then starts — prints your dashboard URL
+flow up mycompany
 ```
 
-Already have a checkout? `./setup.sh` from inside it does the same thing without cloning:
+That's it. `flow up` prints your dashboard URL — open it, connect a repo, and watch the graph build. Then ask questions from the floating bar or kick off a coding agent from the **Agents** tab.
+
+**You'll need:** Node 22+ and Docker running. Indexing runs through a coding CLI you already have — Claude Code, Codex, or opencode — and if you have none, the installer sets up opencode for you. Everything runs on your machine; your code never leaves it.
+
+<details>
+<summary>Other ways to install</summary>
+
+From a checkout:
 
 ```bash
 git clone https://github.com/samyakkkk/flow.git && cd flow
 ./setup.sh
 ```
 
-Works on macOS and Linux natively; on Windows use Git Bash or WSL2. Prefer manual steps? `npm install && npm install -g .` still works — `setup.sh` just does everything in one shot.
+Manual: `npm install && npm install -g .` — `setup.sh` just does everything in one shot.
 
-Then it's all in the browser:
+Works on macOS and Linux natively; on Windows use Git Bash or WSL2.
 
-1. **Open the dashboard URL.** In local mode you're already signed in — no token to paste.
-2. **Give Flow a brain** — paste an OpenRouter key, or skip if a supported coding CLI (opencode, Codex, or Claude Code) is installed, since indexing runs through whichever is present (`INDEXER_RUNTIME`, default auto-detects opencode → codex → claude). Event classification and semantic search stay off until some LLM key is set.
-3. **Connect a repo** from the Home picker (uses your `gh` login, a PAT, or a public URL) and watch the graph build.
-4. **Ask a question** from the floating bar, or head to **Agents** to kick off a coding task.
+</details>
 
-> A one-command installer (`curl … | bash`) that also provisions Node + Docker is on the [roadmap](ROADMAP.md). The steps above are the current path.
+---
 
-### CLI
+## What you get
 
-```
-flow up   [name]     # start a project (creates it if new); no name = all
-flow down [name]     # stop a project; no name = all
-flow ls              # projects, status, and dashboard URLs
-```
+**Ask your codebase anything.** Answers come with `file:line` evidence and the relevant part of the graph highlighted — not a guess.
 
-Each project is a self-contained folder (`data/projects/<name>/`) with its own graph, database, secrets, and cloned repos. Multiple projects run side by side on separate port triplets, sharing FalkorDB via named graphs.
+**Run your coding agents from one place.** Claude Code, Codex, and OpenCode, driven from the browser: pick a model, steer mid-run, approve permissions, stop — no terminal juggling.
+
+<img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
+
+**Every agent session starts smart.** The graph is injected into each session automatically — the agent knows which service owns what and what breaks if it changes something, and you watch it consult the graph live.
+
+**See across repos.** Flow maps the connections *between* your repos — which frontend calls which backend, what shared code is used where — so you and your agents reason about the whole system, not one repo at a time.
+
+**Grow it into a team brain.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's decisions and context, with every automated behavior a policy toggle (auto / propose / off).
 
 ---
 
 ## How it works
 
-Flow is a small set of local services, graph at the center:
-
 ```
 connect sources ──▶ agents build the evidence-backed graph ──▶ answers, agents & context
-  (repos, Slack,        (OpenCode workers write through a          (grounded Q&A, coding-agent
-   Linear, meetings)     governed gateway; every claim              sessions with the graph
-                         has provenance + confidence)               injected, Linear context)
+  (repos, Slack,        (every claim carries file:line             (grounded Q&A, agent
+   Linear, meetings)     evidence and confidence)                   sessions, Linear context)
 ```
 
-**Three storage tiers**, each holding a claim exactly once:
+Flow runs a few small services on your machine: a graph database (FalkorDB, in Docker), a gateway that governs every graph write, an orchestrator that runs the pipeline, and a dashboard. Each project is a self-contained folder with its own graph, database, and cloned repos — multiple projects run side by side.
 
-- **FalkorDB graph** — distilled durable knowledge (services, capabilities, usage contracts). One named graph per project.
-- **SQLite corpus (FTS)** — searchable evidence: Slack messages, a Linear mirror, meeting segments. What graph claims cite.
-- **Systems of record** — Slack / Linear / GitHub stay the source of truth; fast-moving state is joined at read time, never frozen into the graph.
+```
+flow up   [name]     # start a project (creates it if new); no name = all
+flow down [name]     # stop a project; no name = all
+flow ls              # projects, status, and dashboard URLs
+flow doctor          # health check
+```
 
-The **orchestrator** runs a deterministic pipeline — event → LLM classifier → policy lookup (auto / propose / off) → single-write action layer → audit log. Agents produce content; only the service performs side effects, which is what makes the permission matrix enforceable and defends against prompt injection. All graph writes go through the **gateway's** typed verbs (never raw Cypher), so the ontology stays clean under many concurrent writers.
-
-Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); agent-dispatch design in [`docs/AGENT_DISPATCH.md`](docs/AGENT_DISPATCH.md).
-
----
-
-## Using your coding agents
-
-<img src="docs/images/agents.png" width="760" alt="Flow's Agents page — Claude Code, Codex, and OpenCode detected, with a task kickoff form" />
-
-1. **Connect a repo** on Home so there's a checkout for the agent to work in.
-2. Open **Agents** — installed agents (Claude Code / Codex / OpenCode) show up with live detection; missing ones show install hints.
-3. Kick off a task: pick an agent, a connected repo, a model + effort level, and write your prompt.
-4. **Steer it** — send follow-ups when it's idle, interrupt and redirect mid-run, approve or reject permission requests from the browser, switch agent mode, or Stop.
-5. **Watch the graph light up** — the session panel highlights the exact nodes the agent queries, and answers come back citing real files.
-
-The dashboard never spawns processes itself — everything rides the orchestrator's HTTP API, so the same flow will work in cloud mode later.
+Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
-## Connecting more sources
+## Connecting sources
 
 <img src="docs/images/sources.png" width="760" alt="Connecting sources in Flow — GitHub, Linear, Fireflies, and Slack" />
 
-All sources are configured **in the dashboard**, not in env files. Keys are AES-256-GCM encrypted in the project database, masked in responses, and hot-applied — adding a key starts its poller immediately, no restart.
-
-- **GitHub** — connect repos with the picker (gh CLI, PAT, or public URL); each gets indexed into the graph.
-- **Linear** — polled since a cursor; tickets enriched with CONTEXT BY FLOW.
-- **Fireflies** — meeting transcripts ingested as searchable evidence (plus manual meeting-note upload).
-- **Slack** — ambient in-thread answering. **Deploy-only:** a laptop can't be always-on, so local mode locks Slack ("deploy to enable").
-
-Non-Slack sources all use one poll-since-cursor mechanism, so catching up after downtime — a 30-second reboot or a 3-day outage — is the same operation.
+Everything is configured in the dashboard — no env files. **GitHub** repos get indexed into the graph; **Linear** tickets are enriched with an auto-maintained CONTEXT BY FLOW section; **Fireflies** meeting transcripts become searchable evidence; **Slack** answers in-thread (deployed mode only — a laptop can't be always-on). Keys are encrypted at rest and applied without restarts.
 
 ---
 
@@ -147,69 +93,32 @@ Non-Slack sources all use one poll-since-cursor mechanism, so catching up after 
 
 Flow runs the same everywhere; the mode decides what's on.
 
-- **Local** (`--mode local`, default) — build the graph, ask questions, run coding agents, poll GitHub / Linear / Fireflies. Slack is disabled. This is the solo-developer path and needs nothing but your laptop + Docker.
-- **Deployed** (`--mode prod`, on a small always-on box like EC2) — everything above plus the always-on Slack bot.
+- **Local** (default) — build the graph, ask questions, run agents, poll GitHub / Linear / Fireflies. Needs nothing but your laptop + Docker.
+- **Deployed** (`--mode prod`, on any small always-on box) — everything above plus the always-on Slack bot.
 
-Your data stays on your infrastructure. A single admin token guards every HTTP surface, agents that read untrusted content never hold write-to-the-world tools, and every action is audited.
-
-One-command install, `flow export` / `import` project migration (local → EC2 by moving one bundle), and systemd-managed always-on deploys are on the [roadmap](ROADMAP.md).
-
----
-
-## Roadmap
-
-Shipped and honest about what's next — see [`ROADMAP.md`](ROADMAP.md) for the full detail. Highlights of what's coming:
-
-- **One-command installer** (`curl -fsSL … | bash`) that provisions Node + opencode + Docker.
-- **Agent dispatch across machines** via Shellular + a streamable-HTTP graph MCP endpoint, so Flow on a server can drive an agent on your laptop with the graph injected.
-- **Per-repo MCP config on connect** + `flow mcp install`, so your own hand-run agents get the graph tools too.
-- **`flow acp`** — expose Flow's answerer as an agent you can register in Shellular or Zed.
-- **Project migration** (`flow export` / `import`) and **EC2 always-on** under systemd.
-
-Flow is early and moving fast. See [`CHANGELOG.md`](CHANGELOG.md) for dated history.
+Your data stays on your infrastructure either way.
 
 ---
 
 ## Troubleshooting
 
-- **`npm install` fails on an old Node, or with a SQLite build error** — Flow needs **Node 22+**. `nvm install 22 && nvm use 22`, then `npm install` again. (On 22+, SQLite installs a prebuilt binary — no C/C++ toolchain required.)
-- **`flow up` says a dependency "was built for a different Node version"** (or the orchestrator log shows `NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`) — a leftover from an install attempt on another Node is shadowing the fresh install. Clean reinstall from the flow directory: `rm -rf node_modules orchestrator/node_modules graph-gateway/node_modules dashboard/node_modules && npm install`.
-- **`flow up` says Docker isn't installed / the daemon isn't running** — start Docker Desktop and re-run. Prefer no Docker? Run FalkorDB yourself and point Flow at it: `FALKOR_HOST=<host> FALKOR_PORT=<port> flow up`.
-- **Port 6379 already in use** — another Redis/FalkorDB holds it. Free it, or reuse that instance with `FALKOR_HOST` / `FALKOR_PORT` as above.
-- **"Unable to find image 'falkordb/falkordb:latest'" / image download fails** — the first-run image pull failed. `flow up` prints the real cause; if it mentions a rate limit, `docker login` (a free Docker Hub account raises the anonymous pull limit) or wait an hour. Otherwise check connectivity/VPN and re-run `flow up`.
-- **A service "didn't start"** — read `data/projects/<name>/logs/{gateway,orchestrator,dashboard}.log`, and run `flow doctor` for a health summary.
-- **Index jobs fail with "opencode CLI not found on PATH"** — no coding CLI is installed. Run `./setup.sh` (it installs opencode via Homebrew / the official installer), or install Claude Code or Codex yourself. Flow never falls back to the npm-bundled opencode binary — it ships unsigned and macOS kills it at exec.
-- **`tsx` (or another dev dependency) missing after `npm install`** — check for `NODE_ENV=production` in your shell; it makes npm skip devDependencies. `NODE_ENV=development npm install --include=dev` fixes it.
-- **Connecting a repo fails** — cloning needs `git` on your PATH.
-- **"still starting up" when you save your key** — the orchestrator takes a few seconds on first boot; wait and retry.
-- **Don't `docker compose up` for local dev** — use `flow up`. The compose file under `deploy/` is an experimental full-container path, not the local one.
+`flow doctor` gives a health summary; services log to `data/projects/<name>/logs/`. Common fixes (wrong Node version, Docker not running, port conflicts) are in [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. Everything is testable without real credentials — the simulators drive the full pipeline.
+Issues and PRs welcome. Everything is testable without real credentials:
 
 ```bash
-bash verify-all.sh   # typecheck + orchestrator tests + simulator scenarios + dashboard smoke
+bash verify-all.sh   # typecheck + tests + simulator scenarios + dashboard smoke
 ```
 
-Please run `verify-all.sh` before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first to discuss the approach.
+Run it before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first.
 
-**Testing multiple branches side by side** — `setup.sh` clones any branch into its own managed checkout (`~/.flow/checkouts/<alias>`) and registers it as its own command. No checkout needed — the hosted installer takes the same flags:
+To test branches side by side, the installer can set up any branch as its own command (`--alias`, `--branch`), with its own ports and even its own database (`--port-offset`, `--fresh-db`) — see [`docs/testing.md`](docs/testing.md).
 
-```bash
-curl -fsSL https://www.flow.engineer/install.sh | bash -s -- --alias flow-main   --branch main       # clone main → `flow-main`
-curl -fsSL https://www.flow.engineer/install.sh | bash -s -- --alias flow-test-1 --branch feature-x  # clone feature-x → `flow-test-1`
-./setup.sh --alias flow-dev                        # this checkout → `flow-dev`
-
-flow-main   up demo
-flow-test-1 up demo2    # each checkout is fully independent (own deps, own data/)
-```
-
-To run a test deployment *alongside* your main one (own ports, optionally its own FalkorDB), see `docs/testing.md` — `--port-offset` and `--fresh-db`.
-
-Re-running with the same alias fast-forwards that checkout to the branch tip. Don't `up` the *same* project name from two checkouts at once — they'd race for the same ports.
+Flow is early and moving fast — see [`ROADMAP.md`](ROADMAP.md) for what's next and [`CHANGELOG.md`](CHANGELOG.md) for dated history.
 
 ## License
 
