@@ -2,9 +2,9 @@
 
 # Flow
 
-### Flow knows your stack.
+### Your engineering partner. Built to keep you in flow.
 
-Point Flow at your repos and it builds a living map of your services, APIs, and how they connect — then answers questions with `file:line` citations and feeds that map to your coding agents (Claude Code, Codex, OpenCode) in every session.
+Flow builds your brain outside your head: a knowledge graph of your services and how they connect — the way you hold your system in your mind — plus a memory of everything you tell it. Your coding agents (Claude Code, Codex, OpenCode) plug into that brain, so they act with your understanding and take the smart actions you would. Run tasks in parallel, steer with minimum input, stay in flow.
 
 <img src="docs/images/home.png" width="760" alt="Flow dashboard — the live brain graph of your codebase with a floating Ask bar" />
 
@@ -46,17 +46,17 @@ Works on macOS and Linux natively; on Windows use Git Bash or WSL2.
 
 ## What you get
 
-**Ask your codebase anything.** Answers come with `file:line` evidence and the relevant part of the graph highlighted — not a guess.
+**Your system, mapped the way you think about it.** Connect your repos and Flow builds a knowledge graph of your services, APIs, and the connections between them — across repos, the way it looks in your mind. Ask it anything; answers come with `file:line` evidence, not guesses.
 
-**Run your coding agents from one place.** Claude Code, Codex, and OpenCode, driven from the browser: pick a model, steer mid-run, approve permissions, stop — no terminal juggling.
+**Run tasks in parallel, with the coding CLIs you already use.** Claude Code, Codex, and OpenCode, driven from one dashboard: kick off several tasks at once, pick a model per session, steer mid-run, approve permissions from the browser. No terminal juggling.
 
 <img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
 
-**Every agent session starts smart.** The graph is injected into each session automatically — the agent knows which service owns what and what breaks if it changes something, and you watch it consult the graph live.
+**Agents that act like you would.** Every session starts with your brain plugged in — the agent already knows which service owns what and what breaks if it changes something. You watch it consult the graph live, and you only step in when it matters.
 
-**See across repos.** Flow maps the connections *between* your repos — which frontend calls which backend, what shared code is used where — so you and your agents reason about the whole system, not one repo at a time.
+**It remembers everything you tell it.** Decisions, gotchas, "we never do X" — say it once and it's part of the brain, surfaced to you and every future agent session automatically.
 
-**Grow it into a team brain.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's decisions and context, with every automated behavior a policy toggle (auto / propose / off).
+**A brain that grows with your team.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions — with every automated behavior a policy toggle (auto / propose / off).
 
 ---
 
