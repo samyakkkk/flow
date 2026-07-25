@@ -350,9 +350,9 @@ fi
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}Setup complete!${NC}"
-echo -e "  Run: ${BOLD}$ALIAS_NAME up mycompany${NC}   # starts Flow, prints your dashboard URL"
+echo -e "  Run: ${BOLD}$ALIAS_NAME up myproject${NC}   # starts Flow, prints your dashboard URL"
 DASH_PORT=$((7600 + ${PORT_OFFSET:-0}))
-[[ -n "$PORT_OFFSET" ]] && echo -e "  Dashboard for this alias: ${BOLD}http://localhost:$DASH_PORT/mycompany${NC}"
+[[ -n "$PORT_OFFSET" ]] && echo -e "  Dashboard for this alias: ${BOLD}http://localhost:$DASH_PORT/myproject${NC}"
 if [[ "$FRESH_DB" == true ]]; then
   echo -e "  Fresh FalkorDB (testing): container ${BOLD}flow-falkordb-$ALIAS_NAME${NC}"
   echo -e "    '$ALIAS_NAME down' stops it (data kept); '$ALIAS_NAME up' restarts it"
