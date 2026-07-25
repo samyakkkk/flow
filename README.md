@@ -56,7 +56,28 @@ Works on macOS and Linux natively; on Windows use Git Bash or WSL2.
 
 **It remembers the *why*, not just the what.** Decisions, trade-offs, gotchas, "we never do X" — the tribal knowledge that today lives in your head and old Slack threads. Say it once and it's part of the brain, surfaced to you and every future agent session automatically.
 
-**A brain that grows with your team.** Start solo; when you're ready, connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions — with every automated behavior a policy toggle (auto / propose / off) and every action audited.
+**A brain that grows with your team.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions. Start solo, [graduate when you're ready](#solo-today-team-tomorrow).
+
+---
+
+## Solo today, team tomorrow
+
+Flow runs the same in both lives — what changes is who shares the brain.
+
+**On your laptop (start here).** `flow up` runs everything locally — graph, memory, agents, dashboard — private to you. You're signed in automatically, nothing needs to be always-on, and every feature in this README works right here. This is the solo path, and it's complete on its own.
+
+**On your cloud (when the team joins).** Graduate by running the exact same install on any always-on box you control, started with `--mode prod`. Teammates get real logins to the same dashboard — same graph, same memory, same agents — and the always-on integrations (like the Slack bot) come alive. Flow doesn't care whose cloud:
+
+<p align="center">
+  <img src="https://img.shields.io/badge/AWS%20EC2-232F3E?style=for-the-badge" alt="AWS EC2" />
+  <img src="https://img.shields.io/badge/Google%20Cloud-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white" alt="Google Cloud" />
+  <img src="https://img.shields.io/badge/Azure-0078D4?style=for-the-badge" alt="Azure" />
+  <img src="https://img.shields.io/badge/DigitalOcean-0080FF?style=for-the-badge&logo=digitalocean&logoColor=white" alt="DigitalOcean" />
+  <img src="https://img.shields.io/badge/Hetzner-D50C2D?style=for-the-badge&logo=hetzner&logoColor=white" alt="Hetzner" />
+  <img src="https://img.shields.io/badge/Any%20Linux%20box-333333?style=for-the-badge&logo=linux&logoColor=white" alt="Any Linux box" />
+</p>
+
+If it runs Linux and Docker, it runs Flow — a $12/mo box is plenty.
 
 ---
 
@@ -66,7 +87,7 @@ Handing your architecture to someone else's platform is a real concern — so Fl
 
 - **Everything lives on your infrastructure.** The graph, the memory, the evidence database — all in local storage on your machine (or a box you own). There is no Flow cloud, no third-party graph store, and nothing is ever used to train models.
 - **Your code is read by the CLI you already trust.** Indexing runs through your own Claude Code / Codex / opencode install, under your existing account — the same trust decision you've already made. Flow itself sends your code nowhere; even embeddings are computed by a local model.
-- **Audit every line.** Flow is fully open source (AGPL). Integration keys are encrypted at rest, agents that read untrusted content never hold write-to-the-world tools, and every automated action is logged with provenance.
+- **Audit every line.** Flow is fully open source (AGPL). Integration keys are encrypted at rest, agents that read untrusted content never hold write-to-the-world tools, every automated behavior is a policy toggle (auto / propose / off), and every action is logged with provenance.
 
 ---
 
@@ -96,17 +117,6 @@ Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 <img src="docs/images/sources.png" width="760" alt="Connecting sources in Flow — GitHub, Linear, Fireflies, and Slack" />
 
 Everything is configured in the dashboard — no env files. **GitHub** repos get indexed into the graph; **Linear** tickets are enriched with an auto-maintained CONTEXT BY FLOW section; **Fireflies** meeting transcripts become searchable evidence; **Slack** answers in-thread (deployed mode only — a laptop can't be always-on). Keys are encrypted at rest and applied without restarts.
-
----
-
-## Self-hosting
-
-Flow runs the same everywhere; the mode decides what's on.
-
-- **Local** (default) — build the graph, ask questions, run agents, poll GitHub / Linear / Fireflies. Needs nothing but your laptop + Docker.
-- **Deployed** (`--mode prod`, on any small always-on box) — everything above plus the always-on Slack bot.
-
-Your data stays on your infrastructure either way.
 
 ---
 
