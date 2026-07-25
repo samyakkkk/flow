@@ -2,9 +2,9 @@
 
 # Flow
 
-### Your engineering partner. Built to keep you in flow.
+### Your engineering partner. Built to keep you in Flow state.
 
-Flow builds your brain outside your head: a knowledge graph of your services and how they connect — the way you hold your system in your mind — plus a memory of everything you tell it. Your coding agents (Claude Code, Codex, OpenCode) plug into that brain, so they act with your understanding and take the smart actions you would. Run tasks in parallel, steer with minimum input, stay in flow.
+Flow builds your brain outside your head: a knowledge graph of your services and how they connect — the way you hold your system in your mind — plus a memory of everything you tell it. The coding agents you already use (Claude Code, Codex, OpenCode) plug into that brain, so they act with your understanding and take the smart actions you would — no re-explaining your stack every session. Run tasks in parallel, steer with minimum input, stay in Flow state. Works for one developer across many repos, and grows into a shared brain for the whole team.
 
 <img src="docs/images/home.png" width="760" alt="Flow dashboard — the live brain graph of your codebase with a floating Ask bar" />
 
@@ -46,17 +46,27 @@ Works on macOS and Linux natively; on Windows use Git Bash or WSL2.
 
 ## What you get
 
-**Your system, mapped the way you think about it.** Connect your repos and Flow builds a knowledge graph of your services, APIs, and the connections between them — across repos, the way it looks in your mind. Ask it anything; answers come with `file:line` evidence, not guesses.
+**Your system, mapped the way you think about it.** Connect your repos and Flow builds a knowledge graph of your services, APIs, and the connections between them — across repos, the way it looks in your mind. Every claim in the graph carries `file:line` evidence and a confidence level, so answers are grounded in your actual code — where Flow doesn't know, it says so instead of guessing.
 
-**Run tasks in parallel, with the coding CLIs you already use.** Claude Code, Codex, and OpenCode, driven from one dashboard: kick off several tasks at once, pick a model per session, steer mid-run, approve permissions from the browser. No terminal juggling.
+**Your CLI stays your CLI.** Flow drives the same Claude Code, Codex, or OpenCode already installed and signed in on your machine — it doesn't replace your terminal workflow, it adds a place to run several tasks in parallel: pick a model per session, steer mid-run, approve permissions, watch everything from one dashboard.
 
 <img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
 
-**Agents that act like you would.** Every session starts with your brain plugged in — the agent already knows which service owns what and what breaks if it changes something. You watch it consult the graph live, and you only step in when it matters.
+**Agents that act like you would.** Every session starts with your brain plugged in — the agent already knows which service owns what, what depends on this API, and what breaks if it changes something. You watch it consult the graph live, and you only step in when it matters.
 
-**It remembers everything you tell it.** Decisions, gotchas, "we never do X" — say it once and it's part of the brain, surfaced to you and every future agent session automatically.
+**It remembers the *why*, not just the what.** Decisions, trade-offs, gotchas, "we never do X" — the tribal knowledge that today lives in your head and old Slack threads. Say it once and it's part of the brain, surfaced to you and every future agent session automatically.
 
-**A brain that grows with your team.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions — with every automated behavior a policy toggle (auto / propose / off).
+**A brain that grows with your team.** Start solo; when you're ready, connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions — with every automated behavior a policy toggle (auto / propose / off) and every action audited.
+
+---
+
+## Your code stays yours
+
+Handing your architecture to someone else's platform is a real concern — so Flow is built to add **no new trust boundary**:
+
+- **Everything lives on your infrastructure.** The graph, the memory, the evidence database — all in local storage on your machine (or a box you own). There is no Flow cloud, no third-party graph store, and nothing is ever used to train models.
+- **Your code is read by the CLI you already trust.** Indexing runs through your own Claude Code / Codex / opencode install, under your existing account — the same trust decision you've already made. Flow itself sends your code nowhere; even embeddings are computed by a local model.
+- **Audit every line.** Flow is fully open source (AGPL). Integration keys are encrypted at rest, agents that read untrusted content never hold write-to-the-world tools, and every automated action is logged with provenance.
 
 ---
 
