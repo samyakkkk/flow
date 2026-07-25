@@ -7,6 +7,13 @@ either one stepping on the other's ports, data, or graph store.
 For the one-time environment setup itself see `../setup.sh --help`; for the
 architecture behind projects/ports see `ARCHITECTURE.md`.
 
+No checkout needed: the script is hosted at
+`https://www.flow.engineer/install.sh`, and every recipe below also works as
+
+```bash
+curl -fsSL https://www.flow.engineer/install.sh | bash -s -- <flags>
+```
+
 ## The model
 
 `setup.sh --alias <name>` registers an independent checkout under

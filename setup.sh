@@ -3,8 +3,8 @@
 # the `flow` command on your PATH. Run it once; you're done.
 #
 # Usage:
-#   ./setup.sh [OPTIONS]                          # from inside a checkout
-#   curl -fsSL https://<host>/setup.sh | bash     # standalone: clones the repo first
+#   ./setup.sh [OPTIONS]                                        # from inside a checkout
+#   curl -fsSL https://www.flow.engineer/install.sh | bash      # standalone: clones the repo first
 #
 # Options:
 #   --alias <name>       Command name to register (default: flow). Use flow-dev,
@@ -35,7 +35,7 @@
 #   ./setup.sh --alias t1 --branch feat --port-offset 1000 --fresh-db
 #   # isolated ports but reuse the shared :6379 FalkorDB:
 #   ./setup.sh --alias t2 --branch feat --port-offset 2000
-#   curl -fsSL https://<host>/setup.sh | bash -s -- --branch dev --alias flow-dev
+#   curl -fsSL https://www.flow.engineer/install.sh | bash -s -- --branch dev --alias flow-dev
 #
 # Standalone mode (curl | bash, or the script copied outside a checkout) clones
 # from https://github.com/samyakkkk/flow.git — override with FLOW_REPO=<url>.
