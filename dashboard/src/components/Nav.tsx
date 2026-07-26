@@ -8,18 +8,17 @@ import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 
 // Primary nav items (front door — visually emphasized)
 const PRIMARY_ITEMS = [
-  { href: "/", label: "Home" },
-  { href: "/ask", label: "Ask Flow" },
-  { href: "/agents", label: "Agents" },
+  { href: "/", label: "Dashboard (Home)" },
+  { href: "/agents", label: "Agents / Sessions" },
+  { href: "/connections", label: "Connections" },
+  { href: "/inbox", label: "Inbox" },
+  { href: "/settings", label: "Settings" },
 ];
 
-// Secondary nav cluster (quieter — power-user surfaces)
+// Secondary nav cluster
 const SECONDARY_ITEMS = [
-  { href: "/inbox", label: "Inbox" },
-  { href: "/connections", label: "Sources" },
-  { href: "/permissions", label: "Automations" },
   { href: "/activity", label: "Activity" },
-  { href: "/settings", label: "Settings" },
+  { href: "/permissions", label: "Automations" },
 ];
 
 export function Nav() {
