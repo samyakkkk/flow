@@ -424,8 +424,9 @@ export function AgentTaskComposer({
       </div>
 
       <form onSubmit={handleStartTask} className="flex flex-col gap-2.5">
-        {/* Main Text Box Container */}
-        <div className="rounded-xl border border-line bg-paper p-3.5 shadow-xs focus-within:border-ink/40 transition-all flex flex-col gap-3">
+        {/* Main Text Box Container — overflow visible so ExpandablePill
+            dropdowns render above the bar without being clipped. */}
+        <div className="relative rounded-xl border border-line bg-paper p-3.5 shadow-xs focus-within:border-ink/40 transition-all flex flex-col gap-3">
           {/* Attached Files & Screenshots Thumbnails Strip */}
           {attachments.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-line">
@@ -470,60 +471,63 @@ export function AgentTaskComposer({
             rows={compact ? 3 : 4}
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none border-none p-0"
           />
+        </div>
 
-          {/* Bottom bar inside the text box: ACP config controls (left) +
-              attach & run (right). Model/thinking/mode selectors are whatever
-              the selected agent advertises — nothing hardcoded. */}
-          <div className="flex items-center justify-between gap-2 pt-3 border-t border-line/70 flex-wrap">
-            {/* Model / thinking / mode controls — BOTTOM LEFT */}
-            <div className="min-w-0">
-              {optionsLoading ? (
-                <span className="text-[10.5px] text-text-muted font-mono animate-pulse">
-                  Loading agent options…
-                </span>
-              ) : (
-                <AgentConfigControls
-                  configOptions={configOptions}
-                  modes={modes}
-                  values={configValues}
-                  modeValue={modeId}
-                  onChange={handleConfigChange}
-                  onModeChange={handleModeChange}
-                  disabled={starting}
-                />
-              )}
-            </div>
+        {/* Bottom bar — OUTSIDE the box so expanded cards aren't clipped.
+            Attach left | model/mode/effort pills center | Run fixed right. */}
+        <div className="flex items-center justify-between gap-2">
+          {/* Attach — LEFT */}
+          <div className="flex-shrink-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
+              className="hidden"
+              onChange={handleFileInputChange}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
+              title="Attach images or context files"
+            >
+              <span>📎</span>
+              <span>Attach</span>
+            </button>
+          </div>
 
-            {/* Attachment Button & Run Agent Task CTA — BOTTOM RIGHT */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
-                className="hidden"
-                onChange={handleFileInputChange}
+          {/* ACP config pills — CENTER (model name + mode/effort toggles) */}
+          <div className="min-w-0 flex-1 flex justify-center">
+            {optionsLoading ? (
+              <span className="text-[10.5px] text-text-muted font-mono animate-pulse">
+                Loading agent options…
+              </span>
+            ) : (
+              <AgentConfigControls
+                compact
+                configOptions={configOptions}
+                modes={modes}
+                values={configValues}
+                modeValue={modeId}
+                onChange={handleConfigChange}
+                onModeChange={handleModeChange}
+                disabled={starting}
               />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
-                title="Attach images or context files"
-              >
-                <span>📎</span>
-                <span>Attach</span>
-              </button>
+            )}
+          </div>
 
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={!prompt.trim() || starting || !backend}
-                arrow
-                className="py-1.5 px-4 text-[12.5px] font-medium"
-              >
-                {starting ? "Starting Task..." : "Run Agent Task"}
-              </Button>
-            </div>
+          {/* Run Agent Task — FIXED RIGHT */}
+          <div className="flex-shrink-0">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!prompt.trim() || starting || !backend}
+              arrow
+              className="py-1.5 px-4 text-[12.5px] font-medium"
+            >
+              {starting ? "Starting Task..." : "Run Agent Task"}
+            </Button>
           </div>
         </div>
 
