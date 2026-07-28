@@ -8,7 +8,7 @@ import { useProject } from "@/lib/useProject";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
-import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
+import { MentionTextarea, type FileEntry, type SlashCommand } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
 import { BranchSelect } from "@/components/BranchSelect";
 
@@ -174,6 +174,7 @@ function reduceEvents(events: SessionEvent[]): {
   graphNodeIds: string[];
   modes: { currentModeId?: string; availableModes?: Array<{ id: string; name: string }> } | null;
   configOptions: ConfigOption[];
+  commands: SlashCommand[];
 } {
   const blocks: Block[] = [];
   let status = "starting";
@@ -181,6 +182,7 @@ function reduceEvents(events: SessionEvent[]): {
   let error: string | undefined;
   let modes: ReturnType<typeof reduceEvents>["modes"] = null;
   let configOptions: ConfigOption[] = [];
+  let commands: SlashCommand[] = [];
   const permissions = new Map<string, PermissionReq>();
   const graphIds: string[] = [];
 
@@ -298,6 +300,19 @@ function reduceEvents(events: SessionEvent[]): {
             if (Array.isArray(co)) configOptions = normalizeConfigOptions(co);
             break;
           }
+          case "available_commands_update": {
+            // The agent (Claude Code / Codex / OpenCode) advertises its slash
+            // commands over ACP. Arrives as a full snapshot — replace verbatim.
+            const raw = (u as { availableCommands?: unknown }).availableCommands;
+            if (Array.isArray(raw)) {
+              commands = (raw as Array<Record<string, unknown>>).map((c) => ({
+                name: String(c.name ?? ""),
+                description: String(c.description ?? ""),
+                hint: (c.input as { hint?: string } | undefined)?.hint,
+              }));
+            }
+            break;
+          }
           default:
             break;
         }
@@ -317,6 +332,7 @@ function reduceEvents(events: SessionEvent[]): {
     graphNodeIds: [...new Set(graphIds)].slice(-40),
     modes,
     configOptions,
+    commands,
   };
 }
 
@@ -456,6 +472,19 @@ export function AgentSession({ id }: { id: string }) {
   }, [id]);
 
   const view = useMemo(() => reduceEvents(events), [events]);
+
+  // OpenCode only advertises custom commands + skills over ACP; its built-in
+  // slash commands live in each of its UIs. Of those, /compact is the only one
+  // its ACP adapter actually executes (unknown commands are silently dropped),
+  // so surface just that one. Skip if a future version starts advertising it.
+  const commands = useMemo(() => {
+    if (meta?.backend !== "opencode") return view.commands;
+    if (view.commands.some((c) => c.name === "compact")) return view.commands;
+    return [
+      ...view.commands,
+      { name: "compact", description: "Summarize the conversation to free up context" },
+    ];
+  }, [view.commands, meta?.backend]);
 
   // Recent graph highlights: last 45s of graph events light up the brain.
   const [now, setNow] = useState(0);
@@ -1336,12 +1365,13 @@ export function AgentSession({ id }: { id: string }) {
                 }}
                 onPaste={handlePaste}
                 fetchFiles={fetchFiles}
+                commands={commands}
                 placeholder={
                   archived
                     ? "This session ended before the last restart — start a new one to continue."
                     : running
-                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, drop or paste files)"
-                    : "Send a follow-up… (@ to tag a file, drop or paste files)"
+                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, / for commands, drop or paste files)"
+                    : "Send a follow-up… (@ to tag a file, / for commands, drop or paste files)"
                 }
                 rows={1}
                 autoGrow
