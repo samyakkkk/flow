@@ -99,6 +99,10 @@ export function AgentTaskComposer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  // Set when the target folder is already held by a live (or idle-but-
+  // steerable) session — the create call comes back {collision} instead of
+  // starting. The user chooses: separate copy, or share the folder anyway.
+  const [collision, setCollision] = useState<{ id: string; title: string; status: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -293,9 +297,11 @@ export function AgentTaskComposer({
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // Launch Agent Task
-  const handleStartTask = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Launch Agent Task. `placement` is set only after the user answers a
+  // collision prompt: "separate_copy" runs on an isolated copy, "in_place"
+  // shares the folder with the live session.
+  const handleStartTask = async (e?: React.FormEvent, placement?: "in_place" | "separate_copy") => {
+    e?.preventDefault();
     if (!prompt.trim() || starting) return;
 
     if (!workFolder) {
@@ -306,6 +312,7 @@ export function AgentTaskComposer({
 
     setStarting(true);
     setError("");
+    setCollision(null);
 
     try {
       const res = await fetch(prefix("/api/agents/sessions"), {
@@ -316,6 +323,7 @@ export function AgentTaskComposer({
           repo: repo || "local-folder",
           workFolder,
           prompt: prompt.trim(),
+          ...(placement ? { placement } : {}),
           ...(Object.keys(config).length > 0 ? { config } : {}),
           ...(modeChanged && modeId ? { modeId } : {}),
           attachments: attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data })),
@@ -324,6 +332,13 @@ export function AgentTaskComposer({
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+
+      // The folder is already in use by a live (or idle-but-steerable)
+      // session — ask, don't start. Keep the prompt intact.
+      if (data.collision) {
+        setCollision(data.active);
+        return;
+      }
 
       setPrompt("");
       setAttachments([]);
@@ -549,6 +564,44 @@ export function AgentTaskComposer({
         )}
 
         {error && <p className="text-[12px] text-warn font-medium px-1">{error}</p>}
+
+        {/* Collision prompt — another live session is already working in this
+            folder. Offer a separate copy (primary) so they don't overwrite
+            each other, or sharing the same folder anyway. */}
+        {collision && (
+          <div className="rounded-lg border border-line bg-cream/60 px-4 py-3">
+            <p className="text-[13px] text-ink mb-3">
+              Session “{collision.title}” is already working in this folder. Run this one on a
+              separate copy of the branch so they don’t overwrite each other?
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                type="button"
+                onClick={() => handleStartTask(undefined, "separate_copy")}
+                disabled={starting}
+                arrow
+              >
+                {starting ? "Starting…" : "Separate copy"}
+              </Button>
+              <button
+                type="button"
+                onClick={() => handleStartTask(undefined, "in_place")}
+                disabled={starting}
+                className="rounded-lg border border-line bg-paper px-3.5 py-2 text-[13px] text-text hover:bg-cream transition disabled:opacity-50 cursor-pointer"
+              >
+                Same folder anyway
+              </button>
+              <button
+                type="button"
+                onClick={() => setCollision(null)}
+                disabled={starting}
+                className="text-[12px] text-text-muted hover:text-ink transition ml-1 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </form>
 
       {/* File System Picker Dialog */}
