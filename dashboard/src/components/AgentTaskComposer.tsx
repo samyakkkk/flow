@@ -7,6 +7,12 @@ import { Button } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { FolderPickerDialog } from "@/components/FolderPickerDialog";
+import { AgentConfigControls } from "@/components/AgentConfigControls";
+import {
+  normalizeConfigOptions,
+  type AgentModes,
+  type ConfigOption,
+} from "@/lib/acpConfig";
 
 export interface Attachment {
   name: string;
@@ -50,22 +56,6 @@ const AGENT_BRANDS: Record<string, BrandName> = {
   opencode: "opencode",
 };
 
-const MODEL_OPTIONS: Record<string, { id: string; label: string }[]> = {
-  claude: [
-    { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
-    { id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
-    { id: "claude-3-5-haiku", label: "Claude 3.5 Haiku" },
-  ],
-  codex: [
-    { id: "gpt-4o", label: "GPT-4o" },
-    { id: "o3-mini", label: "o3-mini" },
-    { id: "o1", label: "o1" },
-  ],
-  opencode: [
-    { id: "opencode-default", label: "Default Model" },
-  ],
-};
-
 function formatBytes(bytes?: number): string {
   if (!bytes) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -86,11 +76,18 @@ export function AgentTaskComposer({
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [workFolders, setWorkFolders] = useState<WorkFolder[]>([]);
 
-  // Agent Controllers
-  const [backend, setBackend] = useState("claude");
-  const [model, setModel] = useState("claude-3-7-sonnet");
-  const [thinking, setThinking] = useState(true);
-  const [executionMode, setExecutionMode] = useState<"auto" | "manual">("auto");
+  // Selected engine + its ACP-advertised options (models, thought toggles,
+  // modes) — probed live by the orchestrator, never hardcoded here.
+  const [backend, setBackend] = useState("");
+  const [configOptions, setConfigOptions] = useState<ConfigOption[]>([]);
+  const [modes, setModes] = useState<AgentModes | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  // Only values the user explicitly changed from the agent defaults — sent at
+  // session create and applied before the first turn.
+  const [config, setConfig] = useState<Record<string, string | boolean>>({});
+  const [configValues, setConfigValues] = useState<Record<string, string | boolean>>({});
+  const [modeId, setModeId] = useState<string | undefined>(undefined);
+  const [modeChanged, setModeChanged] = useState(false);
 
   // Local folder target
   const [workFolder, setWorkFolder] = useState("");
@@ -131,7 +128,7 @@ export function AgentTaskComposer({
       const folders: WorkFolder[] = data.workFolders ?? [];
       setWorkFolders(folders);
 
-      const defaultBackend = detected.find((x: DetectedAgent) => x.installed)?.id || "claude";
+      const defaultBackend = detected.find((x: DetectedAgent) => x.installed)?.id || "";
       setBackend((prev) => prev || defaultBackend);
 
       if (!workFolder) {
@@ -157,11 +154,54 @@ export function AgentTaskComposer({
     refresh();
   }, [refresh]);
 
-  // Sync model options when backend engine changes
+  // Probe the selected backend's advertised options (model selector, thought
+  // toggles, modes) via a scratch ACP session in the orchestrator.
   useEffect(() => {
-    const opts = MODEL_OPTIONS[backend] || MODEL_OPTIONS.claude;
-    setModel(opts[0].id);
-  }, [backend]);
+    if (!backend) return;
+    let cancelled = false;
+    setOptionsLoading(true);
+    setConfigOptions([]);
+    setModes(null);
+    setConfig({});
+    setConfigValues({});
+    setModeId(undefined);
+    setModeChanged(false);
+    fetch(prefix(`/api/agents/options?backend=${encodeURIComponent(backend)}`))
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d: { configOptions?: unknown; modes?: unknown }) => {
+        if (cancelled) return;
+        const opts = normalizeConfigOptions(d.configOptions);
+        setConfigOptions(opts);
+        const m = (d.modes ?? null) as AgentModes | null;
+        setModes(m);
+        // Seed display values from the agent's advertised current values.
+        const seed: Record<string, string | boolean> = {};
+        for (const o of opts) {
+          if (o.currentValue !== undefined) seed[o.id] = o.currentValue;
+        }
+        setConfigValues(seed);
+        setModeId(m?.currentModeId);
+      })
+      .catch(() => {
+        /* leave controls empty — the session page still shows them live */
+      })
+      .finally(() => {
+        if (!cancelled) setOptionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, prefix]);
+
+  const handleConfigChange = useCallback((configId: string, value: string | boolean) => {
+    setConfigValues((v) => ({ ...v, [configId]: value }));
+    setConfig((c) => ({ ...c, [configId]: value }));
+  }, []);
+
+  const handleModeChange = useCallback((id: string) => {
+    setModeId(id);
+    setModeChanged(true);
+  }, []);
 
   // Handle local folder selection from FolderPickerDialog
   const handleSelectFolder = async (path: string) => {
@@ -267,9 +307,6 @@ export function AgentTaskComposer({
     setStarting(true);
     setError("");
 
-    const promptHeader = `[Model: ${model}${thinking ? " | Thinking: Enabled" : ""}${executionMode ? ` | Mode: ${executionMode}` : ""}]\n\n`;
-    const fullPrompt = `${promptHeader}${prompt.trim()}`;
-
     try {
       const res = await fetch(prefix("/api/agents/sessions"), {
         method: "POST",
@@ -278,10 +315,9 @@ export function AgentTaskComposer({
           backend,
           repo: repo || "local-folder",
           workFolder,
-          prompt: fullPrompt,
-          model,
-          thinking,
-          mode: executionMode,
+          prompt: prompt.trim(),
+          ...(Object.keys(config).length > 0 ? { config } : {}),
+          ...(modeChanged && modeId ? { modeId } : {}),
           attachments: attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data })),
         }),
       });
@@ -310,6 +346,83 @@ export function AgentTaskComposer({
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
+      {/* Top row: local folder (left) + engine chips (right) */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        {/* Local Folder Target — TOP LEFT */}
+        <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
+          <span className="text-xs">📁</span>
+          <span className="text-[11px] font-mono text-ink truncate flex-1" title={workFolder}>
+            {workFolder ? workFolder : "Choose local folder..."}
+          </span>
+          {workFolders.length > 0 && (
+            <select
+              value={workFolder}
+              onChange={(e) => {
+                const selected = e.target.value;
+                setWorkFolder(selected);
+                const match = workFolders.find((f) => f.path === selected);
+                if (match?.repo) setRepo(match.repo);
+              }}
+              className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4 flex-shrink-0"
+              title="Switch local folder"
+            >
+              {workFolders.map((f) => (
+                <option key={f.path} value={f.path}>
+                  {f.path}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            type="button"
+            onClick={() => setIsFolderPickerOpen(true)}
+            className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
+          >
+            Change
+          </button>
+        </div>
+
+        {/* Agent Engine Selector Chips — TOP RIGHT (green dot = ready) */}
+        <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line">
+          {agents.map((a) => {
+            const isSelected = backend === a.id;
+            const brand = AGENT_BRANDS[a.id];
+            return (
+              <button
+                key={a.id}
+                type="button"
+                disabled={!a.installed}
+                onClick={() => setBackend(a.id)}
+                title={
+                  a.installed
+                    ? `${a.name} ${a.version ? `(${a.version})` : "Ready"}`
+                    : `${a.name} - Not installed (${a.installHint ?? ""})`
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
+                  isSelected
+                    ? "bg-ink text-paper shadow-xs font-semibold"
+                    : "text-ink hover:bg-sand/60"
+                } ${!a.installed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+              >
+                {brand && (
+                  <BrandIcon
+                    name={brand}
+                    size={13}
+                    className={isSelected ? "text-paper" : "text-ink"}
+                  />
+                )}
+                <span>{a.name.split(" ")[0]}</span>
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    a.installed ? "bg-ok" : "bg-text-muted/40"
+                  }`}
+                />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <form onSubmit={handleStartTask} className="flex flex-col gap-2.5">
         {/* Main Text Box Container */}
         <div className="rounded-xl border border-line bg-paper p-3.5 shadow-xs focus-within:border-ink/40 transition-all flex flex-col gap-3">
@@ -358,165 +471,58 @@ export function AgentTaskComposer({
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none border-none p-0"
           />
 
-          {/* Bottom Controllers Bar (Sitting inside the text box) */}
-          <div className="flex flex-col gap-2.5 pt-3 border-t border-line/70">
-            {/* Controller Row 1: Engine Selector Chips + Model + Thinking + Auto/Manual Mode */}
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              {/* Agent Engine Selector Chips with Green/Gray Status Dots */}
-              <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line">
-                {agents.map((a) => {
-                  const isSelected = backend === a.id;
-                  const brand = AGENT_BRANDS[a.id];
-                  return (
-                    <button
-                      key={a.id}
-                      type="button"
-                      disabled={!a.installed}
-                      onClick={() => setBackend(a.id)}
-                      title={
-                        a.installed
-                          ? `${a.name} ${a.version ? `(${a.version})` : "Ready"}`
-                          : `${a.name} - Not installed (${a.installHint})`
-                      }
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
-                        isSelected
-                          ? "bg-ink text-paper shadow-xs font-semibold"
-                          : "text-ink hover:bg-sand/60"
-                      } ${!a.installed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
-                    >
-                      {brand && (
-                        <BrandIcon
-                          name={brand}
-                          size={13}
-                          className={isSelected ? "text-paper" : "text-ink"}
-                        />
-                      )}
-                      <span>{a.name.split(" ")[0]}</span>
-                      {/* Status Dot: Green for Enabled, Gray for Deactivated */}
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          a.installed ? "bg-ok" : "bg-text-muted/40"
-                        }`}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Model, Thinking & Auto/Manual Mode Selectors */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {/* Model Selector */}
-                <select
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="rounded-lg border border-line bg-cream px-2 py-1 text-[11.5px] text-ink font-mono focus:outline-none focus:border-ink/30 cursor-pointer"
-                  title="Select AI Model"
-                >
-                  {(MODEL_OPTIONS[backend] || MODEL_OPTIONS.claude).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Thinking Mode Toggle */}
-                <button
-                  type="button"
-                  onClick={() => setThinking(!thinking)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-mono transition-colors cursor-pointer ${
-                    thinking
-                      ? "bg-accent/10 border-accent/40 text-ink font-medium"
-                      : "bg-cream border-line text-text-muted hover:text-ink"
-                  }`}
-                  title="Toggle Thinking / Reasoning Mode"
-                >
-                  <span>🧠</span>
-                  <span>Thinking {thinking ? "On" : "Off"}</span>
-                </button>
-
-                {/* Execution Mode Selector (Auto vs Manual) */}
-                <button
-                  type="button"
-                  onClick={() => setExecutionMode(executionMode === "auto" ? "manual" : "auto")}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-mono transition-colors cursor-pointer ${
-                    executionMode === "auto"
-                      ? "bg-ok/10 border-ok/40 text-ink font-medium"
-                      : "bg-cream border-line text-text-muted hover:text-ink"
-                  }`}
-                  title="Auto-Approve vs Manual Approval Mode"
-                >
-                  <span>{executionMode === "auto" ? "⚡" : "🖐️"}</span>
-                  <span>{executionMode === "auto" ? "Auto" : "Manual"}</span>
-                </button>
-              </div>
+          {/* Bottom bar inside the text box: ACP config controls (left) +
+              attach & run (right). Model/thinking/mode selectors are whatever
+              the selected agent advertises — nothing hardcoded. */}
+          <div className="flex items-center justify-between gap-2 pt-3 border-t border-line/70 flex-wrap">
+            {/* Model / thinking / mode controls — BOTTOM LEFT */}
+            <div className="min-w-0">
+              {optionsLoading ? (
+                <span className="text-[10.5px] text-text-muted font-mono animate-pulse">
+                  Loading agent options…
+                </span>
+              ) : (
+                <AgentConfigControls
+                  configOptions={configOptions}
+                  modes={modes}
+                  values={configValues}
+                  modeValue={modeId}
+                  onChange={handleConfigChange}
+                  onModeChange={handleModeChange}
+                  disabled={starting}
+                />
+              )}
             </div>
 
-            {/* Controller Row 2: Working Folder Target + Attachment + Run Button */}
-            <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-line/40">
-              {/* Local Folder Target Selector */}
-              <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1 rounded-lg border border-line min-w-0 max-w-[340px]">
-                <span className="text-xs">📁</span>
-                <span className="text-[11px] font-mono text-ink truncate flex-1">
-                  {workFolder ? workFolder.split("/").pop() || workFolder : "Choose local folder..."}
-                </span>
-                {workFolders.length > 0 && (
-                  <select
-                    value={workFolder}
-                    onChange={(e) => {
-                      const selected = e.target.value;
-                      setWorkFolder(selected);
-                      const match = workFolders.find((f) => f.path === selected);
-                      if (match?.repo) setRepo(match.repo);
-                    }}
-                    className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4"
-                    title="Switch local folder"
-                  >
-                    {workFolders.map((f) => (
-                      <option key={f.path} value={f.path}>
-                        {f.path}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setIsFolderPickerOpen(true)}
-                  className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
-                >
-                  Change
-                </button>
-              </div>
+            {/* Attachment Button & Run Agent Task CTA — BOTTOM RIGHT */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
+                title="Attach images or context files"
+              >
+                <span>📎</span>
+                <span>Attach</span>
+              </button>
 
-              {/* Attachment Button & Run Agent Task CTA */}
-              <div className="flex items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
-                  className="hidden"
-                  onChange={handleFileInputChange}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
-                  title="Attach images or context files"
-                >
-                  <span>📎</span>
-                  <span>Attach</span>
-                </button>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  disabled={!prompt.trim() || starting}
-                  arrow
-                  className="py-1.5 px-4 text-[12.5px] font-medium"
-                >
-                  {starting ? "Starting Task..." : "Run Agent Task"}
-                </Button>
-              </div>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!prompt.trim() || starting || !backend}
+                arrow
+                className="py-1.5 px-4 text-[12.5px] font-medium"
+              >
+                {starting ? "Starting Task..." : "Run Agent Task"}
+              </Button>
             </div>
           </div>
         </div>

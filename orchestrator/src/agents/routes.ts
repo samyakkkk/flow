@@ -49,6 +49,7 @@ import {
   setConfigOption,
   setSessionMode,
   openLocation,
+  probeAgentOptions,
   steer,
   subscribe,
 } from "./runtime.js";
@@ -59,6 +60,20 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     const owner = req.query.owner || "local";
     const { listWorkFolders } = await import("../work-folders.js");
     return { agents, repos: listRepoOptions(), workFolders: listWorkFolders(owner) };
+  });
+
+  // What a backend offers (model selector, thought/reasoning toggles, modes)
+  // BEFORE any task session exists — probed via a scratch ACP session on the
+  // shared adapter connection, cached per backend. Powers the kickoff form's
+  // model/thinking/mode selectors so nothing is hardcoded in the UI.
+  app.get<{ Querystring: { backend?: string } }>("/v1/agents/options", async (req, reply) => {
+    const backend = req.query.backend as AgentBackend | undefined;
+    if (!backend || !(backend in BACKENDS)) {
+      return reply.code(400).send({ error: `backend must be one of ${Object.keys(BACKENDS).join(", ")}` });
+    }
+    const result = await probeAgentOptions(backend);
+    if ("error" in result) return reply.code(502).send(result);
+    return result;
   });
 
   // Per-user work folders — where THIS user's agent sessions run. Owner is
@@ -107,6 +122,10 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       placement?: string;
       workFolder?: string;
       owner?: string;
+      config?: Record<string, string | boolean>;
+      modeId?: string;
+      attachments?: Array<{ name?: string; data: string; mimeType: string }>;
+      images?: Array<{ data: string; mimeType: string }>;
     };
     const backend = body.backend as AgentBackend;
     if (!backend || !(backend in BACKENDS)) {
@@ -128,7 +147,35 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       if (!owned) return reply.code(400).send({ error: "workFolder is not registered for this user" });
       workFolder = body.workFolder.trim();
     }
-    const result = await createSession({ backend, repo: body.repo, prompt: body.prompt.trim(), placement, workFolder });
+    // Kickoff-chosen config (model/thought selectors, mode): only values the
+    // client explicitly changed, validated to the advertised primitive types.
+    let config: Record<string, string | boolean> | undefined;
+    if (body.config && typeof body.config === "object" && !Array.isArray(body.config)) {
+      config = {};
+      for (const [k, v] of Object.entries(body.config)) {
+        if (typeof v === "string" || typeof v === "boolean") config[k] = v;
+      }
+      if (Object.keys(config).length === 0) config = undefined;
+    }
+    const modeId = typeof body.modeId === "string" && body.modeId.trim() ? body.modeId.trim() : undefined;
+    // First-turn attachments — same shape + semantics as the steer endpoint.
+    const rawAttachments: Array<{ name?: string; data: string; mimeType: string }> =
+      body.attachments ?? body.images ?? [];
+    const attachments = rawAttachments.map((a, i) => ({
+      name: a.name ?? `attachment-${i + 1}`,
+      data: a.data,
+      mimeType: a.mimeType,
+    }));
+    const result = await createSession({
+      backend,
+      repo: body.repo,
+      prompt: body.prompt.trim(),
+      placement,
+      workFolder,
+      config,
+      modeId,
+      attachments: attachments.length ? attachments : undefined,
+    });
     if ("error" in result) return reply.code(400).send(result);
     return result;
   });

@@ -11,6 +11,8 @@ import { MarkdownContent } from "@/components/Markdown";
 import { MentionTextarea, type FileEntry, type SlashCommand } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
 import { BranchSelect } from "@/components/BranchSelect";
+import { AgentConfigControls } from "@/components/AgentConfigControls";
+import { normalizeConfigOptions, type ConfigOption } from "@/lib/acpConfig";
 
 // ---------------------------------------------------------------------------
 // Attachment helpers — any file type, not just images. Images ride inline to
@@ -116,47 +118,8 @@ interface PermissionReq {
 }
 
 // ACP session config option — the model selector (category "model") and any
-// thought/reasoning-level toggles the agent advertises. Select-type only in
-// the UI for now (models are select); boolean options are passed through but
-// not yet rendered.
-interface ConfigSelectValue {
-  value: string;
-  name: string;
-}
-interface ConfigOption {
-  id: string;
-  name: string;
-  type?: string;
-  category?: string;
-  currentValue?: string | boolean;
-  options?: ConfigSelectValue[];
-}
-
-// Options may arrive flat or grouped ({group, options}); flatten to leaves.
-function flattenConfigValues(raw: unknown): ConfigSelectValue[] {
-  if (!Array.isArray(raw)) return [];
-  const out: ConfigSelectValue[] = [];
-  for (const item of raw as Array<Record<string, unknown>>) {
-    if (item && Array.isArray(item.options)) {
-      out.push(...flattenConfigValues(item.options));
-    } else if (item && typeof item.value === "string") {
-      out.push({ value: item.value, name: String(item.name ?? item.value) });
-    }
-  }
-  return out;
-}
-
-function normalizeConfigOptions(raw: unknown): ConfigOption[] {
-  if (!Array.isArray(raw)) return [];
-  return (raw as Array<Record<string, unknown>>).map((o) => ({
-    id: String(o.id),
-    name: String(o.name ?? o.id),
-    type: o.type as string | undefined,
-    category: o.category as string | undefined,
-    currentValue: o.currentValue as string | boolean | undefined,
-    options: flattenConfigValues(o.options),
-  }));
-}
+// thought/reasoning-level toggles the agent advertises. Types + normalizers
+// live in @/lib/acpConfig, shared with the kickoff composer.
 
 function contentText(c: unknown): string {
   if (!c) return "";
@@ -347,14 +310,6 @@ function statusPill(status: string): { kind: "live" | "ok" | "warn" | "idle"; la
 }
 
 const AGENT_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
-
-// Selector order in the header: model, then mode, then reasoning effort, then rest.
-function configRank(category?: string): number {
-  if (category === "model") return 0;
-  if (category === "mode") return 1;
-  if (category === "thought_level" || category === "model_config") return 2;
-  return 3;
-}
 
 export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
@@ -935,47 +890,16 @@ export function AgentSession({ id }: { id: string }) {
             </div>
           )}
         </div>
-        {/* Model + other config selectors (model first) — the agent advertises
-            these on session create; changing one calls setSessionConfigOption. */}
-        {/* Config-driven selectors (model, mode, effort) — the modern unified
-            mechanism. Model first, then mode, then reasoning effort. */}
-        {[...view.configOptions]
-          .filter((o) => o.type !== "boolean" && (o.options?.length ?? 0) > 0)
-          .sort((a, b) => configRank(a.category) - configRank(b.category))
-          .map((o) => (
-            <select
-              key={o.id}
-              value={typeof o.currentValue === "string" ? o.currentValue : ""}
-              onChange={(e) => act("config", { configId: o.id, value: e.target.value })}
-              disabled={archived || busy}
-              className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
-              style={{ fontFamily: "var(--font-mono)" }}
-              title={o.name}
-            >
-              {o.options!.map((v) => (
-                <option key={v.value} value={v.value}>
-                  {o.category === "model" ? v.name : `${o.name}: ${v.name}`}
-                </option>
-              ))}
-            </select>
-          ))}
-        {/* Fallback: agents that expose modes but not configOptions. */}
-        {view.configOptions.length === 0 && view.modes?.availableModes && view.modes.availableModes.length > 0 && (
-          <select
-            value={view.modes.currentModeId ?? ""}
-            onChange={(e) => act("mode", { modeId: e.target.value })}
-            disabled={archived}
-            className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
-            style={{ fontFamily: "var(--font-mono)" }}
-            title="Agent mode"
-          >
-            {view.modes.availableModes.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        )}
+        {/* Config-driven selectors (model, mode, thought level, toggles) —
+            advertised by the agent over ACP; shared renderer with the kickoff
+            composer. Changing one calls setSessionConfigOption / setSessionMode. */}
+        <AgentConfigControls
+          configOptions={view.configOptions}
+          modes={view.modes}
+          onChange={(configId, value) => act("config", { configId, value })}
+          onModeChange={(modeId) => act("mode", { modeId })}
+          disabled={archived || busy}
+        />
         <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
         {running && (
           <Button variant="secondary" onClick={() => act("cancel")} disabled={busy}>
