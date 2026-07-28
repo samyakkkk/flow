@@ -1,14 +1,13 @@
 "use client";
-// Agents home: your installed coding agents, a task kickoff form, and the
-// session history. Sessions stream live in /agents/<id>.
+
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
-import { Kicker, Heading, Button, Card, StatusPill } from "@/components/ui";
+import { Kicker, Heading, Card, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
-import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
 import { BranchSelect } from "@/components/BranchSelect";
+import { AgentTaskComposer } from "@/components/AgentTaskComposer";
 
 interface DetectedAgent {
   id: string;
@@ -18,14 +17,7 @@ interface DetectedAgent {
   source?: "explicit" | "local" | "bundled";
   installHint: string;
 }
-interface RepoOption {
-  name: string;
-  cloned: boolean;
-  // "folder" = the user connected their own checkout (it's the automatic work
-  // surface). "managed" = GitHub-added, index-only: sessions need one of the
-  // user's own folders.
-  surface?: "folder" | "managed";
-}
+
 interface SessionRow {
   id: string;
   backend: string;
@@ -37,7 +29,6 @@ interface SessionRow {
   updated_at: number;
 }
 
-// Maps orchestrator backend ids to BrandIcon names.
 const AGENT_BRANDS: Record<string, BrandName> = {
   claude: "anthropic",
   codex: "openai",
@@ -82,40 +73,17 @@ export function AgentsView() {
   const router = useRouter();
   const { prefix } = useProject();
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
-  const [repos, setRepos] = useState<RepoOption[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const [backend, setBackend] = useState("");
-  const [repo, setRepo] = useState("");
-  // Work folder: "" = the folder the user connected as the source (only valid
-  // for folder-connected repos). GitHub-added repos are index-only — Flow's
-  // internal clone is never a work surface, so those require picking one of
-  // YOUR folders here. Folders are per-user, never shared.
-  const [workFolders, setWorkFolders] = useState<{ path: string; repo: string | null }[]>([]);
-  const [workFolder, setWorkFolder] = useState("");
-  const [newFolderPath, setNewFolderPath] = useState("");
-  const [addingFolder, setAddingFolder] = useState(false);
-  const [prompt, setPrompt] = useState("");
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState("");
-  // Set when the target folder is already in use by a live session — the
-  // create call comes back {collision} instead of starting. The user chooses:
-  // run on a separate copy, or share the same folder anyway.
-  const [collision, setCollision] = useState<{ id: string; title: string; status: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const [a, s] = await Promise.all([
-        fetch(prefix("/api/agents")).then((r) => r.json()),
-        fetch(prefix("/api/agents/sessions")).then((r) => r.json()),
+        fetch(prefix("/api/agents")).then((r) => (r.ok ? r.json() : {})) as Promise<{ agents?: DetectedAgent[] }>,
+        fetch(prefix("/api/agents/sessions")).then((r) => (r.ok ? r.json() : {})) as Promise<{ sessions?: SessionRow[] }>,
       ]);
       setAgents(a.agents ?? []);
-      setRepos((a.repos ?? []).filter((r: RepoOption) => r.cloned));
-      setWorkFolders(a.workFolders ?? []);
       setSessions(s.sessions ?? []);
-      setBackend((prev) => prev || (a.agents ?? []).find((x: DetectedAgent) => x.installed)?.id || "");
-      setRepo((prev) => prev || (a.repos ?? [])[0]?.name || "");
     } finally {
       setLoading(false);
     }
@@ -127,68 +95,8 @@ export function AgentsView() {
     return () => clearInterval(iv);
   }, [refresh]);
 
-  // GitHub-added repos are index-only: no default surface, a work folder is
-  // required. Folder-connected repos carry their own surface (the folder the
-  // user picked as the source).
-  const needsFolder = repos.find((r) => r.name === repo)?.surface === "managed";
-
-  // Switching to a GitHub-added repo: auto-pick the user's folder that was
-  // registered against it, if there is one — never leave "" meaning nothing.
-  useEffect(() => {
-    if (needsFolder && !workFolder) {
-      const match = workFolders.find((f) => f.repo === repo);
-      if (match) setWorkFolder(match.path);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo, needsFolder, workFolders]);
-
-  const fetchFiles = useCallback(
-    (q: string) => {
-      if (!repo) return Promise.resolve([]);
-      const folder = workFolder ? `&folder=${encodeURIComponent(workFolder)}` : "";
-      return fetch(prefix(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}${folder}`))
-        .then((r) => (r.ok ? r.json() : { entries: [] }))
-        .then((d: { entries?: FileEntry[] }) => d.entries ?? []);
-    },
-    [repo, workFolder, prefix]
-  );
-
-  // `placement` is passed only after the user answers a collision prompt:
-  // "separate_copy" runs on an isolated copy, "in_place" shares the folder.
-  async function start(placement?: "in_place" | "separate_copy") {
-    if (!backend || !repo || !prompt.trim()) return;
-    setStarting(true);
-    setError("");
-    setCollision(null);
-    try {
-      const res = await fetch(prefix("/api/agents/sessions"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          backend,
-          repo,
-          prompt,
-          ...(placement ? { placement } : {}),
-          ...(workFolder ? { workFolder } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `status ${res.status}`);
-      // The folder's already in use — ask, don't start.
-      if (data.collision) {
-        setCollision(data.active);
-        setStarting(false);
-        return;
-      }
-      router.push(prefix(`/agents/${data.id}`));
-    } catch (e) {
-      setError((e as Error).message);
-      setStarting(false);
-    }
-  }
-
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-4xl pb-16">
       <Kicker>Your coding agents</Kicker>
       <Heading className="mb-2">Give the work to an agent.</Heading>
       <p className="text-text-muted text-[14px] mb-8 max-w-xl">
@@ -196,7 +104,7 @@ export function AgentsView() {
         brain — read-only — so they start from what your company knows.
       </p>
 
-      {/* Detected agents */}
+      {/* Installed Agents Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8">
         {agents.map((a) => (
           <Card key={a.id} className={`p-4 ${!a.installed ? "opacity-60" : ""}`}>
@@ -227,161 +135,28 @@ export function AgentsView() {
         )}
       </div>
 
-      {/* Kickoff */}
+      {/* New Task Composer Box */}
       <Card className="p-5 mb-10">
-        <Kicker>New task</Kicker>
-        <div className="flex gap-3 mt-3 mb-3 flex-wrap">
-          <select
-            value={backend}
-            onChange={(e) => setBackend(e.target.value)}
-            className="rounded-lg border border-line bg-cream px-3 py-2 text-[13px] text-ink"
-            style={{ fontFamily: "var(--font-mono)" }}
+        <Kicker>New Agent Task</Kicker>
+        <div className="mt-2 mb-4">
+          <h2
+            style={{ fontFamily: "var(--font-display)" }}
+            className="text-base font-semibold text-ink"
           >
-            {agents
-              .filter((a) => a.installed)
-              .map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-          </select>
-          <select
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            className="rounded-lg border border-line bg-cream px-3 py-2 text-[13px] text-ink"
-            style={{ fontFamily: "var(--font-mono)" }}
-          >
-            {repos.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-          {/* Work folder — YOUR checkouts (per-user, never a teammate's paths).
-              Folder-connected repos default to the folder the user picked as
-              the source. GitHub-added repos have no default — Flow only
-              indexes them, so one of your folders must be chosen. */}
-          <select
-            value={workFolder}
-            onChange={(e) => setWorkFolder(e.target.value)}
-            className="rounded-lg border border-line bg-cream px-3 py-2 text-[13px] text-ink"
-            style={{ fontFamily: "var(--font-mono)" }}
-            data-testid="work-folder-select"
-            title="Where the agent makes its changes — your folders, on your machine"
-          >
-            {needsFolder ? (
-              <option value="" disabled>
-                pick a folder to work in…
-              </option>
-            ) : (
-              <option value="">work in: {repo || "repo"} (your connected folder)</option>
-            )}
-            {workFolders.map((f) => (
-              <option key={f.path} value={f.path}>
-                work in: {f.path}
-              </option>
-            ))}
-          </select>
-          <span className="flex items-center gap-1">
-            <input
-              value={newFolderPath}
-              onChange={(e) => setNewFolderPath(e.target.value)}
-              placeholder="/path/to/another/checkout"
-              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-ink w-56"
-              style={{ fontFamily: "var(--font-mono)" }}
-              data-testid="work-folder-input"
-            />
-            <button
-              onClick={async () => {
-                const path = newFolderPath.trim();
-                if (!path) return;
-                setAddingFolder(true);
-                try {
-                  const res = await fetch(prefix("/api/work-folders"), {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ path, repo: repo || undefined }),
-                  });
-                  const d = (await res.json()) as { folders?: { path: string; repo: string | null }[] };
-                  if (res.ok && d.folders) {
-                    setWorkFolders(d.folders);
-                    setWorkFolder(path);
-                    setNewFolderPath("");
-                  }
-                } finally {
-                  setAddingFolder(false);
-                }
-              }}
-              disabled={addingFolder || !newFolderPath.trim()}
-              className="rounded-lg border border-line bg-cream px-3 py-2 text-[12px] text-text-muted hover:text-ink"
-              style={{ fontFamily: "var(--font-mono)" }}
-              title="Remember this folder as a place agents can work"
-            >
-              + folder
-            </button>
-          </span>
-        </div>
-        <MentionTextarea
-          value={prompt}
-          onChange={setPrompt}
-          fetchFiles={fetchFiles}
-          placeholder="What should the agent do? It will consult the brain first, then work in the repo. (@ to tag a file)"
-          rows={3}
-          className="w-full rounded-lg border border-line bg-cream px-3.5 py-3 text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none focus:border-black/20 resize-y mb-3"
-        />
-        {needsFolder && !workFolder && (
-          <p className="text-[12px] text-text-muted mb-3">
-            {repo} came from GitHub, so Flow only indexes it. Pick one of your folders above (or add
-            one) — that&apos;s where the agent will work.
+            Start a new coding task
+          </h2>
+          <p className="text-text-muted text-[12.5px] mt-0.5">
+            Select your engine, model, and target local folder below to launch an agent.
           </p>
-        )}
-        {error && <p className="text-[12px] mb-3" style={{ color: "#b3261e" }}>{error}</p>}
+        </div>
 
-        {/* Collision prompt — another live session is already working in this
-            folder. Offer a separate copy (primary) so they don't overwrite each
-            other, or sharing the same folder anyway. Never says "worktree". */}
-        {collision ? (
-          <div className="rounded-lg border border-line bg-cream/60 px-4 py-3 mb-1">
-            <p className="text-[13px] text-ink mb-3">
-              Session “{collision.title}” is already working in this folder. Run this one on a separate
-              copy of the branch so they don’t overwrite each other?
-            </p>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => start("separate_copy")} disabled={starting} arrow>
-                {starting ? "Starting…" : "Separate copy"}
-              </Button>
-              <button
-                onClick={() => start("in_place")}
-                disabled={starting}
-                className="rounded-lg border border-line bg-paper px-3.5 py-2 text-[13px] text-text hover:bg-cream transition disabled:opacity-50"
-              >
-                Same folder anyway
-              </button>
-              <button
-                onClick={() => setCollision(null)}
-                disabled={starting}
-                className="text-[12px] text-text-muted hover:text-ink transition ml-1"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            onClick={() => start()}
-            disabled={starting || !prompt.trim() || !backend || !repo || (needsFolder && !workFolder)}
-            arrow
-          >
-            {starting ? "Starting…" : "Start agent"}
-          </Button>
-        )}
+        <AgentTaskComposer />
       </Card>
 
-      {/* Separate copies — only rendered when at least one exists, so it stays
-          invisible until the collision flow actually creates one. */}
+      {/* Separate copies (worktrees) */}
       <SeparateCopies onNavigate={(sid) => router.push(prefix(`/agents/${sid}`))} />
 
-      {/* Sessions */}
+      {/* Sessions History */}
       <Kicker>Sessions</Kicker>
       <div className="mt-3 flex flex-col gap-2">
         {sessions.length === 0 && !loading && (
@@ -391,14 +166,14 @@ export function AgentsView() {
           <button
             key={s.id}
             onClick={() => router.push(prefix(`/agents/${s.id}`))}
-            className="text-left rounded-lg border border-line bg-paper px-4 py-3 hover:bg-cream transition flex items-center gap-4"
+            className="text-left rounded-lg border border-line bg-paper px-4 py-3 hover:bg-cream transition flex items-center gap-4 cursor-pointer"
           >
             <AgentBrandIcon backend={s.backend} className="text-ink flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-ink text-[13.5px] truncate" style={{ fontFamily: "var(--font-display)" }}>
+              <p className="text-ink text-[13.5px] truncate font-medium" style={{ fontFamily: "var(--font-display)" }}>
                 {s.title}
               </p>
-              <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
+              <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5">
                 {s.backend} · {s.repo} · {timeAgo(s.updated_at)}
               </p>
             </div>
@@ -411,11 +186,7 @@ export function AgentsView() {
 }
 
 // ---------------------------------------------------------------------------
-// Separate copies — the isolated branch checkouts the collision flow creates.
-// Visibility + exits: see the diff, open a PR, review conflicts, or remove.
-// Progressive disclosure: the whole section is absent until at least one copy
-// exists. UI copy never says "worktree".
-
+// Separate copies — isolated branch checkouts
 interface WorktreeSession {
   id: string;
   title: string;
@@ -438,12 +209,12 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
   const { prefix } = useProject();
   const [trees, setTrees] = useState<Worktree[]>([]);
   const [loaded, setLoaded] = useState(false);
-  // Per-copy UI state, keyed by the copy's path.
+
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notices, setNotices] = useState<Record<string, string>>({});
   const [confirmRemove, setConfirmRemove] = useState<Record<string, boolean>>({});
-  const [prUrls, setPrUrls] = useState<Record<string, string>>({}); // path → compareUrl
+  const [prUrls, setPrUrls] = useState<Record<string, string>>({});
   const [targetBranches, setTargetBranches] = useState<Record<string, string>>({});
   const [conflicts, setConflicts] = useState<Record<string, { targetBranch: string; files: string[] } | undefined>>({});
   const [openDiff, setOpenDiff] = useState<Record<string, boolean>>({});
@@ -455,7 +226,7 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
       const d = await r.json();
       if (Array.isArray(d.worktrees)) setTrees(d.worktrees);
     } catch {
-      /* leave the last-known list */
+      /* leave last known */
     } finally {
       setLoaded(true);
     }
@@ -599,7 +370,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
     }
   }
 
-  // Invisible until a copy exists (progressive disclosure).
   if (!loaded || trees.length === 0) return null;
 
   return (
@@ -618,7 +388,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
           const targetBranch = targetBranches[wt.path] ?? wt.base;
           const conflict = conflicts[wt.path];
 
-          // Broken: the folder is gone. Offer only a way to clean it up.
           if (wt.health === "broken") {
             return (
               <div key={wt.path} className="rounded-lg border border-line bg-paper px-4 py-3">
@@ -643,7 +412,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
 
           return (
             <div key={wt.path} className="rounded-lg border border-line bg-paper px-4 py-3">
-              {/* Row header — branch, repo, ahead/merged pill, dirty dot, sessions. */}
               <div className="flex items-center gap-3 flex-wrap">
                 <span style={{ fontFamily: "var(--font-mono)" }} className="text-[12px] text-ink truncate max-w-[240px]" title={wt.branch ?? ""}>
                   {wt.branch ?? "(detached)"}
@@ -677,7 +445,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                 ))}
               </div>
 
-              {/* Actions */}
               <div className="flex items-center gap-2 flex-wrap mt-2.5">
                 <button
                   onClick={() => toggleDiff(wt.path)}
@@ -706,7 +473,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                     </button>
                   </>
                 )}
-                {/* Remove — inline confirm when the copy has uncommitted work. */}
                 {confirmRemove[wt.path] ? (
                   <span className="inline-flex items-center gap-2">
                     <span className="text-[11.5px] text-text-muted">
@@ -738,7 +504,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
                 )}
               </div>
 
-              {/* Results / errors — rendered verbatim. */}
               {compareUrl && (
                 <a
                   href={compareUrl}
@@ -774,7 +539,6 @@ function SeparateCopies({ onNavigate }: { onNavigate: (sessionId: string) => voi
               {notice && <p className="text-[11.5px] mt-2" style={{ color: "var(--ok)" }}>{notice}</p>}
               {err && <p className="text-[11.5px] mt-2" style={{ color: "var(--danger)" }}>{err}</p>}
 
-              {/* Inline diff */}
               {openDiff[wt.path] && (
                 <div className="mt-3 max-h-[45vh] overflow-y-auto">
                   {diffs[wt.path] === undefined ? (
