@@ -108,8 +108,11 @@ function ExpandablePill({
       </button>
       {open && (
         <div
-          className="absolute bottom-full left-0 mb-2 rounded-lg border border-line bg-paper shadow-lg p-1.5 flex items-center gap-1 z-50 whitespace-nowrap"
-          style={{ minWidth: "max-content" }}
+          className="absolute bottom-full left-0 mb-2 rounded-lg border border-line bg-paper shadow-lg p-1.5 z-50"
+          style={options.length > 8
+            ? { minWidth: 260, maxHeight: 240, overflowY: "auto" }
+            : { minWidth: "max-content" }
+          }
         >
           {options.map((opt) => (
             <button
@@ -119,7 +122,7 @@ function ExpandablePill({
                 onChange(opt.value);
                 setOpen(false);
               }}
-              className={`px-2.5 py-1 rounded-md text-[10.5px] font-medium transition-colors cursor-pointer ${
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-[10.5px] font-medium transition-colors cursor-pointer ${
                 currentValue === opt.value
                   ? "bg-ink text-paper shadow-xs"
                   : "text-text-muted hover:text-ink hover:bg-sand"
