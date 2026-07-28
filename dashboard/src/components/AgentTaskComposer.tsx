@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
-import { Kicker, Button, StatusPill } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { FolderPickerDialog } from "@/components/FolderPickerDialog";
@@ -21,6 +21,7 @@ interface DetectedAgent {
   name: string;
   installed: boolean;
   version?: string;
+  installHint?: string;
 }
 
 interface RepoOption {
@@ -73,7 +74,6 @@ function formatBytes(bytes?: number): string {
 }
 
 export function AgentTaskComposer({
-  nodeCount = 0,
   selectedNodeTag,
   onClearNodeTag,
   compact = false,
@@ -86,11 +86,13 @@ export function AgentTaskComposer({
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [workFolders, setWorkFolders] = useState<WorkFolder[]>([]);
 
+  // Agent Controllers
   const [backend, setBackend] = useState("claude");
   const [model, setModel] = useState("claude-3-7-sonnet");
   const [thinking, setThinking] = useState(true);
+  const [executionMode, setExecutionMode] = useState<"auto" | "manual">("auto");
 
-  // Active work folder & target repo
+  // Local folder target
   const [workFolder, setWorkFolder] = useState("");
   const [repo, setRepo] = useState("");
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -129,13 +131,9 @@ export function AgentTaskComposer({
       const folders: WorkFolder[] = data.workFolders ?? [];
       setWorkFolders(folders);
 
-      // Default backend
       const defaultBackend = detected.find((x: DetectedAgent) => x.installed)?.id || "claude";
       setBackend((prev) => prev || defaultBackend);
 
-      // Default active local folder
-      // Priority 1: First registered work folder
-      // Priority 2: First local folder source (surface === "folder")
       if (!workFolder) {
         if (folders.length > 0) {
           setWorkFolder(folders[0].path);
@@ -170,7 +168,6 @@ export function AgentTaskComposer({
     setIsFolderPickerOpen(false);
     setError("");
     try {
-      // Register folder via /api/work-folders
       const res = await fetch(prefix("/api/work-folders"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -224,7 +221,7 @@ export function AgentTaskComposer({
           size: file.size,
         });
       } catch {
-        // ignore failed file
+        // ignore
       }
     }
     if (newAtts.length > 0) {
@@ -270,8 +267,7 @@ export function AgentTaskComposer({
     setStarting(true);
     setError("");
 
-    // Build prompt payload with model and thinking annotations if specified
-    const promptHeader = `[Model: ${model}${thinking ? " | Thinking: Enabled" : ""}]\n\n`;
+    const promptHeader = `[Model: ${model}${thinking ? " | Thinking: Enabled" : ""}${executionMode ? ` | Mode: ${executionMode}` : ""}]\n\n`;
     const fullPrompt = `${promptHeader}${prompt.trim()}`;
 
     try {
@@ -285,6 +281,7 @@ export function AgentTaskComposer({
           prompt: fullPrompt,
           model,
           thinking,
+          mode: executionMode,
           attachments: attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data })),
         }),
       });
@@ -312,129 +309,19 @@ export function AgentTaskComposer({
   ];
 
   return (
-    <div className={`flex flex-col gap-4 ${className}`}>
-      {/* 1. Header Engine & Local Folder Bar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        {/* Agent Engine Selector Chips */}
-        <div className="flex items-center gap-1.5 bg-cream/80 p-1 rounded-xl border border-line">
-          {agents.map((a) => {
-            const isSelected = backend === a.id;
-            const brand = AGENT_BRANDS[a.id];
-            return (
-              <button
-                key={a.id}
-                type="button"
-                disabled={!a.installed}
-                onClick={() => setBackend(a.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${
-                  isSelected
-                    ? "bg-ink text-paper shadow-xs font-semibold"
-                    : "text-ink hover:bg-sand/60"
-                } ${!a.installed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
-              >
-                {brand && (
-                  <BrandIcon
-                    name={brand}
-                    size={14}
-                    className={isSelected ? "text-paper" : "text-ink"}
-                  />
-                )}
-                <span>{a.name.split(" ")[0]}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Model & Thinking Toggles */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Model Selector */}
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="rounded-lg border border-line bg-cream px-2.5 py-1.5 text-[12px] text-ink font-mono focus:outline-none focus:border-ink/30 cursor-pointer"
-          >
-            {(MODEL_OPTIONS[backend] || MODEL_OPTIONS.claude).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Thinking Toggle */}
-          <button
-            type="button"
-            onClick={() => setThinking(!thinking)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11.5px] font-mono transition-colors ${
-              thinking
-                ? "bg-accent/10 border-accent/40 text-ink font-medium"
-                : "bg-cream border-line text-text-muted hover:text-ink"
-            }`}
-            title="Toggle Thinking / Reasoning Mode"
-          >
-            <span>🧠</span>
-            <span>Thinking {thinking ? "On" : "Off"}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Target Local Folder Row */}
-      <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-sand/40">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="text-sm">📁</span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[10px] uppercase font-mono tracking-wider text-text-muted">
-              Working Folder Target
-            </div>
-            <div className="text-[12px] font-mono text-ink font-medium truncate">
-              {workFolder ? workFolder : "No local folder selected"}
-            </div>
-          </div>
-        </div>
-
-        {/* Folder Select Dropdown or File Picker Trigger */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {workFolders.length > 0 && (
-            <select
-              value={workFolder}
-              onChange={(e) => {
-                const selected = e.target.value;
-                setWorkFolder(selected);
-                const match = workFolders.find((f) => f.path === selected);
-                if (match?.repo) setRepo(match.repo);
-              }}
-              className="rounded-lg border border-line bg-paper px-2 py-1 text-[11.5px] text-ink font-mono outline-none focus:border-ink/30 max-w-[180px]"
-            >
-              {workFolders.map((f) => (
-                <option key={f.path} value={f.path}>
-                  {f.path.split("/").pop()} ({f.path})
-                </option>
-              ))}
-            </select>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setIsFolderPickerOpen(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-line bg-paper text-[12px] text-ink hover:bg-cream transition font-medium cursor-pointer"
-          >
-            <span>Choose Folder...</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Main Text Area Container (Lovable / v0 / Cursor style) */}
-      <form onSubmit={handleStartTask} className="flex flex-col gap-2">
-        <div className="rounded-xl border border-line bg-paper p-3 shadow-xs focus-within:border-ink/40 transition-all flex flex-col gap-2.5">
-          {/* Attached Files & Screenshots Thumbnails */}
+    <div className={`flex flex-col gap-3 ${className}`}>
+      <form onSubmit={handleStartTask} className="flex flex-col gap-2.5">
+        {/* Main Text Box Container */}
+        <div className="rounded-xl border border-line bg-paper p-3.5 shadow-xs focus-within:border-ink/40 transition-all flex flex-col gap-3">
+          {/* Attached Files & Screenshots Thumbnails Strip */}
           {attachments.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap pb-2 border-b border-line">
+            <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-line">
               {attachments.map((att, idx) => (
                 <div
                   key={idx}
                   className="relative group flex items-center gap-2 p-1.5 pr-2 rounded-lg border border-line bg-cream text-[11px] font-mono"
                 >
                   {att.previewUrl ? (
-                    // Image Thumbnail
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={att.previewUrl}
@@ -451,7 +338,7 @@ export function AgentTaskComposer({
                   <button
                     type="button"
                     onClick={() => removeAttachment(idx)}
-                    className="ml-1 text-text-muted hover:text-ink text-xs font-bold px-1"
+                    className="ml-1 text-text-muted hover:text-ink text-xs font-bold px-1 cursor-pointer"
                   >
                     ×
                   </button>
@@ -471,49 +358,172 @@ export function AgentTaskComposer({
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-text-muted/60 focus:outline-none resize-none border-none p-0"
           />
 
-          {/* Bottom Action Bar inside Text Box */}
-          <div className="flex items-center justify-between gap-2 pt-2 border-t border-line/60 flex-wrap">
-            {/* Attachment Button */}
-            <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
-                className="hidden"
-                onChange={handleFileInputChange}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
-                title="Attach images or context files"
-              >
-                <span>📎</span>
-                <span>Attach</span>
-              </button>
+          {/* Bottom Controllers Bar (Sitting inside the text box) */}
+          <div className="flex flex-col gap-2.5 pt-3 border-t border-line/70">
+            {/* Controller Row 1: Engine Selector Chips + Model + Thinking + Auto/Manual Mode */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              {/* Agent Engine Selector Chips with Green/Gray Status Dots */}
+              <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line">
+                {agents.map((a) => {
+                  const isSelected = backend === a.id;
+                  const brand = AGENT_BRANDS[a.id];
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      disabled={!a.installed}
+                      onClick={() => setBackend(a.id)}
+                      title={
+                        a.installed
+                          ? `${a.name} ${a.version ? `(${a.version})` : "Ready"}`
+                          : `${a.name} - Not installed (${a.installHint})`
+                      }
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
+                        isSelected
+                          ? "bg-ink text-paper shadow-xs font-semibold"
+                          : "text-ink hover:bg-sand/60"
+                      } ${!a.installed ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      {brand && (
+                        <BrandIcon
+                          name={brand}
+                          size={13}
+                          className={isSelected ? "text-paper" : "text-ink"}
+                        />
+                      )}
+                      <span>{a.name.split(" ")[0]}</span>
+                      {/* Status Dot: Green for Enabled, Gray for Deactivated */}
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          a.installed ? "bg-ok" : "bg-text-muted/40"
+                        }`}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
 
-              <span className="text-[10px] text-text-muted font-mono hidden sm:inline">
-                @ for files · Paste screenshots
-              </span>
+              {/* Model, Thinking & Auto/Manual Mode Selectors */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* Model Selector */}
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="rounded-lg border border-line bg-cream px-2 py-1 text-[11.5px] text-ink font-mono focus:outline-none focus:border-ink/30 cursor-pointer"
+                  title="Select AI Model"
+                >
+                  {(MODEL_OPTIONS[backend] || MODEL_OPTIONS.claude).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Thinking Mode Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setThinking(!thinking)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-mono transition-colors cursor-pointer ${
+                    thinking
+                      ? "bg-accent/10 border-accent/40 text-ink font-medium"
+                      : "bg-cream border-line text-text-muted hover:text-ink"
+                  }`}
+                  title="Toggle Thinking / Reasoning Mode"
+                >
+                  <span>🧠</span>
+                  <span>Thinking {thinking ? "On" : "Off"}</span>
+                </button>
+
+                {/* Execution Mode Selector (Auto vs Manual) */}
+                <button
+                  type="button"
+                  onClick={() => setExecutionMode(executionMode === "auto" ? "manual" : "auto")}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-mono transition-colors cursor-pointer ${
+                    executionMode === "auto"
+                      ? "bg-ok/10 border-ok/40 text-ink font-medium"
+                      : "bg-cream border-line text-text-muted hover:text-ink"
+                  }`}
+                  title="Auto-Approve vs Manual Approval Mode"
+                >
+                  <span>{executionMode === "auto" ? "⚡" : "🖐️"}</span>
+                  <span>{executionMode === "auto" ? "Auto" : "Manual"}</span>
+                </button>
+              </div>
             </div>
 
-            {/* Run Task Button */}
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!prompt.trim() || starting}
-              arrow
-              className="py-1.5 px-4 text-[13px] font-medium"
-            >
-              {starting ? "Starting Task..." : "Run Agent Task"}
-            </Button>
+            {/* Controller Row 2: Working Folder Target + Attachment + Run Button */}
+            <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-line/40">
+              {/* Local Folder Target Selector */}
+              <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1 rounded-lg border border-line min-w-0 max-w-[340px]">
+                <span className="text-xs">📁</span>
+                <span className="text-[11px] font-mono text-ink truncate flex-1">
+                  {workFolder ? workFolder.split("/").pop() || workFolder : "Choose local folder..."}
+                </span>
+                {workFolders.length > 0 && (
+                  <select
+                    value={workFolder}
+                    onChange={(e) => {
+                      const selected = e.target.value;
+                      setWorkFolder(selected);
+                      const match = workFolders.find((f) => f.path === selected);
+                      if (match?.repo) setRepo(match.repo);
+                    }}
+                    className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4"
+                    title="Switch local folder"
+                  >
+                    {workFolders.map((f) => (
+                      <option key={f.path} value={f.path}>
+                        {f.path}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsFolderPickerOpen(true)}
+                  className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
+                >
+                  Change
+                </button>
+              </div>
+
+              {/* Attachment Button & Run Agent Task CTA */}
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.txt"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
+                  title="Attach images or context files"
+                >
+                  <span>📎</span>
+                  <span>Attach</span>
+                </button>
+
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={!prompt.trim() || starting}
+                  arrow
+                  className="py-1.5 px-4 text-[12.5px] font-medium"
+                >
+                  {starting ? "Starting Task..." : "Run Agent Task"}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Quick Templates */}
         {!prompt && (
-          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+          <div className="flex items-center gap-1.5 flex-wrap px-1 pt-1">
             <span className="text-[10px] text-text-muted font-mono uppercase">Quick:</span>
             {quickTemplates.map((tmpl) => (
               <button
@@ -528,7 +538,7 @@ export function AgentTaskComposer({
           </div>
         )}
 
-        {error && <p className="text-[12px] text-warn font-medium mt-1">{error}</p>}
+        {error && <p className="text-[12px] text-warn font-medium px-1">{error}</p>}
       </form>
 
       {/* File System Picker Dialog */}

@@ -104,37 +104,6 @@ export function AgentsView() {
         brain — read-only — so they start from what your company knows.
       </p>
 
-      {/* Installed Agents Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8">
-        {agents.map((a) => (
-          <Card key={a.id} className={`p-4 ${!a.installed ? "opacity-60" : ""}`}>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="flex items-center gap-2">
-                <AgentBrandIcon backend={a.id} className="text-ink" />
-                <span
-                  style={{ fontFamily: "var(--font-display)", fontSize: 15 }}
-                  className="text-ink font-medium"
-                >
-                  {a.name}
-                </span>
-              </div>
-              <StatusPill kind={a.installed ? "ok" : "idle"}>
-                {a.installed ? "Ready" : "Not installed"}
-              </StatusPill>
-            </div>
-            <p
-              style={{ fontFamily: "var(--font-mono)" }}
-              className="text-[10px] text-text-muted truncate"
-            >
-              {a.installed ? a.version : a.installHint}
-            </p>
-          </Card>
-        ))}
-        {loading && agents.length === 0 && (
-          <p className="text-text-muted text-[13px] col-span-3">Looking for agents on this machine…</p>
-        )}
-      </div>
-
       {/* New Task Composer Box */}
       <Card className="p-5 mb-10">
         <Kicker>New Agent Task</Kicker>
