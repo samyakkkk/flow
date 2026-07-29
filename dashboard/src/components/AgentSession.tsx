@@ -352,6 +352,7 @@ export function AgentSession({ id }: { id: string }) {
   const [diffScope, setDiffScope] = useState<"session" | "base">("session");
   const [baseInfo, setBaseInfo] = useState<{ available: boolean; name: string | null }>({ available: false, name: null });
   const [brainPct, setBrainPct] = useState(50);
+  const [activeTab, setActiveTab] = useState<"chat" | "changes" | "brain">("chat");
   // Once the user picks a scope, stop auto-defaulting it (see the base probe).
   const scopePinned = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -900,6 +901,56 @@ export function AgentSession({ id }: { id: string }) {
           onModeChange={(modeId) => act("mode", { modeId })}
           disabled={archived || busy}
         />
+        {/* View Switcher Tabs (Chat / Changes / Brain) */}
+        <div className="flex items-center gap-1 bg-paper p-1 rounded-lg border border-line flex-shrink-0">
+          <button
+            onClick={() => setActiveTab("chat")}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              activeTab === "chat"
+                ? "bg-ink text-paper shadow-xs"
+                : "text-text-muted hover:text-ink hover:bg-sand/60"
+            }`}
+          >
+            Chat
+          </button>
+          <button
+            onClick={() => setActiveTab("changes")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              activeTab === "changes"
+                ? "bg-ink text-paper shadow-xs"
+                : "text-text-muted hover:text-ink hover:bg-sand/60"
+            }`}
+          >
+            <span>Changes</span>
+            {diff && diff.files.length > 0 && (
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                  activeTab === "changes" ? "bg-paper/20 text-paper" : "bg-sand text-ink"
+                }`}
+              >
+                {diff.files.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab("brain")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              activeTab === "brain"
+                ? "bg-ink text-paper shadow-xs"
+                : "text-text-muted hover:text-ink hover:bg-sand/60"
+            }`}
+          >
+            <span>Brain</span>
+            {recentGraphIds.length > 0 && (
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  activeTab === "brain" ? "bg-accent" : "bg-ok"
+                }`}
+              />
+            )}
+          </button>
+        </div>
+
         <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
         {running && (
           <Button variant="secondary" onClick={() => act("cancel")} disabled={busy}>
@@ -909,8 +960,12 @@ export function AgentSession({ id }: { id: string }) {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
-        {/* Transcript */}
-        <div className="flex-1 min-w-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
+        {/* Chat / Transcript */}
+        <div
+          className={`flex-1 min-w-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden ${
+            activeTab === "chat" ? "flex" : "hidden lg:flex"
+          }`}
+        >
           <div
             ref={transcriptRef}
             onScroll={(e) => {
@@ -1309,10 +1364,20 @@ export function AgentSession({ id }: { id: string }) {
           </div>
         </div>
 
-      {/* Right rail — Changes (top) and Brain (bottom) split by a draggable handle. */}
-      <aside ref={asideRef} className="w-full lg:w-[440px] flex-shrink-0 flex flex-col min-h-[300px] lg:min-h-0">
-          {/* Changes — file list + diff, scoped to this session or vs base. */}
-          <div style={{ flex: 100 - brainPct }} className="min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
+      {/* Right rail — Changes and Brain graph side panel */}
+      <aside
+        ref={asideRef}
+        className={`w-full lg:w-[440px] flex-shrink-0 flex flex-col min-h-[300px] lg:min-h-0 ${
+          activeTab === "chat" ? "hidden lg:flex" : "flex"
+        }`}
+      >
+        {/* Changes — file list + diff, scoped to this session or vs base. */}
+        <div
+          style={{ flex: activeTab === "brain" ? undefined : activeTab === "changes" ? 1 : 100 - brainPct }}
+          className={`min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden ${
+            activeTab === "brain" ? "hidden" : "flex"
+          }`}
+        >
             <div className="flex items-center gap-2 px-3 py-2 border-b border-line flex-shrink-0">
               <span style={{ fontFamily: "var(--font-mono)" }} className="text-[10.5px] uppercase tracking-wider text-text-muted">
                 Changes
@@ -1368,20 +1433,27 @@ export function AgentSession({ id }: { id: string }) {
           </div>
 
           {/* Drag handle — visible grip pill on a divider line, VSCode-style. */}
-          <div
-            onMouseDown={startBrainDrag}
-            className="flex-shrink-0 h-3.5 flex items-center justify-center cursor-ns-resize group relative"
-            title="Drag to resize"
-          >
-            <div className="absolute inset-x-0 top-1/2 -translate-y-px h-px bg-line group-hover:bg-text-muted transition-colors" />
-            <div className="relative px-2 py-[3px] rounded-full bg-paper border border-line group-hover:border-text-muted group-active:border-text-muted transition-colors flex flex-col gap-[3px]">
-              <span className="block w-6 h-px bg-text-muted/70" />
-              <span className="block w-6 h-px bg-text-muted/70" />
+          {activeTab === "chat" && (
+            <div
+              onMouseDown={startBrainDrag}
+              className="flex-shrink-0 h-3.5 flex items-center justify-center cursor-ns-resize group relative"
+              title="Drag to resize"
+            >
+              <div className="absolute inset-x-0 top-1/2 -translate-y-px h-px bg-line group-hover:bg-text-muted transition-colors" />
+              <div className="relative px-2 py-[3px] rounded-full bg-paper border border-line group-hover:border-text-muted group-active:border-text-muted transition-colors flex flex-col gap-[3px]">
+                <span className="block w-6 h-px bg-text-muted/70" />
+                <span className="block w-6 h-px bg-text-muted/70" />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Brain — nodes light up as the agent queries them. */}
-          <div style={{ flex: brainPct }} className="min-h-0 flex flex-col gap-1.5 overflow-hidden">
+          <div
+            style={{ flex: activeTab === "changes" ? undefined : activeTab === "brain" ? 1 : brainPct }}
+            className={`min-h-0 flex-col gap-1.5 overflow-hidden ${
+              activeTab === "changes" ? "hidden" : "flex"
+            }`}
+          >
             <BrainGraph
               citedNodeIds={recentGraphIds}
               fillHeight
