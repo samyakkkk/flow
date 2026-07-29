@@ -42,12 +42,22 @@ interface WorkFolder {
   repo: string | null;
 }
 
+// "+ New session" on a copy card targets the composer at that existing copy —
+// the session runs inside it instead of a work folder.
+export interface CopyTarget {
+  path: string;
+  branch: string | null;
+  repo: string;
+}
+
 interface AgentTaskComposerProps {
   nodeCount?: number;
   selectedNodeTag?: string | null;
   onClearNodeTag?: () => void;
   compact?: boolean;
   className?: string;
+  worktreeTarget?: CopyTarget | null;
+  onClearWorktreeTarget?: () => void;
 }
 
 const AGENT_BRANDS: Record<string, BrandName> = {
@@ -68,6 +78,8 @@ export function AgentTaskComposer({
   onClearNodeTag,
   compact = false,
   className = "",
+  worktreeTarget = null,
+  onClearWorktreeTarget,
 }: AgentTaskComposerProps) {
   const router = useRouter();
   const { prefix } = useProject();
@@ -227,18 +239,21 @@ export function AgentTaskComposer({
     }
   };
 
-  // Autocomplete files from repo/folder
+  // Autocomplete files from repo/folder — inside a copy target, complete
+  // against the copy's own checkout.
   const fetchFiles = useCallback(
     (q: string) => {
-      if (!repo) return Promise.resolve([]);
-      const folderParam = workFolder ? `&folder=${encodeURIComponent(workFolder)}` : "";
+      const effRepo = worktreeTarget?.repo ?? repo;
+      if (!effRepo) return Promise.resolve([]);
+      const folder = worktreeTarget?.path ?? workFolder;
+      const folderParam = folder ? `&folder=${encodeURIComponent(folder)}` : "";
       return fetch(
-        prefix(`/api/agents/repos/files?repo=${encodeURIComponent(repo)}&q=${encodeURIComponent(q)}${folderParam}`)
+        prefix(`/api/agents/repos/files?repo=${encodeURIComponent(effRepo)}&q=${encodeURIComponent(q)}${folderParam}`)
       )
         .then((r) => (r.ok ? r.json() : { entries: [] }))
         .then((d: { entries?: FileEntry[] }) => d.entries ?? []);
     },
-    [repo, workFolder, prefix]
+    [repo, workFolder, worktreeTarget, prefix]
   );
 
   // Handle image / file attachments
@@ -304,7 +319,7 @@ export function AgentTaskComposer({
     e?.preventDefault();
     if (!prompt.trim() || starting) return;
 
-    if (!workFolder) {
+    if (!workFolder && !worktreeTarget) {
       setError("Please choose a local folder to run the agent task in.");
       setIsFolderPickerOpen(true);
       return;
@@ -315,15 +330,18 @@ export function AgentTaskComposer({
     setCollision(null);
 
     try {
+      // A copy target runs the session inside that existing separate copy —
+      // no work folder, no placement, no collision prompt.
+      const target = worktreeTarget
+        ? { repo: worktreeTarget.repo, worktreePath: worktreeTarget.path }
+        : { repo: repo || "local-folder", workFolder, ...(placement ? { placement } : {}) };
       const res = await fetch(prefix("/api/agents/sessions"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           backend,
-          repo: repo || "local-folder",
-          workFolder,
+          ...target,
           prompt: prompt.trim(),
-          ...(placement ? { placement } : {}),
           ...(Object.keys(config).length > 0 ? { config } : {}),
           ...(modeChanged && modeId ? { modeId } : {}),
           attachments: attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data })),
@@ -342,6 +360,7 @@ export function AgentTaskComposer({
 
       setPrompt("");
       setAttachments([]);
+      onClearWorktreeTarget?.();
       if (data.id) {
         router.push(prefix(`/agents/${data.id}`));
       }
@@ -363,39 +382,58 @@ export function AgentTaskComposer({
     <div className={`flex flex-col gap-3 ${className}`}>
       {/* Top row: local folder (left) + engine chips (right) */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        {/* Local Folder Target — TOP LEFT */}
-        <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
-          <span className="text-xs">📁</span>
-          <span className="text-[11px] font-mono text-ink truncate flex-1" title={workFolder}>
-            {workFolder ? workFolder : "Choose local folder..."}
-          </span>
-          {workFolders.length > 0 && (
-            <select
-              value={workFolder}
-              onChange={(e) => {
-                const selected = e.target.value;
-                setWorkFolder(selected);
-                const match = workFolders.find((f) => f.path === selected);
-                if (match?.repo) setRepo(match.repo);
-              }}
-              className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4 flex-shrink-0"
-              title="Switch local folder"
+        {/* Target — TOP LEFT: an existing separate copy when one is picked
+            ("+ new session" on a copy card), otherwise the local folder. */}
+        {worktreeTarget ? (
+          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
+            <span className="text-xs">⎇</span>
+            <span className="text-[11px] font-mono text-ink truncate flex-1" title={worktreeTarget.path}>
+              {worktreeTarget.branch ?? worktreeTarget.path.split("/").pop()}
+            </span>
+            <span className="text-[10px] font-mono text-text-muted flex-shrink-0">separate copy</span>
+            <button
+              type="button"
+              onClick={() => onClearWorktreeTarget?.()}
+              className="text-[12px] font-bold text-text-muted hover:text-ink ml-1 cursor-pointer flex-shrink-0"
+              title="Back to picking a local folder"
             >
-              {workFolders.map((f) => (
-                <option key={f.path} value={f.path}>
-                  {f.path}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            type="button"
-            onClick={() => setIsFolderPickerOpen(true)}
-            className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
-          >
-            Change
-          </button>
-        </div>
+              ×
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
+            <span className="text-xs">📁</span>
+            <span className="text-[11px] font-mono text-ink truncate flex-1" title={workFolder}>
+              {workFolder ? workFolder : "Choose local folder..."}
+            </span>
+            {workFolders.length > 0 && (
+              <select
+                value={workFolder}
+                onChange={(e) => {
+                  const selected = e.target.value;
+                  setWorkFolder(selected);
+                  const match = workFolders.find((f) => f.path === selected);
+                  if (match?.repo) setRepo(match.repo);
+                }}
+                className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4 flex-shrink-0"
+                title="Switch local folder"
+              >
+                {workFolders.map((f) => (
+                  <option key={f.path} value={f.path}>
+                    {f.path}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsFolderPickerOpen(true)}
+              className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
+            >
+              Change
+            </button>
+          </div>
+        )}
 
         {/* Agent Engine Selector Chips — TOP RIGHT (green dot = ready) */}
         <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line">

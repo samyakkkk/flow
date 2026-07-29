@@ -114,6 +114,8 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   //   {error}                                — 400.
   // `placement` (optional): "in_place" starts anyway in the same folder;
   // "separate_copy" branches the checkout into a worktree and runs there.
+  // `worktreePath` (optional): run in an EXISTING managed copy — the "+ new
+  // session" action on a copy card. No collision prompt; targeting is deliberate.
   app.post("/v1/agents/sessions", async (req, reply) => {
     const body = req.body as {
       backend?: string;
@@ -121,6 +123,7 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       prompt?: string;
       placement?: string;
       workFolder?: string;
+      worktreePath?: string;
       owner?: string;
       config?: Record<string, string | boolean>;
       modeId?: string;
@@ -166,12 +169,15 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       data: a.data,
       mimeType: a.mimeType,
     }));
+    const worktreePath =
+      typeof body.worktreePath === "string" && body.worktreePath.trim() ? body.worktreePath.trim() : undefined;
     const result = await createSession({
       backend,
       repo: body.repo,
       prompt: body.prompt.trim(),
       placement,
       workFolder,
+      worktreePath,
       config,
       modeId,
       attachments: attachments.length ? attachments : undefined,
