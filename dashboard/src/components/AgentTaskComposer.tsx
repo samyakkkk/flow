@@ -381,11 +381,11 @@ export function AgentTaskComposer({
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
       {/* Top row: local folder (left) + engine chips (right) */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
         {/* Target — TOP LEFT: an existing separate copy when one is picked
             ("+ new session" on a copy card), otherwise the local folder. */}
         {worktreeTarget ? (
-          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
+          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-full sm:max-w-[50%] w-full sm:w-auto">
             <span className="text-xs">⎇</span>
             <span className="text-[11px] font-mono text-ink truncate flex-1" title={worktreeTarget.path}>
               {worktreeTarget.branch ?? worktreeTarget.path.split("/").pop()}
@@ -401,7 +401,7 @@ export function AgentTaskComposer({
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
+          <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-full sm:max-w-[50%] w-full sm:w-auto">
             <span className="text-xs">📁</span>
             <span className="text-[11px] font-mono text-ink truncate flex-1" title={workFolder}>
               {workFolder ? workFolder : "Choose local folder..."}
@@ -436,7 +436,7 @@ export function AgentTaskComposer({
         )}
 
         {/* Agent Engine Selector Chips — TOP RIGHT (green dot = ready) */}
-        <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line">
+        <div className="flex items-center gap-1 bg-cream/90 p-1 rounded-lg border border-line overflow-x-auto max-w-full">
           {agents.map((a) => {
             const isSelected = backend === a.id;
             const brand = AGENT_BRANDS[a.id];

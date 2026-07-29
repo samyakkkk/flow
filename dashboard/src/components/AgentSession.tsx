@@ -908,7 +908,7 @@ export function AgentSession({ id }: { id: string }) {
         )}
       </div>
 
-      <div className="flex gap-4 flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
         {/* Transcript */}
         <div className="flex-1 min-w-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
           <div
@@ -1309,8 +1309,8 @@ export function AgentSession({ id }: { id: string }) {
           </div>
         </div>
 
-        {/* Right rail — Changes (top) and Brain (bottom) split by a draggable handle. */}
-        <aside ref={asideRef} className="w-[440px] flex-shrink-0 hidden lg:flex flex-col min-h-0">
+      {/* Right rail — Changes (top) and Brain (bottom) split by a draggable handle. */}
+      <aside ref={asideRef} className="w-full lg:w-[440px] flex-shrink-0 flex flex-col min-h-[300px] lg:min-h-0">
           {/* Changes — file list + diff, scoped to this session or vs base. */}
           <div style={{ flex: 100 - brainPct }} className="min-h-0 flex flex-col rounded-lg border border-line bg-paper overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-line flex-shrink-0">

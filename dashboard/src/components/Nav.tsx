@@ -21,7 +21,7 @@ const SECONDARY_ITEMS = [
   { href: "/permissions", label: "Automations" },
 ];
 
-export function Nav() {
+export function Nav({ onCloseMobile }: { onCloseMobile?: () => void }) {
   const path = usePathname();
   const { prefix } = useProject();
   const { mode, loading } = useMode();
@@ -35,9 +35,8 @@ export function Nav() {
 
   return (
     <nav
-      className="flex flex-col flex-shrink-0"
+      className="flex flex-col flex-shrink-0 h-full w-[240px] md:w-[220px]"
       style={{
-        width: 220,
         minHeight: "100vh",
         background: "var(--paper)",
         borderRight: "1px solid var(--line)",
@@ -113,6 +112,7 @@ export function Nav() {
             <Link
               key={item.href}
               href={prefix(item.href)}
+              onClick={onCloseMobile}
               className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5 transition-colors"
               style={{
                 background: active ? "var(--sand)" : "transparent",
@@ -147,6 +147,7 @@ export function Nav() {
             <Link
               key={item.href}
               href={prefix(item.href)}
+              onClick={onCloseMobile}
               className="flex items-center px-3 py-1.5 rounded-md mb-0.5 transition-colors"
               style={{
                 background: active ? "var(--sand)" : "transparent",
