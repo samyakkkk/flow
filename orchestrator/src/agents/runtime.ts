@@ -1711,6 +1711,14 @@ export function subscribe(id: string, fn: (ev: SessionEvent) => void): (() => vo
   const s = liveSession(id);
   if (!s) return null;
   s.subscribers.add(fn);
+  // Auto-reconnect when the page is opened: a rehydrated session sits in
+  // "error" until someone sends a message, but we can do better — kick off
+  // resumeConnection the moment a subscriber (the dashboard SSE stream) joins.
+  // The status guard prevents re-entry (resumeConnection immediately sets
+  // status → "starting").
+  if (s.status === "error" && s.acpSessionId) {
+    resumeConnection(s).catch(() => {}); // errors are surfaced via setStatus → SSE
+  }
   return () => s.subscribers.delete(fn);
 }
 
