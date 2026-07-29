@@ -143,6 +143,8 @@ interface BrainGraphProps {
   externalData?: GraphData | null;
   // When true, shows a pulsing "UPDATING THE BRAIN…" overlay on the canvas corner
   isIndexing?: boolean;
+  // Callback when a node is clicked in the graph
+  onNodeClick?: (nodeName: string) => void;
 }
 
 export function BrainGraph({
@@ -153,6 +155,7 @@ export function BrainGraph({
   mode = "overview",
   externalData,
   isIndexing = false,
+  onNodeClick,
 }: BrainGraphProps) {
   const { prefix } = useProject();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -271,8 +274,14 @@ export function BrainGraph({
       if (!canvas) {
         canvas = document.createElement("falkordb-canvas");
         canvas.style.display = "block";
+        canvas.style.position = "absolute";
+        canvas.style.top = "0";
+        canvas.style.left = "0";
         canvas.style.width = "100%";
         canvas.style.height = "100%";
+        canvas.style.maxHeight = "100%";
+        canvas.style.maxWidth = "100%";
+        canvas.style.overflow = "hidden";
         containerRef.current.appendChild(canvas);
         canvasRef.current = canvas;
         canvas.setBackgroundColor("rgb(54, 55, 38)"); // --ink
@@ -289,12 +298,14 @@ export function BrainGraph({
         eventHandlers: {
           onNodeClick: (node: FalkorGraphNode) => {
             const d = (node.data ?? {}) as Record<string, string>;
+            const nodeName = d.name ?? String(node.id);
             setSelectedNode({
               id: d.displayId ?? String(node.id),
-              name: d.name ?? String(node.id),
+              name: nodeName,
               type: d.type ?? node.labels?.[0] ?? "node",
               description: d.description || undefined,
             });
+            onNodeClick?.(nodeName);
           },
           onBackgroundClick: () => setSelectedNode(null),
         },
@@ -353,13 +364,16 @@ export function BrainGraph({
   const edgeCount = graphData?.edges?.length ?? 0;
   const isEmpty = !loading && nodeCount === 0;
 
+  const headerHeight = 36;
+  const canvasHeight = height - headerHeight;
+
   return (
     <div
-      className={`rounded-lg border border-line overflow-hidden flex flex-col${fillHeight ? " flex-1 min-h-0" : ""}`}
-      style={{ background: "rgb(54, 55, 38)" }} // --ink canvas
+      className="rounded-lg border border-line overflow-hidden flex flex-col w-full relative"
+      style={{ background: "rgb(54, 55, 38)", height: `${height}px`, maxHeight: `${height}px`, minHeight: `${height}px` }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/8">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/8 flex-shrink-0" style={{ height: `${headerHeight}px` }}>
         <Kicker>The brain</Kicker>
         {nodeCount > 0 && (
           <span
@@ -371,10 +385,8 @@ export function BrainGraph({
         )}
       </div>
 
-      {/* Canvas — no flex-1: its flex-basis:0% overrides the height on the
-          main axis and collapses the canvas when the parent height is
-          content-driven. */}
-      <div className="relative" style={fillHeight ? { flex: 1, minHeight: 0 } : { height, minHeight: height }}>
+      {/* Canvas Wrapper - Fixed height pixel bounds */}
+      <div className="relative w-full overflow-hidden" style={{ height: `${canvasHeight}px`, maxHeight: `${canvasHeight}px`, minHeight: `${canvasHeight}px` }}>
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">
@@ -436,13 +448,11 @@ export function BrainGraph({
           </div>
         )}
 
-        {/* Explicit 100% dimensions (not absolute inset-0) so the canvas
-            web component always measures a real height. */}
+        {/* Hard-bounded canvas container */}
         <div
           ref={containerRef}
+          className="absolute inset-0 w-full h-full overflow-hidden"
           style={{
-            width: "100%",
-            height: "100%",
             visibility: isEmpty || loading ? "hidden" : "visible",
             opacity: isIndexing && !isEmpty && !loading ? 0.6 : 1,
             transition: "opacity 0.4s ease",

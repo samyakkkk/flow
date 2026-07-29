@@ -434,21 +434,22 @@ export function AddFolder({
         setInspecting(false);
         return;
       }
+      if (res.ok && json.path) {
+        setInspecting(false);
+        await handleFolderSelected(json.path);
+        return;
+      }
       if (!res.ok || json.error) {
-        // Fall back to in-browser picker
         setInspecting(false);
         setPickerOpen(true);
         return;
       }
-      if (json.path) {
-        await handleFolderSelected(json.path);
-        return;
-      }
     } catch {
-      // Fall back to in-browser picker on any error
+      setInspecting(false);
+      setPickerOpen(true);
+      return;
     }
     setInspecting(false);
-    setPickerOpen(true);
   }
 
   async function runAdd(sources: AddPayload[]) {

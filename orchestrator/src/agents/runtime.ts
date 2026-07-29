@@ -331,6 +331,49 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Capability probe — what a backend offers (model selector, thought/reasoning
+// toggles, modes) BEFORE any task session exists. ACP only advertises these
+// on session/new, so we open a scratch session on the shared per-backend
+// adapter connection, read the advertised options, and close it. Cached.
+
+interface ProbeCacheEntry {
+  at: number;
+  modes: unknown;
+  configOptions: unknown;
+}
+const probeCache = new Map<AgentBackend, ProbeCacheEntry>();
+const PROBE_TTL_MS = 10 * 60_000;
+
+export async function probeAgentOptions(
+  backend: AgentBackend
+): Promise<{ modes: unknown; configOptions: unknown } | { error: string }> {
+  const cached = probeCache.get(backend);
+  if (cached && Date.now() - cached.at < PROBE_TTL_MS) {
+    return { modes: cached.modes, configOptions: cached.configOptions };
+  }
+  try {
+    const c = await ensureConnection(backend);
+    const resp = await c.conn.newSession({ cwd: FLOW_ROOT, mcpServers: [] });
+    const entry: ProbeCacheEntry = {
+      at: Date.now(),
+      modes: resp.modes ?? null,
+      configOptions: resp.configOptions ?? null,
+    };
+    probeCache.set(backend, entry);
+    // Best-effort cleanup — closeSession is an optional agent capability; the
+    // scratch session is prompt-less and inert either way.
+    try {
+      await c.conn.closeSession({ sessionId: resp.sessionId });
+    } catch {
+      /* leave it */
+    }
+    return { modes: entry.modes, configOptions: entry.configOptions };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Project context (graph name, repos, session storage dir)
 
 const PROJECT_DIR = path.dirname(process.env.DB_PATH ?? path.join(FLOW_ROOT, "data", "flow.db"));
@@ -1021,6 +1064,14 @@ export async function createSession(opts: {
   // repo's knowledge, but make the changes in THIS checkout." Overrides the
   // repo's default surface.
   workFolder?: string;
+  // Kickoff-chosen session config (model selector, thought-level toggles, …)
+  // picked from the backend's advertised configOptions — applied right after
+  // newSession, before the first turn. Same RPCs the session page uses live.
+  config?: Record<string, string | boolean>;
+  modeId?: string;
+  // First-turn attachments (images inline, files written into the checkout) —
+  // same handling as steered prompts.
+  attachments?: PromptAttachment[];
 }): Promise<CreateSessionResult> {
   const found = listRepoOptions().find((r) => r.name === opts.repo);
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
@@ -1116,8 +1167,31 @@ export async function createSession(opts: {
       // any thought/reasoning-level toggles — surfaced to the UI verbatim.
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
+      // Apply kickoff-chosen mode + config (model, thought level, …) before
+      // the first turn — same RPCs the session page drives live.
+      if (opts.modeId) {
+        try {
+          await c.conn.setSessionMode({ sessionId: s.acpSessionId, modeId: opts.modeId });
+        } catch {
+          /* keep the agent default */
+        }
+      }
+      if (opts.config) {
+        for (const [configId, value] of Object.entries(opts.config)) {
+          try {
+            const r = await c.conn.setSessionConfigOption(
+              typeof value === "boolean"
+                ? { sessionId: s.acpSessionId, configId, value, type: "boolean" }
+                : { sessionId: s.acpSessionId, configId, value }
+            );
+            if (r?.configOptions) s.configOptions = r.configOptions;
+          } catch {
+            /* keep the agent default */
+          }
+        }
+      }
       emit(s, "status", { modes: s.modes, configOptions: s.configOptions, runtime: runtimeInfo(c) });
-      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`);
+      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`, opts.attachments);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
     }
