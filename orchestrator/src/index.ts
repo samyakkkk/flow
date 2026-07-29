@@ -22,7 +22,7 @@ import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerCorrectionRoutes } from "./corrections.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
-import { setNodeAnchorProvider } from "./memory/anchors.js";
+import { setNodeAnchorProvider, reresolveAllMemoryAnchors } from "./memory/anchors.js";
 import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
@@ -78,9 +78,10 @@ registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerCorrectionRoutes(app);
 registerMemoryRoutes(app);
-// Memory anchors resolve graph node paths through the gateway; a null gateway
-// (no FLOW_GATEWAY_URL) leaves the default no-op provider and items stay
-// repo-level. flow.db is primary — this is a read-only projection lookup.
+// Memory anchors resolve graph node paths through the gateway (GATEWAY_URL,
+// same resolution as embed.ts). An unreachable gateway → no anchors resolved
+// and items stay repo-level. flow.db is primary — this is a read-only
+// projection lookup.
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
 
@@ -284,6 +285,20 @@ const start = async (): Promise<void> => {
     bootSlackAdapter().catch((err) =>
       console.error("[orchestrator] Slack adapter boot error:", err)
     );
+
+    // Backfill memory anchors when none exist yet — resolution silently
+    // no-oped for months while the provider read an env var flow up never
+    // set, so projects can hold many memories with an empty anchors table.
+    // Idempotent; POST /v1/memory/reresolve-anchors re-runs it on demand.
+    const anchored = db.prepare(`SELECT COUNT(*) AS n FROM anchors WHERE item_type = 'memory'`).get() as { n: number };
+    const active = db.prepare(`SELECT COUNT(*) AS n FROM memories WHERE status = 'active'`).get() as { n: number };
+    if (anchored.n === 0 && active.n > 0) {
+      setTimeout(() => {
+        reresolveAllMemoryAnchors()
+          .then((r) => console.log(`[memory] anchor backfill: ${r.anchored}/${r.items} memories anchored`))
+          .catch((err) => console.warn(`[memory] anchor backfill failed: ${err instanceof Error ? err.message : String(err)}`));
+      }, 5000);
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);

@@ -103,14 +103,17 @@ export function candidateFiles(contextFiles: string[], retrievalKeys: string[]):
   return [...out];
 }
 
-// Do two path strings refer to the same file? Exact (lower-cased) OR one is the
-// basename of the other OR they share a basename — the deterministic matcher
-// wants "store.ts" to match "orchestrator/src/store.ts".
+// Do two path strings refer to the same file? Exact (lower-cased) OR one is a
+// suffix of the other — and the basename fallback ("store.ts" should match
+// "orchestrator/src/store.ts") ONLY when one side is a bare filename: two
+// DIFFERENT full paths sharing a generic basename (route.ts, page.tsx,
+// index.ts — every Next.js API file) are not the same file.
 function pathsMatch(a: string, b: string): boolean {
   const la = a.toLowerCase();
   const lb = b.toLowerCase();
   if (la === lb) return true;
   if (la.endsWith("/" + lb) || lb.endsWith("/" + la)) return true;
+  if (a.includes("/") && b.includes("/")) return false;
   return basename(a) === basename(b) && basename(a).includes(".");
 }
 

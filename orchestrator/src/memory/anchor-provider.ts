@@ -19,8 +19,11 @@
 import type { NodeAnchor, NodeAnchorProvider } from "./anchors.js";
 
 function gatewayUrl(): string | null {
-  const base = process.env.FLOW_GATEWAY_URL || process.env.GRAPH_GATEWAY_URL || "";
-  if (!base) return null;
+  // Same resolution as the rest of the orchestrator (embed.ts, opencode.ts):
+  // flow up injects GATEWAY_URL per project. FLOW_GATEWAY_URL/GRAPH_GATEWAY_URL
+  // remain as explicit overrides.
+  const base =
+    process.env.FLOW_GATEWAY_URL || process.env.GRAPH_GATEWAY_URL || process.env.GATEWAY_URL || "http://127.0.0.1:7433";
   return `${base.replace(/\/$/, "")}/v1/verbs/read_query`;
 }
 
@@ -58,9 +61,15 @@ export function makeGatewayAnchorProvider(): NodeAnchorProvider {
         const out: NodeAnchor[] = [];
         for (const r of rows) {
           if (!r.id || !r.evidence) continue;
-          // evidence 'file:line' → path.
-          const path = String(r.evidence).replace(/:\d+(-\d+)?$/, "");
-          out.push({ node_id: String(r.id), paths: [path] });
+          // evidence is free text with one or MORE anchors — 'repos/flow
+          // a/b.ts:10-20 (note); c/d.ts:5' — so extract every path-shaped
+          // token (':' excluded from the token chars drops line ranges).
+          // A noisy extra token is harmless: rankAnchors re-checks each
+          // against the item's candidate files before an edge is stored.
+          const paths = (String(r.evidence).match(/[A-Za-z0-9_.{},-]+(?:\/[A-Za-z0-9_.{},-]+)+/g) ?? []).map((p) =>
+            p.replace(/[.,]+$/, ""),
+          );
+          if (paths.length > 0) out.push({ node_id: String(r.id), paths });
         }
         return out;
       } catch {
