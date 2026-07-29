@@ -20,6 +20,9 @@
 //                                                     kind, repo, strength,
 //                                                     anchors:[node_id]}]} for
 //                                                     the brain-graph overlay.
+//   POST /v1/memory/reresolve-anchors                → {items, anchored} re-run
+//                                                     anchor resolution for all
+//                                                     active memories.
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -35,6 +38,7 @@ import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 import { rememberText } from "./distiller.js";
 import { getOrientDocs } from "./orient-doc.js";
+import { reresolveAllMemoryAnchors } from "./anchors.js";
 
 export interface MemoryStats {
   memories: number;
@@ -184,6 +188,11 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
     }
     return { memories: memories.map((m) => ({ ...m, anchors: byItem.get(m.id) ?? [] })) };
   });
+
+  // Re-run anchor resolution for every active memory (idempotent — replaces
+  // each item's edge set from its stored context files). For backfills and
+  // after a reindex reshapes the graph.
+  app.post("/v1/memory/reresolve-anchors", async () => reresolveAllMemoryAnchors());
 
   // The ambient tier — rendered orient docs, served verbatim into the
   // gateway's orient(). A scope with no members returns null, never "".
