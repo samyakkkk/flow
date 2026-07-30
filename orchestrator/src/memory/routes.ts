@@ -16,10 +16,6 @@
 //   GET  /v1/memory/orient-doc?repo=<name>           → {global, repo} rendered
 //                                                     ambient-tier docs (null
 //                                                     when a scope has none).
-//   GET  /v1/memory/graph-overlay                    → {memories:[{id, claim,
-//                                                     kind, repo, strength,
-//                                                     anchors:[node_id]}]} for
-//                                                     the brain-graph overlay.
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -162,28 +158,6 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       return reply.code(202).send({ status: "queued" });
     },
   );
-
-  // Graph overlay — every active memory with the graph node ids it is
-  // anchored to. flow.db owns the item↔node edges (see anchors.ts DESIGN:
-  // any graph representation is a rebuildable projection); the dashboard's
-  // brain canvas renders this as Memory nodes + ANCHORED_TO edges. Memories
-  // with no anchors still ship (with their repo) so the caller can fall
-  // back to the repo-level node.
-  app.get("/v1/memory/graph-overlay", async () => {
-    const memories = db
-      .prepare(`SELECT id, claim, kind, repo, strength FROM memories WHERE status = 'active'`)
-      .all() as Array<{ id: string; claim: string; kind: string; repo: string | null; strength: number }>;
-    const anchorRows = db
-      .prepare(`SELECT item_id, node_id FROM anchors WHERE item_type = 'memory'`)
-      .all() as Array<{ item_id: string; node_id: string }>;
-    const byItem = new Map<string, string[]>();
-    for (const a of anchorRows) {
-      const list = byItem.get(a.item_id) ?? [];
-      list.push(a.node_id);
-      byItem.set(a.item_id, list);
-    }
-    return { memories: memories.map((m) => ({ ...m, anchors: byItem.get(m.id) ?? [] })) };
-  });
 
   // The ambient tier — rendered orient docs, served verbatim into the
   // gateway's orient(). A scope with no members returns null, never "".
