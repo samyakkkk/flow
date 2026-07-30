@@ -25,8 +25,6 @@ const TYPE_COLORS: Record<string, string> = {
   Repo:         "#B8D4C8",
   file:         "#D4C8B8", // warm gray
   File:         "#D4C8B8",
-  memory:       "#F2E39B", // pale gold — distilled memories overlaid from flow.db
-  Memory:       "#F2E39B",
 };
 
 const DEFAULT_NODE_COLOR = "rgb(162, 163, 148)"; // --text-muted adapted

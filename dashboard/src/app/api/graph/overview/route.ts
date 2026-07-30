@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
 import { requireProject } from "@/lib/projectContext";
-import { orcFetch } from "@/lib/orchestrator";
 
 // GET /api/graph/overview
 // Calls the graph-gateway POST /v1/verbs/read_query with safe read-only Cypher
@@ -10,8 +9,6 @@ import { orcFetch } from "@/lib/orchestrator";
 // `MATCH (n) OPTIONAL MATCH (n)-[r]->(m)` query multiplies rows by out-degree,
 // so any row LIMIT silently drops whole subgraphs once the graph grows.
 // We omit `graph` from the body so the gateway uses its configured default graph.
-// Distilled memories (orchestrator flow.db) are overlaid as Memory nodes with
-// ANCHORED_TO edges — best-effort, skipped when the orchestrator is unreachable.
 
 const NODES_CYPHER = `MATCH (n) RETURN n`;
 const EDGES_CYPHER = `MATCH ()-[r]->() RETURN r`;
@@ -48,19 +45,6 @@ interface CyEdge {
   source: string;
   target: string;
   label: string;
-}
-
-// Memories live in the orchestrator's flow.db, not FalkorDB. The anchors
-// table owns the memory↔node join (anchors.ts: "any graph representation is
-// a rebuildable projection") — so the overlay is fetched per request and
-// projected onto the graph as Memory nodes + ANCHORED_TO edges.
-interface OverlayMemory {
-  id: string;
-  claim: string;
-  kind: string;
-  repo: string | null;
-  strength: number;
-  anchors: string[];
 }
 
 export async function GET() {
@@ -125,38 +109,6 @@ export async function GET() {
       if (!edgesSet.has(key)) {
         edgesSet.add(key);
         edges.push({ source: s, target: t, label });
-      }
-    }
-
-    // Overlay memories onto the graph. Anchored memories link to their
-    // resolved nodes; unanchored ones fall back to their repo node (the same
-    // repo-level fallback the anchor resolver uses). Orchestrator down or an
-    // empty brain → no overlay, never a failed overview.
-    if (nodesMap.size > 0) {
-      try {
-        const res = await orcFetch("/v1/memory/graph-overlay", token);
-        if (res.ok) {
-          const { memories } = (await res.json()) as { memories: OverlayMemory[] };
-          for (const m of memories) {
-            let targets = m.anchors.filter((id) => nodesMap.has(id));
-            if (targets.length === 0 && m.repo && nodesMap.has(`repo:${m.repo}`)) {
-              targets = [`repo:${m.repo}`];
-            }
-            if (targets.length === 0) continue;
-            const memId = `mem:${m.id}`;
-            nodesMap.set(memId, {
-              id: memId,
-              data: {
-                name: m.claim.length > 80 ? `${m.claim.slice(0, 80)}…` : m.claim,
-                type: "Memory",
-                description: `(${m.kind}) ${m.claim}`,
-              },
-            });
-            for (const t of targets) edges.push({ source: memId, target: t, label: "ANCHORED_TO" });
-          }
-        }
-      } catch {
-        // overlay is best-effort
       }
     }
 
