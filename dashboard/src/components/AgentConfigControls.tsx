@@ -93,6 +93,11 @@ function ExpandablePill({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  const selectedOption = options.find((o) => o.value === currentValue);
+  const displayLabel = selectedOption
+    ? selectedOption.name
+    : shortLabel(options[0] ? "" : "", label, currentValue);
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -104,15 +109,12 @@ function ExpandablePill({
         title={label}
       >
         <span>{icon}</span>
-        <span>{shortLabel(options[0] ? "" : "", label, currentValue)}</span>
+        <span>{displayLabel}</span>
       </button>
       {open && (
         <div
-          className="absolute bottom-full left-0 mb-2 rounded-lg border border-line bg-paper shadow-lg p-1.5 z-50"
-          style={options.length > 8
-            ? { minWidth: 260, maxHeight: 240, overflowY: "auto" }
-            : { minWidth: "max-content" }
-          }
+          className="absolute bottom-full left-0 mb-2 rounded-lg border border-line bg-paper shadow-lg p-1.5 z-50 max-h-60 overflow-y-auto"
+          style={{ minWidth: 180 }}
         >
           {options.map((opt) => (
             <button
