@@ -1,5 +1,6 @@
 "use client";
 import { Nav } from "./Nav";
+import { UpdateBanner } from "./UpdateBanner";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -13,6 +14,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           maxWidth: "calc(100vw - 220px)",
         }}
       >
+        <UpdateBanner />
         {children}
       </main>
     </div>

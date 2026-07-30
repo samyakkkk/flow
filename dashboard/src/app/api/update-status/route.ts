@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
-import { getSessionToken } from "@/lib/auth";
+import { getSessionToken, requireOwner } from "@/lib/auth";
+import { FLOW_DATA_DIR, IS_LOCAL } from "@/lib/config";
 
 const exec = promisify(execFile);
 
@@ -60,11 +62,61 @@ async function checkUpstream(): Promise<UpdateStatus> {
   }
 }
 
+// Identifies THIS dashboard process. flow up restarts the dashboard, so the
+// update banner knows the install landed when the bootId it polls changes.
+const BOOT_ID = randomBytes(8).toString("hex");
+
 export async function GET() {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!cache || Date.now() - cache.checkedAt > TTL_MS) {
     cache = await checkUpstream();
   }
-  return NextResponse.json(cache);
+  return NextResponse.json({ ...cache, bootId: BOOT_ID });
+}
+
+// Tapping the banner runs the same command the old badge told users to type:
+// `flow up`. The CLI owns the whole update path — ff-only pull, npm install
+// when the lockfile moved, dashboard rebuild, restart of every service
+// INCLUDING this process — so the child must be detached, with output going
+// to data/logs/self-update.log. The client keeps polling GET and reloads when
+// bootId changes. The cache is deliberately left alone here: polling must not
+// trigger a fresh `git fetch` while the updater is mid-pull.
+let installStartedAt = 0;
+
+export async function POST() {
+  const token = await getSessionToken();
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!IS_LOCAL && !(await requireOwner())) {
+    return NextResponse.json({ error: "Only owners can install updates" }, { status: 403 });
+  }
+  // Double-tap / multi-tab guard; a successful install replaces this process,
+  // so the flag clearing itself on restart is exactly right.
+  if (installStartedAt && Date.now() - installStartedAt < 10 * 60 * 1000) {
+    return NextResponse.json({ ok: true, alreadyRunning: true, bootId: BOOT_ID });
+  }
+  installStartedAt = Date.now();
+
+  const logDir = join(FLOW_DATA_DIR, "logs");
+  mkdirSync(logDir, { recursive: true });
+  const fd = openSync(join(logDir, "self-update.log"), "a");
+  writeSync(fd, `\n── update triggered from dashboard ${new Date().toISOString()} ──\n`);
+
+  // The env flow up gave THIS process would leak into the services the child
+  // spawns ({...process.env, ...env}) — strip the dashboard-specific parts and
+  // let the CLI re-derive them.
+  const stripped = ["PORT", "NODE_ENV", "FLOW_DATA_DIR", "FLOW_AUTH_PATH", "FLOW_MODE"];
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !stripped.includes(k)),
+  ) as NodeJS.ProcessEnv;
+
+  const child = spawn(process.execPath, [join(FLOW_ROOT, "bin", "flow.mjs"), "up"], {
+    cwd: FLOW_ROOT,
+    env,
+    detached: true,
+    stdio: ["ignore", fd, fd],
+  });
+  child.unref();
+  closeSync(fd);
+  return NextResponse.json({ ok: true, bootId: BOOT_ID });
 }
