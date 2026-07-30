@@ -891,16 +891,6 @@ export function AgentSession({ id }: { id: string }) {
             </div>
           )}
         </div>
-        {/* Config-driven selectors (model, mode, thought level, toggles) —
-            advertised by the agent over ACP; shared renderer with the kickoff
-            composer. Changing one calls setSessionConfigOption / setSessionMode. */}
-        <AgentConfigControls
-          configOptions={view.configOptions}
-          modes={view.modes}
-          onChange={(configId, value) => act("config", { configId, value })}
-          onModeChange={(modeId) => act("mode", { modeId })}
-          disabled={archived || busy}
-        />
         {/* View Switcher Tabs (Chat / Changes / Brain) */}
         <div className="flex items-center gap-1 bg-paper p-1 rounded-lg border border-line flex-shrink-0">
           <button
@@ -1360,6 +1350,19 @@ export function AgentSession({ id }: { id: string }) {
               <Button onClick={send} disabled={archived || (!input.trim() && attachments.length === 0) || busy}>
                 {running ? "Steer" : "Send"}
               </Button>
+            </div>
+            {/* Bottom bar — options at the bottom, just like agents kickoff page */}
+            <div className="flex items-center justify-between gap-2 pt-2 px-1">
+              <div className="min-w-0 flex-1 flex items-center gap-2 overflow-x-auto">
+                <AgentConfigControls
+                  compact
+                  configOptions={view.configOptions}
+                  modes={view.modes}
+                  onChange={(configId, value) => act("config", { configId, value })}
+                  onModeChange={(modeId) => act("mode", { modeId })}
+                  disabled={archived || busy}
+                />
+              </div>
             </div>
           </div>
         </div>
