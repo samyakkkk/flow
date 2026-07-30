@@ -402,35 +402,64 @@ export function AgentTaskComposer({
           </div>
         ) : (
           <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
-            <span className="text-xs">📁</span>
-            <span className="text-[11px] font-mono text-ink truncate flex-1" title={workFolder}>
-              {workFolder ? workFolder : "Choose local folder..."}
-            </span>
-            {workFolders.length > 0 && (
-              <select
-                value={workFolder}
-                onChange={(e) => {
-                  const selected = e.target.value;
-                  setWorkFolder(selected);
-                  const match = workFolders.find((f) => f.path === selected);
-                  if (match?.repo) setRepo(match.repo);
-                }}
-                className="bg-transparent border-none text-[10px] font-mono text-text-muted outline-none cursor-pointer w-4 flex-shrink-0"
-                title="Switch local folder"
-              >
-                {workFolders.map((f) => (
-                  <option key={f.path} value={f.path}>
-                    {f.path}
-                  </option>
-                ))}
-              </select>
-            )}
+            <span className="text-xs flex-shrink-0">📁</span>
+            {/* End folder name + chevron. When other folders exist, a transparent
+                native <select> overlays the whole label so the dropdown feels normal. */}
+            <div className="relative flex items-center gap-1 min-w-0">
+              <span className="text-[11px] font-mono text-ink truncate" title={workFolder}>
+                {workFolder ? workFolder.split("/").filter(Boolean).pop() : "Choose local folder..."}
+              </span>
+              {workFolders.length > 0 && (
+                <>
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    className="w-3 h-3 text-text-muted flex-shrink-0"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  <select
+                    value={workFolder}
+                    onChange={(e) => {
+                      const selected = e.target.value;
+                      setWorkFolder(selected);
+                      const match = workFolders.find((f) => f.path === selected);
+                      if (match?.repo) setRepo(match.repo);
+                    }}
+                    className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                    title="Switch local folder"
+                  >
+                    {workFolders.map((f) => (
+                      <option key={f.path} value={f.path}>
+                        {f.path}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => setIsFolderPickerOpen(true)}
-              className="text-[10px] font-mono text-text-muted hover:text-ink underline ml-1 cursor-pointer flex-shrink-0"
+              className="text-text-muted hover:text-ink ml-1 cursor-pointer flex-shrink-0"
+              title="Add a new folder"
             >
-              Change
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3.5 h-3.5"
+              >
+                <path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7.5l-2-2H4a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1Z" />
+                <path d="M12 11v6M9 14h6" />
+              </svg>
             </button>
           </div>
         )}
