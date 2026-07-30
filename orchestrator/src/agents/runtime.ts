@@ -331,6 +331,49 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Capability probe — what a backend offers (model selector, thought/reasoning
+// toggles, modes) BEFORE any task session exists. ACP only advertises these
+// on session/new, so we open a scratch session on the shared per-backend
+// adapter connection, read the advertised options, and close it. Cached.
+
+interface ProbeCacheEntry {
+  at: number;
+  modes: unknown;
+  configOptions: unknown;
+}
+const probeCache = new Map<AgentBackend, ProbeCacheEntry>();
+const PROBE_TTL_MS = 10 * 60_000;
+
+export async function probeAgentOptions(
+  backend: AgentBackend
+): Promise<{ modes: unknown; configOptions: unknown } | { error: string }> {
+  const cached = probeCache.get(backend);
+  if (cached && Date.now() - cached.at < PROBE_TTL_MS) {
+    return { modes: cached.modes, configOptions: cached.configOptions };
+  }
+  try {
+    const c = await ensureConnection(backend);
+    const resp = await c.conn.newSession({ cwd: FLOW_ROOT, mcpServers: [] });
+    const entry: ProbeCacheEntry = {
+      at: Date.now(),
+      modes: resp.modes ?? null,
+      configOptions: resp.configOptions ?? null,
+    };
+    probeCache.set(backend, entry);
+    // Best-effort cleanup — closeSession is an optional agent capability; the
+    // scratch session is prompt-less and inert either way.
+    try {
+      await c.conn.closeSession({ sessionId: resp.sessionId });
+    } catch {
+      /* leave it */
+    }
+    return { modes: entry.modes, configOptions: entry.configOptions };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Project context (graph name, repos, session storage dir)
 
 const PROJECT_DIR = path.dirname(process.env.DB_PATH ?? path.join(FLOW_ROOT, "data", "flow.db"));
@@ -1021,14 +1064,37 @@ export async function createSession(opts: {
   // repo's knowledge, but make the changes in THIS checkout." Overrides the
   // repo's default surface.
   workFolder?: string;
+  // Run inside an EXISTING managed separate copy (the "+ new session" action
+  // on a copy card). The copy is already isolated, so no collision prompt —
+  // targeting it is deliberate.
+  worktreePath?: string;
+  // Kickoff-chosen session config (model selector, thought-level toggles, …)
+  // picked from the backend's advertised configOptions — applied right after
+  // newSession, before the first turn. Same RPCs the session page uses live.
+  config?: Record<string, string | boolean>;
+  modeId?: string;
+  // First-turn attachments (images inline, files written into the checkout) —
+  // same handling as steered prompts.
+  attachments?: PromptAttachment[];
 }): Promise<CreateSessionResult> {
   const found = listRepoOptions().find((r) => r.name === opts.repo);
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
-  if (!found.cloned && !opts.workFolder) return { error: `Repo "${opts.repo}" is not cloned yet` };
+  // EXISTING COPY target: validate it up front. A managed copy bypasses the
+  // work-folder guards below — it was branched off a work folder already.
+  if (opts.worktreePath) {
+    if (!isManagedWorktree(opts.worktreePath)) return { error: "That path isn't a Flow-managed copy." };
+    if (!existsSync(opts.worktreePath)) return { error: `Copy folder not found: ${opts.worktreePath}` };
+    if (managedRepoOf(opts.worktreePath) !== opts.repo) {
+      return { error: `That copy doesn't belong to "${opts.repo}".` };
+    }
+  }
+  if (!found.cloned && !opts.workFolder && !opts.worktreePath) {
+    return { error: `Repo "${opts.repo}" is not cloned yet` };
+  }
   // BRAIN/WORK separation: a GitHub-added repo's only checkout is Flow's
   // managed clone, which the indexer force-resets at will — never a place to
   // run agents. Sessions over these repos require an explicit work folder.
-  if (found.surface === "managed" && !opts.workFolder) {
+  if (found.surface === "managed" && !opts.workFolder && !opts.worktreePath) {
     return {
       error: `"${opts.repo}" was connected from GitHub, so Flow only indexes it. Pick one of your folders to run the agent in.`,
     };
@@ -1046,8 +1112,9 @@ export async function createSession(opts: {
   // COLLISION check (in-place default only). When the caller hasn't yet chosen a
   // placement and the target folder is already held by a live session, stop and
   // ask — starting a second agent in the same working tree lets them overwrite
-  // each other's edits.
-  if (!opts.placement) {
+  // each other's edits. Skipped for an explicit copy target: clicking "+ new
+  // session" on a copy that's already busy is an informed choice.
+  if (!opts.placement && !opts.worktreePath) {
     const active = findCollision(repoOpt.path);
     if (active) {
       return { collision: true, active: { id: active.id, title: active.title, status: active.status } };
@@ -1060,7 +1127,10 @@ export async function createSession(opts: {
   // to in_place — running in place is exactly what the user asked to avoid.
   let cwd = repoOpt.path;
   let worktreeId: string | undefined;
-  if (opts.placement === "separate_copy") {
+  if (opts.worktreePath) {
+    cwd = opts.worktreePath;
+    worktreeId = opts.worktreePath;
+  } else if (opts.placement === "separate_copy") {
     const wt = await createSessionWorktree({
       repoName: repoOpt.name,
       srcCheckout: repoOpt.path,
@@ -1116,8 +1186,31 @@ export async function createSession(opts: {
       // any thought/reasoning-level toggles — surfaced to the UI verbatim.
       s.configOptions = resp.configOptions ?? null;
       c.sessionsByAcpId.set(s.acpSessionId, id);
+      // Apply kickoff-chosen mode + config (model, thought level, …) before
+      // the first turn — same RPCs the session page drives live.
+      if (opts.modeId) {
+        try {
+          await c.conn.setSessionMode({ sessionId: s.acpSessionId, modeId: opts.modeId });
+        } catch {
+          /* keep the agent default */
+        }
+      }
+      if (opts.config) {
+        for (const [configId, value] of Object.entries(opts.config)) {
+          try {
+            const r = await c.conn.setSessionConfigOption(
+              typeof value === "boolean"
+                ? { sessionId: s.acpSessionId, configId, value, type: "boolean" }
+                : { sessionId: s.acpSessionId, configId, value }
+            );
+            if (r?.configOptions) s.configOptions = r.configOptions;
+          } catch {
+            /* keep the agent default */
+          }
+        }
+      }
       emit(s, "status", { modes: s.modes, configOptions: s.configOptions, runtime: runtimeInfo(c) });
-      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`);
+      await runTurn(s, opts.prompt, `${GRAPH_PREAMBLE}\n\n`, opts.attachments);
     } catch (e) {
       setStatus(s, "error", { error: (e as Error).message });
     }
@@ -1779,16 +1872,26 @@ export async function listRepoBranches(repo: string): Promise<{ branches: string
 // createSession stores the raw dest path, `git worktree list` emits realpaths,
 // and on macOS those differ (/var vs /private/var). Live status wins over the
 // stored row status when the session is in the live map.
-function sessionsForWorktree(treePath: string): Array<{ id: string; title: string; status: SessionStatus }> {
+function sessionsForWorktree(
+  treePath: string
+): Array<{ id: string; title: string; status: SessionStatus; backend: string; updated_at: number }> {
   const real = realpathOrSelf(treePath);
   const rows = db
-    .prepare(`SELECT id, title, status, worktree_id FROM agent_sessions WHERE worktree_id IS NOT NULL ORDER BY created_at DESC`)
-    .all() as Array<{ id: string; title: string; status: string; worktree_id: string }>;
+    .prepare(
+      `SELECT id, title, status, backend, updated_at, worktree_id FROM agent_sessions WHERE worktree_id IS NOT NULL ORDER BY updated_at DESC`
+    )
+    .all() as Array<{ id: string; title: string; status: string; backend: string; updated_at: number; worktree_id: string }>;
   return rows
     .filter((r) => realpathOrSelf(r.worktree_id) === real)
     .map((r) => {
       const live = sessions.get(r.id);
-      return { id: r.id, title: r.title, status: (live?.status ?? r.status) as SessionStatus };
+      return {
+        id: r.id,
+        title: r.title,
+        status: (live?.status ?? r.status) as SessionStatus,
+        backend: r.backend,
+        updated_at: live?.updatedAt ?? r.updated_at,
+      };
     });
 }
 
@@ -1801,7 +1904,7 @@ export interface ManagedWorktree {
   dirty: boolean;
   merged: boolean;
   health: "ok" | "broken";
-  sessions: Array<{ id: string; title: string; status: SessionStatus }>;
+  sessions: Array<{ id: string; title: string; status: SessionStatus; backend: string; updated_at: number }>;
   github: boolean; // repo has a GitHub url → PR action is available
 }
 
