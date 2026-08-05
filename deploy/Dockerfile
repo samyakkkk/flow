@@ -8,6 +8,16 @@
 #   docker build -f deploy/Dockerfile -t flow .
 FROM node:22
 
+# The indexer runs through a real coding CLI (opencode), driven headless with
+# an OpenRouter key. opencode is NOT bundled with Flow (resolved from PATH), so
+# a headless server MUST ship it or every index/answer job fails at spawn with
+# "opencode CLI not found on PATH" — even when the user has provided an
+# OpenRouter key (OpenRouter is opencode's model provider, not a substitute for
+# the binary). Same install path setup.sh uses on Linux.
+RUN curl -fsSL https://opencode.ai/install | bash \
+    && ln -s /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && opencode --version
+
 WORKDIR /app
 
 # Dependency layer first so code-only changes don't re-run npm install.
