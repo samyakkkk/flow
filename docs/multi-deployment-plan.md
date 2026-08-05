@@ -1,9 +1,25 @@
 # Multi-Deployment Plan: EC2-hostable Flow + Dual-Origin Dashboard
 
-_Plan doc, 2026-08-05. Companion to `harness-integrations.md` (§7 defines the target
-architecture). Scope: the platform work — EC2 deployability, `flow connect`, user API tokens,
-dual-origin dashboard, MCP exposure. Explicitly OUT of scope here: hooks/skills/capture
-(separate worktree; see "Impact on the hooks tree" at the bottom)._
+_Plan doc, 2026-08-05; STATUS UPDATE 2026-08-06 after the overnight build. Companion to
+`harness-integrations.md` (§7 defines the target architecture). Scope: the platform work —
+EC2 deployability, `flow connect`, user API tokens, dual-origin dashboard, MCP exposure.
+Explicitly OUT of scope here: hooks/skills/capture (separate worktree; see "Impact on the
+hooks tree" at the bottom)._
+
+## Status (2026-08-06)
+
+| Phase | Status | Commits |
+|---|---|---|
+| 1a Alias EC2 sim + prod-auth smoke | ✅ done — all checks green | (no code) |
+| 1b Docker parity deploy | ✅ built — CLI-driven container, new compose, rewritten ec2.md | see deploy/ |
+| 2 flow connect + remotes + /connect page | ✅ done — device flow verified end-to-end incl. real CLI run | a4fed19 |
+| 3-spike PNA/Safari tunnel test | 🟡 automated portion done — **finding: Chrome gates public→localhost behind the Local Network Access PERMISSION** (preflight header alone insufficient); localhost→localhost works fully; card detects denied state. Manual remaining: fresh-profile Allow-prompt UX, Safari, Firefox | 6f700c9 |
+| 3 Dual-origin dashboard | ✅ done — execution door (CORS+PNA+pairing), /api/machines, executionClient, LocalExecutionCard; verified in real Chrome both states | ecdc58b, e358f0c |
+| 4 Project-scoped MCP | ✅ done — streamable-HTTP /mcp on gateway + dashboard route; PAT-authed, leak-free; verified handshake + negatives | 998674e |
+
+Discoveries that reduced scope: PATs (`/api/tokens`, `flowpat_…`) and gateway-side PAT
+verification with per-project grants + revocation ALREADY existed — Phase 2 shrank to the
+device flow, Phase 4's auth was free. Reserved project names gained `mcp` and `connect`.
 
 ## Ground rules
 
