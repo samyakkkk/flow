@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMode } from "@/lib/useMode";
-import { useUpdateStatus } from "@/lib/useUpdateStatus";
 import { useProject } from "@/lib/useProject";
 import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 
@@ -25,7 +24,6 @@ export function Nav() {
   const path = usePathname();
   const { prefix } = useProject();
   const { mode, loading } = useMode();
-  const update = useUpdateStatus();
 
   function isActive(href: string) {
     const full = prefix(href);
@@ -81,21 +79,6 @@ export function Nav() {
               style={{ background: mode === "prod" ? "var(--ok)" : "var(--text-muted)" }}
             />
             {mode === "prod" ? "Production" : "Local"}
-          </span>
-        )}
-
-        {/* Update badge — a long-running install that's fallen behind main.
-            flow up applies it (self-update runs at start), hence the hint. */}
-        {update.behind > 0 && (
-          <span
-            style={{ fontFamily: "var(--font-mono)" }}
-            className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest"
-            title={`${update.behind} commit${update.behind === 1 ? "" : "s"} behind (${update.current} → ${update.latest}). Restart with \`flow up\` to apply.`}
-          >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--accent)" }} />
-            <span style={{ color: "var(--ink)" }}>
-              Update · <span className="normal-case">flow up</span>
-            </span>
           </span>
         )}
       </div>

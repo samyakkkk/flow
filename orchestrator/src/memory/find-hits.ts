@@ -14,7 +14,7 @@
 // Output is terse typed lines the gateway splices into find_entity's match list:
 //   [Memory:gotcha] <headline> (strong) [mem:<id>]
 
-import { searchMemory, type SearchTypeFilter } from "./search.js";
+import { searchMemory, BATCH_CONCURRENCY, type SearchTypeFilter } from "./search.js";
 
 // Max memory hits blended into a single find_entity query's results, unless the
 // query carries a type filter. Small on purpose: find_entity is graph-first; a
@@ -56,13 +56,14 @@ export async function memoryHitsForQuery(
   const res = await searchMemory({ query, repo, type: opts.type ?? null, limit: Math.max(cap, MEMORY_HIT_QUOTA) });
   return res.memories.slice(0, cap).map((m) => {
     const headline = trunc(m.claim, HEADLINE_TRUNC);
+    const tag = m.distant ? `${m.strengthTier}, distant` : m.strengthTier;
     return {
       type: "memory" as const,
       kind: m.kind,
       headline,
       tier: m.strengthTier,
       id: `mem:${m.id}`,
-      line: `[Memory:${m.kind}] ${headline} (${m.strengthTier}) [mem:${m.id}]`,
+      line: `[Memory:${m.kind}] ${headline} (${tag}) [mem:${m.id}]`,
     };
   });
 }
@@ -73,14 +74,24 @@ export interface QueryHits {
 }
 
 // Batch form: several queries, grouped in request order (mirrors search batch).
+// Queries run through the same bounded pool as searchMemoryBatch: each one is
+// a full searchMemory — a query-embed round trip plus FTS — so running them
+// serially multiplies embed latency by the batch size, which is what blew the
+// gateway's blend timeout and silently dropped memory_hits from find_entity.
 export async function memoryHitsForQueries(
   queries: string[],
   repo: string | null,
   opts: { type?: SearchTypeFilter | null; limit?: number } = {},
 ): Promise<QueryHits[]> {
-  const out: QueryHits[] = [];
-  for (const q of queries) {
-    out.push({ query: q, hits: await memoryHitsForQuery(q, repo, opts) });
-  }
+  const out: QueryHits[] = new Array(queries.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(BATCH_CONCURRENCY, queries.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= queries.length) return;
+      out[i] = { query: queries[i], hits: await memoryHitsForQuery(queries[i], repo, opts) };
+    }
+  });
+  await Promise.all(workers);
   return out;
 }
