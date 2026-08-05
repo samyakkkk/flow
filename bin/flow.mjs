@@ -23,6 +23,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, relative } from "node:path";
+import { hostname, homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
@@ -92,6 +93,8 @@ ${c.bold("Usage")}
   flow ls               List projects, status, and dashboard URLs.
   flow doctor           Health-check every project — pages load, assets load, services up.
   flow rm <name>        Stop and delete a project and its data.
+  flow connect <url>    Connect this machine to a deployed Flow (device flow → token).
+  flow remotes          List connected deployments (remove with: flow remotes remove <name>).
 
 ${c.bold("Options")}
   --mode local|prod     For a new project (default: local). Local needs no login.
@@ -476,7 +479,7 @@ function printTable(headers, rows) {
 // so callers (explicit create, or create-on-`up`) control their own output.
 // Names that collide with the dashboard's deployment-level URLs (/login,
 // /api/…) or the legacy /p/ prefix — a project can't live at those paths.
-const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs", "mcp", "connect"]);
 
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
@@ -1145,6 +1148,168 @@ async function cmdRm(args) {
   console.log(`  ${OK} removed ${c.bold(name)}\n`);
 }
 
+// ── Remotes: connect this machine to other Flow deployments ──────────────────
+//
+// A "remote" is another Flow deployment (a team's EC2, a second box) this
+// machine holds a credential for. `flow connect <url>` runs a device flow:
+// the dashboard mints a personal access token for the approving user, and it
+// lands in ~/.flow/config.json — machine-level, shared by every alias, never
+// inside a project's data dir. The PAT inherits the user's project grants;
+// revoking it in the dashboard cuts this machine off within seconds.
+
+function userConfigPath() {
+  return join(homedir(), ".flow", "config.json");
+}
+
+function readUserConfig() {
+  try {
+    return JSON.parse(readFileSync(userConfigPath(), "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeUserConfig(cfg) {
+  mkdirSync(join(homedir(), ".flow"), { recursive: true });
+  writeFileSync(userConfigPath(), JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+}
+
+function openInBrowser(target) {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    spawn(cmd, [target], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // Printing the URL is the fallback; never fail the flow over a browser.
+  }
+}
+
+async function cmdConnect(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { name: { type: "string" } },
+    allowPositionals: true,
+  });
+  let url = positionals[0];
+  if (!url) die(`Usage: flow connect <dashboard-url> [--name <remote-name>]`);
+  if (!/^https?:\/\//.test(url)) {
+    url = (/^(localhost|127\.)/.test(url) ? "http://" : "https://") + url;
+  }
+  url = url.replace(/\/+$/, "");
+
+  // Sanity check: is this a Flow deployment, and does it need connecting?
+  let status;
+  try {
+    const res = await fetch(`${url}/api/auth/status`, { signal: AbortSignal.timeout(8000) });
+    status = await res.json();
+  } catch (err) {
+    die(`Couldn't reach ${url} — is that the dashboard URL? (${err instanceof Error ? err.message : err})`);
+  }
+  if (status.mode !== "prod") {
+    die(`${url} runs in local mode — the dashboard and CLI already share the machine, nothing to connect.`);
+  }
+
+  const label = hostname();
+  const startRes = await fetch(`${url}/api/auth/device`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  const start = await startRes.json();
+  if (!startRes.ok) die(start.error ?? `Connect failed (${startRes.status})`);
+
+  const approveUrl = `${url}/connect?code=${start.code}`;
+  console.log(`\n  Approve this machine (${c.bold(label)}) in your browser:`);
+  console.log(`  ${c.cyan(approveUrl)}\n`);
+  openInBrowser(approveUrl);
+
+  process.stdout.write(`  ${c.dim("Waiting for approval…")} `);
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let token = null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await fetch(`${url}/api/auth/device/${start.code}/claim`, { method: "POST" }).catch(() => null);
+    if (!res) continue; // transient network blip — keep polling
+    if (res.status === 404) {
+      console.log("");
+      die("Connect code expired — run `flow connect` again.");
+    }
+    const body = await res.json().catch(() => ({}));
+    if (body.status === "approved" && body.token) {
+      token = body.token;
+      break;
+    }
+  }
+  console.log("");
+  if (!token) die("Timed out waiting for approval (10 minutes) — run `flow connect` again.");
+
+  const name = values.name ?? new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const cfg = readUserConfig();
+  cfg.remotes ??= {};
+  cfg.remotes[name] = { url, token, connectedAt: new Date().toISOString() };
+  writeUserConfig(cfg);
+
+  console.log(`  ${OK} Connected ${c.bold(name)} → ${url}`);
+  console.log(`    ${c.dim("Saved to ~/.flow/config.json — list with")} flow remotes`);
+  console.log(`    ${c.dim("MCP endpoint for agents:")} ${url}/<project>/mcp ${c.dim("(bearer = this machine's token)")}\n`);
+}
+
+async function cmdRemotes(args) {
+  const sub = args[0];
+  const cfg = readUserConfig();
+  const remotes = cfg.remotes ?? {};
+
+  if (!sub || sub === "ls" || sub === "list") {
+    const names = Object.keys(remotes);
+    if (names.length === 0) {
+      console.log(`\n  No remotes. Connect one with: ${c.bold("flow connect <dashboard-url>")}\n`);
+      return;
+    }
+    console.log("");
+    for (const n of names) {
+      const r = remotes[n];
+      const id = (r.token?.match(/^flowpat_([0-9a-f]{8})_/) ?? [])[1] ?? "????????";
+      console.log(
+        `  ${c.bold(n.padEnd(20))} ${r.url}  ${c.dim(`token flowpat_${id}_…  since ${r.connectedAt?.slice(0, 10) ?? "?"}`)}`
+      );
+    }
+    console.log("");
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const name = args[1];
+    if (!name || !remotes[name]) {
+      die(`No remote "${name ?? ""}". Have: ${Object.keys(remotes).join(", ") || "(none)"}`);
+    }
+    const r = remotes[name];
+    // Best-effort server-side revoke (a PAT may revoke itself); the local
+    // entry goes away regardless, and the dashboard Connect page can clean
+    // up a leftover token.
+    const id = (r.token?.match(/^flowpat_([0-9a-f]{8})_/) ?? [])[1];
+    if (id) {
+      try {
+        const res = await fetch(`${r.url}/api/tokens/${id}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${r.token}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        console.log(
+          `  ${res.ok ? OK : c.yellow("!")} ${res.ok ? "revoked server-side" : "server-side revoke failed — revoke on the dashboard's /connect page"}`
+        );
+      } catch {
+        console.log(`  ${c.yellow("!")} couldn't reach ${r.url} — revoke on the dashboard's /connect page`);
+      }
+    }
+    delete remotes[name];
+    cfg.remotes = remotes;
+    writeUserConfig(cfg);
+    console.log(`  ${OK} removed remote ${c.bold(name)}\n`);
+    return;
+  }
+
+  die(`Usage: flow remotes [remove <name>]`);
+}
+
 // ── Main dispatch ─────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1169,6 +1334,10 @@ async function main() {
       await cmdDoctor();
     } else if (cmd === "rm" || cmd === "remove" || cmd === "delete") {
       await cmdRm(rest);
+    } else if (cmd === "connect") {
+      await cmdConnect(rest);
+    } else if (cmd === "remotes" || cmd === "remote") {
+      await cmdRemotes(rest);
     } else if (cmd === "create" || cmd === "new" || cmd === "project") {
       // Tolerate `flow create project X`, `flow new X`, `flow project create X`.
       let a = rest;

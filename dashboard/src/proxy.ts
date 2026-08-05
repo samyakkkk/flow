@@ -65,6 +65,23 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next(); // routes enforce their own session/role checks
   }
 
+  // /connect — deployment-level page (device-flow approval + machine list).
+  // Requires a session in prod; the ?code= param must survive the login
+  // round-trip, so the redirect carries pathname + search (toLogin drops
+  // search, which is fine everywhere else).
+  if (pathname === "/connect") {
+    if (!IS_LOCAL) {
+      const u = verifySession(req.cookies.get(SESSION_COOKIE)?.value);
+      if (!u) {
+        const url = req.nextUrl.clone();
+        url.pathname = "/login";
+        url.search = `?from=${encodeURIComponent(pathname + req.nextUrl.search)}`;
+        return NextResponse.redirect(url);
+      }
+    }
+    return NextResponse.next();
+  }
+
   // Legacy /p/<name>/… prefix → the bare form.
   const legacy = pathname.match(/^\/p\/([^/]+)(\/.*)?$/);
   if (legacy) {

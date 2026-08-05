@@ -1,0 +1,65 @@
+import { randomBytes } from "node:crypto";
+
+// Device-flow pending store for `flow connect` — in-memory by design.
+// A connect attempt is a 10-minute, single-use handshake:
+//   CLI: POST /api/auth/device {label}            → {code}
+//   CLI: opens <dashboard>/connect?code=…          (user approves, logged in)
+//   web: POST /api/auth/device/<code>/approve      → mints a PAT, parks it here
+//   CLI: POST /api/auth/device/<code>/claim        → {token}, entry deleted
+// Losing pending entries on a dashboard restart just means the user reruns
+// `flow connect` — not worth persisting secrets to disk for. The map lives on
+// globalThis so dev-mode module reloads don't split the store between routes.
+
+export interface DeviceRequest {
+  label: string;
+  createdAt: number;
+  token?: string; // set on approval, consumed exactly once by claim
+}
+
+const TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING = 32; // unauthenticated create — cap so it can't be flooded
+
+const store: Map<string, DeviceRequest> =
+  ((globalThis as Record<string, unknown>).__flowDeviceFlow as Map<string, DeviceRequest>) ??
+  new Map<string, DeviceRequest>();
+(globalThis as Record<string, unknown>).__flowDeviceFlow = store;
+
+function sweep(): void {
+  const now = Date.now();
+  for (const [code, req] of store) {
+    if (now - req.createdAt > TTL_MS) store.delete(code);
+  }
+}
+
+/** Register a pending connect attempt. Null when the store is full. */
+export function createDeviceRequest(label: string): string | null {
+  sweep();
+  if (store.size >= MAX_PENDING) return null;
+  const code = randomBytes(16).toString("hex");
+  store.set(code, { label, createdAt: Date.now() });
+  return code;
+}
+
+export function getDeviceRequest(code: string): DeviceRequest | null {
+  sweep();
+  return store.get(code) ?? null;
+}
+
+/** Park the minted token for the CLI to claim. */
+export function approveDeviceRequest(code: string, token: string): boolean {
+  sweep();
+  const req = store.get(code);
+  if (!req || req.token) return false;
+  req.token = token;
+  return true;
+}
+
+/** Hand the token to the CLI — once. */
+export function claimDeviceToken(code: string): { status: "pending" } | { status: "approved"; token: string } | null {
+  sweep();
+  const req = store.get(code);
+  if (!req) return null;
+  if (!req.token) return { status: "pending" };
+  store.delete(code);
+  return { status: "approved", token: req.token };
+}
