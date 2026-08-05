@@ -27,6 +27,7 @@ export function LocalExecutionCard() {
   const [link, setLink] = useState<LocalLink | null>(null);
   const [projects, setProjects] = useState<LocalProject[] | null>(null);
   const [probing, setProbing] = useState(true);
+  const [lnaDenied, setLnaDenied] = useState(false);
 
   const probe = useCallback(() => {
     setProbing(true);
@@ -37,6 +38,17 @@ export function LocalExecutionCard() {
           return localFetch(l, "/api/projects")
             .then((r) => (r.ok ? r.json() : { projects: [] }))
             .then((d) => setProjects(d.projects ?? []));
+        }
+        // Chrome gates public-site → local-network fetches behind a
+        // permission ("local network access"). When it's hard-denied, no
+        // probe can ever succeed — tell the user instead of looking broken.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (navigator.permissions.query({ name: "local-network-access" as any }) as Promise<PermissionStatus>)
+            .then((p) => setLnaDenied(p.state === "denied"))
+            .catch(() => {});
+        } catch {
+          // Browsers without this permission name (Safari/Firefox) — ignore.
         }
       })
       .finally(() => setProbing(false));
@@ -82,6 +94,34 @@ export function LocalExecutionCard() {
             "."
           )}
         </span>
+      </div>
+    );
+  }
+
+  if (lnaDenied) {
+    return (
+      <div style={wrap}>
+        <span style={{ color: "var(--warning, #ff9f0a)", marginRight: 8 }}>▲</span>
+        <strong>Chrome is blocking access to your local Flow.</strong>{" "}
+        <span style={{ color: "var(--text-secondary)" }}>
+          Allow <em>local network access</em> for this site (click the icon left of the address bar → Site settings →
+          Local network access → Allow), then retry.
+        </span>{" "}
+        <button
+          onClick={probe}
+          style={{
+            background: "none",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "2px 10px",
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            cursor: "pointer",
+            marginLeft: 6,
+          }}
+        >
+          Retry
+        </button>
       </div>
     );
   }
