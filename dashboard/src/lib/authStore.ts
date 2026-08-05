@@ -37,6 +37,9 @@ export interface AuthToken {
   // (the browser sits on that machine). Shared only with the minting user's
   // own session via GET /api/machines; never grants access to this server.
   pairing?: string;
+  // Where a browser on that machine reaches its local dashboard (port
+  // offsets exist; defaults to http://localhost:7600 when absent).
+  localUrl?: string;
 }
 
 export interface AuthStore {

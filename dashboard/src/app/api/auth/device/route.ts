@@ -18,7 +18,13 @@ export async function POST(req: NextRequest) {
   // Optional machine-pairing secret (48 hex chars) — see AuthToken.pairing.
   const pairing =
     typeof body.pairing === "string" && /^[0-9a-f]{48}$/.test(body.pairing) ? body.pairing : undefined;
-  const code = createDeviceRequest(label, pairing);
+  // Only localhost URLs make sense — this is where a browser ON the
+  // connecting machine reaches its own local dashboard.
+  const localUrl =
+    typeof body.local_url === "string" && /^http:\/\/localhost:\d{2,5}$/.test(body.local_url)
+      ? body.local_url
+      : undefined;
+  const code = createDeviceRequest(label, pairing, localUrl);
   if (!code) {
     return NextResponse.json({ error: "Too many pending connect attempts — try again in a few minutes." }, { status: 429 });
   }

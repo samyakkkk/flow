@@ -6,7 +6,7 @@
 // experience — same ACP loop, zero added latency) or how to get connected.
 // Renders nothing in local mode: the page already IS the local dashboard.
 import { useState, useEffect, useCallback } from "react";
-import { discoverLocal, localFetch, LOCAL_DASHBOARD, type LocalLink } from "@/lib/executionClient";
+import { discoverLocal, localFetch, type LocalLink } from "@/lib/executionClient";
 
 interface LocalProject {
   name: string;
@@ -71,7 +71,7 @@ export function LocalExecutionCard() {
               {projects.map((p, i) => (
                 <span key={p.name}>
                   {i > 0 && ", "}
-                  <a href={`${LOCAL_DASHBOARD}/${p.name}/agents`} target="_blank" rel="noreferrer">
+                  <a href={`${link.base}/${p.name}/agents`} target="_blank" rel="noreferrer">
                     {p.name}
                   </a>
                 </span>

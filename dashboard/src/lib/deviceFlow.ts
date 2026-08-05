@@ -16,6 +16,9 @@ export interface DeviceRequest {
   // record at approval so the user's dashboard pages can later reach this
   // machine's local Flow cross-origin (see AuthToken.pairing).
   pairing?: string;
+  // Where a browser on the connecting machine reaches its local dashboard
+  // (port offsets exist) — stored on the token record for /api/machines.
+  localUrl?: string;
   createdAt: number;
   token?: string; // set on approval, consumed exactly once by claim
 }
@@ -36,11 +39,11 @@ function sweep(): void {
 }
 
 /** Register a pending connect attempt. Null when the store is full. */
-export function createDeviceRequest(label: string, pairing?: string): string | null {
+export function createDeviceRequest(label: string, pairing?: string, localUrl?: string): string | null {
   sweep();
   if (store.size >= MAX_PENDING) return null;
   const code = randomBytes(16).toString("hex");
-  store.set(code, { label, pairing, createdAt: Date.now() });
+  store.set(code, { label, pairing, localUrl, createdAt: Date.now() });
   return code;
 }
 

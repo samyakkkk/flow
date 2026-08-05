@@ -18,6 +18,6 @@ export async function GET() {
   return NextResponse.json({
     machines: store.tokens
       .filter((t) => t.userId === user.id && t.pairing)
-      .map((t) => ({ id: t.id, label: t.label, pairing: t.pairing, createdAt: t.createdAt })),
+      .map((t) => ({ id: t.id, label: t.label, pairing: t.pairing, localUrl: t.localUrl, createdAt: t.createdAt })),
   });
 }

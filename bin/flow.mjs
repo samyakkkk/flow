@@ -1214,10 +1214,14 @@ async function cmdConnect(args) {
   // door in dashboard/src/proxy.ts. Generated here, shared with the
   // deployment via the device flow, kept locally in the remote entry.
   const pairing = randomBytes(24).toString("hex");
+  // Where a browser on this machine can reach THIS Flow's dashboard — the
+  // deployment hands it back to the user's pages so the execution client
+  // probes the right port (offsets exist: test aliases, multiple installs).
+  const localUrl = `http://localhost:${dashboardPort()}`;
   const startRes = await fetch(`${url}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label, pairing }),
+    body: JSON.stringify({ label, pairing, local_url: localUrl }),
   });
   const start = await startRes.json();
   if (!startRes.ok) die(start.error ?? `Connect failed (${startRes.status})`);
@@ -1250,7 +1254,7 @@ async function cmdConnect(args) {
   const name = values.name ?? new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
   const cfg = readUserConfig();
   cfg.remotes ??= {};
-  cfg.remotes[name] = { url, token, pairing, connectedAt: new Date().toISOString() };
+  cfg.remotes[name] = { url, token, pairing, localUrl, connectedAt: new Date().toISOString() };
   writeUserConfig(cfg);
 
   console.log(`  ${OK} Connected ${c.bold(name)} → ${url}`);
