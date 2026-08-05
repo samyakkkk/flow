@@ -32,6 +32,11 @@ export interface AuthToken {
   label: string;
   hash: string; // sha256:<hex>
   createdAt: string;
+  // Machine-pairing secret from `flow connect` — lets a dashboard page served
+  // by THIS deployment call the connecting machine's local Flow cross-origin
+  // (the browser sits on that machine). Shared only with the minting user's
+  // own session via GET /api/machines; never grants access to this server.
+  pairing?: string;
 }
 
 export interface AuthStore {

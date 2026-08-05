@@ -21,6 +21,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ co
   const store = loadAuthStore();
   if (!store) return NextResponse.json({ error: "Auth store missing" }, { status: 503 });
   const { token, record } = mintPat(user.id, req.label);
+  if (req.pairing) record.pairing = req.pairing;
   store.tokens.push(record);
   saveAuthStore(store);
   approveDeviceRequest(code, token);

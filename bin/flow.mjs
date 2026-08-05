@@ -1209,10 +1209,15 @@ async function cmdConnect(args) {
   }
 
   const label = hostname();
+  // Pairing secret: lets pages served by THIS deployment (in a browser on
+  // THIS machine) call the local dashboard cross-origin — see the execution
+  // door in dashboard/src/proxy.ts. Generated here, shared with the
+  // deployment via the device flow, kept locally in the remote entry.
+  const pairing = randomBytes(24).toString("hex");
   const startRes = await fetch(`${url}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({ label, pairing }),
   });
   const start = await startRes.json();
   if (!startRes.ok) die(start.error ?? `Connect failed (${startRes.status})`);
@@ -1245,7 +1250,7 @@ async function cmdConnect(args) {
   const name = values.name ?? new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
   const cfg = readUserConfig();
   cfg.remotes ??= {};
-  cfg.remotes[name] = { url, token, connectedAt: new Date().toISOString() };
+  cfg.remotes[name] = { url, token, pairing, connectedAt: new Date().toISOString() };
   writeUserConfig(cfg);
 
   console.log(`  ${OK} Connected ${c.bold(name)} → ${url}`);

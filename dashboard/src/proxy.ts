@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, IS_LOCAL, PROJECT_HEADER } from "@/lib/config";
 import { listRegistryProjects, getRegistryProject, isValidProjectName } from "@/lib/registry";
 import { verifySession, verifyPat, userCanAccess, userProjectFilter, loadAuthStore } from "@/lib/authStore";
+import { remoteForOrigin } from "@/lib/machineConfig";
 
 // Central router + auth gate (Next 16 `proxy` file convention — Node runtime,
 // so the project registry and auth store are plain fs reads, no round-trips).
@@ -33,7 +34,7 @@ const PUBLIC_PATHS = [
 
 // Deployment-level API prefixes that carry no project scope but DO require a
 // session in prod (enforced inside the routes themselves).
-const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens"];
+const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens", "/api/machines"];
 
 function toLogin(req: NextRequest, clearCookie: boolean) {
   const url = req.nextUrl.clone();
@@ -55,7 +56,7 @@ function toHome(req: NextRequest) {
   return NextResponse.redirect(url);
 }
 
-export async function proxy(req: NextRequest) {
+async function routeRequest(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p))) {
@@ -176,6 +177,52 @@ export async function proxy(req: NextRequest) {
     res.cookies.set("flow_last_project", name, { path: "/", sameSite: "lax", maxAge: 60 * 60 * 24 * 365 });
   }
   return res;
+}
+
+// ── Cross-origin execution door (local mode only) ────────────────────────────
+// A dashboard page served by a CONNECTED deployment (flow.acme.com) may call
+// this machine's local Flow directly from the browser — that's how "run
+// agents on my machine from the prod dashboard" works with zero relay and
+// zero added latency. The door opens only when (a) this deployment runs in
+// local mode, (b) the request's Origin matches a remote in ~/.flow/config.json
+// (written by `flow connect`), and (c) the caller presents that remote's
+// pairing secret in x-flow-pairing — without (c), any website open in the
+// same browser could drive local agents. Chrome's Private Network Access
+// preflight is answered explicitly (Access-Control-Allow-Private-Network).
+// Unknown origins get no CORS headers at all: the request routes normally
+// but the browser refuses to hand the response to the page.
+
+const DOOR_HEADERS = "content-type, authorization, x-flow-pairing";
+
+function addCors<T extends Response>(res: T, origin: string): T {
+  res.headers.set("access-control-allow-origin", origin);
+  res.headers.append("vary", "Origin");
+  return res;
+}
+
+export async function proxy(req: NextRequest) {
+  const origin = req.headers.get("origin");
+  if (!IS_LOCAL || !origin || origin === req.nextUrl.origin) return routeRequest(req);
+
+  const remote = remoteForOrigin(origin);
+  if (!remote?.pairing) return routeRequest(req);
+
+  if (req.method === "OPTIONS") {
+    const res = new NextResponse(null, { status: 204 });
+    addCors(res, origin);
+    res.headers.set("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.headers.set("access-control-allow-headers", DOOR_HEADERS);
+    res.headers.set("access-control-max-age", "3600");
+    if (req.headers.get("access-control-request-private-network") === "true") {
+      res.headers.set("access-control-allow-private-network", "true");
+    }
+    return res;
+  }
+
+  if (req.headers.get("x-flow-pairing") !== remote.pairing) {
+    return addCors(NextResponse.json({ error: "Invalid or missing pairing token" }, { status: 401 }), origin);
+  }
+  return addCors(await routeRequest(req), origin);
 }
 
 export const config = {

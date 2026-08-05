@@ -15,7 +15,10 @@ export async function POST(req: NextRequest) {
   }
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const label = typeof body.label === "string" && body.label.trim() ? body.label.trim().slice(0, 80) : "unnamed machine";
-  const code = createDeviceRequest(label);
+  // Optional machine-pairing secret (48 hex chars) — see AuthToken.pairing.
+  const pairing =
+    typeof body.pairing === "string" && /^[0-9a-f]{48}$/.test(body.pairing) ? body.pairing : undefined;
+  const code = createDeviceRequest(label, pairing);
   if (!code) {
     return NextResponse.json({ error: "Too many pending connect attempts — try again in a few minutes." }, { status: 429 });
   }
