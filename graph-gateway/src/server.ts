@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { callVerb, verbs } from "./verbs.js";
 import { record, tail } from "./journal.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
@@ -7,9 +8,11 @@ import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled } from "./embed.js";
 import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
+import { buildMcpServer } from "./mcp-core.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
+//   POST /mcp               streamable-HTTP MCP     (bearer-authed)
 //   POST /v1/embed          body: { text }          (bearer-authed)
 //   POST /v1/reconcile/embeddings                    (bearer-authed)
 //   GET  /v1/journal?limit=50                        (bearer-authed)
@@ -54,6 +57,43 @@ const server = createServer(async (req, res) => {
       if (!authorized(auth)) {
         return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token (project token or a personal access token with a grant on this project)." });
       }
+    }
+    // Remote MCP: the session tool surface (query verbs + remember +
+    // correct_graph) over stateless streamable HTTP. Each POST builds a
+    // throwaway server + transport pair — the verbs are stateless, so there
+    // is no session to keep, and Claude/Codex/Cursor clients all speak the
+    // stateless form. Auth happened above: a PAT (per-user, grant-checked
+    // for this project) or the internal project token.
+    if (url.pathname === "/mcp") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", allow: "POST" });
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Stateless MCP endpoint — POST only." },
+          id: null,
+        }));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      let body: unknown;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return json(res, 400, { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null });
+      }
+      const mcp = buildMcpServer({ mode: "session" });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless
+        enableJsonResponse: true,
+      });
+      res.on("close", () => {
+        transport.close();
+        mcp.close();
+      });
+      await mcp.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
     }
     if (req.method === "GET" && url.pathname === "/v1/journal") {
       const limit = Number(url.searchParams.get("limit") ?? 50);

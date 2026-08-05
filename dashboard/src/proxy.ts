@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, IS_LOCAL, PROJECT_HEADER } from "@/lib/config";
 import { listRegistryProjects, getRegistryProject, isValidProjectName } from "@/lib/registry";
-import { verifySession, userCanAccess, userProjectFilter, loadAuthStore } from "@/lib/authStore";
+import { verifySession, verifyPat, userCanAccess, userProjectFilter, loadAuthStore } from "@/lib/authStore";
 
 // Central router + auth gate (Next 16 `proxy` file convention — Node runtime,
 // so the project registry and auth store are plain fs reads, no round-trips).
@@ -103,6 +103,34 @@ export async function proxy(req: NextRequest) {
   const rest = m?.[2] || "/";
   const project = isValidProjectName(name) ? getRegistryProject(name) : null;
   const isApi = rest.startsWith("/api/") || (name === "api" && !project);
+
+  // /<name>/mcp — remote MCP endpoint (streamable HTTP). MCP clients carry a
+  // bearer PAT, not a session cookie, so the page/API auth below doesn't
+  // apply. Leak discipline is preserved: a missing/invalid token answers 401
+  // BEFORE the project is resolved (existence never leaks to bad creds); a
+  // valid token without a grant answers 404, identical to a project that
+  // doesn't exist. Local mode needs no token — single user on their own box.
+  if (rest === "/mcp") {
+    if (!IS_LOCAL) {
+      const auth = req.headers.get("authorization") ?? "";
+      const bearer = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+      const patUser = bearer ? verifyPat(bearer) : null;
+      if (!patUser) {
+        return NextResponse.json(
+          { error: "Unauthorized — pass a personal access token (dashboard → Tokens) as a bearer." },
+          { status: 401 }
+        );
+      }
+      if (!project || !userCanAccess(patUser, name)) return notFound();
+    } else if (!project) {
+      return notFound();
+    }
+    const mcpHeaders = new Headers(req.headers);
+    mcpHeaders.set(PROJECT_HEADER, name);
+    const mcpUrl = req.nextUrl.clone();
+    mcpUrl.pathname = "/mcp";
+    return NextResponse.rewrite(mcpUrl, { request: { headers: mcpHeaders } });
+  }
 
   if (!project) {
     // Unknown first segment. APIs fail loudly. Pages: in local mode redirect
