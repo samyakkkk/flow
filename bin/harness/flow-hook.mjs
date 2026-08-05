@@ -101,14 +101,17 @@ async function main() {
     return;
   }
 
+  // The binding (--project) resolves to a machine-level config entry written
+  // by `flow setup` — never resolved from the payload at capture time.
   const remoteName = args.remote ?? "local";
   let remote;
   try {
     const cfg = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8"));
-    remote = cfg.remotes?.[remoteName];
+    const proj = args.project ? cfg.projects?.[args.project] : undefined;
+    remote = proj ? { url: proj.orchestratorUrl, token: proj.token } : cfg.remotes?.[remoteName];
   } catch {}
   if (!remote?.url) {
-    logLine(`no remote "${remoteName}" in ~/.flow/config.json, dropped`);
+    logLine(`no binding for project "${args.project}" / remote "${remoteName}" in ~/.flow/config.json, dropped`);
     return;
   }
 
