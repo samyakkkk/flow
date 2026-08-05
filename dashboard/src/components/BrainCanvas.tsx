@@ -31,7 +31,7 @@ interface BrainCanvasProps {
   onConnectFirstSource?: () => void;
   onNodeClick?: (nodeName: string) => void;
   sources?: Array<{ source: string; catching_up: boolean; last_poll_at: number }>;
-  repos?: Array<{ name: string; lastIndexedCommit?: string }>;
+  repos?: Array<{ name: string; lastIndexedCommit?: string; kind?: string }>;
 }
 
 export function BrainCanvas({
@@ -49,7 +49,36 @@ export function BrainCanvas({
   const [activity, setActivity] = useState<IndexActivityData | null>(null);
   const [showLogs, setShowLogs] = useState(false);
 
-  const activeRepo = repos[0]?.name ?? "";
+  const [statusRepo, setStatusRepo] = useState("");
+
+  // The status endpoint knows which repo is actually indexing (or queued) —
+  // repos[0] is just whichever source was added first and is usually idle in
+  // multi-repo projects. Fallback: first indexable repo with no indexed commit
+  // (docs entries never get one, so they'd wedge the guess).
+  const guessRepo =
+    repos.find((r) => r.kind !== "docs" && !r.lastIndexedCommit)?.name ?? repos[0]?.name ?? "";
+  const activeRepo = statusRepo || guessRepo;
+
+  // Resolve the actively-indexing repo while indexing
+  useEffect(() => {
+    if (!isIndexing) return;
+
+    function fetchStatus() {
+      fetch(prefix("/api/repos/status"))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { repos?: Array<{ name: string; status: string }> } | null) => {
+          const rows = d?.repos ?? [];
+          const active =
+            rows.find((r) => r.status === "indexing") ?? rows.find((r) => r.status === "queued");
+          if (active) setStatusRepo(active.name);
+        })
+        .catch(() => {});
+    }
+
+    fetchStatus();
+    const iv = setInterval(fetchStatus, 5000);
+    return () => clearInterval(iv);
+  }, [isIndexing, prefix]);
 
   // Poll live index activity when indexing
   useEffect(() => {
