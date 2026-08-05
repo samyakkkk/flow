@@ -1,5 +1,14 @@
 # Overnight Plan — Harness Integrations, Local-Only (2026-08-05 → 06)
 
+> **STATUS (morning): executed.** Results, evidence, morning checklist, and
+> deviations are in [integration-test-report.md](integration-test-report.md).
+> Headline: capture+serve PASS end-to-end for Claude Code, Codex, opencode,
+> Gemini CLI; Cursor capture PASS (serve = one approval tap); Antigravity
+> serve PASS, capture blocked by the vendor (hooks not executed on 1.107.0).
+> Deliberate deviations: transcript-delta byte watermarks deferred (hook
+> payload fields proved sufficient; server-side dedupe covers retries), and
+> the dev stack was left RUNNING for morning inspection instead of shut down.
+
 **Definition of done (morning):** running Claude Code, Codex, opencode, Gemini CLI, Cursor,
 or Antigravity in a bound test repo lands that session in the local Flow brain (capture), and
 each tool can call Flow's MCP tools (serve). `docs/integration-test-report.md` proves it

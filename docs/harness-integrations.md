@@ -97,6 +97,10 @@ Headline findings:
   courier-only until verified.
 - Trust: hooks require one-time `/hooks` review; re-trust on every hook-definition change
   (hash-based) → keep the hook a stable one-line shim that execs a versioned script.
+  VERIFIED 2026-08-06 (0.144.5): untrusted hooks are skipped SILENTLY; headless runs can use
+  `codex exec --dangerously-bypass-hook-trust`. Also `[features] hooks = true` was still
+  required on 0.144.5 (GA default-on evidently lands in a newer build), and `SessionEnd` did
+  not fire under `codex exec` (Stop did — idle sweep covers close).
 - Transcripts: rollouts at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (full conversation;
   note: files are world-readable 0644). `history.jsonl` is prompt history only. Format
   explicitly "not a stable interface".
@@ -167,6 +171,10 @@ Headline findings:
 - Docs: geminicli.com/docs/{hooks/reference,cli/session-management,tools/mcp-server,extensions}.
 
 ### Google Antigravity
+- ⚠️ VERIFIED GAP 2026-08-06: on Antigravity IDE 1.107.0, doc-conform hooks.json (named-group
+  schema) in BOTH `.agents/` and `~/.gemini/config/` was never executed while agent sessions
+  ran fine — hooks appear version/flag-gated. MCP serve works (live orient). Capture fallback:
+  brain-dir ingestion.
 - Hooks: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`. Payload:
   `conversationId`, `workspacePaths`, **`transcriptPath`**
   (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`),

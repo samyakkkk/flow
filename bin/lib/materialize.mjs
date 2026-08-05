@@ -21,6 +21,7 @@ import {
   chmodSync,
   copyFileSync,
   rmSync,
+  rmdirSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -411,7 +412,8 @@ function renderCursor(ctx) {
   const file = readJson(hooksPath, {});
   file.version = 1;
   const hooks = { ...(file.hooks ?? {}) };
-  for (const ev of ["sessionStart", "beforeSubmitPrompt", "stop", "sessionEnd"]) {
+  // afterAgentResponse (not stop) carries the assistant text in Cursor's dialect.
+  for (const ev of ["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "sessionEnd"]) {
     const kept = (hooks[ev] ?? []).filter((e) => !isFlowHook(e));
     kept.push({ command: hookCmd("cursor", project, repo) });
     hooks[ev] = kept;
@@ -437,13 +439,14 @@ function renderCursor(ctx) {
 
 function renderAntigravity(ctx) {
   const { repoDir, project, repo } = ctx;
+  // Antigravity's dialect: hooks.json maps NAMED GROUPS → event → entries.
+  // We own the "flow-capture" group and never touch others.
   const hooksPath = join(repoDir, ".agents", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
-  hooksFile.hooks = mergeHooksObject(
-    hooksFile.hooks,
-    [{ name: "PostInvocation" }, { name: "Stop" }],
-    () => hookCmd("antigravity", project, repo)
-  );
+  const entry = (name) => [
+    { hooks: [{ type: "command", command: hookCmd("antigravity", project, repo), timeout: 5 }] },
+  ];
+  hooksFile["flow-capture"] = { PostInvocation: entry("PostInvocation"), Stop: entry("Stop") };
   writeJson(hooksPath, hooksFile);
 
   const mcpPath = join(repoDir, ".agents", "mcp_config.json");
@@ -498,8 +501,64 @@ function setGitExclude(repoDir, paths, share) {
   spliceBlock(excludeFile, paths.join("\n"), EXCLUDE_BEGIN, EXCLUDE_END);
 }
 
+// Every repo-relative path any renderer may touch — snapshotted before the
+// first render so --remove can restore pre-existing files byte-for-byte.
+const CANDIDATE_FILES = [
+  ".claude/settings.json",
+  ".claude/skills/flow/SKILL.md",
+  ".mcp.json",
+  "CLAUDE.md",
+  ".codex/hooks.json",
+  ".codex/config.toml",
+  ".agents/skills/flow/SKILL.md",
+  ".agents/hooks.json",
+  ".agents/mcp_config.json",
+  "AGENTS.md",
+  ".opencode/plugins/flow.ts",
+  "opencode.json",
+  ".gemini/settings.json",
+  "GEMINI.md",
+  ".cursor/hooks.json",
+  ".cursor/mcp.json",
+  ".cursor/rules/flow.mdc",
+];
+const ORIGINAL_CAP = 256 * 1024;
+
+function snapshotOriginals(repoDir) {
+  const manifest = readJson(MANIFEST_PATH, {});
+  const repoEntry = manifest.repos?.[repoDir] ?? {};
+  const originals = repoEntry.originals ?? {};
+  for (const rel of CANDIDATE_FILES) {
+    if (originals[rel]) continue; // first-setup snapshot wins; re-runs keep it
+    const p = join(repoDir, rel);
+    if (existsSync(p)) {
+      const buf = readFileSync(p);
+      originals[rel] = {
+        existed: true,
+        data: buf.length <= ORIGINAL_CAP ? buf.toString("base64") : null,
+      };
+    } else {
+      originals[rel] = { existed: false };
+    }
+  }
+  return originals;
+}
+
+// A merged config is "semantically empty" when stripping Flow's entries left
+// nothing but scaffolding — such files are deleted on --remove if we created
+// them, kept (stripped) if the user added their own entries since.
+function isEmptyShell(v) {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.length === 0 || v.every(isEmptyShell);
+  if (typeof v === "object") {
+    return Object.entries(v).every(([k, val]) => k === "version" || k === "$schema" || isEmptyShell(val));
+  }
+  return false;
+}
+
 export function materializeRepo(ctx) {
   const harnesses = ctx.harnesses ?? ALL_HARNESSES;
+  const originals = snapshotOriginals(ctx.repoDir);
   const owned = [];
   const merged = [];
   for (const h of harnesses) {
@@ -522,6 +581,7 @@ export function materializeRepo(ctx) {
       version: ATOMS_VERSION,
       owned,
       merged,
+      originals,
       share: ctx.share === true,
       at: new Date().toISOString(),
     },
@@ -533,6 +593,7 @@ export function materializeRepo(ctx) {
 export function removeRepo(repoDir) {
   const manifest = readJson(MANIFEST_PATH, {});
   const entry = manifest.repos?.[repoDir];
+  const originals = entry?.originals ?? {};
   const owned = entry?.owned ?? [
     ".claude/skills/flow/SKILL.md",
     ".agents/skills/flow/SKILL.md",
@@ -548,6 +609,14 @@ export function removeRepo(repoDir) {
     if (j?.hooks) {
       j.hooks = removeFlowHooks(j.hooks);
       if (j.mcpServers?.["flow-graph"]) delete j.mcpServers["flow-graph"];
+      if (rel.startsWith(".claude")) {
+        delete j.enableAllProjectMcpServers;
+        if (Array.isArray(j.permissions?.allow)) {
+          j.permissions.allow = j.permissions.allow.filter((t) => !String(t).startsWith("mcp__flow-graph__"));
+          if (j.permissions.allow.length === 0) delete j.permissions.allow;
+          if (isEmptyShell(j.permissions)) delete j.permissions;
+        }
+      }
       writeJson(p, j);
     }
   }
@@ -579,14 +648,49 @@ export function removeRepo(repoDir) {
     delete oc.mcp["flow-graph"];
     writeJson(join(repoDir, "opencode.json"), oc);
   }
-  const agHooks = readJson(join(repoDir, ".agents", "hooks.json"), null);
-  if (agHooks?.hooks) {
-    agHooks.hooks = removeFlowHooks(agHooks.hooks);
-    writeJson(join(repoDir, ".agents", "hooks.json"), agHooks);
+  const agHooksPath = join(repoDir, ".agents", "hooks.json");
+  const agHooks = readJson(agHooksPath, null);
+  if (agHooks?.["flow-capture"]) {
+    delete agHooks["flow-capture"];
+    writeJson(agHooksPath, agHooks);
   }
   for (const f of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) unspliceBlock(join(repoDir, f));
   unspliceBlock(join(repoDir, ".codex", "config.toml"), TOML_BEGIN, TOML_END);
   setGitExclude(repoDir, [], true);
+
+  // Final pass over everything we may have touched: files we CREATED that are
+  // now semantically empty get deleted; files that PRE-EXISTED and are now
+  // semantically identical to their original get their exact bytes back.
+  for (const [rel, orig] of Object.entries(originals)) {
+    const p = join(repoDir, rel);
+    if (!existsSync(p)) continue;
+    if (!orig.existed) {
+      const j = readJson(p, undefined);
+      const text = readFileSync(p, "utf-8");
+      if ((j !== undefined && isEmptyShell(j)) || text.trim() === "") rmSync(p, { force: true });
+    } else if (orig.data != null) {
+      const originalBuf = Buffer.from(orig.data, "base64");
+      const now = readJson(p, undefined);
+      const then = (() => {
+        try {
+          return JSON.parse(originalBuf.toString("utf-8"));
+        } catch {
+          return undefined;
+        }
+      })();
+      const sameJson = now !== undefined && then !== undefined && JSON.stringify(now) === JSON.stringify(then);
+      const sameText = readFileSync(p, "utf-8").trim() === originalBuf.toString("utf-8").trim();
+      if (sameJson || sameText) writeFileSync(p, originalBuf);
+    }
+  }
+  // Empty scaffolding dirs left behind are noise — prune best-effort.
+  for (const dir of [".claude/skills/flow", ".claude/skills", ".claude", ".codex", ".agents/skills/flow", ".agents/skills", ".agents", ".opencode/plugins", ".opencode", ".gemini", ".cursor/rules", ".cursor"]) {
+    try {
+      rmdirSync(join(repoDir, dir)); // only succeeds when empty
+    } catch {
+      /* not empty — keep */
+    }
+  }
 
   if (entry) {
     delete manifest.repos[repoDir];

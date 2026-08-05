@@ -47,13 +47,7 @@ import {
   writePids,
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
-import {
-  materializeMachine,
-  materializeRepo,
-  removeRepo,
-  ALL_HARNESSES,
-  SHIM_PATH,
-} from "./lib/materialize.mjs";
+import { materializeMachine, materializeRepo, removeRepo, ALL_HARNESSES } from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
 
