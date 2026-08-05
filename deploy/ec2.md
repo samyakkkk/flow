@@ -54,6 +54,10 @@ docker compose up --build -d
 docker compose logs -f flow
 ```
 
+The image ships **opencode** (the headless graph-building agent the indexer
+drives) — with an OpenRouter key set during onboarding, the server can index
+repos into the brain without any coding CLI on the box.
+
 First boot builds the dashboard (~1–2 min), creates the project in prod
 mode, and prints a **setup code**:
 
