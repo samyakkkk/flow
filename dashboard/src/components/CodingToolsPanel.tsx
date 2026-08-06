@@ -158,7 +158,7 @@ export function CodingToolsPanel() {
           Use Flow in your own tools
         </h2>
         <p className="text-[12px] text-ink/55 mt-1 leading-snug">
-          Keep working where you already work. Connect a workspace and these tools get this
+          Keep working where you already work. Connect a workspace and your AI tools get this
           project&apos;s memory — and every session they run teaches it.
         </p>
       </div>
