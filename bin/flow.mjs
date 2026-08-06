@@ -1431,6 +1431,7 @@ async function cmdSetup(rest) {
       remove: { type: "boolean" },
       harness: { type: "string" },
       all: { type: "boolean" },
+      remote: { type: "string" }, // bind to a project on a connected deployment (flow connect)
     },
     allowPositionals: true,
   });
@@ -1453,20 +1454,75 @@ async function cmdSetup(rest) {
         (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
     );
   }
-  const project = readProject(name); // throws with a helpful message if unknown
-  const index = listProjectNames().indexOf(name);
-  const ports = portsForIndex(index);
-  const env = parseEnvFile(join(projectDir(name), ".env"));
-  const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
-  const graph = project.graph ?? name;
+  let projectEntry;
+  let repoName;
+  let registered = false;
+  let workFolderUrl; // where to register the WORK folder (best-effort)
+  let workFolderToken;
+  const remoteName = values.remote ?? "local";
 
-  const { name: repoName, registered } = resolveRepoName(name, repoDir);
+  if (values.remote) {
+    // ── Remote binding: this repo's sessions read/write a project on a
+    // deployed Flow (EC2). Everything routes through that deployment's public
+    // per-project dashboard routes with the machine's PAT; MCP uses the remote
+    // /<project>/mcp endpoint (bridged to stdio by flow-mcp). No local project,
+    // no FalkorDB access, no gateway source on this box.
+    const cfg = readUserConfig();
+    const remoteEntry = cfg.remotes?.[values.remote];
+    if (!remoteEntry?.url) {
+      const have = Object.keys(cfg.remotes ?? {}).join(", ") || "(none — run: flow connect <url>)";
+      die(`No connected deployment "${values.remote}". Connected: ${have}`);
+    }
+    const base = remoteEntry.url.replace(/\/+$/, "");
+    const tok = remoteEntry.token ?? "";
 
-  materializeMachine({
-    flowRoot,
-    projectName: name,
-    shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
-    projectEntry: {
+    // Validate the project exists there (and grab its graph) via the public
+    // project list — a wrong name fails here with a clear message instead of
+    // silently materializing a dead binding.
+    let graph = name;
+    try {
+      const list = await fetch(`${base}/api/projects`, {
+        headers: tok ? { authorization: `Bearer ${tok}` } : {},
+        signal: AbortSignal.timeout(10000),
+      }).then((r) => (r.ok ? r.json() : null));
+      const proj = list?.projects?.find((p) => p.name === name);
+      if (list && !proj) {
+        const names = (list.projects ?? []).map((p) => p.name).join(", ") || "(none you can access)";
+        die(`Deployment "${values.remote}" has no project "${name}" you can access. Available: ${names}`);
+      }
+      if (proj?.graph) graph = proj.graph;
+    } catch (err) {
+      die(`Couldn't reach deployment "${values.remote}" (${base}): ${err instanceof Error ? err.message : err}`);
+    }
+
+    // Remote deployments own their own source registry; we can't read it here,
+    // so use the git-derived name and don't claim it's a registered source.
+    repoName = resolveRepoName(name, repoDir).name;
+    registered = false;
+    workFolderUrl = `${base}/${name}/v1/work-folders`;
+    workFolderToken = tok;
+    projectEntry = {
+      remote: values.remote,
+      deploymentId: remoteEntry.deploymentId ?? null,
+      orchestratorUrl: `${base}/${name}`,
+      gatewayUrl: `${base}/${name}`,
+      mcpUrl: `${base}/${name}/mcp`,
+      graphName: graph,
+      token: tok,
+    };
+  } else {
+    const project = readProject(name); // throws with a helpful message if unknown
+    const index = listProjectNames().indexOf(name);
+    const ports = portsForIndex(index);
+    const env = parseEnvFile(join(projectDir(name), ".env"));
+    const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
+    const graph = project.graph ?? name;
+    const resolved = resolveRepoName(name, repoDir);
+    repoName = resolved.name;
+    registered = resolved.registered;
+    workFolderUrl = `http://localhost:${ports.orchestrator}/v1/work-folders`;
+    workFolderToken = token;
+    projectEntry = {
       remote: "local",
       orchestratorUrl: `http://localhost:${ports.orchestrator}`,
       gatewayUrl: `http://localhost:${ports.gateway}`,
@@ -1476,7 +1532,14 @@ async function cmdSetup(rest) {
       falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
       tsxBin: nodeBin(gatewayDir(), "tsx"),
       gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
-    },
+    };
+  }
+
+  materializeMachine({
+    flowRoot,
+    projectName: name,
+    shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
+    projectEntry,
   });
 
   // Default: only the tools this machine actually has. `--all` pre-wires
@@ -1494,28 +1557,31 @@ async function cmdSetup(rest) {
     repoDir,
     project: name,
     repo: repoName,
+    remote: remoteName,
     share: values.share === true,
     harnesses,
   });
 
   // WORK-surface registration (work_folders): best-effort — the binding above
   // is complete without it; this makes the folder appear in the dashboard.
+  // Local → the local orchestrator; remote → the deployment's public route.
   let workFolderOk = false;
   try {
-    const res = await fetch(`http://localhost:${ports.orchestrator}/v1/work-folders`, {
+    const res = await fetch(workFolderUrl, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${workFolderToken}` },
       body: JSON.stringify({ path: repoDir, repo: registered ? repoName : undefined }),
       signal: AbortSignal.timeout(3000),
     });
     workFolderOk = res.ok;
   } catch {
-    /* orchestrator not running — fine */
+    /* deployment unreachable — fine, registers on next flow up / reconnect */
   }
 
+  const where = values.remote ? `${c.bold(remoteName)} (remote)` : "local";
   console.log(`
   ${OK} ${c.bold(repoDir)}
-    → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    → project ${c.bold(name)} on ${where}, repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
     tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
