@@ -30,6 +30,10 @@ import { execFileSync } from "node:child_process";
 export const FLOW_DIR = join(homedir(), ".flow");
 export const SHIM_PATH = join(FLOW_DIR, "bin", "flow-hook");
 export const MCP_PATH = join(FLOW_DIR, "bin", "flow-mcp");
+// GUI-launched tools (Cursor, Antigravity, desktop apps) spawn MCP servers and
+// hooks with the bare system PATH — no nvm/homebrew — so `#!/usr/bin/env node`
+// shebangs fail silently. Bake the absolute node that ran `flow setup`.
+export const NODE_BIN = process.execPath;
 const MANIFEST_PATH = join(FLOW_DIR, "integrations.json");
 export const ATOMS_VERSION = 1; // bump → `flow setup` re-renders repo files
 
@@ -208,7 +212,7 @@ function mcpWrapperSource() {
 // execs it. The registration line in each tool's config never changes.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 
 const args = {};
@@ -241,6 +245,9 @@ const env = {
   ...(p.falkorHost ? { FALKOR_HOST: p.falkorHost } : {}),
   ...(p.falkorPort ? { FALKOR_PORT: String(p.falkorPort) } : {}),
 };
+// tsx's bin shim also resolves node via env — make sure OUR node's dir is on
+// the child PATH (GUI-spawned parents often carry only the system PATH).
+env.PATH = dirname(process.execPath) + ":" + (env.PATH ?? "/usr/bin:/bin");
 const child = spawn(p.tsxBin, [p.gatewayMcp], { env, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));
 `;
@@ -276,6 +283,13 @@ function hookCmd(harness, project, repo) {
   return `"${SHIM_PATH}" --harness ${harness} --project ${project} --repo ${repo} --remote local`;
 }
 
+// GUI-app dialect: explicit node, because the shebang can't resolve one on the
+// system PATH. Terminal tools keep the plain form — notably Codex, whose hook
+// line is trust-hashed and must never change.
+function hookCmdGui(harness, project, repo) {
+  return `"${NODE_BIN}" ${hookCmd(harness, project, repo)}`;
+}
+
 function renderClaude(ctx) {
   const { repoDir, project, repo } = ctx;
   const settingsPath = join(repoDir, ".claude", "settings.json");
@@ -297,7 +311,7 @@ function renderClaude(ctx) {
   const mcp = readJson(mcpPath, {});
   mcp.mcpServers = {
     ...(mcp.mcpServers ?? {}),
-    "flow-graph": { command: MCP_PATH, args: ["--project", project, "--repo", repo] },
+    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(mcpPath, mcp);
 
@@ -326,7 +340,7 @@ function renderCodex(ctx) {
   const tomlPath = join(repoDir, ".codex", "config.toml");
   spliceBlock(
     tomlPath,
-    `[mcp_servers.flow-graph]\ncommand = "${MCP_PATH}"\nargs = ["--project", "${project}", "--repo", "${repo}"]`,
+    `[mcp_servers.flow-graph]\ncommand = "${NODE_BIN}"\nargs = ["${MCP_PATH}", "--project", "${project}", "--repo", "${repo}"]`,
     TOML_BEGIN,
     TOML_END
   );
@@ -374,7 +388,7 @@ function renderOpencode(ctx) {
   const oc = readJson(ocPath, { $schema: "https://opencode.ai/config.json" });
   oc.mcp = {
     ...(oc.mcp ?? {}),
-    "flow-graph": { type: "local", command: [MCP_PATH, "--project", project, "--repo", repo] },
+    "flow-graph": { type: "local", command: [NODE_BIN, MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(ocPath, oc);
   // AGENTS.md block shared with Codex — rendered there.
@@ -396,7 +410,7 @@ function renderGemini(ctx) {
   );
   settings.mcpServers = {
     ...(settings.mcpServers ?? {}),
-    "flow-graph": { command: MCP_PATH, args: ["--project", project, "--repo", repo] },
+    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(settingsPath, settings);
 
@@ -415,7 +429,7 @@ function renderCursor(ctx) {
   // afterAgentResponse (not stop) carries the assistant text in Cursor's dialect.
   for (const ev of ["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "sessionEnd"]) {
     const kept = (hooks[ev] ?? []).filter((e) => !isFlowHook(e));
-    kept.push({ command: hookCmd("cursor", project, repo) });
+    kept.push({ command: hookCmdGui("cursor", project, repo) });
     hooks[ev] = kept;
   }
   file.hooks = hooks;
@@ -425,7 +439,7 @@ function renderCursor(ctx) {
   const mcp = readJson(mcpPath, {});
   mcp.mcpServers = {
     ...(mcp.mcpServers ?? {}),
-    "flow-graph": { command: MCP_PATH, args: ["--project", project, "--repo", repo] },
+    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(mcpPath, mcp);
 
@@ -444,7 +458,7 @@ function renderAntigravity(ctx) {
   const hooksPath = join(repoDir, ".agents", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
   const entry = (name) => [
-    { hooks: [{ type: "command", command: hookCmd("antigravity", project, repo), timeout: 5 }] },
+    { hooks: [{ type: "command", command: hookCmdGui("antigravity", project, repo), timeout: 5 }] },
   ];
   hooksFile["flow-capture"] = { PostInvocation: entry("PostInvocation"), Stop: entry("Stop") };
   writeJson(hooksPath, hooksFile);
@@ -453,7 +467,7 @@ function renderAntigravity(ctx) {
   const mcp = readJson(mcpPath, {});
   mcp.mcpServers = {
     ...(mcp.mcpServers ?? {}),
-    "flow-graph": { command: MCP_PATH, args: ["--project", project, "--repo", repo] },
+    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(mcpPath, mcp);
   // Skill dir + AGENTS.md are shared with Codex — rendered there.
