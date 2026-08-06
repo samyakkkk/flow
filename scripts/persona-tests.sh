@@ -102,6 +102,10 @@ cap=$(curl -s -X POST "$BASE/$PROJECT/v1/ingest/hook" -H "Authorization: Bearer 
       --max-time 20 | jget "d.get('ok')")
 [ "$cap" = "True" ] && ok "member's own session feeds the brain (ingest hook 200)" || bad "member capture failed ($cap)"
 
+c=$(curl -s -b "$MJ" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/access/users" \
+     -H 'Content-Type: application/json' -d "{\"email\":\"nope@x.z\",\"password\":\"whatever12\",\"grants\":[\"$PROJECT\"]}")
+[ "$c" = "403" ] && ok "member BLOCKED from creating users (403)" || bad "member create user = $c (want 403)"
+
 # ── P3/P5 · remote brain over MCP + consumer connector ──────────────────────
 echo
 echo "P3/P5 · REMOTE BRAIN + CONNECTOR (Jordan / Maya)"

@@ -104,11 +104,19 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 - [ ] Pass/fail per persona; fix breakages; loop until green
 - [ ] Persona report doc with evidence (screenshots)
 
-### Phase 5 — If time remains (append freely)
-- [ ] `flow remotes` junk `local  undefined  since ?` row — fix
-- [ ] One-command Hetzner redeploy script
-- [ ] `/code-review` + `/simplify` the diff
-- [ ] Any persona-run bugs → fix + retest
+### Phase 5 — Hardening (done)
+- [x] `flow remotes` junk `local … undefined … since ?` row — fixed (commit b3ca314)
+- [x] One-command Hetzner redeploy + smoke script (scripts/deploy-hetzner.sh, e82edb9) — verified rebuild→17/17
+- [x] Code review of session diff (subagent) — 3 low/med findings; fixed the member-control flash (80f4b17)
+- [x] Member capture path (ingest hook + PAT) verified + automated (17/17)
+- [x] docs/HANDOFF.md — morning deploy-ready summary
+
+### Still open (documented, not blocking)
+- C2 dashboard dual-origin composer (send brain binding + browser LNA grant) —
+  LNA auto-denied in automation, needs a real user browser grant. Orchestrator
+  + remote brain are ready; this is a small, well-scoped follow-up.
+- Resume-after-restart drops the remote brain binding (documented; falls back to
+  local). Persist mcpUrl if remote-brain machines lack a local gateway.
 
 ---
 
