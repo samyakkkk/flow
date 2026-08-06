@@ -10,9 +10,12 @@ import { homedir } from "node:os";
 // registry so a fresh `flow connect` works without a dashboard restart.
 
 export interface RemoteEntry {
+  kind?: "local" | "remote";
+  deploymentId?: string;
   url: string;
   token?: string;
   pairing?: string;
+  localUrl?: string;
   connectedAt?: string;
 }
 

@@ -28,6 +28,7 @@ import { remoteForOrigin } from "@/lib/machineConfig";
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/",
+  "/api/deployment", // stable-identity probe for `flow connect` (pre-credential)
   "/_next",
   "/favicon.ico",
 ];

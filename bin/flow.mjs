@@ -9,7 +9,7 @@
 //   flow --help
 
 import { parseArgs } from "node:util";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   writeFileSync,
@@ -351,6 +351,11 @@ function ensureAuthStore(mode) {
   store.users ??= [];
   store.grants ??= {};
   store.tokens ??= [];
+  // Stable identity for this deployment, independent of its URL/IP. A team can
+  // move the box, change the DNS name, or get a new EC2 IP — the deploymentId
+  // stays constant, so a machine reconnecting to the new address updates its
+  // existing remote in place instead of forking a duplicate. Minted once.
+  store.deploymentId ??= randomUUID();
   let setupToken = null;
   if (mode === "prod" && store.users.length === 0) {
     store.setupToken ??= randomBytes(4).toString("hex");
@@ -1227,6 +1232,18 @@ async function cmdConnect(args) {
     die(`${url} runs in local mode — the dashboard and CLI already share the machine, nothing to connect.`);
   }
 
+  // Stable identity: key the remote by deploymentId, not URL, so a later
+  // address change (new EC2 IP, renamed DNS) reconnects the SAME remote in
+  // place instead of forking a duplicate. Older deployments predate the
+  // endpoint (null id) — those fall back to URL-based naming.
+  let deploymentId = null;
+  try {
+    const dep = await fetch(`${url}/api/deployment`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
+    deploymentId = dep?.deploymentId ?? null;
+  } catch {
+    // Non-fatal — proceed with URL-based identity.
+  }
+
   const label = hostname();
   // Pairing secret: lets pages served by THIS deployment (in a browser on
   // THIS machine) call the local dashboard cross-origin — see the execution
@@ -1270,13 +1287,38 @@ async function cmdConnect(args) {
   console.log("");
   if (!token) die("Timed out waiting for approval (10 minutes) — run `flow connect` again.");
 
-  const name = values.name ?? new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
   const cfg = readUserConfig();
   cfg.remotes ??= {};
-  cfg.remotes[name] = { url, token, pairing, localUrl, connectedAt: new Date().toISOString() };
+
+  // Reconnect-in-place when we've seen this deploymentId before (under any
+  // name) — the URL may have changed; everything else refreshes.
+  let name = values.name;
+  let addressChanged = false;
+  if (deploymentId) {
+    for (const [n, r] of Object.entries(cfg.remotes)) {
+      if (r?.deploymentId === deploymentId) {
+        name ??= n;
+        addressChanged = r.url !== url;
+        break;
+      }
+    }
+  }
+  name ??= new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
+
+  cfg.remotes[name] = {
+    kind: "remote",
+    deploymentId,
+    url,
+    token,
+    pairing,
+    localUrl,
+    connectedAt: new Date().toISOString(),
+  };
   writeUserConfig(cfg);
 
-  console.log(`  ${OK} Connected ${c.bold(name)} → ${url}`);
+  const verb = addressChanged ? "Reconnected" : "Connected";
+  console.log(`  ${OK} ${verb} ${c.bold(name)} → ${url}`);
+  if (addressChanged) console.log(`    ${c.dim("(same deployment — address updated in place)")}`);
   console.log(`    ${c.dim("Saved to ~/.flow/config.json — list with")} flow remotes`);
   console.log(`    ${c.dim("MCP endpoint for agents:")} ${url}/<project>/mcp ${c.dim("(bearer = this machine's token)")}\n`);
 }

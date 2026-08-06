@@ -46,6 +46,12 @@ export interface AuthStore {
   version: number;
   sessionSecret: string;
   setupToken?: string; // present until the first owner account exists
+  // Stable identity for this deployment, independent of its URL/IP (minted
+  // once by `flow up`). A connecting machine keys its remote by this, so a
+  // changed EC2 IP or DNS name updates the existing remote in place rather
+  // than forking a duplicate. Served (id + name only) by GET /api/deployment.
+  deploymentId?: string;
+  deploymentName?: string;
   users: AuthUser[];
   grants: Record<string, string[]>; // userId -> project names, or ["*"]
   tokens: AuthToken[];
