@@ -191,7 +191,29 @@ A subagent security review of this session's auth/token/gating/brain code found:
 - **Finding 5 (SAFE).** The `/mcp` consumer-connector path is correctly
   read-scoped + project-gated (forwards the PAT, not admin; gateway re-verifies).
 
+## ✅ State of completion (2026-08-07, after N watchdog ticks)
+Verifiable overnight work is **substantially complete**. Delivered + validated:
+- **Features:** D1–D5, C1, C2 core — 5 personas, 21/21 API assertions green.
+- **Reliability:** 3 crash-vector fixes + 2 global nets + entrypoint supervisor +
+  lsof/portInUse fix — all fault-tested; hard `docker restart` recovery proven.
+- **Security:** both member-exploitable findings (CRITICAL escalation + HIGH
+  ingest forgery) fixed, verified as real exploits before/after, regression-guarded.
+- **Tests:** orchestrator 282/282, gateway 24/24, personas 21/21. Health-scans clean.
+- **Docs:** HANDOFF, personas, this plan, flow-cloud-test skill, 4 memories.
+
+**Genuinely remaining (all blocked from headless validation or low-value):**
+- C2 dashboard composer (browser LNA auto-denied) + resolve-from-folder plumbing
+  (new feature, spec'd above) — won't build un-verifiable feature code blind.
+- Finding 3 SSRF residual (owner-only now; a string check wouldn't stop DNS
+  rebinding, so no false-confidence validation) + Finding 4 LOW nits.
+- Minor: prod dashboard polls /v1/agents/sessions though prod runs no server-side
+  agents (C1) — harmless INFO noise; not worth a change.
+The watchdog continues low-cost health-scanning (it caught 2 real bugs), but the
+substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
+
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — Health scan clean (no error-level patterns; INFO polling only),
+  1 listener/port, lsof fix holds. Declared verifiable work substantially complete.
 - 2026-08-07 T+N — Broadened validation: **gateway tests 24/24** (regression on my
   graph.ts/server.ts changes; orchestrator was 282/282 → all my code covered).
   **Hard container-restart durability test:** `docker restart deploy-flow-1` →
