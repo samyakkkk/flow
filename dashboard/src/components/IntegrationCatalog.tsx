@@ -133,11 +133,28 @@ export function IntegrationCatalog({
     }
   }
 
+  // While the viewer's role is still resolving, show a neutral header (no edit
+  // controls) so a member never flashes owner-only buttons before we know they
+  // can't use them. Resolves within one fetch.
+  if (viewer.loading) {
+    return (
+      <div className="flex flex-col gap-4 p-5 rounded-2xl border border-line bg-paper shadow-xs">
+        <div className="border-b border-line pb-3">
+          <Kicker>Integrations & Sources</Kicker>
+          <h2 style={{ fontFamily: "var(--font-display)" }} className="text-lg font-semibold text-ink mt-0.5">
+            Connect code and business context
+          </h2>
+        </div>
+        <div className="text-xs text-text-muted py-6 text-center">Loading…</div>
+      </div>
+    );
+  }
+
   // Members (prod, non-owner) don't manage team integrations — mirrors the
   // server-side 403 from canManageIntegrations(). Rather than show Connect
   // buttons that would fail, give them an honest read-only view of what the
   // owner has wired up. Local mode and owners fall through to the full editor.
-  if (!viewer.loading && viewer.mode === "prod" && !viewer.canManageIntegrations) {
+  if (viewer.mode === "prod" && !viewer.canManageIntegrations) {
     const roItems: Array<{ name: string; icon: React.ReactNode; on: boolean; detail: string }> = [
       { name: "GitHub Repos", icon: <BrandIcon name="opencode" size={22} />, on: repos.length > 0, detail: repos.length > 0 ? `${repos.length} repo${repos.length !== 1 ? "s" : ""} indexed` : "none yet" },
       { name: "Slack Bot", icon: <BrandIcon name="slack" size={22} />, on: slackSet, detail: slackSet ? "connected" : "not connected" },

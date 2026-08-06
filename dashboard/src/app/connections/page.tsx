@@ -323,10 +323,20 @@ export default function ConnectionsPage() {
 
   const isLocalMode = !modeLoading && mode === "local";
 
+  // While the role resolves, don't render the editor — avoids a member
+  // flashing owner-only controls before we know their role.
+  if (viewer.loading) {
+    return (
+      <Shell>
+        <div style={{ padding: "40px 0", fontSize: 13, color: "var(--text-muted)" }}>Loading…</div>
+      </Shell>
+    );
+  }
+
   // Prod members can't manage connections (server 403s every write). Show an
   // honest read-only page instead of edit controls that fail. Owners + local
   // fall through to the full manager.
-  if (!viewer.loading && viewer.mode === "prod" && !viewer.canManageIntegrations) {
+  if (viewer.mode === "prod" && !viewer.canManageIntegrations) {
     return (
       <Shell>
         <div style={{ marginBottom: 28 }}>
