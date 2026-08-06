@@ -232,26 +232,8 @@ export default function HomePage() {
         </div>
         <div id="agent-runner-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
           {/* Your AI tools: workspace connection column */}
-          <div id="coding-tools-section" className="relative lg:col-span-5 flex flex-col">
+          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
             <CodingToolsPanel />
-            {/* the seam: a full-height divider with OR at its middle */}
-            <div className="hidden lg:flex absolute -right-[13px] inset-y-0 z-10 flex-col items-center" aria-hidden>
-              <span className="w-px bg-line flex-1" />
-              <span
-                className="text-[10px] uppercase tracking-widest text-ink/50 py-2"
-                style={{ writingMode: "vertical-rl", textOrientation: "upright" }}
-              >
-                or
-              </span>
-              <span className="w-px bg-line flex-1" />
-            </div>
-          </div>
-
-          {/* stacked (mobile) divider — the seam badge above is lg-only */}
-          <div className="lg:hidden flex items-center gap-3 w-full" aria-hidden>
-            <span className="h-px bg-line flex-1" />
-            <span className="text-[11px] uppercase text-ink/45">or</span>
-            <span className="h-px bg-line flex-1" />
           </div>
 
           {/* Flow's interface: agent trigger + activity */}

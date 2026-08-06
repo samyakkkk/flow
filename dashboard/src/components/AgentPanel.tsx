@@ -91,15 +91,7 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
             panels are one decision (which interface do you drive Flow from?),
             so they must read as siblings. */}
         <div className="border-b border-line pb-3">
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] uppercase tracking-widest text-ink/50">Flow&apos;s interface</div>
-            <span
-              style={{ fontFamily: "var(--font-mono)" }}
-              className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-sand border border-line text-ink font-medium"
-            >
-              {nodeCount > 0 ? `${nodeCount} nodes mapped` : "Brain Ready"}
-            </span>
-          </div>
+          <div className="text-[11px] uppercase tracking-widest text-ink/50">Flow&apos;s interface</div>
           <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
             Or run agents right here
           </h2>
