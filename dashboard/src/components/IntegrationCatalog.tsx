@@ -7,6 +7,7 @@ import { AddFolder } from "@/components/AddFolder";
 import { Button, StatusPill, Kicker } from "@/components/ui";
 import { useProject } from "@/lib/useProject";
 import { FlowMode } from "@/lib/useMode";
+import { useViewer } from "@/lib/useViewer";
 
 export interface RepoEntry {
   name: string;
@@ -41,6 +42,7 @@ export function IntegrationCatalog({
   onChanged,
 }: IntegrationCatalogProps) {
   const { prefix } = useProject();
+  const viewer = useViewer();
   const [activeModal, setActiveModal] = useState<ModalKind>("none");
   const [msg, setMsg] = useState("");
 
@@ -84,6 +86,7 @@ export function IntegrationCatalog({
   const indexedUrls = new Set(repos.map((r) => r.url || r.name));
   const linearSet = settings.some((s) => s.key === "LINEAR_API_KEY" && s.set);
   const firefliesSet = settings.some((s) => s.key === "FIREFLIES_API_KEY" && s.set);
+  const slackSet = settings.some((s) => s.key === "SLACK_BOT_TOKEN" && (s.set || s.value));
 
   async function handleSaveKey(keyName: string, val: string) {
     if (!val.trim()) return;
@@ -128,6 +131,49 @@ export function IntegrationCatalog({
     } finally {
       setIngestingNotes(false);
     }
+  }
+
+  // Members (prod, non-owner) don't manage team integrations — mirrors the
+  // server-side 403 from canManageIntegrations(). Rather than show Connect
+  // buttons that would fail, give them an honest read-only view of what the
+  // owner has wired up. Local mode and owners fall through to the full editor.
+  if (!viewer.loading && viewer.mode === "prod" && !viewer.canManageIntegrations) {
+    const roItems: Array<{ name: string; icon: React.ReactNode; on: boolean; detail: string }> = [
+      { name: "GitHub Repos", icon: <BrandIcon name="opencode" size={22} />, on: repos.length > 0, detail: repos.length > 0 ? `${repos.length} repo${repos.length !== 1 ? "s" : ""} indexed` : "none yet" },
+      { name: "Slack Bot", icon: <BrandIcon name="slack" size={22} />, on: slackSet, detail: slackSet ? "connected" : "not connected" },
+      { name: "Linear", icon: <BrandIcon name="linear" size={22} />, on: linearSet, detail: linearSet ? "connected" : "not connected" },
+      { name: "Fireflies.ai", icon: <BrandIcon name="fireflies" size={22} />, on: firefliesSet, detail: firefliesSet ? "connected" : "not connected" },
+    ];
+    return (
+      <div className="flex flex-col gap-4 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in">
+        <div className="flex items-center justify-between border-b border-line pb-3">
+          <div>
+            <Kicker>Integrations & Sources</Kicker>
+            <h2 style={{ fontFamily: "var(--font-display)" }} className="text-lg font-semibold text-ink mt-0.5">
+              What feeds this project&apos;s brain
+            </h2>
+          </div>
+          <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded bg-sand border border-line text-text-muted whitespace-nowrap">
+            🔒 Owner-managed
+          </span>
+        </div>
+        <p className="text-xs text-text-muted -mt-1">
+          Your workspace owner connects code and business sources. You can still connect
+          your own coding tools to this project below.
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {roItems.map((it) => (
+            <div key={it.name} className={`rounded-xl border border-line bg-cream p-3 flex flex-col items-center text-center gap-1.5 ${it.on ? "" : "opacity-60"}`}>
+              <div className="text-ink pt-1">{it.icon}</div>
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">{it.name}</h3>
+              <span className={`text-[10px] font-medium ${it.on ? "text-[color:var(--success,#16a34a)]" : "text-text-muted"}`}>
+                {it.on ? `✓ ${it.detail}` : it.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   return (

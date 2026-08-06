@@ -5,6 +5,7 @@ import { AddRepoUrl } from "@/components/AddRepoUrl";
 import { RepoPicker } from "@/components/RepoPicker";
 import { useState, FormEvent, useEffect, useCallback } from "react";
 import { useMode } from "@/lib/useMode";
+import { useViewer } from "@/lib/useViewer";
 import { useProject } from "@/lib/useProject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -264,6 +265,7 @@ function CatchingUpPanel() {
 
 export default function ConnectionsPage() {
   const { mode, loading: modeLoading } = useMode();
+  const viewer = useViewer();
   const { prefix } = useProject();
   const [status, setStatus] = useState<ConnStatus | null>(null);
   const [indexedRepos, setIndexedRepos] = useState<RepoEntry[]>([]);
@@ -320,6 +322,43 @@ export default function ConnectionsPage() {
   }
 
   const isLocalMode = !modeLoading && mode === "local";
+
+  // Prod members can't manage connections (server 403s every write). Show an
+  // honest read-only page instead of edit controls that fail. Owners + local
+  // fall through to the full manager.
+  if (!viewer.loading && viewer.mode === "prod" && !viewer.canManageIntegrations) {
+    return (
+      <Shell>
+        <div style={{ marginBottom: 28 }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
+            Connections
+          </h1>
+          <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
+            Repos and integrations are managed by your workspace owner.
+          </p>
+        </div>
+        <Section title="Indexed repositories">
+          {indexedRepos.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+              No repositories indexed yet — your owner connects these.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {indexedRepos.map((r) => (
+                <div key={r.url || r.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontFamily: "monospace", color: "var(--text-primary)" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 9, background: "var(--success, #16a34a)", flexShrink: 0 }} />
+                  {r.name} <span style={{ color: "var(--text-muted)" }}>· {r.branch}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+        <Section title="Ingest Status">
+          <CatchingUpPanel />
+        </Section>
+      </Shell>
+    );
+  }
 
   return (
     <Shell>
