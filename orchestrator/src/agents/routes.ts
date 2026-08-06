@@ -129,6 +129,10 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       modeId?: string;
       attachments?: Array<{ name?: string; data: string; mimeType: string }>;
       images?: Array<{ data: string; mimeType: string }>;
+      // Local-control-plane / remote-brain: a dashboard served BY a deployment
+      // but driving this local orchestrator binds the session's brain to the
+      // remote project's MCP endpoint (+ a machine token). Omitted = local brain.
+      brain?: { mcpUrl?: string; token?: string };
     };
     const backend = body.backend as AgentBackend;
     if (!backend || !(backend in BACKENDS)) {
@@ -171,6 +175,12 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     }));
     const worktreePath =
       typeof body.worktreePath === "string" && body.worktreePath.trim() ? body.worktreePath.trim() : undefined;
+    // Remote-brain binding: accept only a well-formed http(s) MCP url; the token
+    // is opaque (a machine PAT with a grant on the remote project).
+    const brain =
+      body.brain && typeof body.brain.mcpUrl === "string" && /^https?:\/\//.test(body.brain.mcpUrl)
+        ? { mcpUrl: body.brain.mcpUrl, token: typeof body.brain.token === "string" ? body.brain.token : undefined }
+        : undefined;
     const result = await createSession({
       backend,
       repo: body.repo,
@@ -181,6 +191,7 @@ export function registerAgentRoutes(app: FastifyInstance): void {
       config,
       modeId,
       attachments: attachments.length ? attachments : undefined,
+      brain,
     });
     if ("error" in result) return reply.code(400).send(result);
     return result;

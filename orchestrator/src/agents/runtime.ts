@@ -501,6 +501,11 @@ export interface LiveSession {
   repo: string;
   branch?: string; // git branch of the checkout at session create (remember-verb default + distiller context)
   cwd: string;
+  // Set when this session's folder is bound to a REMOTE deployment — the agent
+  // runs here but its brain (MCP) is the remote project's. In-memory for the
+  // session's lifetime; a reconnect after an orchestrator restart falls back to
+  // the local brain (acceptable — the session re-mounts on next create).
+  brain?: BrainBinding | null;
   // Working-tree snapshot captured at session start, for the SESSION-scope
   // diff. startSha is a git commit object (stash-create or HEAD); null in an
   // empty repo. startUntracked is the pre-existing untracked file list, which
@@ -981,7 +986,7 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
     const resp = await c.conn.loadSession({
       sessionId: acpSessionId,
       cwd: s.cwd,
-      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "")],
+      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "", s.brain)],
     });
     s.modes = resp.modes ?? s.modes;
     s.configOptions = resp.configOptions ?? s.configOptions;
@@ -998,7 +1003,32 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 // ---------------------------------------------------------------------------
 // Flow graph MCP injection (read-only) + activity routing
 
-function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
+// Local-control-plane / remote-brain: when a session's work folder is bound to
+// a REMOTE deployment (via `flow setup <project> --remote`), the agent runs
+// HERE (this machine) but reads/writes the remote project's brain over HTTP
+// MCP — no local gateway, no local FalkorDB. The remote /<project>/mcp handles
+// orient/search/remember/correct_graph server-side, so all we mount is the
+// bearer-authed HTTP endpoint. ACP agents that advertise McpServer::Http
+// consume it directly.
+export interface BrainBinding {
+  mcpUrl: string; // e.g. https://flow.acme.com/<project>/mcp
+  token?: string; // personal access token with a grant on that project
+}
+
+function flowGraphMcp(
+  flowSessionId: string,
+  repo = "",
+  branch = "",
+  brain?: BrainBinding | null,
+): acp.McpServer {
+  if (brain?.mcpUrl) {
+    return {
+      type: "http",
+      name: "flow-graph",
+      url: brain.mcpUrl,
+      headers: brain.token ? [{ name: "Authorization", value: `Bearer ${brain.token}` }] : [],
+    };
+  }
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
   const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
@@ -1093,6 +1123,12 @@ export async function createSession(opts: {
   // First-turn attachments (images inline, files written into the checkout) —
   // same handling as steered prompts.
   attachments?: PromptAttachment[];
+  // Local-control-plane / remote-brain: when set, this session's brain (the
+  // flow-graph MCP) is the REMOTE deployment's project over HTTP instead of the
+  // local gateway. The caller — a dashboard served BY a deployment but driving
+  // this local orchestrator, or the CLI in a `--remote` work folder — resolves
+  // the endpoint + machine token. Unset = local brain (unchanged behavior).
+  brain?: BrainBinding | null;
 }): Promise<CreateSessionResult> {
   const found = listRepoOptions().find((r) => r.name === opts.repo);
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
@@ -1166,6 +1202,7 @@ export async function createSession(opts: {
     backend: opts.backend,
     repo: opts.repo,
     cwd,
+    brain: opts.brain ?? null,
     worktreeId,
     title,
     status: "starting",
@@ -1195,7 +1232,7 @@ export async function createSession(opts: {
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
         cwd,
-        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "")],
+        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "", s.brain)],
       });
       s.acpSessionId = String(resp.sessionId);
       s.modes = resp.modes ?? null;
