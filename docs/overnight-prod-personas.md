@@ -64,7 +64,7 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 - [x] Write this plan
 - [x] Bring up ec2sim, verify it builds+serves (:8600 → 200, main :7600 still 200)
 - [x] 30-min cron watchdog (session-only — resumes on idle; can't resurrect a fully dead process)
-- [ ] Cloud/persona **testing skill** (deferred to Phase 4 — author from real experience)
+- [x] Cloud/persona **testing skill** — `.claude/skills/flow-cloud-test/SKILL.md` (authored from real experience)
 
 ### Phase 1 — D3: role-based integrations + admin GitHub config + repo browse (CENTRAL — personas need it)
 - [x] API already works: owner-gated PAT storage + `/api/github/repos` browse + add_repos→index (RepoPicker.tsx / api/github/repos/route.ts)
@@ -96,13 +96,16 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 - [ ] Dashboard dual-origin composer sends the binding (LNA-gated e2e — needs real user browser grant; building blocks in place)
 **C2 core done ✓ (remote brain proven, orchestrator ready); full browser e2e is LNA-gated**
 
-### Phase 4 — Persona validation (headline deliverable)
-- [ ] Fresh prod project on Hetzner (reset or new project) + owner account
-- [ ] 3–5 personas defined (who / when / what / why) — see bottom section
-- [ ] Test agents drive real browser (agent-browser): admin sets up project +
-      GitHub repos; member logs in, accesses, links a workspace
-- [ ] Pass/fail per persona; fix breakages; loop until green
-- [ ] Persona report doc with evidence (screenshots)
+### Phase 4 — Persona validation (headline deliverable) — DONE ✓
+- [x] Prod project: `main` on Hetzner + owner `sam@acme.dev` + member `alex@acme.dev`
+- [x] 5 personas defined (who/when/what/why) — `docs/personas.md`
+- [x] Test agents: `scripts/persona-tests.sh` (21 API assertions) + agent-browser
+      screenshots (owner editor vs member read-only) — admin sets up GitHub, member
+      accesses read-only + links own tools + captures sessions
+- [x] Pass/fail per persona: **21/21 green** (P1 owner, P2 member+gating+capture,
+      P3 remote brain, P4 durability, P5 connector). Fixed everything found,
+      including a CRITICAL security escalation surfaced mid-run.
+- [x] Persona report: `docs/personas.md` (status matrix) + `docs/HANDOFF.md`
 
 ### Phase 5 — Hardening (done)
 - [x] `flow remotes` junk `local … undefined … since ?` row — fixed (commit b3ca314)
@@ -237,4 +240,4 @@ substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
   home UI fixes (b8b1466); deployed+verified on Hetzner.
 
 ## 👥 Personas (define & script in Phase 4)
-_TBD — 3–5: who uses Flow, when, doing what, why; each scripted as a browser-driving test agent._
+**Defined + scripted in `docs/personas.md`** — 5 personas (Priya/owner, Alex/member, Jordan/agent-runner, Sam/returning-owner, Maya/consumer), each with a journey + automated validation. All member-exploitable paths verified.
