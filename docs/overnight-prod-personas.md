@@ -152,6 +152,12 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
      healthcheck tweak, which Docker's restart policy ignores.)
 
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — Broadened validation: **gateway tests 24/24** (regression on my
+  graph.ts/server.ts changes; orchestrator was 282/282 → all my code covered).
+  **Hard container-restart durability test:** `docker restart deploy-flow-1` →
+  brain nodes 49→49 (survived), dashboard back in 16s, **18/18 personas**, 1
+  listener/port (supervisor + lsof fix hold across a full restart). The complete
+  durability + recovery story is validated end-to-end.
 - 2026-08-07 T+N — **Caught + fixed a regression my own supervisor introduced.**
   node:22 ships no `lsof`; `bin/flow.mjs portInUse` spawnSync'd lsof and (since
   spawnSync returns `{error}` not a throw on ENOENT) read every port as FREE →
