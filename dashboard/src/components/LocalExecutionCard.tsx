@@ -1,9 +1,13 @@
 "use client";
-// The prod dashboard's window onto THIS machine's local Flow — the first
-// consumer of the dual-origin execution client. Rendered only on prod
-// deployments: probes localhost:7600 through the execution door and shows
-// either the machine's local projects (linking into the native local agents
-// experience — same ACP loop, zero added latency) or how to get connected.
+// The prod dashboard's window onto THIS machine's local Flow, and the gate for
+// running agents here. Four states, decided by a localhost probe refined by the
+// server-side machine record (which survives reboots, unlike the probe):
+//   connected            → probe succeeds → link into native local agents
+//   lna-denied           → probe blocked by Chrome's Local Network Access perm
+//   installed-not-running→ has a machine record but probe fails → `flow up`
+//   not-connected        → no machine record → the one-command install
+// The machine record is trusted OVER the probe for "has this machine ever
+// connected", so we never tell someone with Flow installed to reinstall.
 // Renders nothing in local mode: the page already IS the local dashboard.
 import { useState, useEffect, useCallback } from "react";
 import { discoverLocal, localFetch, type LocalLink } from "@/lib/executionClient";
@@ -12,6 +16,8 @@ interface LocalProject {
   name: string;
   mode: string;
 }
+
+type State = "probing" | "connected" | "lna-denied" | "installed-not-running" | "not-connected";
 
 const wrap: React.CSSProperties = {
   border: "1px solid var(--border)",
@@ -22,36 +28,76 @@ const wrap: React.CSSProperties = {
   fontSize: 13,
 };
 
+const retryBtn: React.CSSProperties = {
+  background: "none",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  padding: "2px 10px",
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  cursor: "pointer",
+  marginLeft: 6,
+};
+
+async function lnaIsDenied(): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = await (navigator.permissions.query({ name: "local-network-access" as any }) as Promise<PermissionStatus>);
+    return p.state === "denied";
+  } catch {
+    return false; // Safari/Firefox have no such permission name
+  }
+}
+
 export function LocalExecutionCard() {
   const [mode, setMode] = useState<"local" | "prod" | null>(null);
+  const [state, setState] = useState<State>("probing");
   const [link, setLink] = useState<LocalLink | null>(null);
-  const [projects, setProjects] = useState<LocalProject[] | null>(null);
-  const [probing, setProbing] = useState(true);
-  const [lnaDenied, setLnaDenied] = useState(false);
+  const [projects, setProjects] = useState<LocalProject[]>([]);
+  const [installCmd, setInstallCmd] = useState<string>("");
+  const [copied, setCopied] = useState(false);
 
-  const probe = useCallback(() => {
-    setProbing(true);
-    discoverLocal()
-      .then((l) => {
-        setLink(l);
-        if (l && l.base) {
-          return localFetch(l, "/api/projects")
-            .then((r) => (r.ok ? r.json() : { projects: [] }))
-            .then((d) => setProjects(d.projects ?? []));
-        }
-        // Chrome gates public-site → local-network fetches behind a
-        // permission ("local network access"). When it's hard-denied, no
-        // probe can ever succeed — tell the user instead of looking broken.
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return (navigator.permissions.query({ name: "local-network-access" as any }) as Promise<PermissionStatus>)
-            .then((p) => setLnaDenied(p.state === "denied"))
-            .catch(() => {});
-        } catch {
-          // Browsers without this permission name (Safari/Firefox) — ignore.
-        }
-      })
-      .finally(() => setProbing(false));
+  const probe = useCallback(async () => {
+    setState("probing");
+    const l = await discoverLocal();
+    if (l && l.base !== undefined) {
+      // base "" means the page itself is the local dashboard (same origin).
+      setLink(l);
+      if (l.base) {
+        const projs = await localFetch(l, "/api/projects")
+          .then((r) => (r.ok ? r.json() : { projects: [] }))
+          .then((d) => d.projects ?? [])
+          .catch(() => []);
+        setProjects(projs);
+      }
+      setState("connected");
+      return;
+    }
+    // Probe failed — disambiguate with the server record + the LNA permission.
+    if (await lnaIsDenied()) {
+      setState("lna-denied");
+      return;
+    }
+    const machines = await fetch("/api/machines", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { machines: [] }))
+      .then((d) => d.machines ?? [])
+      .catch(() => []);
+    if (machines.length > 0) {
+      setState("installed-not-running");
+      return;
+    }
+    // Never connected → build the one-command install with a pre-blessed code.
+    const origin = window.location.origin;
+    const code = await fetch("/api/auth/device/prebless", { method: "POST" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.code as string | undefined)
+      .catch(() => undefined);
+    setInstallCmd(
+      code
+        ? `curl -fsSL ${origin}/install.sh | bash -s -- --connect ${origin} --code ${code}`
+        : `flow connect ${origin}`
+    );
+    setState("not-connected");
   }, []);
 
   useEffect(() => {
@@ -66,24 +112,25 @@ export function LocalExecutionCard() {
 
   if (mode !== "prod") return null;
 
-  if (probing) {
+  if (state === "probing") {
     return <div style={wrap}>Checking for a local Flow on this machine…</div>;
   }
 
-  if (link && link.base) {
+  if (state === "connected") {
+    const base = link?.base ?? "";
     return (
       <div style={wrap}>
         <span style={{ color: "var(--success, #34c759)", marginRight: 8 }}>●</span>
         <strong>This machine&apos;s Flow is connected.</strong>{" "}
         <span style={{ color: "var(--text-secondary)" }}>
           Sessions run natively on your machine
-          {projects && projects.length > 0 ? (
+          {projects.length > 0 ? (
             <>
               {" — open a local project: "}
               {projects.map((p, i) => (
                 <span key={p.name}>
                   {i > 0 && ", "}
-                  <a href={`${link.base}/${p.name}/agents`} target="_blank" rel="noreferrer">
+                  <a href={`${base}/${p.name}/agents`} target="_blank" rel="noreferrer">
                     {p.name}
                   </a>
                 </span>
@@ -98,7 +145,7 @@ export function LocalExecutionCard() {
     );
   }
 
-  if (lnaDenied) {
+  if (state === "lna-denied") {
     return (
       <div style={wrap}>
         <span style={{ color: "var(--warning, #ff9f0a)", marginRight: 8 }}>▲</span>
@@ -107,48 +154,72 @@ export function LocalExecutionCard() {
           Allow <em>local network access</em> for this site (click the icon left of the address bar → Site settings →
           Local network access → Allow), then retry.
         </span>{" "}
-        <button
-          onClick={probe}
-          style={{
-            background: "none",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            padding: "2px 10px",
-            color: "var(--text-secondary)",
-            fontSize: 12,
-            cursor: "pointer",
-            marginLeft: 6,
-          }}
-        >
+        <button onClick={probe} style={retryBtn}>
           Retry
         </button>
       </div>
     );
   }
 
+  if (state === "installed-not-running") {
+    return (
+      <div style={wrap}>
+        <span style={{ color: "var(--warning, #ff9f0a)", marginRight: 8 }}>◐</span>
+        <strong>Flow is connected but not running on this machine.</strong>{" "}
+        <span style={{ color: "var(--text-secondary)" }}>
+          Start it to run agents here: <code>flow up</code>, then
+        </span>{" "}
+        <button onClick={probe} style={retryBtn}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  // not-connected → the one-command install.
   return (
     <div style={wrap}>
-      <span style={{ color: "var(--text-secondary)", marginRight: 8 }}>○</span>
-      <strong>Run agents on this machine</strong>{" "}
-      <span style={{ color: "var(--text-secondary)" }}>
-        — start Flow locally (<code>flow up</code>), and connect it to this deployment once with{" "}
-        <code>flow connect {typeof window !== "undefined" ? window.location.origin : ""}</code>.
-      </span>{" "}
-      <button
-        onClick={probe}
-        style={{
-          background: "none",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          padding: "2px 10px",
-          color: "var(--text-secondary)",
-          fontSize: 12,
-          cursor: "pointer",
-          marginLeft: 6,
-        }}
-      >
-        Retry
-      </button>
+      <div>
+        <span style={{ color: "var(--text-secondary)", marginRight: 8 }}>○</span>
+        <strong>Run agents on this machine.</strong>{" "}
+        <span style={{ color: "var(--text-secondary)" }}>
+          Install Flow and connect it to this deployment with one command:
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+        <code
+          style={{
+            flex: 1,
+            fontFamily: "ui-monospace, monospace",
+            fontSize: 12,
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "8px 10px",
+            overflowX: "auto",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {installCmd}
+        </code>
+        <button
+          onClick={() => {
+            navigator.clipboard?.writeText(installCmd).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+          style={{ ...retryBtn, marginLeft: 0 }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+        <button onClick={probe} style={{ ...retryBtn, marginLeft: 0 }}>
+          Recheck
+        </button>
+      </div>
+      <div style={{ color: "var(--text-secondary)", fontSize: 12, marginTop: 8 }}>
+        Then refresh this tab. The command is safe to re-run — it reconnects in place.
+      </div>
     </div>
   );
 }

@@ -29,6 +29,7 @@ const PUBLIC_PATHS = [
   "/login",
   "/api/auth/",
   "/api/deployment", // stable-identity probe for `flow connect` (pre-credential)
+  "/install.sh", // one-command install bootstrap (curled by an unauth'd machine)
   "/_next",
   "/favicon.ico",
 ];

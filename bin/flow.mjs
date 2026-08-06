@@ -1210,7 +1210,7 @@ function openInBrowser(target) {
 async function cmdConnect(args) {
   const { values, positionals } = parseArgs({
     args,
-    options: { name: { type: "string" } },
+    options: { name: { type: "string" }, code: { type: "string" } },
     allowPositionals: true,
   });
   let url = positionals[0];
@@ -1254,6 +1254,26 @@ async function cmdConnect(args) {
   // deployment hands it back to the user's pages so the execution client
   // probes the right port (offsets exist: test aliases, multiple installs).
   const localUrl = `http://localhost:${dashboardPort()}`;
+
+  // ── One-command install path: --code carries a pre-blessed code the
+  // dashboard already minted for the logged-in user. Skip the browser
+  // approval round-trip; just complete it with this machine's pairing.
+  let token;
+  if (values.code) {
+    const res = await fetch(`${url}/api/auth/device/${values.code}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label, pairing, local_url: localUrl }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.token) {
+      die(body.error ?? `Connect failed (${res.status}) — the install code may have expired; get a fresh command from the dashboard.`);
+    }
+    token = body.token;
+    saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
+    return;
+  }
+
   const startRes = await fetch(`${url}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1269,7 +1289,6 @@ async function cmdConnect(args) {
 
   process.stdout.write(`  ${c.dim("Waiting for approval…")} `);
   const deadline = Date.now() + 10 * 60 * 1000;
-  let token = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
     const res = await fetch(`${url}/api/auth/device/${start.code}/claim`, { method: "POST" }).catch(() => null);
@@ -1287,12 +1306,17 @@ async function cmdConnect(args) {
   console.log("");
   if (!token) die("Timed out waiting for approval (10 minutes) — run `flow connect` again.");
 
+  saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
+}
+
+// Write (or reconnect-in-place) a remote to ~/.flow/config.json, keyed by
+// deploymentId so an address change updates rather than forks. Shared by the
+// classic browser-approval path and the one-command --code path.
+function saveRemote(url, deploymentId, token, pairing, localUrl, preferredName) {
   const cfg = readUserConfig();
   cfg.remotes ??= {};
 
-  // Reconnect-in-place when we've seen this deploymentId before (under any
-  // name) — the URL may have changed; everything else refreshes.
-  let name = values.name;
+  let name = preferredName;
   let addressChanged = false;
   if (deploymentId) {
     for (const [n, r] of Object.entries(cfg.remotes)) {

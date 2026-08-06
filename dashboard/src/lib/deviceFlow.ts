@@ -19,6 +19,11 @@ export interface DeviceRequest {
   // Where a browser on the connecting machine reaches its local dashboard
   // (port offsets exist) — stored on the token record for /api/machines.
   localUrl?: string;
+  // PRE-BLESSED flow (the one-command install): the dashboard is already
+  // authenticated, so it mints the code AND records the approving user here.
+  // The CLI then `complete`s the code with the machine's pairing — no second
+  // browser round-trip. Absent for the classic CLI-initiated flow.
+  userId?: string;
   createdAt: number;
   token?: string; // set on approval, consumed exactly once by claim
 }
@@ -45,6 +50,27 @@ export function createDeviceRequest(label: string, pairing?: string, localUrl?: 
   const code = randomBytes(16).toString("hex");
   store.set(code, { label, pairing, localUrl, createdAt: Date.now() });
   return code;
+}
+
+/** Pre-blessed by the logged-in user for the one-command install. The CLI
+ *  completes it with the machine's pairing (see completePreblessed). */
+export function createPreblessedRequest(userId: string): string | null {
+  sweep();
+  if (store.size >= MAX_PENDING) return null;
+  const code = randomBytes(16).toString("hex");
+  store.set(code, { label: "pending machine", userId, createdAt: Date.now() });
+  return code;
+}
+
+/** Consume a pre-blessed code: returns the approving userId (once) so the
+ *  route can mint the PAT with the machine details the CLI supplies. Null if
+ *  the code is unknown, expired, already consumed, or not pre-blessed. */
+export function consumePreblessed(code: string): { userId: string } | null {
+  sweep();
+  const req = store.get(code);
+  if (!req || !req.userId || req.token) return null;
+  store.delete(code);
+  return { userId: req.userId };
 }
 
 export function getDeviceRequest(code: string): DeviceRequest | null {
