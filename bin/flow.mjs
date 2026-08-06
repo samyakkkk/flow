@@ -287,12 +287,29 @@ function ensureDashboardBuild() {
 // Is anything listening on a TCP port? Deterministic (unlike a health probe
 // that can flake and trick us into starting a second process on a used port).
 function portInUse(port) {
-  try {
-    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
-    return out.length > 0;
-  } catch {
-    return false;
+  // Fast path: lsof (present on macOS + most Linux). spawnSync does NOT throw
+  // when lsof is missing — it returns { error, status: null } — so distinguish
+  // "lsof ran" from "lsof absent" explicitly. Reading a missing lsof as "port
+  // free" makes `flow up` spawn a DUPLICATE on a live port (EADDRINUSE) — which
+  // is exactly what happened in the container (node:22 ships no lsof).
+  const r = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
+  if (!r.error && r.status !== null) {
+    return (r.stdout ?? "").trim().length > 0;
   }
+  // lsof absent — node-native TCP connect probe: a successful connect to
+  // 127.0.0.1:port means something is listening there.
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `const s=require('net').connect(${port},'127.0.0.1');` +
+        `s.on('connect',()=>{s.destroy();process.exit(0)});` +
+        `s.on('error',()=>process.exit(3));` +
+        `setTimeout(()=>{s.destroy();process.exit(3)},800);`,
+    ],
+    { encoding: "utf8", timeout: 2000 },
+  );
+  return probe.status === 0;
 }
 
 // Kill whatever holds a TCP port (best-effort).

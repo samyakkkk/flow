@@ -8,6 +8,15 @@
 #   docker build -f deploy/Dockerfile -t flow .
 FROM node:22
 
+# Flow's process manager (bin/flow.mjs portInUse/killPort) shells out to `lsof`
+# to detect and reclaim service ports. node:22 does NOT ship lsof, so it
+# silently returned "port free" for every service — and the entrypoint
+# supervisor's periodic `flow up` then spawned DUPLICATE services that failed
+# to bind (EADDRINUSE, log spam every cycle). Install lsof (+ procps for ps).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends lsof procps \
+    && rm -rf /var/lib/apt/lists/*
+
 # The indexer runs through a real coding CLI (opencode), driven headless with
 # an OpenRouter key. opencode is NOT bundled with Flow (resolved from PATH), so
 # a headless server MUST ship it or every index/answer job fails at spawn with
