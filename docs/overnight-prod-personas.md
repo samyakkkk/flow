@@ -121,9 +121,10 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 ---
 
 ## 🔭 Watch / next ticks (for the cron watchdog to pick up)
-- [ ] Verify the 2nd repo (`olostep/samples`) finishes indexing → brain grows to
-      ≥2 nodes: `curl -b <owner-cookie> $BASE/main/api/repos/status` (indexing→indexed),
-      then MCP `read_query` a node count. (Indexing is async; check on later ticks.)
+- [x] 2nd repo indexed → **brain grew to 48 nodes** (MCP read_query, cypher arg). Both repos `indexed`.
+- [x] BUG FOUND + FIXED: github-poller had a hardcoded demo seed (acme/api-service,
+      acme/web-app) → recurring 404s on every deployment. Removed (commit 6074922);
+      deployed; verified **0 phantom errors** after a full poll cycle. Tests 20/20.
 - [ ] If agent-browser recovers, capture the owner GitHub-modal + D4 connector-modal
       screenshots (visual evidence; API already green 18/18).
 - [ ] C2 dashboard dual-origin composer (only if the user wants it built blind —
