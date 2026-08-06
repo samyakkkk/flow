@@ -102,6 +102,14 @@ cap=$(curl -s -X POST "$BASE/$PROJECT/v1/ingest/hook" -H "Authorization: Bearer 
       --max-time 20 | jget "d.get('ok')")
 [ "$cap" = "True" ] && ok "member's own session feeds the brain (ingest hook 200)" || bad "member capture failed ($cap)"
 
+# SECURITY (critical regression guard): a member PAT must NOT reach owner-only
+# machine endpoints via the /<project>/v1/* door (it forwards the admin token to
+# the role-blind orchestrator). Members get only the agent/capture surface.
+c=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE/$PROJECT/v1/settings" -H "Authorization: Bearer $MPAT" -H 'Content-Type: application/json' -d '{"LINEAR_API_KEY":"x"}')
+[ "$c" = "403" ] && ok "member PAT BLOCKED from /v1/settings (403, no escalation)" || bad "member /v1/settings = $c (want 403 — ESCALATION!)"
+c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/$PROJECT/v1/agents/sessions" -H "Authorization: Bearer $MPAT" -H 'Content-Type: application/json' -d '{"backend":"opencode","repo":"x","prompt":"y"}')
+[ "$c" = "403" ] && ok "member PAT BLOCKED from /v1/agents (403)" || bad "member /v1/agents = $c (want 403)"
+
 c=$(curl -s -b "$MJ" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/access/users" \
      -H 'Content-Type: application/json' -d "{\"email\":\"nope@x.z\",\"password\":\"whatever12\",\"grants\":[\"$PROJECT\"]}")
 [ "$c" = "403" ] && ok "member BLOCKED from creating users (403)" || bad "member create user = $c (want 403)"
