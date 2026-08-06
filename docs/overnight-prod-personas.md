@@ -111,12 +111,23 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 - [x] Member capture path (ingest hook + PAT) verified + automated (17/17)
 - [x] docs/HANDOFF.md — morning deploy-ready summary
 
-### Still open (documented, not blocking)
-- C2 dashboard dual-origin composer (send brain binding + browser LNA grant) —
-  LNA auto-denied in automation, needs a real user browser grant. Orchestrator
-  + remote brain are ready; this is a small, well-scoped follow-up.
-- Resume-after-restart drops the remote brain binding (documented; falls back to
-  local). Persist mcpUrl if remote-brain machines lack a local gateway.
+### C2 — precise remaining scope (investigated, deliberately not built blind)
+DONE + proven: orchestrator accepts `{brain:{mcpUrl,token}}` on POST
+/v1/agents/sessions and mounts it as the flow-graph MCP (runtime.ts); the remote
+brain answers over HTTP+PAT (8 tools, orient returns real knowledge, 401 w/o token).
+Remaining (all NEW plumbing, can't be fully validated headlessly):
+1. **Resolve-from-folder**: `work_folders` (orchestrator/src/agents/work-folders.ts)
+   has NO remote/brain field, and `flow setup --remote` bakes the binding into
+   hook commands + the flow-mcp bridge (bin/lib/materialize.mjs), not a store
+   createSession reads. Need: a remote-binding column on work_folders + record it
+   in setup + resolve it in createSession (→ pass brain). Testable on ec2sim.
+2. **Dashboard dual-origin composer**: browser (served by deployment) → localhost
+   execution door with the brain binding. **LNA-gated** — the agent browser
+   auto-denies Local Network Access, so this can't be validated headlessly.
+3. Resume-after-restart drops the in-memory brain binding (falls back to local);
+   persist mcpUrl if remote-brain machines lack a local gateway.
+Left as a clean, well-specified follow-up — building new feature plumbing that
+can't be e2e-verified tonight would risk "working" for "more".
 
 ---
 
