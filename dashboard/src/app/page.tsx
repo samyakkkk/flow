@@ -237,7 +237,12 @@ export default function HomePage() {
             {/* the seam: a full-height divider with OR at its middle */}
             <div className="hidden lg:flex absolute -right-[13px] inset-y-0 z-10 flex-col items-center" aria-hidden>
               <span className="w-px bg-line flex-1" />
-              <span className="text-[10px] uppercase tracking-widest text-ink/50 py-2">or</span>
+              <span
+                className="text-[10px] uppercase tracking-widest text-ink/50 py-2"
+                style={{ writingMode: "vertical-rl", textOrientation: "upright" }}
+              >
+                or
+              </span>
               <span className="w-px bg-line flex-1" />
             </div>
           </div>
