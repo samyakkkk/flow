@@ -32,7 +32,7 @@ interface IntegrationCatalogProps {
   onChanged: () => void;
 }
 
-type ModalKind = "none" | "github" | "folder" | "linear" | "fireflies" | "notes";
+type ModalKind = "none" | "github" | "folder" | "linear" | "fireflies" | "notes" | "slack";
 
 export function IntegrationCatalog({
   repos,
@@ -53,8 +53,33 @@ export function IntegrationCatalog({
   const [notesText, setNotesText] = useState("");
   const [ingestingNotes, setIngestingNotes] = useState(false);
 
-  // Slack tooltip popover
+  // Slack tooltip popover (local mode) + config inputs (prod)
   const [slackPopover, setSlackPopover] = useState(false);
+  const [slackBotToken, setSlackBotToken] = useState("");
+  const [slackAppToken, setSlackAppToken] = useState("");
+
+  async function handleSaveSlack() {
+    if (!slackBotToken.trim() || !slackAppToken.trim()) return;
+    setSavingKey(true);
+    try {
+      await fetch(prefix("/api/settings"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          SLACK_BOT_TOKEN: slackBotToken.trim(),
+          SLACK_APP_TOKEN: slackAppToken.trim(),
+        }),
+      });
+      setSlackBotToken("");
+      setSlackAppToken("");
+      setActiveModal("none");
+      onChanged();
+    } catch {
+      // swallow
+    } finally {
+      setSavingKey(false);
+    }
+  }
 
   const indexedUrls = new Set(repos.map((r) => r.url || r.name));
   const linearSet = settings.some((s) => s.key === "LINEAR_API_KEY" && s.set);
@@ -250,37 +275,66 @@ export function IntegrationCatalog({
           </Button>
         </div>
 
-        {/* 6. Slack Bot (Locked) */}
-        <div className="rounded-xl border border-line bg-paper/60 p-4 flex flex-col items-center text-center justify-between opacity-60 transition-all gap-2 min-h-[195px] relative">
-          <div className="flex items-center justify-center pt-1 text-ink">
-            <BrandIcon name="slack" size={32} />
-          </div>
-
-          <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
-              Slack Bot
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
-              Ambient listening in cloud
-            </p>
-          </div>
-
-          <button
-            onClick={() => setSlackPopover((v) => !v)}
-            className="w-full py-1 text-center text-[9px] font-mono uppercase tracking-wider bg-sand border border-line rounded text-text-muted hover:text-ink transition-colors cursor-pointer"
-          >
-            Locked ↗
-          </button>
-
-          {slackPopover && (
-            <div className="absolute bottom-full mb-2 right-0 left-0 p-2.5 rounded-lg border border-line bg-paper shadow-xl text-[10px] text-ink z-50 rise-in text-left">
-              <div className="font-semibold mb-0.5">Slack Locked</div>
-              <p className="text-text-muted text-[9px] leading-tight">
-                Requires production mode (<code className="font-mono text-ink">flow up --mode prod</code>).
+        {/* 6. Slack Bot — locked in local mode (needs a deployment); connectable
+            in prod. The old card was hardcoded "Locked" and never checked the
+            mode, so it wrongly showed "requires production mode" ON a prod
+            deployment. */}
+        {mode === "prod" ? (
+          (() => {
+            const connected = settings.some(
+              (s) => s.key === "SLACK_BOT_TOKEN" && s.value,
+            );
+            return (
+              <div className="rounded-xl border border-line bg-paper p-4 flex flex-col items-center text-center justify-between transition-all gap-2 min-h-[195px]">
+                <div className="flex items-center justify-center pt-1 text-ink">
+                  <BrandIcon name="slack" size={32} />
+                </div>
+                <div className="flex flex-col items-center gap-0.5">
+                  <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+                    Slack Bot
+                  </h3>
+                  <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+                    Ambient listening — @mention Flow in your workspace
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveModal("slack")}
+                  className="w-full py-1 text-center text-[9px] font-mono uppercase tracking-wider bg-sand border border-line rounded text-ink hover:bg-line transition-colors cursor-pointer"
+                >
+                  {connected ? "Connected ✓ · Edit" : "Connect"}
+                </button>
+              </div>
+            );
+          })()
+        ) : (
+          <div className="rounded-xl border border-line bg-paper/60 p-4 flex flex-col items-center text-center justify-between opacity-60 transition-all gap-2 min-h-[195px] relative">
+            <div className="flex items-center justify-center pt-1 text-ink">
+              <BrandIcon name="slack" size={32} />
+            </div>
+            <div className="flex flex-col items-center gap-0.5">
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+                Slack Bot
+              </h3>
+              <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+                Ambient listening in cloud
               </p>
             </div>
-          )}
-        </div>
+            <button
+              onClick={() => setSlackPopover((v) => !v)}
+              className="w-full py-1 text-center text-[9px] font-mono uppercase tracking-wider bg-sand border border-line rounded text-text-muted hover:text-ink transition-colors cursor-pointer"
+            >
+              Locked ↗
+            </button>
+            {slackPopover && (
+              <div className="absolute bottom-full mb-2 right-0 left-0 p-2.5 rounded-lg border border-line bg-paper shadow-xl text-[10px] text-ink z-50 rise-in text-left">
+                <div className="font-semibold mb-0.5">Slack needs a deployment</div>
+                <p className="text-text-muted text-[9px] leading-tight">
+                  Slack&apos;s ambient bot runs on an always-on server. Deploy Flow (prod mode) to connect a workspace.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── DEDICATED FOCUSED MODALS ─────────────────────────────────────────── */}
@@ -348,6 +402,50 @@ export function IntegrationCatalog({
                 className="text-xs"
               >
                 Save & Sync
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Slack Modal (prod) — bot + app token, stored as deployment settings */}
+      {activeModal === "slack" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-paper border border-line rounded-2xl w-full max-w-md p-5 shadow-2xl rise-in flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div className="flex items-center gap-2">
+                <BrandIcon name="slack" size={20} />
+                <span className="font-semibold text-ink text-sm">Connect Slack</span>
+              </div>
+              <button onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
+            </div>
+            <p className="text-xs text-text-muted">
+              Flow&apos;s Slack bot listens ambiently and answers when @mentioned. Create a Slack app with Socket Mode,
+              then paste its bot &amp; app tokens.
+            </p>
+            <input
+              type="password"
+              value={slackBotToken}
+              onChange={(e) => setSlackBotToken(e.target.value)}
+              placeholder="Bot token — xoxb-..."
+              className="w-full rounded-md border border-line bg-cream px-3 py-2 text-xs text-ink outline-none"
+            />
+            <input
+              type="password"
+              value={slackAppToken}
+              onChange={(e) => setSlackAppToken(e.target.value)}
+              placeholder="App-level token — xapp-..."
+              className="w-full rounded-md border border-line bg-cream px-3 py-2 text-xs text-ink outline-none"
+            />
+            <div className="flex justify-end gap-2 mt-2">
+              <Button onClick={() => setActiveModal("none")} variant="secondary" className="text-xs">Cancel</Button>
+              <Button
+                onClick={handleSaveSlack}
+                disabled={!slackBotToken.trim() || !slackAppToken.trim() || savingKey}
+                variant="primary"
+                className="text-xs"
+              >
+                Save &amp; Connect
               </Button>
             </div>
           </div>

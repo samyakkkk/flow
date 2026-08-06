@@ -22,8 +22,16 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     # No published ports: only Flow (on the compose network) talks to it.
+    # DURABILITY: FalkorDB's data dir is /var/lib/falkordb/data (redis `dir`),
+    # NOT /data — the volume MUST mount there or the graph lives only in the
+    # container's ephemeral layer and every restart/redeploy wipes the brain.
+    # AOF (appendonly) persists every write immediately; RDB snapshots alone
+    # miss small graphs (the default 100-writes-in-300s threshold never fires
+    # for a modest index), so a restart before a snapshot loses everything.
+    environment:
+      - REDIS_ARGS=--appendonly yes --appendfsync everysec
     volumes:
-      - falkordb-data:/data
+      - falkordb-data:/var/lib/falkordb/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
