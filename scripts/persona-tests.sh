@@ -97,10 +97,14 @@ c=$(code -b "$MJ" "$BASE/$PROJECT/api/repos/status")
 MPAT=$(curl -s -b "$MJ" -X POST "$BASE/$PROJECT/api/tokens" -H 'Content-Type: application/json' \
        -d '{"label":"persona capture"}' | jget "d.get('token','')")
 NONCE="p$$-$(date +%s 2>/dev/null || echo 0)"
-cap=$(curl -s -X POST "$BASE/$PROJECT/v1/ingest/hook" -H "Authorization: Bearer $MPAT" -H 'Content-Type: application/json' \
-      -d "{\"harness\":\"claude-code\",\"repo\":\"persona-cap\",\"event\":{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"cap-$NONCE\",\"prompt\":\"FLOW-CAP-$NONCE\"}}" \
-      --max-time 20 | jget "d.get('ok')")
+MUID=$(curl -s -b "$MJ" "$BASE/api/auth/status" | jget "d.get('user',{}).get('id','')")
+capresp=$(curl -s -X POST "$BASE/$PROJECT/v1/ingest/hook" -H "Authorization: Bearer $MPAT" -H 'Content-Type: application/json' \
+      -d "{\"harness\":\"claude-code\",\"repo\":\"persona-cap\",\"event\":{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"cap-$NONCE\",\"prompt\":\"FLOW-CAP-$NONCE\"}}" --max-time 20)
+cap=$(echo "$capresp" | jget "d.get('ok')")
+sid=$(echo "$capresp" | jget "d.get('session','')")
 [ "$cap" = "True" ] && ok "member's own session feeds the brain (ingest hook 200)" || bad "member capture failed ($cap)"
+# anti-forgery: the captured session id must be namespaced by the member's user id
+{ [ -n "$MUID" ] && echo "$sid" | grep -q "$MUID"; } && ok "captured session id is namespaced by user ($sid)" || bad "session id NOT user-namespaced: $sid"
 
 # SECURITY (critical regression guard): a member PAT must NOT reach owner-only
 # machine endpoints via the /<project>/v1/* door (it forwards the admin token to
