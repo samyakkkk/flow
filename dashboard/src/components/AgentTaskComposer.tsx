@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
+import { useMode } from "@/lib/useMode";
+import { LocalExecutionCard } from "@/components/LocalExecutionCard";
 import { Button } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
@@ -83,6 +85,7 @@ export function AgentTaskComposer({
 }: AgentTaskComposerProps) {
   const router = useRouter();
   const { prefix } = useProject();
+  const { mode } = useMode();
 
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
   const [repos, setRepos] = useState<RepoOption[]>([]);
@@ -377,6 +380,16 @@ export function AgentTaskComposer({
     "Fix build errors and typescript issues",
     "Refactor UI layout and clean code",
   ];
+
+  // On a remote deployment (prod), the composer below is SERVER-backed — its
+  // CLI detection and session-create hit this deployment, i.e. they'd run the
+  // agent on the server and show the server's CLIs. That contradicts "tasks
+  // run on the CLIs on your machine" and the local-control-plane/remote-brain
+  // design. Until execution is wired to the user's localhost (C2), gate it:
+  // show this machine's connection state instead of a run surface that runs on
+  // the server. In local mode same-origin IS the local machine, so the
+  // composer is correct — render it as-is.
+  if (mode === "prod") return <LocalExecutionCard />;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
