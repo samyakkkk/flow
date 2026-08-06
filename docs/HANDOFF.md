@@ -12,16 +12,24 @@ brain is reachable as a **remote MCP** — all validated on the real box.
 **Live deployment:** https://167-233-240-21.nip.io (project `main`)
 - Owner: `sam@acme.dev` / `hetznertest1`
 - Member: `alex@acme.dev` / `memberpass1`
-- Re-run all checks any time: `bash scripts/persona-tests.sh` → **12/12 green**
+- Re-run all checks any time: `bash scripts/persona-tests.sh` → **18/18 green**
+- Redeploy + smoke in one command: `bash scripts/deploy-hetzner.sh`
 
-## What shipped tonight (commits, newest first)
+## What shipped tonight (12 commits, newest first)
+- `e82edb9` ops: one-command Hetzner redeploy + smoke (`scripts/deploy-hetzner.sh`)
+- `84c637c`/`18-18` persona suite: member capture + member-can't-manage-users
+- `80f4b17` no owner-control flash for members while role loads (review fix)
+- `63752f6` morning HANDOFF + suite to 16
 - `b3ca314` fix(cli): `flow remotes` hides the junk `kind:local` row
 - `e744e78` skill + persona docs (`.claude/skills/flow-cloud-test`, `docs/personas.md`)
 - `a5c0a7e` **D4** consumer connectors (ChatGPT/claude.ai) — no marketplace
 - `4e2ecd5` **C2** orchestrator mounts a REMOTE brain for a bound session
 - `5de2ca5` persona validation suite (`scripts/persona-tests.sh`)
 - `1d7280f` **D3** role-based integrations — members read-only, not 403s
-- `b8b1466` honest local-exec detector message + prod connect layout (earlier)
+- `b8b1466` honest local-exec detector message + prod connect layout
+
+The branch is **local** (not pushed). To ship: merge/push this branch, or just
+run `scripts/deploy-hetzner.sh` from this worktree.
 
 ## Verified deliverables
 | Item | Evidence |
