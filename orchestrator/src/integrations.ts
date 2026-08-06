@@ -14,6 +14,7 @@ import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { FLOW_ROOT, GATEWAY_MCP, binPath, projectGraphName } from "./agents/runtime.js";
 import { addWorkFolder } from "./work-folders.js";
+import db from "./db.js";
 
 const PROJECT_DIR = dirname(process.env.DB_PATH ?? join(FLOW_ROOT, "data", "flow.db"));
 
@@ -92,6 +93,17 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     } catch {
       /* none yet */
     }
+    // Liveness: when did a captured session last land for each folder? This is
+    // the signal the home page leads with — proof capture works, per repo.
+    const lastByCwd = new Map<string, number>(
+      (
+        db
+          .prepare(
+            `SELECT cwd, MAX(updated_at) AS last FROM agent_sessions WHERE backend LIKE 'ext:%' GROUP BY cwd`
+          )
+          .all() as Array<{ cwd: string; last: number }>
+      ).map((r) => [r.cwd, r.last])
+    );
     const repos = Object.entries(manifest.repos ?? {})
       .filter(([, v]) => v.project === name)
       .map(([path, v]) => ({
@@ -102,6 +114,11 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
         share: v.share === true,
         at: v.at,
         stale: (v.version as number) !== m.ATOMS_VERSION,
+        lastSessionAt:
+          [...lastByCwd.entries()].reduce<number | null>(
+            (best, [cwd, last]) => (cwd === path || cwd.startsWith(path + "/") ? Math.max(best ?? 0, last) : best),
+            null
+          ) ?? null,
       }));
     return { project: name, repos, detected: m.detectHarnesses(), all: m.ALL_HARNESSES, version: m.ATOMS_VERSION };
   });
