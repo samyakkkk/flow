@@ -28,6 +28,16 @@ import { buildMcpServer } from "./mcp-core.js";
 // per-user gating for remote MCP clients (EC2 topology). No token in env →
 // open, as before — dev fallback only.
 
+// Global safety net — see the orchestrator's index.ts for the rationale. The
+// gateway holds the long-lived FalkorDB client; a background/socket error that
+// slipped past a specific listener must not crash the brain service silently.
+process.on("unhandledRejection", (reason) => {
+  console.error("[gateway] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[gateway] uncaughtException:", (err as Error)?.stack ?? err);
+});
+
 const port = Number(process.env.GATEWAY_PORT ?? 7433);
 const TOKEN = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
 if (!TOKEN) {
