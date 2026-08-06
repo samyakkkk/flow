@@ -15,6 +15,7 @@ import { useProject } from "@/lib/useProject";
 import { useMode } from "@/lib/useMode";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { BrandIcon, type BrandName } from "./BrandIcon";
+import { ConsumerConnectorModal } from "./ConsumerConnectorModal";
 
 interface ConnectedRepo {
   path: string;
@@ -64,6 +65,8 @@ export function CodingToolsPanel() {
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [openRepo, setOpenRepo] = useState<string | null>(null);
+  // D4: which consumer app's connect flow is open (prod only).
+  const [connectorApp, setConnectorApp] = useState<"chatgpt" | "claude" | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -332,27 +335,61 @@ export function CodingToolsPanel() {
         <div className="text-[12px] text-ink/50 py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</div>
       )}
 
-      {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
+      {/* Consumer apps (ChatGPT, claude.ai) reach the brain over this
+          deployment's remote MCP. In prod that URL is public → a real connect
+          flow (URL + token + paste steps). In local mode there's no public URL
+          yet, so keep the honest "needs a deployment" note. */}
       <div className="mt-auto pt-1 grid grid-cols-1 gap-1.5">
-        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
-          <div>
-            <div className="text-[11px] font-medium text-ink/70">ChatGPT chats</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
-              Needs a public connector — coming with your team deployment. (The desktop app&apos;s Codex view is already covered above.)
+        {isProd ? (
+          <>
+            <button
+              onClick={() => setConnectorApp("chatgpt")}
+              className="flex items-center gap-2 p-2.5 rounded-xl border border-line bg-cream text-left hover:border-ink/30 transition-all"
+            >
+              <span className="text-ink/70"><BrandIcon name="openai" size={14} /></span>
+              <div className="flex-1">
+                <div className="text-[11px] font-medium text-ink">ChatGPT chats</div>
+                <div className="text-[10px] text-ink/50 leading-snug">Add this brain as a custom connector →</div>
+              </div>
+            </button>
+            <button
+              onClick={() => setConnectorApp("claude")}
+              className="flex items-center gap-2 p-2.5 rounded-xl border border-line bg-cream text-left hover:border-ink/30 transition-all"
+            >
+              <span className="text-ink/70"><BrandIcon name="anthropic" size={14} /></span>
+              <div className="flex-1">
+                <div className="text-[11px] font-medium text-ink">claude.ai &amp; Cowork</div>
+                <div className="text-[10px] text-ink/50 leading-snug">Add this brain as a custom connector →</div>
+              </div>
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
+              <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
+              <div>
+                <div className="text-[11px] font-medium text-ink/70">ChatGPT chats</div>
+                <div className="text-[10px] text-ink/45 leading-snug">
+                  Reaches the brain via a public connector — available once this project runs on a deployment.
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
-          <div>
-            <div className="text-[11px] font-medium text-ink/70">claude.ai &amp; Cowork</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
-              Needs a public connector + skill upload — coming with your team deployment. Works on every plan once live.
+            <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
+              <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
+              <div>
+                <div className="text-[11px] font-medium text-ink/70">claude.ai &amp; Cowork</div>
+                <div className="text-[10px] text-ink/45 leading-snug">
+                  Reaches the brain via a public connector — available once this project runs on a deployment.
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
+
+      {connectorApp && (
+        <ConsumerConnectorModal app={connectorApp} onClose={() => setConnectorApp(null)} />
+      )}
 
       {pickerOpen && <FolderPickerDialog onSelect={openConfirm} onClose={() => setPickerOpen(false)} />}
 
