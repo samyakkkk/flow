@@ -152,6 +152,16 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
      healthcheck tweak, which Docker's restart policy ignores.)
 
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — **Caught + fixed a regression my own supervisor introduced.**
+  node:22 ships no `lsof`; `bin/flow.mjs portInUse` spawnSync'd lsof and (since
+  spawnSync returns `{error}` not a throw on ENOENT) read every port as FREE →
+  the supervisor's periodic `flow up` spawned DUPLICATE gateway/orchestrator →
+  EADDRINUSE every 30s (absorbed by the new global net, so no crash, just spam).
+  Found via the routine log health-scan. Fix (52acc29): Dockerfile installs
+  lsof+procps AND portInUse falls back to a node-native TCP probe when lsof is
+  absent (both paths unit-tested). Verified on the box: 1 listener/port, EADDRINUSE
+  count stable across a supervisor cycle, `flow up` → "already running", 18/18.
+  Lesson: the global net masked the symptom in logs — log-scanning is what caught it.
 - 2026-08-07 T+N — **18/18 persona suite green** (owner setup, member gating+capture+can't-manage-users, remote brain, connector, durability). Multi-repo verified (2 repos registered). Deployed + smoke-tested via scripts/deploy-hetzner.sh. Code-reviewed (subagent) → fixed member-control flash. Skill + HANDOFF + deploy script shipped. 12 commits, branch clean. agent-browser went flaky mid-run (early owner/member screenshots captured). C2 composer left as documented LNA-gated follow-up.
 - 2026-08-07 T0 — Plan created. PAT secured+verified. ec2sim = local rig. Earlier
   this session: fixed devDeps/NODE_ENV build break (no code change); committed
