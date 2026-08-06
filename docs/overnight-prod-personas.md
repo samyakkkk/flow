@@ -138,6 +138,20 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
       it's LNA-gated, can't be validated headlessly; orchestrator + remote brain ready).
 - [ ] Consider persisting `brain.mcpUrl` for session resume (review finding #1).
 
+## 🛡️ Reliability hardening (this session)
+- Fixed 3 crash vectors + 2 defense-in-depth nets, all deployed + tests 282/282:
+  1. github-poller hardcoded demo seed → recurring 404s (6074922)
+  2. gateway FalkorDB client had no 'error' listener → crash on socket close; **fault-tested** (0c78895)
+  3. ACP agent spawn had no 'error' listener → crash on ENOENT/EACCES (5cb3961)
+  4. global unhandledRejection/uncaughtException nets on orchestrator + gateway (fe3d5c3)
+- **Documented gap (not built — architectural + risk):** a crashed backend
+  service does NOT auto-recover. `flow up` spawns detached, the entrypoint just
+  `tail -f`s, and `restart: unless-stopped` does NOT act on healthcheck status
+  (only container exit) — and the healthcheck only probes the dashboard. The
+  global nets make a crash unlikely; true auto-recovery needs an autoheal
+  sidecar OR a supervisor loop re-running `flow up` (idempotent via portInUse)
+  OR the entrypoint exiting when a service dies. Left as a scoped follow-up.
+
 ## 📓 Progress Log (newest first)
 - 2026-08-07 T+N — **18/18 persona suite green** (owner setup, member gating+capture+can't-manage-users, remote brain, connector, durability). Multi-repo verified (2 repos registered). Deployed + smoke-tested via scripts/deploy-hetzner.sh. Code-reviewed (subagent) → fixed member-control flash. Skill + HANDOFF + deploy script shipped. 12 commits, branch clean. agent-browser went flaky mid-run (early owner/member screenshots captured). C2 composer left as documented LNA-gated follow-up.
 - 2026-08-07 T0 — Plan created. PAT secured+verified. ec2sim = local rig. Earlier
