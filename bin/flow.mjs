@@ -47,7 +47,13 @@ import {
   writePids,
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
-import { materializeMachine, materializeRepo, removeRepo, ALL_HARNESSES } from "./lib/materialize.mjs";
+import {
+  materializeMachine,
+  materializeRepo,
+  removeRepo,
+  ALL_HARNESSES,
+  detectHarnesses,
+} from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
 
@@ -1208,6 +1214,7 @@ async function cmdSetup(rest) {
       share: { type: "boolean" },
       remove: { type: "boolean" },
       harness: { type: "string" },
+      all: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -1256,9 +1263,17 @@ async function cmdSetup(rest) {
     },
   });
 
+  // Default: only the tools this machine actually has. `--all` pre-wires
+  // everything; `--harness a,b` picks explicitly.
+  const detected = detectHarnesses();
   const harnesses = values.harness
     ? values.harness.split(",").map((s) => s.trim()).filter((h) => ALL_HARNESSES.includes(h))
-    : ALL_HARNESSES;
+    : values.all
+      ? ALL_HARNESSES
+      : detected.length
+        ? detected
+        : ALL_HARNESSES;
+  const skipped = ALL_HARNESSES.filter((h) => !harnesses.includes(h));
   const { owned, merged } = materializeRepo({
     repoDir,
     project: name,
@@ -1285,7 +1300,7 @@ async function cmdSetup(rest) {
   console.log(`
   ${OK} ${c.bold(repoDir)}
     → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
-    tools: ${harnesses.join(", ")}
+    tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
     work folder: ${workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}

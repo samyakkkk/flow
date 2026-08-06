@@ -623,6 +623,42 @@ const RENDERERS = {
 
 export const ALL_HARNESSES = Object.keys(RENDERERS);
 
+// Which tools does this machine actually have? Default `flow setup` renders
+// only these — configuring a tool the user never installed is mostly inert
+// but does leave real cruft (a ~/.codex dir, trust entries). `--all`
+// force-renders everything (pre-wiring for tools installed later).
+function onPath(bin) {
+  try {
+    execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function detectHarnesses() {
+  const home = homedir();
+  const checks = {
+    claude: () => onPath("claude") || existsSync(join(home, ".claude", "settings.json")),
+    codex: () => onPath("codex") || existsSync(join(home, ".codex", "config.toml")),
+    opencode: () =>
+      onPath("opencode") || existsSync(join(home, ".opencode")) || existsSync(join(home, ".config", "opencode")),
+    gemini: () => onPath("gemini") || existsSync(join(home, ".gemini", "settings.json")),
+    cursor: () => existsSync("/Applications/Cursor.app") || existsSync(join(home, ".cursor")),
+    antigravity: () =>
+      existsSync("/Applications/Antigravity.app") ||
+      existsSync("/Applications/Antigravity IDE.app") ||
+      existsSync(join(home, ".gemini", "antigravity")),
+  };
+  return ALL_HARNESSES.filter((h) => {
+    try {
+      return checks[h]();
+    } catch {
+      return false;
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // git exclude + manifest + top-level entry points
 

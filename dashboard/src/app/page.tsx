@@ -6,6 +6,7 @@ import { KeyGate } from "@/components/KeyGate";
 import { BrainCanvas } from "@/components/BrainCanvas";
 import { AgentPanel } from "@/components/AgentPanel";
 import { IntegrationCatalog } from "@/components/IntegrationCatalog";
+import { CodingToolsPanel } from "@/components/CodingToolsPanel";
 import { SourcesPillStrip, SourceDrawer, type RepoEntry, type SettingItem } from "@/components/SourceDrawer";
 import { RecentActivity, type AuditRow } from "@/components/RecentActivity";
 import { Kicker, Heading, StatusPill } from "@/components/ui";
@@ -216,6 +217,11 @@ export default function HomePage() {
             mode={mode}
             onChanged={() => loadAll()}
           />
+        </div>
+
+        {/* 2b. CODING TOOLS: connect repos + cloud/desktop app status */}
+        <div id="coding-tools-section" className="w-full">
+          <CodingToolsPanel />
         </div>
 
         {/* 3. BOTTOM SECTION: START AN AGENT TASK & RECENT ACTIVITY */}

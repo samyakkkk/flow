@@ -21,6 +21,7 @@ import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
 import { registerIngestRoutes } from "./ingest/routes.js";
+import { registerIntegrationRoutes } from "./integrations.js";
 import { registerCorrectionRoutes } from "./corrections.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
 import { setNodeAnchorProvider } from "./memory/anchors.js";
@@ -78,6 +79,7 @@ registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
 registerIngestRoutes(app);
+registerIntegrationRoutes(app);
 registerCorrectionRoutes(app);
 registerMemoryRoutes(app);
 // Memory anchors resolve graph node paths through the gateway; a null gateway
