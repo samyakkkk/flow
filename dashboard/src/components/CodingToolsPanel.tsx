@@ -1,13 +1,13 @@
 "use client";
 
-// CodingToolsPanel — answers three questions, in the order a user asks them:
-//   1. "Is my coding activity feeding this brain?"  → repo chips with a
-//      liveness dot + when the last session landed. Names only; detail on click.
-//   2. "Which of my tools are covered?"             → ONE machine-level icon
-//      row (detected = ink, absent = faded). Tools are a machine fact — they
-//      are not repeated per folder; per-folder deviations live in the detail.
-//   3. "How do I add the next repo?"                → one button + the CLI
-//      one-liner. Cloud surfaces are a quiet chip row, not four paragraphs.
+// "Listen to sessions" — the workspace-capture column (sits beside the agent
+// trigger). One idea, stated plainly: connect a workspace and Flow listens to
+// every coding session inside it — by installing the hooks, MCP registration
+// and skills each tool needs there. Two equivalent ways in, shown as an
+// explicit either/or: the native folder chooser here, or `flow setup
+// <project>` in a terminal. Connected workspaces list below with a liveness
+// signal. ChatGPT chats and claude.ai/Cowork can't be listened to locally —
+// they get two quiet "later" cards, not silence.
 
 import { useCallback, useEffect, useState } from "react";
 import { useProject } from "@/lib/useProject";
@@ -44,7 +44,7 @@ const TOOLS: Array<{ id: string; label: string; icon: BrandName }> = [
 const toolMeta = (id: string) => TOOLS.find((t) => t.id === id);
 
 function ago(ts: number | null): string {
-  if (!ts) return "no sessions yet";
+  if (!ts) return "quiet";
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
@@ -83,6 +83,29 @@ export function CodingToolsPanel() {
     setPickerOpen(false);
   };
 
+  // Native Finder chooser first (the server hosts it — browsers can't expose
+  // real paths from their own pickers); in-page browser as the fallback.
+  const pickFolder = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(prefix("/api/fs/native-pick"), { method: "POST" });
+      const json = (await res.json()) as { path?: string; canceled?: boolean; unsupported?: boolean };
+      if (json.path) {
+        openConfirm(json.path);
+        setBusy(false);
+        return;
+      }
+      if (json.canceled) {
+        setBusy(false);
+        return;
+      }
+    } catch {
+      /* fall through to in-page picker */
+    }
+    setBusy(false);
+    setPickerOpen(true);
+  };
+
   const connect = async () => {
     if (!pendingPath) return;
     setBusy(true);
@@ -93,7 +116,7 @@ export function CodingToolsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: pendingPath, harnesses: [...chosen] }),
       });
-      const json = (await res.json()) as { ok?: boolean; repoDir?: string; error?: string };
+      const json = (await res.json()) as { ok?: boolean; error?: string };
       if (res.ok && json.ok) {
         setPendingPath(null);
         void load();
@@ -126,54 +149,73 @@ export function CodingToolsPanel() {
   const detected = new Set(data?.detected ?? []);
 
   return (
-    <div className="flex flex-col gap-4 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in">
+    <div className="flex flex-col gap-3.5 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in h-full">
       {/* Header */}
-      <div className="flex items-end justify-between border-b border-line pb-3 gap-3 flex-wrap">
-        <div>
-          <div className="text-[11px] uppercase tracking-widest text-ink/50">Coding tools</div>
-          <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
-            Sessions in connected repos feed the brain
-          </h2>
-        </div>
+      <div className="border-b border-line pb-3">
+        <div className="text-[11px] uppercase tracking-widest text-ink/50">Listening</div>
+        <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+          Listen to sessions
+        </h2>
+        <p className="text-[12px] text-ink/55 mt-1 leading-snug">
+          Connect a workspace and Flow listens to every coding session inside it — it installs the
+          hooks, MCP and skills your tools need, then sessions feed the brain automatically.
+        </p>
+      </div>
+
+      {/* Either/or connect */}
+      <div className="flex flex-col gap-1.5">
         <button
-          onClick={() => setPickerOpen(true)}
-          className="px-3 py-1.5 rounded-lg border border-ink/20 bg-cream text-sm hover:border-ink/40 transition-all shrink-0"
+          onClick={() => void pickFolder()}
+          className="w-full px-3 py-2 rounded-lg border border-ink/20 bg-cream text-sm hover:border-ink/40 transition-all font-medium"
           disabled={busy}
         >
-          + Connect repo
+          {busy ? "Choosing…" : "+ Connect a workspace"}
+        </button>
+        <div className="flex items-center gap-2 text-[11px] text-ink/45">
+          <span className="h-px bg-line flex-1" />
+          or, in any terminal
+          <span className="h-px bg-line flex-1" />
+        </div>
+        <button
+          className="w-full flex items-center justify-center gap-2 text-[12px] font-mono text-ink/60 hover:text-ink group py-1"
+          title="Copy — run inside the workspace you want Flow to listen to"
+          onClick={() => {
+            void navigator.clipboard?.writeText(cliCommand);
+            setMsg("Copied — run it inside the workspace.");
+          }}
+        >
+          <span className="text-ink/35">$</span> {cliCommand}
+          <span className="text-[10px] text-ink/35 group-hover:text-ink/60">⧉</span>
         </button>
       </div>
 
       {msg && (
-        <div className="p-2.5 rounded-lg bg-sand border border-line text-xs font-mono text-ink flex items-center justify-between">
+        <div className="p-2 rounded-lg bg-sand border border-line text-[11px] font-mono text-ink flex items-center justify-between">
           <span>{msg}</span>
           <button onClick={() => setMsg("")}>✕</button>
         </div>
       )}
 
-      {/* Machine-level tool coverage: one row of marks */}
-      <div className="flex items-center gap-5 flex-wrap">
+      {/* Machine-level tool coverage */}
+      <div className="flex items-center gap-3 flex-wrap">
         {TOOLS.map((t) => {
           const on = detected.has(t.id);
           return (
-            <div
+            <span
               key={t.id}
-              title={`${t.label} — ${on ? "detected; captured in connected repos" : "not installed on this machine"}`}
-              className={`flex flex-col items-center gap-1 w-14 ${on ? "text-ink" : "text-ink/25"}`}
+              title={`${t.label} — ${on ? "detected; sessions captured in connected workspaces" : "not installed on this machine"}`}
+              className={on ? "text-ink" : "text-ink/20"}
             >
-              <BrandIcon name={t.icon} size={22} />
-              <span className="text-[9px] uppercase tracking-wide text-center leading-tight">{t.label}</span>
-            </div>
+              <BrandIcon name={t.icon} size={17} />
+            </span>
           );
         })}
-        <div className="text-[11px] text-ink/40 ml-auto self-center">
-          {detected.size}/{TOOLS.length} detected on this machine
-        </div>
+        <span className="text-[10px] text-ink/40 ml-auto">{detected.size}/{TOOLS.length} tools detected</span>
       </div>
 
-      {/* Connected repos: names + liveness, scrollable */}
+      {/* Connected workspaces */}
       {data && data.repos.length > 0 ? (
-        <div className="max-h-56 overflow-y-auto rounded-xl border border-line divide-y divide-line bg-cream/50">
+        <div className="max-h-52 overflow-y-auto rounded-xl border border-line divide-y divide-line bg-cream/50">
           {data.repos.map((r) => {
             const name = r.path.split("/").filter(Boolean).pop() ?? r.path;
             const live = r.lastSessionAt != null;
@@ -182,44 +224,42 @@ export function CodingToolsPanel() {
             return (
               <div key={r.path}>
                 <button
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-cream transition-colors"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-cream transition-colors"
                   onClick={() => setOpenRepo(isOpen ? null : r.path)}
                 >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${live ? "bg-green-600" : "bg-ink/20"}`}
-                  />
-                  <span className="font-mono text-[13px] truncate">{name}</span>
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${live ? "bg-green-600" : "bg-ink/20"}`} />
+                  <span className="font-mono text-[12px] truncate">{name}</span>
                   {r.stale && <span className="text-[9px] px-1 rounded bg-sand border border-line text-ink/50">update</span>}
                   {deviates && (
                     <span className="flex items-center gap-1 text-ink/40">
                       {r.harnesses.slice(0, 6).map((h) => {
                         const m = toolMeta(h);
-                        return m ? <BrandIcon key={h} name={m.icon} size={11} /> : null;
+                        return m ? <BrandIcon key={h} name={m.icon} size={10} /> : null;
                       })}
                     </span>
                   )}
-                  <span className="ml-auto text-[11px] text-ink/45 shrink-0">{ago(r.lastSessionAt)}</span>
+                  <span className="ml-auto text-[10px] text-ink/45 shrink-0">{ago(r.lastSessionAt)}</span>
                 </button>
                 {isOpen && (
-                  <div className="px-3 pb-2.5 pt-0.5 flex items-center justify-between gap-3 flex-wrap bg-cream">
+                  <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between gap-2 flex-wrap bg-cream">
                     <div className="min-w-0">
-                      <div className="font-mono text-[11px] text-ink/50 truncate">{r.path}</div>
-                      <div className="flex items-center gap-2 mt-1.5 text-ink/70">
+                      <div className="font-mono text-[10px] text-ink/50 truncate">{r.path}</div>
+                      <div className="flex items-center gap-1.5 mt-1 text-ink/70">
                         {r.harnesses.map((h) => {
                           const m = toolMeta(h);
                           return m ? (
                             <span key={h} title={m.label}>
-                              <BrandIcon name={m.icon} size={14} />
+                              <BrandIcon name={m.icon} size={12} />
                             </span>
                           ) : null;
                         })}
-                        <span className="text-[10px] text-ink/40">{r.share ? "shared with team" : "personal"}</span>
+                        <span className="text-[9px] text-ink/40">{r.share ? "shared" : "personal"}</span>
                       </div>
                     </div>
-                    <div className="flex gap-2 shrink-0">
+                    <div className="flex gap-1.5 shrink-0">
                       {r.stale && (
                         <button
-                          className="text-[11px] px-2 py-1 rounded border border-ink/20 hover:border-ink/40"
+                          className="text-[10px] px-2 py-0.5 rounded border border-ink/20 hover:border-ink/40"
                           onClick={() => openConfirm(r.path)}
                           disabled={busy}
                         >
@@ -227,7 +267,7 @@ export function CodingToolsPanel() {
                         </button>
                       )}
                       <button
-                        className="text-[11px] px-2 py-1 rounded border border-ink/10 text-ink/50 hover:text-ink hover:border-ink/30"
+                        className="text-[10px] px-2 py-0.5 rounded border border-ink/10 text-ink/50 hover:text-ink hover:border-ink/30"
                         onClick={() => void remove(r.path)}
                         disabled={busy}
                       >
@@ -241,45 +281,34 @@ export function CodingToolsPanel() {
           })}
         </div>
       ) : (
-        <div className="text-sm text-ink/50 py-2">
-          No repos connected yet — sessions there aren&apos;t reaching the brain. Connect one, or run{" "}
-          <code className="px-1 py-0.5 rounded bg-cream border border-line font-mono text-[12px]">{cliCommand}</code>{" "}
-          inside it.
-        </div>
+        <div className="text-[12px] text-ink/50 py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</div>
       )}
 
-      {/* Footer: the habit + cloud surfaces, one quiet line each */}
-      <div className="flex items-center justify-between gap-3 flex-wrap pt-1 border-t border-line">
-        <button
-          className="flex items-center gap-2 text-[12px] font-mono text-ink/60 hover:text-ink group"
-          title="Copy — run in any repo you work on"
-          onClick={() => {
-            void navigator.clipboard?.writeText(cliCommand);
-            setMsg("Copied — run it inside any repo you work on.");
-          }}
-        >
-          <span className="text-ink/35">$</span> {cliCommand}
-          <span className="text-[10px] text-ink/35 group-hover:text-ink/60">⧉</span>
-        </button>
-        <div className="flex items-center gap-2">
-          <span
-            className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-full border border-line text-ink/45 bg-sand/60"
-            title="claude.ai & Cowork connect via a remote connector once your deployment has a public URL"
-          >
-            <BrandIcon name="anthropic" size={10} /> claude.ai · needs public URL
-          </span>
-          <span
-            className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-full border border-line text-ink/45 bg-sand/60"
-            title="ChatGPT web connects via Developer-mode connector once public; the desktop app's Codex view is covered by Codex today"
-          >
-            <BrandIcon name="openai" size={10} /> ChatGPT · needs public URL
-          </span>
+      {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
+      <div className="mt-auto pt-1 grid grid-cols-1 gap-1.5">
+        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
+          <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
+          <div>
+            <div className="text-[11px] font-medium text-ink/70">ChatGPT chats</div>
+            <div className="text-[10px] text-ink/45 leading-snug">
+              Needs a public connector — coming with your team deployment. (The desktop app&apos;s Codex view is already covered above.)
+            </div>
+          </div>
+        </div>
+        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
+          <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
+          <div>
+            <div className="text-[11px] font-medium text-ink/70">claude.ai &amp; Cowork</div>
+            <div className="text-[10px] text-ink/45 leading-snug">
+              Needs a public connector + skill upload — coming with your team deployment. Works on every plan once live.
+            </div>
+          </div>
         </div>
       </div>
 
       {pickerOpen && <FolderPickerDialog onSelect={openConfirm} onClose={() => setPickerOpen(false)} />}
 
-      {/* Confirm: which tools for this repo (detected pre-checked) */}
+      {/* Confirm: which tools to install into this workspace */}
       {pendingPath && (
         <div
           className="fixed inset-0 z-[1000] flex items-center justify-center"
@@ -290,8 +319,12 @@ export function CodingToolsPanel() {
             className="bg-paper border border-line rounded-xl w-[440px] max-w-[92vw] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-sm font-medium">Connect to {data?.project}</div>
-            <div className="font-mono text-[11px] text-ink/50 break-all mt-0.5 mb-3">{pendingPath}</div>
+            <div className="text-sm font-medium">Listen to sessions in this workspace</div>
+            <div className="font-mono text-[11px] text-ink/50 break-all mt-0.5">{pendingPath}</div>
+            <div className="text-[11px] text-ink/55 mt-2 mb-3">
+              Flow will install the capture hooks, MCP registration and the flow skill for the
+              selected tools into this workspace (personal by default — nothing is committed).
+            </div>
             <div className="grid grid-cols-2 gap-1.5 mb-4">
               {TOOLS.map((t) => {
                 const isDetected = detected.has(t.id);
@@ -331,7 +364,7 @@ export function CodingToolsPanel() {
                 onClick={() => void connect()}
                 disabled={busy || chosen.size === 0}
               >
-                {busy ? "Connecting…" : `Connect ${chosen.size} tool${chosen.size === 1 ? "" : "s"}`}
+                {busy ? "Installing…" : `Install & listen (${chosen.size})`}
               </button>
             </div>
           </div>

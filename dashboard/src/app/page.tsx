@@ -219,26 +219,22 @@ export default function HomePage() {
           />
         </div>
 
-        {/* 2b. CODING TOOLS: connect repos + cloud/desktop app status */}
-        <div id="coding-tools-section" className="w-full">
-          <CodingToolsPanel />
-        </div>
-
-        {/* 3. BOTTOM SECTION: START AN AGENT TASK & RECENT ACTIVITY */}
+        {/* 3. BOTTOM SECTION: AGENT TRIGGER · LISTEN TO SESSIONS · ACTIVITY */}
         <div id="agent-runner-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
-          {/* Agent Task Command Center (Left 8 Cols / ~65%) */}
-          <div className="lg:col-span-8 flex flex-col">
+          {/* Agent Task Command Center (Left ~60%) */}
+          <div className="lg:col-span-7 flex flex-col gap-6">
             <AgentPanel
               nodeCount={graphNodeCount}
               selectedNodeTag={selectedNodeTag}
               onClearNodeTag={() => setSelectedNodeTag(null)}
               onOpenDrawer={() => setIsDrawerOpen(true)}
             />
+            <RecentActivity rows={auditRows} />
           </div>
 
-          {/* Domain Milestones Feed (Right 4 Cols / ~35%) */}
-          <div className="lg:col-span-4 flex flex-col">
-            <RecentActivity rows={auditRows} />
+          {/* Listen to sessions: the workspace-capture column */}
+          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
+            <CodingToolsPanel />
           </div>
         </div>
       </div>
