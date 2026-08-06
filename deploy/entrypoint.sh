@@ -25,7 +25,22 @@ stop() {
 }
 trap stop TERM INT
 
-# Stay in the foreground, surfacing service logs when present.
+# Surface service logs in the foreground.
 touch /tmp/keepalive
 tail -f /tmp/keepalive data/logs/*.log data/projects/"$PROJECT"/logs/*.log 2>/dev/null &
-wait $!
+TAIL_PID=$!
+
+# Supervise. Services are spawned DETACHED with no supervisor, the healthcheck
+# only probes the dashboard, and Docker's restart policy does NOT act on
+# healthcheck status — so a crashed orchestrator/gateway would otherwise be a
+# SILENT partial outage (dashboard still 200s). `flow up` is idempotent:
+# portInUse skips live services and restarts only the dead ones, without
+# rebuilding (BUILD_ID unchanged) or reprinting the setup code (stored
+# setupToken; only shown pre-bootstrap). Re-run it on an interval as the
+# supervisor. The loop keeps the container in the foreground; SIGTERM interrupts
+# the sleep and runs `stop` for a clean `flow down`.
+FLOW_SUPERVISE_INTERVAL="${FLOW_SUPERVISE_INTERVAL:-30}"
+while kill -0 "$TAIL_PID" 2>/dev/null; do
+  sleep "$FLOW_SUPERVISE_INTERVAL"
+  $FLOW up "$PROJECT" >/dev/null 2>&1 || true
+done
