@@ -39,7 +39,9 @@ run `scripts/deploy-hetzner.sh` from this worktree.
 | **Member gating** | 403 on GitHub/settings writes; can read; can link own tools |
 | **C2 remote brain** | `POST /main/mcp` + machine PAT → 8 brain tools; `orient()` real knowledge; no token → 401 |
 | **D4 connectors** | member mints PAT → works as MCP connector (8 tools); cards+modal live |
-| **D1 durability** | brain/repo survive `docker compose up --build` |
+| **D1 durability** | brain/repo survive `docker compose up --build` + a hard `docker restart` (49→49 nodes, 18/18 after) |
+| **Reliability** | 3 crash-vector fixes + 2 global nets + entrypoint supervisor auto-recovering a killed service in ≤30s — all fault-tested |
+| **Security (CRITICAL, fixed)** | closed a member→owner escalation (member PAT could `PUT /v1/settings` via the `/v1/*` door, bypassing D3). Now member-allowlisted; verified member→403 / owner→200; suite guards it. 2 HIGH residuals documented in the plan's § Security posture (ingest attribution; brain-binding SSRF, now owner-only). |
 
 ## To deploy for real (your own box)
 1. `docs/hetzner-deploy.md` is the tested guide (nip.io + Caddy TLS, 4GB+swap, OpenRouter key).

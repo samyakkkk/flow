@@ -162,6 +162,34 @@ can't be e2e-verified tonight would risk "working" for "more".
      silent-partial-outage gap is CLOSED and self-healing. (Chosen over a
      healthcheck tweak, which Docker's restart policy ignores.)
 
+## 🔐 Security posture (adversarial review 2026-08-07)
+A subagent security review of this session's auth/token/gating/brain code found:
+- **Finding 1 (CRITICAL) — FIXED + verified + regression-guarded (275dcfc).** A
+  member PAT could hit `/<project>/v1/settings` `/v1/sources` `/v1/agents`
+  `/v1/work-folders` directly — the proxy checked only any-grant and route.ts
+  injects the ADMIN token into the role-blind orchestrator, bypassing D3's
+  canManageIntegrations() gate. VERIFIED exploit: member `PUT /v1/settings` →
+  200, wrote LINEAR_API_KEY. Fix: proxy now allows members only the agent/capture
+  surface (verbs/embed/journal/reconcile/memory/ingest/corrections); every other
+  /v1 segment requires owner (403). Verified: member settings/sources/agents →
+  403, ingest+mcp → 200, owner → 200. Suite guards it (20/20).
+- **Finding 2 (HIGH) — documented, not yet fixed.** `/v1/ingest/hook` derives the
+  session row id `ext-<harness>-<externalId>` from client input with NO per-user
+  attribution → an insider member can forge sessions or append to another user's
+  session → memory-poisoning of the shared brain. Fix: proxy stamps a trusted
+  `x-flow-pat-user` header (overwriting any client value), route.ts forwards it,
+  orchestrator ingest namespaces the row id by user + rejects cross-user appends.
+  Multi-file plumbing touching capture dedupe — deferred to avoid destabilizing
+  the (green) capture flow blind. Insider-only, data-integrity (not secret theft).
+- **Finding 3 (HIGH→reduced).** brain-binding SSRF via `/v1/agents` is now
+  owner-only (member 403), so not member-exploitable. Residual: `mcpUrl` accepts
+  `http://` + any host (no private-IP/metadata block) — tighten to https+allowlist
+  for owner/local. Low urgency (owner-trusted).
+- **Finding 4 (LOW).** PAT hashing/constant-time/project-scoping all correct;
+  nits: no per-token expiry/revoke UI, 32-bit token id. Defense-in-depth only.
+- **Finding 5 (SAFE).** The `/mcp` consumer-connector path is correctly
+  read-scoped + project-gated (forwards the PAT, not admin; gateway re-verifies).
+
 ## 📓 Progress Log (newest first)
 - 2026-08-07 T+N — Broadened validation: **gateway tests 24/24** (regression on my
   graph.ts/server.ts changes; orchestrator was 282/282 → all my code covered).
