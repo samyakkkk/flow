@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useProject } from "@/lib/useProject";
+import { useMode } from "@/lib/useMode";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { BrandIcon, type BrandName } from "./BrandIcon";
 
@@ -55,6 +56,7 @@ function ago(ts: number | null): string {
 
 export function CodingToolsPanel() {
   const { prefix } = useProject();
+  const { mode } = useMode();
   const [data, setData] = useState<IntegrationsData | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -147,6 +149,15 @@ export function CodingToolsPanel() {
   };
 
   const cliCommand = `flow setup ${data?.project ?? "<project>"}`;
+  // In prod the dashboard is served by a REMOTE deployment, so `data.detected`
+  // (from the server's /api/integrations) is the SERVER's CLIs, not the user's,
+  // and the native folder picker browses the SERVER's filesystem. Both are
+  // wrong here — connecting a workspace is a LOCAL-machine act, done by running
+  // `flow setup` in the repo (which needs the Flow CLI installed). So in prod
+  // we present the CLI list as "supported" (neutral), drop the server folder
+  // picker, and lead with the terminal command. Local mode is unchanged: there
+  // same-origin IS the user's machine.
+  const isProd = mode === "prod";
   const detected = new Set(data?.detected ?? []);
 
   return (
@@ -166,11 +177,16 @@ export function CodingToolsPanel() {
       {/* The user's tools, up top: "yes, mine are covered" */}
       <div className="flex items-start gap-2 flex-wrap">
         {TOOLS.map((t) => {
-          const on = detected.has(t.id);
+          // Prod: don't claim local detection from server data — show all as supported.
+          const on = isProd ? true : detected.has(t.id);
           return (
             <div
               key={t.id}
-              title={`${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
+              title={
+                isProd
+                  ? `${t.label} — supported; connect a workspace with 'flow setup' to give it this project's memory`
+                  : `${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`
+              }
               className={`flex flex-col items-center gap-1 w-[52px] ${on ? "text-ink" : "text-ink/25"}`}
             >
               <BrandIcon name={t.icon} size={20} />
@@ -180,20 +196,32 @@ export function CodingToolsPanel() {
         })}
       </div>
 
-      {/* Either/or connect */}
+      {/* Either/or connect. In prod the native picker would browse the SERVER
+          filesystem, so we drop it and lead with the terminal command run on
+          the user's machine (which needs the Flow CLI installed). */}
       <div className="flex flex-col gap-1.5">
-        <button
-          onClick={() => void pickFolder()}
-          className="w-full px-3 py-2 rounded-lg border border-ink/20 bg-cream text-sm hover:border-ink/40 transition-all font-medium"
-          disabled={busy}
-        >
-          {busy ? "Choosing…" : "+ Connect a workspace"}
-        </button>
-        <div className="flex items-center gap-2 text-[11px] text-ink/45">
-          <span className="h-px bg-line flex-1" />
-          or, in any terminal
-          <span className="h-px bg-line flex-1" />
-        </div>
+        {!isProd && (
+          <>
+            <button
+              onClick={() => void pickFolder()}
+              className="w-full px-3 py-2 rounded-lg border border-ink/20 bg-cream text-sm hover:border-ink/40 transition-all font-medium"
+              disabled={busy}
+            >
+              {busy ? "Choosing…" : "+ Connect a workspace"}
+            </button>
+            <div className="flex items-center gap-2 text-[11px] text-ink/45">
+              <span className="h-px bg-line flex-1" />
+              or, in any terminal
+              <span className="h-px bg-line flex-1" />
+            </div>
+          </>
+        )}
+        {isProd && (
+          <div className="text-[11px] text-ink/55 leading-snug">
+            Run this in the repo on <strong>your machine</strong> (needs the{" "}
+            <a href={prefix("/connect")} className="underline">Flow CLI installed</a>):
+          </div>
+        )}
         <button
           className="w-full flex items-center justify-center gap-2 text-[12px] font-mono text-ink/60 hover:text-ink group py-1"
           title="Copy — run inside the workspace you want Flow to listen to"
