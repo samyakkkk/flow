@@ -92,6 +92,16 @@ c=$(curl -s -b "$MJ" -o /dev/null -w "%{http_code}" -X PUT "$BASE/$PROJECT/api/s
 c=$(code -b "$MJ" "$BASE/$PROJECT/api/repos/status")
 [ "$c" = "200" ] && ok "member CAN read repo status ($c)" || bad "member read repo status = $c"
 
+# member's OWN coding sessions feed the brain (capture via ingest hook + PAT) —
+# the "link stuff and contribute" half of the member story.
+MPAT=$(curl -s -b "$MJ" -X POST "$BASE/$PROJECT/api/tokens" -H 'Content-Type: application/json' \
+       -d '{"label":"persona capture"}' | jget "d.get('token','')")
+NONCE="p$$-$(date +%s 2>/dev/null || echo 0)"
+cap=$(curl -s -X POST "$BASE/$PROJECT/v1/ingest/hook" -H "Authorization: Bearer $MPAT" -H 'Content-Type: application/json' \
+      -d "{\"harness\":\"claude-code\",\"repo\":\"persona-cap\",\"event\":{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"cap-$NONCE\",\"prompt\":\"FLOW-CAP-$NONCE\"}}" \
+      --max-time 20 | jget "d.get('ok')")
+[ "$cap" = "True" ] && ok "member's own session feeds the brain (ingest hook 200)" || bad "member capture failed ($cap)"
+
 # ── P3/P5 · remote brain over MCP + consumer connector ──────────────────────
 echo
 echo "P3/P5 · REMOTE BRAIN + CONNECTOR (Jordan / Maya)"
