@@ -448,7 +448,16 @@ function renderCursor(ctx) {
   const rulePath = join(repoDir, ".cursor", "rules", "flow.mdc");
   mkdirSync(dirname(rulePath), { recursive: true });
   writeFileSync(rulePath, `---\ndescription: Flow project memory\nalwaysApply: true\n---\n\n${instructionBlock(project)}\n`, "utf-8");
-  return { owned: [".cursor/rules/flow.mdc"], merged: [".cursor/hooks.json", ".cursor/mcp.json"] };
+
+  // Cursor discovers skills in .agents/skills/ — the same shared path the
+  // Codex renderer writes, so this is a no-op when both are enabled.
+  const skillPath = join(repoDir, ".agents", "skills", "flow", "SKILL.md");
+  mkdirSync(dirname(skillPath), { recursive: true });
+  writeFileSync(skillPath, skillMd(project), "utf-8");
+  return {
+    owned: [".cursor/rules/flow.mdc", ".agents/skills/flow/SKILL.md"],
+    merged: [".cursor/hooks.json", ".cursor/mcp.json"],
+  };
 }
 
 function renderAntigravity(ctx) {
