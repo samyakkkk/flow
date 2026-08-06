@@ -234,12 +234,11 @@ export default function HomePage() {
           {/* Your AI tools: workspace connection column */}
           <div id="coding-tools-section" className="relative lg:col-span-5 flex flex-col">
             <CodingToolsPanel />
-            {/* the fulcrum of the decision, sitting on the seam between the cards */}
-            <div
-              className="hidden lg:flex absolute -right-[30px] top-9 z-10 items-center justify-center w-9 h-9 rounded-full border border-line bg-paper shadow-sm text-[11px] font-medium text-ink/60"
-              aria-hidden
-            >
-              or
+            {/* the seam: a full-height divider with OR at its middle */}
+            <div className="hidden lg:flex absolute -right-[13px] inset-y-0 z-10 flex-col items-center" aria-hidden>
+              <span className="w-px bg-line flex-1" />
+              <span className="text-[10px] uppercase tracking-widest text-ink/50 py-2">or</span>
+              <span className="w-px bg-line flex-1" />
             </div>
           </div>
 
