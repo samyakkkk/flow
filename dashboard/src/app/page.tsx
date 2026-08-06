@@ -219,9 +219,15 @@ export default function HomePage() {
           />
         </div>
 
-        {/* 3. BOTTOM SECTION: AGENT TRIGGER · LISTEN TO SESSIONS · ACTIVITY */}
+        {/* 3. THE INTERFACE DECISION: use Flow in your own AI interfaces (left)
+            — or drive it from Flow's own interface (right). Same brain either way. */}
         <div id="agent-runner-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
-          {/* Agent Task Command Center (Left ~60%) */}
+          {/* Your AI interfaces: workspace connection column */}
+          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
+            <CodingToolsPanel />
+          </div>
+
+          {/* Flow's interface: agent trigger + activity */}
           <div className="lg:col-span-7 flex flex-col gap-6">
             <AgentPanel
               nodeCount={graphNodeCount}
@@ -230,11 +236,6 @@ export default function HomePage() {
               onOpenDrawer={() => setIsDrawerOpen(true)}
             />
             <RecentActivity rows={auditRows} />
-          </div>
-
-          {/* Listen to sessions: the workspace-capture column */}
-          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
-            <CodingToolsPanel />
           </div>
         </div>
       </div>

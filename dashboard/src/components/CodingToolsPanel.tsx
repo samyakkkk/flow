@@ -153,12 +153,12 @@ export function CodingToolsPanel() {
     <div className="flex flex-col gap-3.5 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in h-full">
       {/* Header — value first: your tools, Flow-powered */}
       <div className="border-b border-line pb-3">
-        <div className="text-[11px] uppercase tracking-widest text-ink/50">Your AI tools</div>
+        <div className="text-[11px] uppercase tracking-widest text-ink/50">Your AI interfaces</div>
         <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
-          Use Flow in your own tools
+          Use Flow in your own AI interfaces
         </h2>
         <p className="text-[12px] text-ink/55 mt-1 leading-snug">
-          Keep working where you already work. Connect a workspace and your AI tools get this
+          Keep working where you already work. Connect a workspace and your AI interfaces get this
           project&apos;s memory — and every session they run teaches it.
         </p>
       </div>

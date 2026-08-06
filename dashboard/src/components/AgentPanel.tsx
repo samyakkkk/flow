@@ -87,23 +87,26 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
       style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
     >
       <div className="flex flex-col gap-4">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-line pb-3">
-          <div>
-            <Kicker>Agent Task Command Center</Kicker>
-            <h2
-              style={{ fontFamily: "var(--font-display)" }}
-              className="text-base font-semibold text-ink mt-0.5"
+        {/* Header — typography mirrors the "your AI interfaces" card: the two
+            panels are one decision (which interface do you drive Flow from?),
+            so they must read as siblings. */}
+        <div className="border-b border-line pb-3">
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] uppercase tracking-widest text-ink/50">Flow&apos;s interface</div>
+            <span
+              style={{ fontFamily: "var(--font-mono)" }}
+              className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-sand border border-line text-ink font-medium"
             >
-              New Agent Task
-            </h2>
+              {nodeCount > 0 ? `${nodeCount} nodes mapped` : "Brain Ready"}
+            </span>
           </div>
-          <span
-            style={{ fontFamily: "var(--font-mono)" }}
-            className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-sand border border-line text-ink font-medium"
-          >
-            {nodeCount > 0 ? `${nodeCount} nodes mapped` : "Brain Ready"}
-          </span>
+          <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+            Or run agents right here
+          </h2>
+          <p className="text-[12px] text-ink/55 mt-1 leading-snug">
+            Same brain, your own subscriptions — tasks run on the CLIs already installed on your
+            machine. The only difference is which interface you drive from.
+          </p>
         </div>
 
         {/* Task Composer Box */}
