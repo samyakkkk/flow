@@ -365,7 +365,13 @@ try {
   } else if (cmd === "search") {
     if (!arg) { console.log('usage: flow search "<query>"'); process.exit(0); }
     const out = await call(p.orchestratorUrl + "/v1/memory/search", p.token, { query: arg, repo: binding.repo });
-    console.log(header + "\\n\\n" + (out.lines?.length ? out.lines.join("\\n") : JSON.stringify(out, null, 2)));
+    // lines is a rendered string today; stay tolerant of array/absent shapes.
+    const text = Array.isArray(out.lines)
+      ? out.lines.join("\\n")
+      : typeof out.lines === "string" && out.lines.trim()
+        ? out.lines
+        : JSON.stringify(out, null, 2);
+    console.log(header + "\\n\\n" + text);
   } else if (cmd === "remember") {
     if (!arg) { console.log('usage: flow remember "<text — verbatim quotes plus context>"'); process.exit(0); }
     const out = await call(p.orchestratorUrl + "/v1/memory/remember", p.token, { text: arg, repo: binding.repo, branch });
