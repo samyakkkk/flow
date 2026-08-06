@@ -173,14 +173,15 @@ A subagent security review of this session's auth/token/gating/brain code found:
   surface (verbs/embed/journal/reconcile/memory/ingest/corrections); every other
   /v1 segment requires owner (403). Verified: member settings/sources/agents →
   403, ingest+mcp → 200, owner → 200. Suite guards it (20/20).
-- **Finding 2 (HIGH) — documented, not yet fixed.** `/v1/ingest/hook` derives the
-  session row id `ext-<harness>-<externalId>` from client input with NO per-user
-  attribution → an insider member can forge sessions or append to another user's
-  session → memory-poisoning of the shared brain. Fix: proxy stamps a trusted
-  `x-flow-pat-user` header (overwriting any client value), route.ts forwards it,
-  orchestrator ingest namespaces the row id by user + rejects cross-user appends.
-  Multi-file plumbing touching capture dedupe — deferred to avoid destabilizing
-  the (green) capture flow blind. Insider-only, data-integrity (not secret theft).
+- **Finding 2 (HIGH) — FIXED + verified + regression-guarded (58fbffd).** The
+  ingest hook built the row id `ext-<harness>-<externalId>` from client input with
+  no attribution → an insider member could forge/append another user's captured
+  session (brain memory-poisoning). Fix: proxy verifies the PAT and stamps a
+  trusted `x-flow-pat-user` (stripping any client value) → route.ts forwards it →
+  orchestrator namespaces the row id by user (`ext-<userId>-<harness>-<externalId>`).
+  VERIFIED: alex's capture → `ext-944a1b77…-…`; the SAME externalId under the
+  owner → a DIFFERENT id → cross-user forge/append structurally impossible. Ingest
+  tests 34/34; suite guards it (21/21). Local/unattributed keeps the legacy id.
 - **Finding 3 (HIGH→reduced).** brain-binding SSRF via `/v1/agents` is now
   owner-only (member 403), so not member-exploitable. Residual: `mcpUrl` accepts
   `http://` + any host (no private-IP/metadata block) — tighten to https+allowlist
