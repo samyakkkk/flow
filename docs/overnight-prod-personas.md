@@ -120,7 +120,18 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 
 ---
 
+## 🔭 Watch / next ticks (for the cron watchdog to pick up)
+- [ ] Verify the 2nd repo (`olostep/samples`) finishes indexing → brain grows to
+      ≥2 nodes: `curl -b <owner-cookie> $BASE/main/api/repos/status` (indexing→indexed),
+      then MCP `read_query` a node count. (Indexing is async; check on later ticks.)
+- [ ] If agent-browser recovers, capture the owner GitHub-modal + D4 connector-modal
+      screenshots (visual evidence; API already green 18/18).
+- [ ] C2 dashboard dual-origin composer (only if the user wants it built blind —
+      it's LNA-gated, can't be validated headlessly; orchestrator + remote brain ready).
+- [ ] Consider persisting `brain.mcpUrl` for session resume (review finding #1).
+
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — **18/18 persona suite green** (owner setup, member gating+capture+can't-manage-users, remote brain, connector, durability). Multi-repo verified (2 repos registered). Deployed + smoke-tested via scripts/deploy-hetzner.sh. Code-reviewed (subagent) → fixed member-control flash. Skill + HANDOFF + deploy script shipped. 12 commits, branch clean. agent-browser went flaky mid-run (early owner/member screenshots captured). C2 composer left as documented LNA-gated follow-up.
 - 2026-08-07 T0 — Plan created. PAT secured+verified. ec2sim = local rig. Earlier
   this session: fixed devDeps/NODE_ENV build break (no code change); committed
   home UI fixes (b8b1466); deployed+verified on Hetzner.
