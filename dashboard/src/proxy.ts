@@ -123,13 +123,14 @@ async function routeRequest(req: NextRequest) {
   const project = isValidProjectName(name) ? getRegistryProject(name) : null;
   const isApi = rest.startsWith("/api/") || (name === "api" && !project);
 
-  // /<name>/mcp — remote MCP endpoint (streamable HTTP). MCP clients carry a
-  // bearer PAT, not a session cookie, so the page/API auth below doesn't
-  // apply. Leak discipline is preserved: a missing/invalid token answers 401
-  // BEFORE the project is resolved (existence never leaks to bad creds); a
-  // valid token without a grant answers 404, identical to a project that
-  // doesn't exist. Local mode needs no token — single user on their own box.
-  if (rest === "/mcp") {
+  // /<name>/mcp and /<name>/v1/* — the machine surface for coding agents:
+  // remote MCP plus the verb/memory/embed/ingest endpoints the flow-mcp
+  // wrapper, flow-hook shim, and CLI agent call. These carry a bearer PAT,
+  // not a session cookie, so the page/API auth below doesn't apply. Leak
+  // discipline preserved: missing/invalid token → 401 BEFORE project
+  // resolution; valid token without a grant → 404, identical to nonexistent.
+  // Local mode needs no token (single user on their own box).
+  if (rest === "/mcp" || rest.startsWith("/v1/")) {
     if (!IS_LOCAL) {
       const auth = req.headers.get("authorization") ?? "";
       const bearer = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
@@ -144,11 +145,13 @@ async function routeRequest(req: NextRequest) {
     } else if (!project) {
       return notFound();
     }
-    const mcpHeaders = new Headers(req.headers);
-    mcpHeaders.set(PROJECT_HEADER, name);
-    const mcpUrl = req.nextUrl.clone();
-    mcpUrl.pathname = "/mcp";
-    return NextResponse.rewrite(mcpUrl, { request: { headers: mcpHeaders } });
+    const fwdHeaders = new Headers(req.headers);
+    fwdHeaders.set(PROJECT_HEADER, name);
+    const fwdUrl = req.nextUrl.clone();
+    // /<name>/mcp → /mcp ; /<name>/v1/x → /v1/x  (route handlers resolve the
+    // project + upstream from the header).
+    fwdUrl.pathname = rest;
+    return NextResponse.rewrite(fwdUrl, { request: { headers: fwdHeaders } });
   }
 
   if (!project) {
