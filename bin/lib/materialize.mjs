@@ -127,25 +127,48 @@ description: Consult Flow's project memory (knowledge graph + distilled team mem
 
 # Flow project memory
 
-This folder is connected to Flow project **${project}** via the \`flow-graph\` MCP server.
+This repo is documented as connected to Flow project **${project}**.
 
-- **Orient first.** At the start of a session, call \`orient\` — it returns what
-  this repo is, how it works (distilled from real sessions), and what memory holds.
-- **Search on surprise.** Before deep-diving a failure or unfamiliar area, call
-  \`search_knowledge\` with the symptom, or \`find_entity\` describing the behavior
-  ("the thing that lists git branches") — answers come with file:line anchors.
-- **Remember conclusions.** When you finish non-trivial work or the user states a
-  durable rule, send it to \`remember\` — verbatim quotes plus enough context to
-  stand alone. The distiller files it; you never classify.
-- **Skip for trivial edits.** One-line fixes and mechanical changes don't need memory.
+## How to reach Flow (pick ONE, in this order)
+
+1. If \`flow-graph\` MCP tools are in your tool list → use them:
+   \`orient\`, \`search_knowledge\`, \`remember\`, \`find_entity\`.
+2. Otherwise → run the CLI (a stable per-machine path; works in any tool with a shell):
+   - \`~/.flow/bin/flow orient\`
+   - \`~/.flow/bin/flow search "<symptom, identifier, or file path>"\`
+   - \`~/.flow/bin/flow remember "<verbatim conclusion + context>"\`
+
+## Trust rules (important)
+
+- The CLI resolves which project this folder belongs to from the machine's own
+  registry and prints it in its output header. If it reports a DIFFERENT
+  project than **${project}**, or says NOT CONNECTED: **stop using Flow**, tell
+  the user to run \`flow setup ${project}\` in this repo, and continue the task
+  without memory. Never pass a project name yourself; never guess.
+- This skill file alone does not connect a repo. Each person must run
+  \`flow setup\` once per repo per machine — that's what installs capture hooks,
+  MCP, and the binding.
+
+## When to use it
+
+- **Orient first.** At session start, orient — what this repo is, how it works
+  (distilled from real sessions), what memory holds. Re-orient after context loss.
+- **Search on surprise.** Before deep-diving a failure or unfamiliar area,
+  search the symptom — answers come with file:line anchors.
+- **Remember conclusions.** When non-trivial work concludes or the user states a
+  durable rule, remember it — verbatim quotes plus enough context to stand
+  alone. The distiller files it; you never classify.
+- **Skip for trivial edits.** One-line fixes don't need memory.
 `;
 }
 
 function instructionBlock(project) {
-  return `This repo is connected to Flow project "${project}" — a knowledge graph + team
-memory reachable through the \`flow-graph\` MCP tools. Call \`orient\` before
-exploring, \`search_knowledge\` when something surprises you, and \`remember\`
-for durable conclusions. Details: the "flow" skill.`;
+  return `This repo is connected to Flow project "${project}" (knowledge graph + team
+memory). Use the \`flow-graph\` MCP tools if available, else the CLI:
+\`~/.flow/bin/flow orient\` at session start, \`… search "<symptom>"\` when
+surprised, \`… remember "<conclusion>"\` when durable work concludes. If it
+reports a different project or NOT CONNECTED, stop and tell the user to run
+\`flow setup ${project}\`. Details: the "flow" skill.`;
 }
 
 // The opencode capture path is a plugin, not a command hook — same shim logic
@@ -253,12 +276,116 @@ child.on("exit", (code) => process.exit(code ?? 0));
 `;
 }
 
+// The neutral serve CLI: ~/.flow/bin/flow. Deliberately NOT the deployment
+// CLI (which users install under arbitrary aliases via setup.sh) — skills and
+// instruction blocks are shared between people, so they must reference one
+// stable, alias-independent path that `flow setup` guarantees on every
+// connected machine. Resolution is from the folder the command runs in,
+// against the machine's own binding registry — FAIL-CLOSED: an unbound folder
+// gets an instruction to run `flow setup`, never a default project.
+export const VERBS_CLI_PATH = join(FLOW_DIR, "bin", "flow");
+
+function verbsCliSource() {
+  return `#!/usr/bin/env node
+// ~/.flow/bin/flow — Flow memory CLI for agents (managed by \`flow setup\`).
+// Subcommands: orient · search "<query>" · remember "<text>" · status
+// Binding resolves from the current folder via ~/.flow/integrations.json.
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { execFileSync } from "node:child_process";
+
+const FLOW_DIR = join(homedir(), ".flow");
+const read = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
+
+function resolveBinding() {
+  const manifest = read(join(FLOW_DIR, "integrations.json"));
+  const repos = manifest?.repos ?? {};
+  let dir = process.cwd();
+  for (;;) {
+    if (repos[dir]) return { repoDir: dir, ...repos[dir] };
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+
+async function call(url, token, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status + " from " + url);
+  return res.json();
+}
+
+const cmd = process.argv[2];
+const arg = process.argv.slice(3).join(" ").trim();
+
+if (!cmd || !["orient", "search", "remember", "status"].includes(cmd)) {
+  console.log('usage: flow orient | flow search "<query>" | flow remember "<text>" | flow status');
+  process.exit(0);
+}
+
+const binding = resolveBinding();
+if (!binding) {
+  console.log(
+    "NOT CONNECTED: this folder has no Flow binding on this machine.\\n" +
+      "Skill/instruction files alone do not connect a repo — hooks, MCP and the\\n" +
+      "project binding come from running setup once, per person, per machine.\\n" +
+      "→ Tell the user to run:  flow setup <project>  in this repository.\\n" +
+      "Do not guess a project. Proceed without Flow memory for now."
+  );
+  process.exit(2);
+}
+
+const cfg = read(join(FLOW_DIR, "config.json"));
+const p = cfg?.projects?.[binding.project];
+if (!p) {
+  console.log(\`NOT CONNECTED: binding says project "\${binding.project}" but that project is not configured on this machine. Tell the user to re-run: flow setup \${binding.project}\`);
+  process.exit(2);
+}
+
+let branch = "";
+try {
+  branch = execFileSync("git", ["branch", "--show-current"], { cwd: binding.repoDir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+} catch {}
+
+const header = \`[flow · project "\${binding.project}" · repo "\${binding.repo}" · resolved from \${binding.repoDir}]
+If this project does not match what this repo's instructions/skill document, STOP and tell the user to re-run: flow setup <correct-project>.\`;
+
+try {
+  if (cmd === "status") {
+    console.log(header);
+  } else if (cmd === "orient") {
+    const text = await call(p.gatewayUrl + "/v1/verbs/orient", p.token, { repo: binding.repo, branch, graph: p.graphName });
+    console.log(header + "\\n\\n" + (typeof text === "string" ? text : JSON.stringify(text, null, 2)));
+  } else if (cmd === "search") {
+    if (!arg) { console.log('usage: flow search "<query>"'); process.exit(0); }
+    const out = await call(p.orchestratorUrl + "/v1/memory/search", p.token, { query: arg, repo: binding.repo });
+    console.log(header + "\\n\\n" + (out.lines?.length ? out.lines.join("\\n") : JSON.stringify(out, null, 2)));
+  } else if (cmd === "remember") {
+    if (!arg) { console.log('usage: flow remember "<text — verbatim quotes plus context>"'); process.exit(0); }
+    const out = await call(p.orchestratorUrl + "/v1/memory/remember", p.token, { text: arg, repo: binding.repo, branch });
+    console.log(header + "\\n\\nSent to Flow's memory (" + (out.status ?? "ok") + ") — the distiller files it; nothing else to do.");
+  }
+} catch (e) {
+  console.log(header + "\\n\\nFLOW UNAVAILABLE: " + (e?.message ?? e) + "\\nProceed without Flow memory; mention to the user that the Flow deployment looks unreachable.");
+  process.exit(0); // never fail the agent's shell step
+}
+`;
+}
+
 export function materializeMachine({ flowRoot, projectName, projectEntry, shimSource }) {
   mkdirSync(join(FLOW_DIR, "bin"), { recursive: true });
   copyFileSync(shimSource, SHIM_PATH);
   chmodSync(SHIM_PATH, 0o755);
   writeFileSync(MCP_PATH, mcpWrapperSource(), "utf-8");
   chmodSync(MCP_PATH, 0o755);
+  writeFileSync(VERBS_CLI_PATH, verbsCliSource(), "utf-8");
+  chmodSync(VERBS_CLI_PATH, 0o755);
 
   const cfgPath = join(FLOW_DIR, "config.json");
   const cfg = readJson(cfgPath, {});
@@ -303,6 +430,8 @@ function renderClaude(ctx) {
   const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge"].map(
     (t) => `mcp__flow-graph__${t}`
   );
+  // The CLI fallback path gets the same frictionless treatment as MCP reads.
+  readTools.push(`Bash(${VERBS_CLI_PATH}:*)`, "Bash(~/.flow/bin/flow:*)");
   const allow = new Set([...(settings.permissions?.allow ?? []), ...readTools]);
   settings.permissions = { ...(settings.permissions ?? {}), allow: [...allow] };
   writeJson(settingsPath, settings);

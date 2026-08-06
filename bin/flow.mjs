@@ -794,6 +794,10 @@ async function upProject(name, { rebuilt = false } = {}) {
     // store, checking the minting user's grant on THIS project.
     FLOW_AUTH_PATH: authJsonPath(),
     FLOW_PROJECT_NAME: name,
+    // Lets the gateway's HTTP-served orient reach the memory tiers (orient
+    // docs, stats) — MCP spawns inject this per-process, the long-running
+    // server needs it in its own env for CLI/remote verb callers.
+    ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
     NODE_ENV: "production",
   };
   // Direct LLM callers (classification) may use an OpenAI-compatible provider.
