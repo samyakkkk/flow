@@ -1,13 +1,14 @@
 "use client";
 
-// "Listen to sessions" — the workspace-capture column (sits beside the agent
-// trigger). One idea, stated plainly: connect a workspace and Flow listens to
-// every coding session inside it — by installing the hooks, MCP registration
-// and skills each tool needs there. Two equivalent ways in, shown as an
-// explicit either/or: the native folder chooser here, or `flow setup
-// <project>` in a terminal. Connected workspaces list below with a liveness
-// signal. ChatGPT chats and claude.ai/Cowork can't be listened to locally —
-// they get two quiet "later" cards, not silence.
+// "Use Flow in your own AI tools" — the column beside the agent trigger. The
+// home page offers two ways to work: start agents HERE (left), or keep using
+// your own tools WITH Flow (this panel). Value-first framing: the user's
+// tools are listed up top so they can see "yes, mine are covered"; connecting
+// a workspace is the action that makes those tools Flow-powered (installs
+// hooks + MCP + skills; sessions then teach the brain). Two equivalent ways
+// in, as an explicit either/or: native folder chooser, or `flow setup
+// <project>` in a terminal. ChatGPT chats and claude.ai/Cowork can't work
+// locally — two quiet "later" cards, not silence.
 
 import { useCallback, useEffect, useState } from "react";
 import { useProject } from "@/lib/useProject";
@@ -150,16 +151,33 @@ export function CodingToolsPanel() {
 
   return (
     <div className="flex flex-col gap-3.5 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in h-full">
-      {/* Header */}
+      {/* Header — value first: your tools, Flow-powered */}
       <div className="border-b border-line pb-3">
-        <div className="text-[11px] uppercase tracking-widest text-ink/50">Listening</div>
+        <div className="text-[11px] uppercase tracking-widest text-ink/50">Your AI tools</div>
         <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
-          Listen to sessions
+          Use Flow in your own tools
         </h2>
         <p className="text-[12px] text-ink/55 mt-1 leading-snug">
-          Connect a workspace and Flow listens to every coding session inside it — it installs the
-          hooks, MCP and skills your tools need, then sessions feed the brain automatically.
+          Keep working where you already work. Connect a workspace and these tools get this
+          project&apos;s memory — and every session they run teaches it.
         </p>
+      </div>
+
+      {/* The user's tools, up top: "yes, mine are covered" */}
+      <div className="flex items-start gap-2 flex-wrap">
+        {TOOLS.map((t) => {
+          const on = detected.has(t.id);
+          return (
+            <div
+              key={t.id}
+              title={`${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
+              className={`flex flex-col items-center gap-1 w-[52px] ${on ? "text-ink" : "text-ink/25"}`}
+            >
+              <BrandIcon name={t.icon} size={20} />
+              <span className="text-[8px] uppercase tracking-wide text-center leading-tight">{t.label}</span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Either/or connect */}
@@ -195,23 +213,6 @@ export function CodingToolsPanel() {
           <button onClick={() => setMsg("")}>✕</button>
         </div>
       )}
-
-      {/* Machine-level tool coverage */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {TOOLS.map((t) => {
-          const on = detected.has(t.id);
-          return (
-            <span
-              key={t.id}
-              title={`${t.label} — ${on ? "detected; sessions captured in connected workspaces" : "not installed on this machine"}`}
-              className={on ? "text-ink" : "text-ink/20"}
-            >
-              <BrandIcon name={t.icon} size={17} />
-            </span>
-          );
-        })}
-        <span className="text-[10px] text-ink/40 ml-auto">{detected.size}/{TOOLS.length} tools detected</span>
-      </div>
 
       {/* Connected workspaces */}
       {data && data.repos.length > 0 ? (
