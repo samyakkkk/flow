@@ -142,6 +142,7 @@ async function routeRequest(req: NextRequest) {
   // resolution; valid token without a grant → 404, identical to nonexistent.
   // Local mode needs no token (single user on their own box).
   if (rest === "/mcp" || rest.startsWith("/v1/")) {
+    let patUserId: string | null = null;
     if (!IS_LOCAL) {
       const auth = req.headers.get("authorization") ?? "";
       const bearer = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
@@ -153,6 +154,7 @@ async function routeRequest(req: NextRequest) {
         );
       }
       if (!project || !userCanAccess(patUser, name)) return notFound();
+      patUserId = patUser.id;
       // Owner-only machine surface. Without this, a member PAT reaches the
       // role-blind orchestrator (guarded only by the admin token route.ts
       // injects) and performs owner actions — writing team settings, adding
@@ -169,6 +171,11 @@ async function routeRequest(req: NextRequest) {
     }
     const fwdHeaders = new Headers(req.headers);
     fwdHeaders.set(PROJECT_HEADER, name);
+    // Trusted attribution for ingest: strip any CLIENT-supplied value, then
+    // stamp the verified PAT owner. The orchestrator namespaces captured
+    // sessions by this so a member can't forge/append to another user's session.
+    fwdHeaders.delete("x-flow-pat-user");
+    if (patUserId) fwdHeaders.set("x-flow-pat-user", patUserId);
     const fwdUrl = req.nextUrl.clone();
     // /<name>/mcp → /mcp ; /<name>/v1/x → /v1/x  (route handlers resolve the
     // project + upstream from the header).

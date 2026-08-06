@@ -28,6 +28,11 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
   const accept = req.headers.get("accept");
   if (accept) headers.set("accept", accept);
   headers.set("authorization", `Bearer ${project.adminToken}`);
+  // Forward the proxy-verified caller identity so the orchestrator can attribute
+  // captured sessions to the right user (ingest anti-forgery). proxy.ts stamped
+  // this (stripping any client value); the raw ports are private, so it's trusted.
+  const patUser = req.headers.get("x-flow-pat-user");
+  if (patUser) headers.set("x-flow-pat-user", patUser);
 
   const method = req.method;
   const body = method === "GET" || method === "HEAD" ? undefined : await req.arrayBuffer();

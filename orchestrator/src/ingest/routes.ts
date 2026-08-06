@@ -44,14 +44,33 @@ const titleStmt = () =>
 const closeStmt = () =>
   db.prepare(`UPDATE agent_sessions SET status = 'closed', updated_at = ? WHERE id = ?`);
 
-export function extRowId(harness: string, externalId: string): string {
+export function extRowId(harness: string, externalId: string, userId: string | null = null): string {
   // Harness session ids are uuids/slugs; sanitize defensively — this id
   // becomes a filename in agent-sessions/.
-  return `ext-${harness}-${externalId.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  const safeExt = externalId.replace(/[^A-Za-z0-9._-]/g, "_");
+  // Namespace by the authenticated user (the PAT owner, stamped by the dashboard
+  // proxy) so a member cannot forge a session as another user/harness nor append
+  // to someone else's session id — that would poison the shared brain once
+  // distilled. Local/unattributed captures (single user) keep the legacy id.
+  if (userId) {
+    const safeUser = userId.replace(/[^A-Za-z0-9._-]/g, "_");
+    return `ext-${safeUser}-${harness}-${safeExt}`;
+  }
+  return `ext-${harness}-${safeExt}`;
 }
 
 function hashKey(parts: unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 24);
+}
+
+// The authenticated PAT owner. The dashboard proxy verifies the caller's PAT and
+// stamps `x-flow-pat-user` (overwriting any client value); the orchestrator is
+// 127.0.0.1-only behind the admin token, so the header is trustworthy here.
+// null = local mode (single user) or an unattributed post — legacy id, no
+// namespacing. Used to scope captured sessions per user (anti-forgery).
+function patUserOf(req: { headers: Record<string, string | string[] | undefined> }): string | null {
+  const h = req.headers["x-flow-pat-user"];
+  return typeof h === "string" && h.trim() ? h.trim() : null;
 }
 
 interface UpsertArgs {
@@ -60,10 +79,11 @@ interface UpsertArgs {
   repo: string | null;
   cwd: string | null;
   title: string | null;
+  userId?: string | null;
 }
 
 function upsertExternalSession(a: UpsertArgs): string {
-  const id = extRowId(a.harness, a.externalId);
+  const id = extRowId(a.harness, a.externalId, a.userId ?? null);
   const now = Date.now();
   const row = rowStmt().get(id) as { id: string } | undefined;
   if (!row) {
@@ -104,6 +124,7 @@ export function registerIngestRoutes(app: FastifyInstance): void {
       repo: repo ?? null,
       cwd: norm.cwd,
       title: norm.title,
+      userId: patUserOf(req),
     });
 
     // One hook event = one dedupe unit. The hash covers the payload, so a
@@ -144,6 +165,7 @@ export function registerIngestRoutes(app: FastifyInstance): void {
       repo: b.repo ?? null,
       cwd: b.directory ?? null,
       title: firstText ? firstText.slice(0, 80) : null,
+      userId: patUserOf(req),
     });
     if (readTranscript(id).length === 0) {
       appendNew(id, [
