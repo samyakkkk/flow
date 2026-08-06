@@ -196,11 +196,13 @@ export function CodingToolsPanel() {
         })}
       </div>
 
-      {/* Either/or connect. In prod the native picker would browse the SERVER
-          filesystem, so we drop it and lead with the terminal command run on
-          the user's machine (which needs the Flow CLI installed). */}
-      <div className="flex flex-col gap-1.5">
-        {!isProd && (
+      {/* Either/or connect. Local: the native folder picker (same-origin IS the
+          user's machine) with the terminal command as the alt. Prod: the picker
+          would browse the SERVER filesystem, so we drop it and give a proper
+          command card run on the user's own machine (needs the Flow CLI). Both
+          keep the same visual structure so prod doesn't read as "missing". */}
+      <div className="flex flex-col gap-2">
+        {!isProd ? (
           <>
             <button
               onClick={() => void pickFolder()}
@@ -214,25 +216,42 @@ export function CodingToolsPanel() {
               or, in any terminal
               <span className="h-px bg-line flex-1" />
             </div>
+            <button
+              className="w-full flex items-center justify-center gap-2 text-[12px] font-mono text-ink/60 hover:text-ink group py-1"
+              title="Copy — run inside the workspace you want Flow to listen to"
+              onClick={() => {
+                void navigator.clipboard?.writeText(cliCommand);
+                setMsg("Copied — run it inside the workspace.");
+              }}
+            >
+              <span className="text-ink/35">$</span> {cliCommand}
+              <span className="text-[10px] text-ink/35 group-hover:text-ink/60">⧉</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="text-[12px] text-ink/60 leading-snug">
+              Connect a repo on <strong>your machine</strong> so your tools get this project&apos;s
+              memory. Run this inside the repo:
+            </div>
+            <div className="w-full flex items-center gap-2 rounded-lg border border-ink/15 bg-cream px-3 py-2">
+              <span className="text-ink/35 font-mono text-[12px]">$</span>
+              <code className="flex-1 font-mono text-[12px] text-ink/80 truncate">{cliCommand}</code>
+              <button
+                className="text-[11px] px-2 py-0.5 rounded border border-ink/20 text-ink/60 hover:border-ink/40 hover:text-ink shrink-0"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(cliCommand);
+                  setMsg("Copied — run it inside the repo on your machine.");
+                }}
+              >
+                Copy
+              </button>
+            </div>
+            <a href={prefix("/connect")} className="text-[11px] text-ink/45 underline hover:text-ink/70">
+              Don&apos;t have the Flow CLI on this machine yet? Set it up →
+            </a>
           </>
         )}
-        {isProd && (
-          <div className="text-[11px] text-ink/55 leading-snug">
-            Run this in the repo on <strong>your machine</strong> (needs the{" "}
-            <a href={prefix("/connect")} className="underline">Flow CLI installed</a>):
-          </div>
-        )}
-        <button
-          className="w-full flex items-center justify-center gap-2 text-[12px] font-mono text-ink/60 hover:text-ink group py-1"
-          title="Copy — run inside the workspace you want Flow to listen to"
-          onClick={() => {
-            void navigator.clipboard?.writeText(cliCommand);
-            setMsg("Copied — run it inside the workspace.");
-          }}
-        >
-          <span className="text-ink/35">$</span> {cliCommand}
-          <span className="text-[10px] text-ink/35 group-hover:text-ink/60">⧉</span>
-        </button>
       </div>
 
       {msg && (

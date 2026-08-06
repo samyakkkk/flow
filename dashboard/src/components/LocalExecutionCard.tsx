@@ -162,14 +162,34 @@ export function LocalExecutionCard() {
   }
 
   if (state === "installed-not-running") {
+    // The probe failed but this machine has a connection record. We can't tell
+    // "Flow isn't running" from "the browser couldn't reach it" (LNA permission
+    // still on 'prompt', an insecure http:// page, or a port mismatch), so we
+    // name both rather than assert one — the old copy said "not running", which
+    // was wrong when Flow was up but the browser was blocking the request.
+    const insecure = typeof window !== "undefined" && window.location.protocol !== "https:";
     return (
       <div style={wrap}>
-        <span style={{ color: "var(--warning, #ff9f0a)", marginRight: 8 }}>◐</span>
-        <strong>Flow is connected but not running on this machine.</strong>{" "}
-        <span style={{ color: "var(--text-secondary)" }}>
-          Start it to run agents here: <code>flow up</code>, then
-        </span>{" "}
-        <button onClick={probe} style={retryBtn}>
+        <div>
+          <span style={{ color: "var(--warning, #ff9f0a)", marginRight: 8 }}>◐</span>
+          <strong>This machine is connected, but the page couldn&apos;t reach its Flow.</strong>
+        </div>
+        <ul style={{ color: "var(--text-secondary)", margin: "8px 0 0", paddingLeft: 28, lineHeight: 1.6 }}>
+          <li>
+            Make sure Flow is running here — <code>flow up</code> in a terminal.
+          </li>
+          <li>
+            Allow <em>local network access</em> for this site (the icon left of the address bar → Site
+            settings → Local network access → Allow).
+          </li>
+          {insecure && (
+            <li>
+              Open the <strong>https://</strong> dashboard — Chrome blocks reaching localhost from an
+              insecure <code>http://</code> page.
+            </li>
+          )}
+        </ul>
+        <button onClick={probe} style={{ ...retryBtn, marginLeft: 28, marginTop: 8 }}>
           Retry
         </button>
       </div>
