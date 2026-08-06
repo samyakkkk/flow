@@ -84,14 +84,17 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
   (only FLOW_PROJECT restarts). Fine for single-project prod; note for multi.
 
 ### Phase 2 — D4: consumer connectors without a marketplace
-- [ ] Replace the two placeholder cards with a real install flow: connector URL +
-      PAT + skill ZIP + copy-paste steps, instance-parameterized
-- [ ] Verify artifacts embed the deployment URL + per-user token
+- [x] Insight: /<project>/mcp is already a bearer-authed remote MCP → connectors = URL + token, no marketplace
+- [x] ConsumerConnectorModal (URL + mint PAT + per-app steps) + CodingToolsPanel cards become real Connect buttons in prod (commit a5c0a7e)
+- [x] VERIFIED: member mints PAT via /api/tokens → PAT works against /main/mcp (all 8 brain tools). Cards render for member on Hetzner. Modal+cards live in deployed build.
+**D4 DONE ✓** (member-allowed personal connector; instance-parameterized by origin+project)
 
 ### Phase 3 — C2: local execution + remote brain
-- [ ] Thread `BrainBinding` through orchestrator createSession + both mount sites
-- [ ] Dashboard runs agents on localhost:8600 with brain = deployment (MCP http)
-- [ ] Verify a Flow-driven local session queries the remote brain
+- [x] Thread `BrainBinding` through orchestrator createSession + both mount sites (commit 4e2ecd5) — typechecks
+- [x] POST /v1/agents/sessions accepts {brain:{mcpUrl,token}}
+- [x] **Remote brain PROVEN**: POST Hetzner /main/mcp + machine PAT → 8 brain tools; orient() returns real indexed-repo knowledge; no token → 401
+- [ ] Dashboard dual-origin composer sends the binding (LNA-gated e2e — needs real user browser grant; building blocks in place)
+**C2 core done ✓ (remote brain proven, orchestrator ready); full browser e2e is LNA-gated**
 
 ### Phase 4 — Persona validation (headline deliverable)
 - [ ] Fresh prod project on Hetzner (reset or new project) + owner account
