@@ -89,3 +89,49 @@ Single admin bearer token (`FLOW_ADMIN_TOKEN`, per project) guards every HTTP
 surface except `/health`. Webhooks authenticate by HMAC; the notify endpoint
 accepts the admin token or a per-job scoped token (so an injected agent can't
 reach the whole API). Dashboard sets an httpOnly cookie; middleware gates pages.
+
+## Process lifecycle (who ends what, and who reaps whom)
+
+Every long-lived box (a laptop, a customer EC2) must hold a **flat** process
+count under sustained agent use. The lifecycle of every process Flow touches:
+
+| Process | Ends when… | Children reaped by… |
+|---|---|---|
+| Direct `claude` in a terminal | terminal close → SIGHUP | its `flow-graph` MCP child self-exits on stdin EOF (`graph-gateway/src/mcp.ts`); a `kill -9` (no EOF when others hold the pipe) is covered by the MCP's harness-death poll |
+| Flow agent session (ACP) | explicit close (`POST /v1/agents/sessions/:id/close`), or the **process reaper** after `FLOW_SESSION_IDLE_CLOSE_MS` (default 60 min) idle/errored | `closeFlowSession` sends ACP `session/close`; the adapter tears the session down and **kills its per-session agent CLI child** (claude-agent-acp: `teardownSession → query.close()`). Closed sessions stay resumable via `session/load`. |
+| Shared ACP adapter (`claude-agent-acp`, `codex-acp`, `opencode acp`) — one per backend | zero live sessions for `FLOW_ADAPTER_LINGER_MS` (default 10 min), or orchestrator shutdown | spawned in its own **process group**; SIGTERM to the group (SIGKILL after 5 s) reaps the adapter *and* any agent-CLI/MCP descendants — the backstop for backends without `session/close` |
+| Orchestrator / gateway (`flow up`) | `flow down`, superseding `flow up`, or their own **watchdog** (`src/watchdog.ts`): self-exit when `pids.json` stops naming their pid (superseded / retired / project deleted) | orchestrator's SIGTERM path kills adapters (`killAdapters`) and indexer job process groups (`killRunningJobChildren`) |
+| Indexer/chat CLI jobs (`opencode`/`codex`/`claude` via `opencode.ts`) | job completes, times out, or orchestrator shuts down | tracked in `jobChildren`, killed by process group (`killTree`) |
+| Deployment dashboard (`next start`) | `flow down` (whole-deployment), or superseding `flow up` | tracked pid in `data/dashboard.json` + port kill |
+
+Mechanisms, and where they live:
+
+- **Session close is an OS-level act, not a DB update.** `closeFlowSession`
+  (`orchestrator/src/agents/runtime.ts`) cancels the turn, resolves pending
+  permissions, sends ACP `session/close` (which kills the per-session agent
+  child), drops the routing entry, then marks the row `closed`. The memory
+  idle sweep (`memory/trigger.ts`) only distills; it never touches processes.
+- **Process reaper** (`runtime.ts`, 60 s interval): closes sessions idle past
+  `FLOW_SESSION_IDLE_CLOSE_MS`; shuts down adapters session-less past
+  `FLOW_ADAPTER_LINGER_MS`. Disable with `FLOW_AGENT_REAPER=0`.
+- **Service watchdog** (`orchestrator/src/watchdog.ts`,
+  `graph-gateway/src/watchdog.ts`): armed by `flow up` via `FLOW_PIDS_PATH` +
+  `FLOW_SERVICE_ROLE`; polls pids.json every 60 s and self-exits (with strike
+  grace) when no longer the tracked pid. Dev runs / Docker never set the env,
+  so they're unaffected. Disable with `FLOW_WATCHDOG=0`.
+- **CLI reaping** (`bin/flow.mjs`): pids.json keeps a `history` of every pid a
+  project ever spawned. `flow down` kills tracked + historical pids (identity-
+  verified against the process's command line — recycled pids are never
+  signalled) plus a port sweep; `flow up` reaps historical instances before
+  spawning (catches instances stranded on other port offsets); `flow doctor
+  --reap` scans `ps` for Flow-shaped orphans (untracked services from this
+  checkout or from `workspace/repos|worktrees` clones, adapters/MCP servers
+  reparented to init) and kills them. Foreign installs' processes are reported,
+  never killed.
+- **MCP self-defense** (`graph-gateway/src/mcp.ts`): exits on stdin EOF, plus
+  a 15 s harness-death poll so a `kill -9`'d harness can't orphan it. The poll
+  is wrapper-aware: Flow injects the server as `tsx src/mcp.ts`, where tsx is
+  a supervisor whose node child runs this code — the child's own ppid never
+  changes when the harness dies, so the guard resolves the real harness pid
+  (the grandparent, when the parent's argv names this script) at boot and
+  exits when it's gone.

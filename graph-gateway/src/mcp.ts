@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -216,5 +217,40 @@ if (MODE === "builder" && process.env.FLOW_JOB_ID) {
 // orphaned MCP processes accumulating on the machine.
 process.stdin.on("end", () => process.exit(0));
 process.stdin.on("close", () => process.exit(0));
+
+// Parent-death guard for the path stdin can't cover: a `kill -9` of the
+// harness delivers no EOF when something else still holds the pipe's write
+// end, so also poll for the harness dying. The wrinkle is topology: Flow
+// injects this server as `tsx src/mcp.ts`, and tsx runs a SUPERVISOR process
+// whose node child executes this code — when the harness dies, the supervisor
+// reparents to init but our own ppid never changes. So at boot, if our parent
+// is such a wrapper (its argv mentions this script), the process to watch is
+// the GRANDparent — the actual harness. Exiting here also ends the supervisor
+// (it exits with its child). Fail-safe on pid reuse: a recycled pid counts as
+// alive and we simply keep running.
+function psField(pid: number, field: "ppid" | "command"): string {
+  try {
+    return execFileSync("ps", ["-o", `${field}=`, "-p", String(pid)], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM"; // exists, not ours
+  }
+}
+const initialPpid = process.ppid;
+let harnessPid = initialPpid;
+if (/\bmcp\.(?:ts|js)\b/.test(psField(initialPpid, "command"))) {
+  const gp = Number(psField(initialPpid, "ppid"));
+  if (Number.isFinite(gp) && gp > 1) harnessPid = gp;
+}
+setInterval(() => {
+  if (process.ppid !== initialPpid || !pidAlive(harnessPid)) process.exit(0);
+}, 15_000).unref();
 
 await server.connect(new StdioServerTransport());

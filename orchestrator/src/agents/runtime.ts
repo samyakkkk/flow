@@ -750,6 +750,9 @@ interface Connection {
   command: string;
   localPath?: string;
   sessionsByAcpId: Map<string, string>; // acp session id → flow session id
+  // When the adapter last dropped to zero live sessions — the linger reaper
+  // shuts it down once it has been session-less past ADAPTER_LINGER_MS.
+  idleSince?: number;
 }
 
 const connections = new Map<AgentBackend, Connection>();
@@ -846,6 +849,10 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
   const proc = spawn(attempt.command, attempt.args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: attempt.env,
+    // Own process group (POSIX): the adapter spawns one agent CLI child per
+    // session (which spawn MCP children of their own) — a group kill is the
+    // only way to reap the whole tree when the adapter itself won't.
+    detached: process.platform !== "win32",
   });
   proc.stderr.on("data", (chunk: Buffer) => {
     try {
@@ -1427,21 +1434,196 @@ export async function setConfigOption(
   }
 }
 
-// Kill adapter subprocesses when the orchestrator shuts down — `flow down`
-// must not leave agent adapters (and their MCP children) running.
-function killAdapters(): void {
-  for (const c of connections.values()) {
+// Signal an adapter and everything under it. The adapters spawn one agent CLI
+// child per session (claude/codex), each of which spawns its own MCP servers —
+// signalling the process GROUP (spawned detached above) reaps the whole tree
+// even when the adapter mishandles the signal. Falls back to a single-process
+// kill on platforms without process groups.
+function killTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  const pid = proc.pid;
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
     try {
-      c.process.kill("SIGTERM");
+      proc.kill(signal);
     } catch {
       /* already gone */
     }
+  }
+}
+
+// Retire one backend's shared adapter: SIGTERM the tree (the adapters dispose
+// their sessions — and kill their per-session agent children — on SIGTERM),
+// then SIGKILL any survivor after a grace window.
+function shutdownConnection(backend: AgentBackend, reason: string): void {
+  const c = connections.get(backend);
+  if (!c) return;
+  connections.delete(backend);
+  adapterLog(backend, `shutting down adapter (${reason})`);
+  killTree(c.process, "SIGTERM");
+  const t = setTimeout(() => {
+    if (c.process.exitCode === null) killTree(c.process, "SIGKILL");
+  }, 5000);
+  t.unref?.();
+}
+
+// Kill adapter subprocesses when the orchestrator shuts down — `flow down`
+// must not leave agent adapters (and their agent-CLI/MCP children) running.
+function killAdapters(): void {
+  for (const c of connections.values()) {
+    killTree(c.process, "SIGTERM");
   }
   connections.clear();
 }
 process.once("SIGTERM", killAdapters);
 process.once("SIGINT", killAdapters);
 process.once("exit", killAdapters);
+
+// ---------------------------------------------------------------------------
+// Ending a session for real — the OS-process side, not just the DB row.
+//
+// A Flow session has no terminal whose close would end it, so ending is an
+// explicit act: tell the adapter to close the ACP session (claude-agent-acp's
+// closeSession → teardownSession → query.close() terminates the per-session
+// `claude` subprocess; codex behaves likewise), drop the routing entry, and
+// mark the row closed. Closed sessions stay resumable: the agent CLI persists
+// the conversation on disk, and steer() → resumeConnection() reloads it via
+// session/load on a (possibly fresh) adapter.
+
+// Bound an ACP request so a wedged adapter can't hang the close path (and the
+// reaper behind it) forever — on timeout we fall through to the linger
+// reaper's group kill, which needs no cooperation from the adapter.
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`ACP request timed out after ${ms}ms`)), ms);
+    t.unref?.();
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
+export async function closeFlowSession(
+  id: string,
+  reason: "closed" | "idle_timeout" = "closed"
+): Promise<{ ok: true } | { error: string }> {
+  const s = liveSession(id);
+  if (!s) {
+    // No live/rehydratable session (e.g. it died in "starting" and never got
+    // an ACP id) — there is no process to free, but the row should still stop
+    // presenting as active.
+    const row = db.prepare(`SELECT status FROM agent_sessions WHERE id = ?`).get(id) as { status?: string } | undefined;
+    if (!row) return { error: "Unknown session" };
+    if (row.status !== "closed") {
+      db.prepare(`UPDATE agent_sessions SET status='closed', stop_reason=?, updated_at=? WHERE id=?`).run(reason, Date.now(), id);
+    }
+    return { ok: true };
+  }
+  if (s.status === "closed") return { ok: true };
+
+  // Unblock anything in flight — a pending permission promise would otherwise
+  // dangle forever, and queued steers are moot.
+  s.queue = [];
+  for (const p of s.pendingPermissions.values()) {
+    p.resolve({ outcome: { outcome: "cancelled" } });
+  }
+  s.pendingPermissions.clear();
+
+  const c = connections.get(s.backend);
+  if (c && s.acpSessionId && c.sessionsByAcpId.get(s.acpSessionId) === s.id) {
+    if (s.turnActive) {
+      try {
+        await withTimeout(c.conn.cancel({ sessionId: s.acpSessionId }), 5000);
+      } catch {
+        /* the close below is the real teardown */
+      }
+    }
+    try {
+      // This is what frees the OS process: the adapter tears the session down
+      // and kills its per-session agent CLI child. Optional capability —
+      // adapters without it get reaped by the zero-session linger instead.
+      await withTimeout(c.conn.closeSession({ sessionId: s.acpSessionId }), 10_000);
+    } catch {
+      /* not supported / wedged / already gone — linger reaper covers the process */
+    }
+    c.sessionsByAcpId.delete(s.acpSessionId);
+    if (c.sessionsByAcpId.size === 0) c.idleSince = Date.now();
+  }
+
+  s.turnActive = false;
+  setStatus(s, "closed", { stopReason: reason });
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Process reaper — the OS-process counterpart of the memory idle sweep.
+//
+// Flow-spawned sessions have no terminal, so without this nothing ever ends
+// them: every agent task would leave a live `claude`/`codex` child under the
+// shared adapter forever (observed: days-old children on a laptop, and a
+// monotonically rising process count on long-lived EC2 boxes). Two rules:
+//   1. A session idle (or errored) past SESSION_IDLE_CLOSE_MS is closed for
+//      real (closeFlowSession → adapter kills the per-session child). Still
+//      resumable afterwards via session/load.
+//   2. An adapter with zero live sessions past ADAPTER_LINGER_MS is shut down
+//      (SIGTERM tree → SIGKILL grace) — also the backstop for backends whose
+//      closeSession isn't supported.
+
+const SESSION_IDLE_CLOSE_MS = Number(process.env.FLOW_SESSION_IDLE_CLOSE_MS ?? 60 * 60 * 1000);
+const ADAPTER_LINGER_MS = Number(process.env.FLOW_ADAPTER_LINGER_MS ?? 10 * 60 * 1000);
+const REAPER_INTERVAL_MS = Number(process.env.FLOW_REAPER_INTERVAL_MS ?? 60 * 1000);
+
+export async function reapIdleProcesses(now = Date.now()): Promise<{ closedSessions: number; adaptersShutDown: number }> {
+  let closedSessions = 0;
+  let adaptersShutDown = 0;
+
+  // Only sessions actually in the live map — never rehydrate rows just to
+  // close them (a rehydrated session holds no OS process anyway).
+  for (const s of [...sessions.values()]) {
+    const quiet = s.status === "idle" || s.status === "error";
+    if (!quiet || s.turnActive || s.pendingPermissions.size > 0) continue;
+    if (now - s.updatedAt < SESSION_IDLE_CLOSE_MS) continue;
+    const r = await closeFlowSession(s.id, "idle_timeout");
+    if ("ok" in r) closedSessions++;
+  }
+
+  for (const c of [...connections.values()]) {
+    if (c.sessionsByAcpId.size > 0) {
+      c.idleSince = undefined;
+      continue;
+    }
+    c.idleSince ??= now;
+    if (now - c.idleSince >= ADAPTER_LINGER_MS) {
+      shutdownConnection(c.backend, "no live sessions");
+      adaptersShutDown++;
+    }
+  }
+  return { closedSessions, adaptersShutDown };
+}
+
+let reaperTimer: ReturnType<typeof setInterval> | null = null;
+export function startProcessReaper(): void {
+  if (reaperTimer || process.env.FLOW_AGENT_REAPER === "0") return;
+  reaperTimer = setInterval(() => {
+    void reapIdleProcesses().catch(() => {});
+  }, REAPER_INTERVAL_MS);
+  reaperTimer.unref?.();
+}
+export function stopProcessReaper(): void {
+  if (reaperTimer) {
+    clearInterval(reaperTimer);
+    reaperTimer = null;
+  }
+}
+startProcessReaper();
 
 // Resolve a session's working directory (the repo checkout) from the live map
 // or the DB, so it works for finished/reloaded sessions too.
