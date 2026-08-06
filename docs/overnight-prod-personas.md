@@ -125,6 +125,13 @@ FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
 - [x] BUG FOUND + FIXED: github-poller had a hardcoded demo seed (acme/api-service,
       acme/web-app) → recurring 404s on every deployment. Removed (commit 6074922);
       deployed; verified **0 phantom errors** after a full poll cycle. Tests 20/20.
+- [x] **CRASH BUG FOUND + FIXED + FAULT-TESTED**: gateway's FalkorDB client had NO
+      'error' listener → an unexpected socket close (server restart/blip) emitted
+      an unhandled 'error' event → Node rethrows → **gateway crash**. Attached
+      listeners (commit 0c78895). Fault-injected a FalkorDB restart: flow container
+      stayed healthy, gateway logged "[falkordb] client error (auto-reconnecting)"
+      + reconnected, brain queryable (48 nodes). Same class as the users-service
+      Redis silent wedge. This is a real reliability win for every deployment.
 - [ ] If agent-browser recovers, capture the owner GitHub-modal + D4 connector-modal
       screenshots (visual evidence; API already green 18/18).
 - [ ] C2 dashboard dual-origin composer (only if the user wants it built blind —
