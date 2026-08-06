@@ -92,6 +92,29 @@ c=$(curl -s -b "$MJ" -o /dev/null -w "%{http_code}" -X PUT "$BASE/$PROJECT/api/s
 c=$(code -b "$MJ" "$BASE/$PROJECT/api/repos/status")
 [ "$c" = "200" ] && ok "member CAN read repo status ($c)" || bad "member read repo status = $c"
 
+# ── P3/P5 · remote brain over MCP + consumer connector ──────────────────────
+echo
+echo "P3/P5 · REMOTE BRAIN + CONNECTOR (Jordan / Maya)"
+MCPHDR=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+# A personal token (what a ChatGPT/claude.ai connector or a local agent uses).
+PAT=$(curl -s -b "$OJ" -X POST "$BASE/$PROJECT/api/tokens" -H 'Content-Type: application/json' \
+      -d '{"label":"persona-test connector"}' | jget "d.get('token','')")
+[ -n "$PAT" ] && ok "mint personal access token (connector credential)" || bad "token mint failed"
+
+ntools=$(curl -s -X POST "$BASE/$PROJECT/mcp" -H "Authorization: Bearer $PAT" "${MCPHDR[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 20 \
+  | python3 -c "import sys,re,json;t=sys.stdin.read();m=re.search(r'\{.*\}',t,re.S);d=json.loads(m.group(0)) if m else {};print(len(d.get('result',{}).get('tools',[])))" 2>/dev/null)
+{ [ -n "$ntools" ] && [ "$ntools" -ge 8 ]; } && ok "remote brain MCP serves $ntools tools (connector works)" || bad "MCP tools=$ntools (want ≥8)"
+
+hasknow=$(curl -s -X POST "$BASE/$PROJECT/mcp" -H "Authorization: Bearer $PAT" "${MCPHDR[@]}" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"orient","arguments":{}}}' --max-time 30 \
+  | python3 -c "import sys,re,json;t=sys.stdin.read();m=re.search(r'\{.*\}',t,re.S);d=json.loads(m.group(0)) if m else {};c=d.get('result',{}).get('content',[]);print('yes' if c and c[0].get('text') else 'no')" 2>/dev/null)
+[ "$hasknow" = "yes" ] && ok "orient() returns real brain knowledge" || bad "orient returned nothing ($hasknow)"
+
+c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/$PROJECT/mcp" "${MCPHDR[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 15)
+[ "$c" = "401" ] && ok "MCP rejects a request with NO token (401)" || bad "MCP no-token = $c (want 401)"
+
 # ── P4 · durability — the connected repo is still registered (survives runs) ──
 echo
 echo "P4 · DURABILITY (Sam, returning)"
