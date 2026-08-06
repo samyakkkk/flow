@@ -219,12 +219,35 @@ export default function HomePage() {
           />
         </div>
 
-        {/* 3. THE INTERFACE DECISION: use Flow in your own AI interfaces (left)
-            — or drive it from Flow's own interface (right). Same brain either way. */}
+        {/* 3. THE INTERFACE DECISION: use Flow in your own AI tools (left) —
+            or drive it from Flow's own interface (right). Same brain either
+            way. The section header + the "or" badge in the gap make the
+            either/or legible before any card text is read. */}
+        <div className="flex items-center gap-4 w-full pt-2">
+          <span className="h-px bg-line flex-1" />
+          <span className="text-[11px] uppercase tracking-widest text-ink/50">
+            Two ways to use Flow — pick your interface
+          </span>
+          <span className="h-px bg-line flex-1" />
+        </div>
         <div id="agent-runner-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
-          {/* Your AI interfaces: workspace connection column */}
-          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
+          {/* Your AI tools: workspace connection column */}
+          <div id="coding-tools-section" className="relative lg:col-span-5 flex flex-col">
             <CodingToolsPanel />
+            {/* the fulcrum of the decision, sitting on the seam between the cards */}
+            <div
+              className="hidden lg:flex absolute -right-[30px] top-9 z-10 items-center justify-center w-9 h-9 rounded-full border border-line bg-paper shadow-sm text-[11px] font-medium text-ink/60"
+              aria-hidden
+            >
+              or
+            </div>
+          </div>
+
+          {/* stacked (mobile) divider — the seam badge above is lg-only */}
+          <div className="lg:hidden flex items-center gap-3 w-full" aria-hidden>
+            <span className="h-px bg-line flex-1" />
+            <span className="text-[11px] uppercase text-ink/45">or</span>
+            <span className="h-px bg-line flex-1" />
           </div>
 
           {/* Flow's interface: agent trigger + activity */}
