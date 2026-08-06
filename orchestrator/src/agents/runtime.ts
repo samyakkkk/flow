@@ -929,6 +929,23 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
       }
     }
   });
+  // A spawn-level failure (missing/again binary, EACCES, resource limit) emits
+  // an 'error' event on the child — and an 'error' event with NO listener is
+  // RETHROWN by Node, crashing the whole orchestrator. Treat it like an exit:
+  // drop the connection and fail the bound sessions, but never take the process
+  // down over one agent that couldn't start.
+  proc.on("error", (err) => {
+    const msg = (err as Error)?.message ?? String(err);
+    adapterLog(backend, `adapter process error: ${msg}`);
+    connections.delete(backend);
+    for (const flowId of c.sessionsByAcpId.values()) {
+      const s = sessions.get(flowId);
+      if (s && s.status !== "closed" && s.status !== "error") {
+        s.turnActive = false;
+        setStatus(s, "error", { error: `${backend} adapter failed to start: ${msg}` });
+      }
+    }
+  });
   return c;
 }
 
