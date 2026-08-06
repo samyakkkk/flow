@@ -1353,7 +1353,13 @@ async function cmdRemotes(args) {
   const remotes = cfg.remotes ?? {};
 
   if (!sub || sub === "ls" || sub === "list") {
-    const names = Object.keys(remotes);
+    // Only actual remote deployments — the config also holds a `kind:"local"`
+    // entry (the local flow root), which is not a remote and rendered as a junk
+    // "undefined … since ?" row before this filter.
+    const names = Object.keys(remotes).filter((n) => {
+      const r = remotes[n];
+      return r && r.kind !== "local" && r.url;
+    });
     if (names.length === 0) {
       console.log(`\n  No remotes. Connect one with: ${c.bold("flow connect <dashboard-url>")}\n`);
       return;
