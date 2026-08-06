@@ -212,6 +212,7 @@ The watchdog continues low-cost health-scanning (it caught 2 real bugs), but the
 substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
 
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — Stability tick: lifeline+Hetzner 200, brain intact (49 nodes, orient OK), member escalation still 403, 1 listener/port. No drift/regression. Nothing meaningful to add — verifiable work complete.
 - 2026-08-07 T+N — Health scan clean (no error-level patterns; INFO polling only),
   1 listener/port, lsof fix holds. Declared verifiable work substantially complete.
 - 2026-08-07 T+N — Broadened validation: **gateway tests 24/24** (regression on my
