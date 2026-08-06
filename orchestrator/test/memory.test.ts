@@ -325,20 +325,24 @@ describe("search ranking", () => {
     assert.ok(ids.indexOf(acme.id) < ids.indexOf(other.id), "same-family ranks above rest-of-project");
   });
 
-  test("silence gate drops weak vector-only hits", async () => {
+  test("weak vector-only hits surface as distant fallback, never confident", async () => {
     await seed("we chose tailwind css for styling the dashboard", "acme", ["tailwind", "css"]);
-    // Query with no token overlap → cosine ~0 → below floor, no FTS hit → dropped.
+    // Query with no token overlap → cosine ~0 → below floor, no FTS hit. The
+    // gate marks rather than mutes: the memory still surfaces, tagged distant.
     const res = await search.searchMemory({ query: "database migration rollback strategy", repo: "acme", limit: 10 });
-    assert.equal(res.memories.length, 0, "weak vector-only hit must be silenced");
+    assert.ok(res.memories.length >= 1, "below-floor candidates fill in as fallback");
+    assert.ok(res.memories.every((m) => m.distant), "every fallback hit is marked distant");
+    assert.match(search.renderSearchResult(res), /, distant\]/, "render carries the distant tag");
   });
 
-  test("FTS exact-match bypasses the silence gate", async () => {
+  test("FTS exact-match is a confident hit (never marked distant)", async () => {
     // Seed a memory whose retrieval keys carry a rare identifier. A query for
     // that identifier is an FTS exact hit even if the dense cosine is weak.
     await seed("the flaky test is caused by a race in the WorktreePruner", "acme", ["WorktreePruner", "race"]);
     const res = await search.searchMemory({ query: "WorktreePruner", repo: "acme", limit: 10 });
     assert.ok(res.memories.length >= 1, "FTS exact hit must survive even under the cosine floor");
     assert.ok(res.memories[0].ftsHit);
+    assert.equal(res.memories[0].distant, false, "an FTS hit is confident, not distant");
   });
 });
 
@@ -369,12 +373,14 @@ describe("keyword matching + multi-memory retrieval", () => {
     assert.deepEqual(search.meaningfulTokens("how is it that we do this with the"), []);
   });
 
-  test("stopword-only overlap does NOT surface a memory (the live bug)", async () => {
+  test("stopword-only overlap is never a CONFIDENT hit (the live bug)", async () => {
     clearMemory();
     // The memory shares ONLY filler words with the query below ("on", "with").
+    // It may surface as a distant fallback, but must never read as a real
+    // keyword/vector match — the live bug was an unmarked confident hit.
     await seed("the ci pipeline runs on github-actions with layer caching", "acme", ["ci", "github-actions", "caching"]);
     const res = await search.searchMemory({ query: "avatar images on profile cards with rounded corners", repo: "acme", limit: 10 });
-    assert.equal(res.memories.length, 0, "shared stopwords must not surface an unrelated memory");
+    assert.ok(res.memories.every((m) => m.distant && !m.ftsHit), "shared stopwords never make a confident (non-distant) hit");
     // positive control: a real content token from that memory DOES surface it
     const hit = await search.searchMemory({ query: "github-actions caching", repo: "acme", limit: 10 });
     assert.ok(hit.memories.length >= 1 && hit.memories[0].ftsHit, "real keyword must still hit");
@@ -439,13 +445,16 @@ describe("batched memory search", () => {
     );
   });
 
-  test("a query with no hits still gets an (empty) group in order", async () => {
+  test("a query with no confident hits keeps its group in order (distant fallback)", async () => {
     clearMemory();
     await seed("dashboard uses tailwind for styling", "acme", ["tailwind", "css"]);
     const res = await search.searchMemoryBatch({ queries: ["tailwind", "zzznonexistentzzz"], repo: "acme", limit: 10 });
     assert.equal(res.groups.length, 2);
     assert.ok(res.groups[0].result.memories.length >= 1);
-    assert.equal(res.groups[1].result.memories.length, 0, "empty group is kept, not dropped");
+    assert.ok(
+      res.groups[1].result.memories.every((m) => m.distant),
+      "an off-topic query gets at most distant fallback hits, never confident ones",
+    );
   });
 
   test("batch render labels each query section in order", async () => {
@@ -1220,10 +1229,40 @@ describe("find_entity memory hits + quota (Section D)", () => {
     assert.ok(hits.length > findHits.MEMORY_HIT_QUOTA, "a typed query lifts the quota");
   });
 
-  test("the 0.55 silence gate still applies to hits (no keyword → no noise)", async () => {
+  test("a weak vector-only match blends in as a distant-tagged hit, not silence", async () => {
     clearMemory();
     await seed("we chose tailwind css for styling", "acme", ["tailwind"]);
     const hits = await findHits.memoryHitsForQuery("database migration rollback", "acme");
-    assert.equal(hits.length, 0, "a weak vector-only match is silenced, so no memory hit blends in");
+    assert.ok(hits.length >= 1, "below-floor fallback keeps find_entity's blend non-empty");
+    assert.match(hits[0].line, /\(\w+, distant\) \[mem:/, "the terse line carries the distant tag");
+  });
+
+  test("batch runs queries concurrently but returns groups in request order", async () => {
+    clearMemory();
+    await seed("payments verified with hmac signature", "acme", ["hmac"]);
+    await seed("s3 uploads use presigned urls", "acme", ["presigned"]);
+    // Embedder that resolves out of order: first call (hmac) waits until the
+    // second (presigned) has resolved — a sequential loop would deadlock-free
+    // pass too, but out-of-order results would land in the wrong group if the
+    // pool wrote by completion order instead of request index.
+    let firstRelease!: () => void;
+    const firstDone = new Promise<void>((r) => (firstRelease = r));
+    let calls = 0;
+    store.setEmbedder(async (text) => {
+      const call = ++calls;
+      if (call === 1) await firstDone;
+      else if (call === 2) firstRelease();
+      return stubEmbedder(text);
+    });
+    try {
+      const groups = await findHits.memoryHitsForQueries(["hmac", "presigned"], "acme");
+      assert.equal(groups.length, 2);
+      assert.equal(groups[0].query, "hmac");
+      assert.equal(groups[1].query, "presigned");
+      assert.ok(groups[0].hits[0]?.line.includes("hmac"), "first group holds the first query's hits");
+      assert.ok(groups[1].hits[0]?.line.includes("presigned"), "second group holds the second query's hits");
+    } finally {
+      store.setEmbedder(stubEmbedder);
+    }
   });
 });

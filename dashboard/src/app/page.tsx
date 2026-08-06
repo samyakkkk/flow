@@ -6,6 +6,7 @@ import { KeyGate } from "@/components/KeyGate";
 import { BrainCanvas } from "@/components/BrainCanvas";
 import { AgentPanel } from "@/components/AgentPanel";
 import { IntegrationCatalog } from "@/components/IntegrationCatalog";
+import { CodingToolsPanel } from "@/components/CodingToolsPanel";
 import { SourcesPillStrip, SourceDrawer, type RepoEntry, type SettingItem } from "@/components/SourceDrawer";
 import { RecentActivity, type AuditRow } from "@/components/RecentActivity";
 import { Kicker, Heading, StatusPill } from "@/components/ui";
@@ -218,20 +219,31 @@ export default function HomePage() {
           />
         </div>
 
-        {/* 3. BOTTOM SECTION: START AN AGENT TASK & RECENT ACTIVITY */}
+        {/* 3. THE INTERFACE DECISION: use Flow in your own AI tools (left) —
+            or drive it from Flow's own interface (right). Same brain either
+            way. The section header + the "or" badge in the gap make the
+            either/or legible before any card text is read. */}
+        <div className="flex items-center gap-4 w-full pt-2">
+          <span className="h-px bg-line flex-1" />
+          <span className="text-[11px] uppercase tracking-widest text-ink/50">
+            Two ways to use Flow — pick your interface
+          </span>
+          <span className="h-px bg-line flex-1" />
+        </div>
         <div id="agent-runner-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
-          {/* Agent Task Command Center (Left 8 Cols / ~65%) */}
-          <div className="lg:col-span-8 flex flex-col">
+          {/* Your AI tools: workspace connection column */}
+          <div id="coding-tools-section" className="lg:col-span-5 flex flex-col">
+            <CodingToolsPanel />
+          </div>
+
+          {/* Flow's interface: agent trigger + activity */}
+          <div className="lg:col-span-7 flex flex-col gap-6">
             <AgentPanel
               nodeCount={graphNodeCount}
               selectedNodeTag={selectedNodeTag}
               onClearNodeTag={() => setSelectedNodeTag(null)}
               onOpenDrawer={() => setIsDrawerOpen(true)}
             />
-          </div>
-
-          {/* Domain Milestones Feed (Right 4 Cols / ~35%) */}
-          <div className="lg:col-span-4 flex flex-col">
             <RecentActivity rows={auditRows} />
           </div>
         </div>

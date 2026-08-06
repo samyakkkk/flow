@@ -11,9 +11,12 @@
 //         + 0.10 * file_mention_overlap
 //         + 0.08 * same_repo_exact
 //         + 0.04 * same_family (sibling repo, e.g. acme-backend from acme-frontend)
-//   SILENCE GATE: drop results under ~0.55 cosine UNLESS they are an FTS5 exact
-//     hit. FTS candidates are ALWAYS eligible (identifiers/error strings are the
-//     reliable path); vector-only candidates must clear the cosine floor.
+//   SILENCE GATE: vector-only candidates under ~0.55 cosine don't count as
+//     confident hits — FTS5 exact hits always do (identifiers/error strings are
+//     the reliable path). The gate marks rather than mutes (Samyak, 2026-07-27):
+//     when fewer than FLOOR_FALLBACK_HITS confident hits survive, the top
+//     below-floor candidates surface anyway, flagged `distant`, so retrieval
+//     degrades to best-effort instead of silence.
 //   Merge FTS5 + vector candidates before ranking.
 //
 // Returns terse lines. Also searches the corpus (slack/linear/meeting FTS) and
@@ -28,6 +31,11 @@ import { searchCorpus } from "../corpus.js";
 import { itemsAnchoredToNode } from "./anchors.js";
 
 export const COSINE_FLOOR = 0.55;
+
+// When the gate leaves fewer confident hits than this, the best below-floor
+// candidates fill the gap (marked distant) — the caller always sees the top
+// few closest memories when any exist at all.
+export const FLOOR_FALLBACK_HITS = 3;
 
 // Node-scoped + type filters parsed out of the query string (Section E). A
 // caller can write `node:svc:users type:memory hmac` and get memories anchored
@@ -94,6 +102,9 @@ export interface MemoryHit {
   score: number;
   cosine: number;
   ftsHit: boolean;
+  // True when this hit is a below-floor fallback: no FTS match and cosine under
+  // COSINE_FLOOR. Rendered as a "distant" tag so the agent can weigh it.
+  distant: boolean;
 }
 
 export interface CorpusHit {
@@ -264,16 +275,20 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   const emptyNodeScope = nodeMemoryIds !== null && effectiveQuery === "";
 
   const hits: MemoryHit[] = [];
+  // Below-floor candidates kept aside instead of dropped: if the gate leaves
+  // fewer than FLOOR_FALLBACK_HITS confident hits, the best of these surface
+  // anyway, marked distant — best-effort beats silent emptiness.
+  const distantPool: MemoryHit[] = [];
   for (const m of memRows) {
     // Node scope: drop memories not anchored to the node.
     if (nodeMemoryIds && !nodeMemoryIds.has(m.id)) continue;
 
     const cos = cosById.get(m.id) ?? 0;
     const isFts = ftsIds.has(m.id);
-    // Silence gate: vector-only candidates must clear the cosine floor; FTS
-    // exact hits bypass it. An empty node-scoped query bypasses (the anchor IS
-    // the selection).
-    if (!emptyNodeScope && !isFts && cos < COSINE_FLOOR) continue;
+    // Silence gate: vector-only candidates under the cosine floor are marked
+    // distant; FTS exact hits pass. An empty node-scoped query passes (the
+    // anchor IS the selection).
+    const distant = !emptyNodeScope && !isFts && cos < COSINE_FLOOR;
 
     const keys = parseJsonArray(m.retrieval_keys);
     const keyOverlap = overlap(queryTokens, keys);
@@ -285,7 +300,7 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
     const sameFamily = !sameRepoExact && queryFamily && m.repo_family && queryFamily === m.repo_family ? 1 : 0;
 
     const score = cos + 0.15 * keyOverlap + 0.1 * fileOverlap + 0.08 * sameRepoExact + 0.04 * sameFamily;
-    hits.push({
+    (distant ? distantPool : hits).push({
       id: m.id,
       claim: m.claim,
       kind: m.kind,
@@ -294,9 +309,14 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
       score,
       cosine: cos,
       ftsHit: isFts,
+      distant,
     });
   }
 
+  if (hits.length < FLOOR_FALLBACK_HITS && distantPool.length > 0) {
+    distantPool.sort((a, b) => b.score - a.score);
+    hits.push(...distantPool.slice(0, FLOOR_FALLBACK_HITS - hits.length));
+  }
   hits.sort((a, b) => b.score - a.score);
   return {
     memories: hits.slice(0, limit),
@@ -325,7 +345,7 @@ function nodeScopeIds(nodeId: string): NodeScope {
 // kept in REQUEST ORDER. Concurrency is bounded — each query is a full FTS +
 // vector pass, so a small pool keeps a batch from monopolizing the event loop.
 export const SEARCH_MEMORY_MAX_BATCH = 10;
-const BATCH_CONCURRENCY = 4;
+export const BATCH_CONCURRENCY = 4;
 
 export interface BatchSearchInput {
   queries: string[];
@@ -415,7 +435,7 @@ export function renderSearchResult(res: SearchResult): string {
   if (res.memories.length) {
     lines.push("MEMORY:");
     for (const m of res.memories) {
-      lines.push(`- ${m.claim} [${m.kind}/${m.strengthTier}] (memory ${m.id})`);
+      lines.push(`- ${m.claim} [${m.kind}/${m.strengthTier}${m.distant ? ", distant" : ""}] (memory ${m.id})`);
     }
   }
   if (res.corpus.length) {

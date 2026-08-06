@@ -22,7 +22,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, basename } from "node:path";
 import { hostname, homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
@@ -48,6 +48,13 @@ import {
   writePids,
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
+import {
+  materializeMachine,
+  materializeRepo,
+  removeRepo,
+  ALL_HARNESSES,
+  detectHarnesses,
+} from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
 
@@ -95,6 +102,14 @@ ${c.bold("Usage")}
   flow rm <name>        Stop and delete a project and its data.
   flow connect <url>    Connect this machine to a deployed Flow (device flow → token).
   flow remotes          List connected deployments (remove with: flow remotes remove <name>).
+  flow setup <name>     Connect the current git repo to a project: installs Flow's
+                        capture hooks, MCP registration, skill, and instruction blocks
+                        into every coding tool's config (Claude Code, Codex, opencode,
+                        Gemini CLI, Cursor, Antigravity). Idempotent; re-run to repair.
+     --share            Un-hide the written files from git so the team can commit them
+                        (default: personal mode via .git/info/exclude).
+     --harness a,b      Limit to specific tools.
+     --remove           Uninstall Flow artifacts from this repo.
 
 ${c.bold("Options")}
   --mode local|prod     For a new project (default: local). Local needs no login.
@@ -788,6 +803,10 @@ async function upProject(name, { rebuilt = false } = {}) {
     // store, checking the minting user's grant on THIS project.
     FLOW_AUTH_PATH: authJsonPath(),
     FLOW_PROJECT_NAME: name,
+    // Lets the gateway's HTTP-served orient reach the memory tiers (orient
+    // docs, stats) — MCP spawns inject this per-process, the long-running
+    // server needs it in its own env for CLI/remote verb callers.
+    ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
     NODE_ENV: "production",
   };
   // Direct LLM callers (classification) may use an OpenAI-compatible provider.
@@ -1319,6 +1338,155 @@ async function cmdRemotes(args) {
   die(`Usage: flow remotes [remove <name>]`);
 }
 
+// ── flow setup — bind the current repo to a project + materialize atoms ──────
+//
+// Folder → (deployment, project) binding, resolved ONCE here and baked into
+// the rendered artifacts (`--project X` in every hook line). Nothing is
+// resolved at capture time — that's the anti-cross-project-bleed design.
+
+function normalizeGitUrl(u) {
+  return String(u)
+    .trim()
+    .replace(/^git@([^:]+):/, "https://$1/")
+    .replace(/^ssh:\/\/git@/, "https://")
+    .replace(/\.git$/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+// Which registered source (BRAIN repo) does this checkout correspond to?
+// localPath match beats remote-URL match beats name match; no match is fine —
+// capture still works, the repo is just not an indexed source (BRAIN/WORK split).
+function resolveRepoName(projectName, repoDir) {
+  let repos = [];
+  try {
+    const parsed = JSON.parse(readFileSync(join(projectDir(projectName), "workspace", "repos.json"), "utf-8"));
+    repos = parsed.repos ?? [];
+  } catch {
+    /* no registry — fall through */
+  }
+  const byPath = repos.find((r) => r.localPath === repoDir);
+  if (byPath) return { name: byPath.name, registered: true };
+  let origin = "";
+  try {
+    origin = spawnSync("git", ["remote", "get-url", "origin"], { cwd: repoDir, encoding: "utf-8" }).stdout ?? "";
+  } catch {}
+  if (origin.trim()) {
+    const norm = normalizeGitUrl(origin);
+    const byUrl = repos.find((r) => r.url && normalizeGitUrl(r.url) === norm);
+    if (byUrl) return { name: byUrl.name, registered: true };
+  }
+  const byName = repos.find((r) => r.name === basename(repoDir));
+  if (byName) return { name: byName.name, registered: true };
+  return { name: basename(repoDir), registered: false };
+}
+
+async function cmdSetup(rest) {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    options: {
+      share: { type: "boolean" },
+      remove: { type: "boolean" },
+      harness: { type: "string" },
+      all: { type: "boolean" },
+    },
+    allowPositionals: true,
+  });
+
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf-8" });
+  if (top.status !== 0) die("flow setup must run inside a git repository.");
+  const repoDir = top.stdout.trim();
+
+  if (values.remove) {
+    removeRepo(repoDir);
+    console.log(`\n  ${OK} removed Flow integration artifacts from ${c.bold(repoDir)}\n`);
+    return;
+  }
+
+  const name = positionals[0];
+  if (!name) {
+    const names = listProjectNames();
+    die(
+      `Usage: flow setup <project> [--share] [--harness a,b] [--remove]\n` +
+        (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
+    );
+  }
+  const project = readProject(name); // throws with a helpful message if unknown
+  const index = listProjectNames().indexOf(name);
+  const ports = portsForIndex(index);
+  const env = parseEnvFile(join(projectDir(name), ".env"));
+  const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
+  const graph = project.graph ?? name;
+
+  const { name: repoName, registered } = resolveRepoName(name, repoDir);
+
+  materializeMachine({
+    flowRoot,
+    projectName: name,
+    shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
+    projectEntry: {
+      remote: "local",
+      orchestratorUrl: `http://localhost:${ports.orchestrator}`,
+      gatewayUrl: `http://localhost:${ports.gateway}`,
+      graphName: graph,
+      token,
+      falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
+      falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
+      tsxBin: nodeBin(gatewayDir(), "tsx"),
+      gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
+    },
+  });
+
+  // Default: only the tools this machine actually has. `--all` pre-wires
+  // everything; `--harness a,b` picks explicitly.
+  const detected = detectHarnesses();
+  const harnesses = values.harness
+    ? values.harness.split(",").map((s) => s.trim()).filter((h) => ALL_HARNESSES.includes(h))
+    : values.all
+      ? ALL_HARNESSES
+      : detected.length
+        ? detected
+        : ALL_HARNESSES;
+  const skipped = ALL_HARNESSES.filter((h) => !harnesses.includes(h));
+  const { owned, merged } = materializeRepo({
+    repoDir,
+    project: name,
+    repo: repoName,
+    share: values.share === true,
+    harnesses,
+  });
+
+  // WORK-surface registration (work_folders): best-effort — the binding above
+  // is complete without it; this makes the folder appear in the dashboard.
+  let workFolderOk = false;
+  try {
+    const res = await fetch(`http://localhost:${ports.orchestrator}/v1/work-folders`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path: repoDir, repo: registered ? repoName : undefined }),
+      signal: AbortSignal.timeout(3000),
+    });
+    workFolderOk = res.ok;
+  } catch {
+    /* orchestrator not running — fine */
+  }
+
+  console.log(`
+  ${OK} ${c.bold(repoDir)}
+    → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
+    mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
+    files: ${[...owned, ...merged].join(", ")}
+    work folder: ${workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
+
+  ${c.bold("One-time approvals some tools will ask for:")}
+    Claude Code  → first prompt asks to use this repo's .mcp.json — approve.
+    Codex        → run ${c.cyan("/hooks")} once in codex here and trust the flow hooks.
+    Cursor       → Settings → MCP: approve "flow-graph" when prompted.
+    Gemini CLI   → shows "hooks will be executed" notice on first run.
+`);
+}
+
 // ── Main dispatch ─────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1347,6 +1515,8 @@ async function main() {
       await cmdConnect(rest);
     } else if (cmd === "remotes" || cmd === "remote") {
       await cmdRemotes(rest);
+    } else if (cmd === "setup" || cmd === "connect-repo") {
+      await cmdSetup(rest);
     } else if (cmd === "create" || cmd === "new" || cmd === "project") {
       // Tolerate `flow create project X`, `flow new X`, `flow project create X`.
       let a = rest;

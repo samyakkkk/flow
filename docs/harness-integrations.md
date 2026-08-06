@@ -49,7 +49,7 @@ Headline findings:
 | Tool | Capture, local script | Capture, zero-local | Serve memory | Per-folder scoping |
 |---|---|---|---|---|
 | Claude Code | ✅ hooks + `transcript_path`, `prompt`, `last_assistant_message`, `tool_response` | ✅ native **HTTP hooks** POST payloads to a remote URL | ✅ remote MCP + skills; claude.ai connectors auto-bridge in | ✅ `.claude/`, `.mcp.json` (trust-gated) |
-| Codex CLI | ✅ hooks (`[features] hooks=true`) + `transcript_path` on Session/Subagent events; rollouts in `~/.codex/sessions/` | ❌ command hooks only | ✅ MCP (stdio+HTTP+OAuth), skills (`.agents/skills`), AGENTS.md, MCP `instructions` field | ✅ `.codex/` (trust-gated) |
+| Codex (CLI/IDE/desktop app) | ✅ hooks **GA, on by default** (opt-out `[features] hooks=false`) + `transcript_path`; fire on all local surfaces incl. ChatGPT desktop app's Codex view; rollouts in `~/.codex/sessions/` | 🟡 hooks also run in Codex cloud ("wherever Codex runs") | ✅ MCP (stdio+HTTP+OAuth), skills (`.agents/skills`), AGENTS.md, MCP `instructions` field | ✅ `.codex/` (trust-gated) |
 | Cursor | ✅ hooks (`stop`/`afterAgentResponse`) + `transcript_path`, `workspace_roots`, `conversation_id`, `user_email` | 🟡 cloud agents run repo hooks in Cursor's cloud; v1 API streams transcripts | ✅ MCP (⚠️ ~40-tool cap), skills, rules, `sessionStart` `additional_context` injection | ✅ `.cursor/` (`hooks.json` needs `"version": 1`) |
 | VS Code Copilot | ✅ hooks (Preview) + `transcript_path`; also reads `.claude/settings.json` hooks | 🟡 Copilot coding agent runs repo `.github/hooks/` in cloud sandbox (egress unverified) | ✅ MCP (gallery+OAuth), copilot-instructions.md, AGENTS.md, skills, custom agents pinning `flow/*` | ✅ `.vscode/mcp.json`, `.github/hooks/` |
 | Copilot CLI | ✅ 14 hook events + `transcriptPath`; sessions in SQLite+JSONL under `~/.copilot/` | 🟡 "chronicle" syncs to GitHub cloud, no public read API | ✅ MCP via `~/.copilot/mcp-config.json` (shared with VS Code), skills | ✅ repo `.github/hooks/` |
@@ -80,13 +80,27 @@ Headline findings:
 - Identity: hooks give `cwd`; MCP stdio servers get `CLAUDE_PROJECT_DIR`; `roots/list` supported.
 - Docs: code.claude.com/docs/en/{hooks,sessions,plugins,mcp}.
 
-### Codex CLI (ChatGPT)
-- Hooks: 11 events; gated by `[features] hooks = true`. Common fields `session_id`, `cwd`,
+### Codex (CLI / IDE extension / ChatGPT desktop app)
+- Hooks: 11 events (`SessionStart/End`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`,
+  `PostToolUse`, `PreCompact/PostCompact`, `Stop`, `SubagentStart/Stop`). **GA and enabled by
+  default** as of Aug 2026 (opt-out `[features] hooks = false`; admins via `requirements.toml`)
+  — the `[features] hooks = true` gate is no longer needed. Apply "across CLI, IDE extension,
+  ChatGPT desktop app, and cloud — wherever Codex runs" (docs); discovery:
+  `~/.codex/{hooks.json,config.toml}` + repo `.codex/`. Common fields `session_id`, `cwd`,
   `hook_event_name`, `model`, `permission_mode` (+ `turn_id` on turn events).
   `transcript_path` is `string|null`, reliably present on `SessionStart/End`,
   `SubagentStart/Stop`. Command hooks only (stdin JSON) — **no HTTP hooks**.
+- ChatGPT desktop app (redesigned Jul 16, 2026): global switcher ChatGPT ↔ Codex; inside
+  ChatGPT, **Chat vs Work modes** (Work = agentic end-to-end tasks). The Codex view is the
+  standard local Codex → our `~/.codex` hooks/MCP cover it with zero extra work. Whether
+  ChatGPT-side Work-mode conversations fire Codex hooks is undocumented — treat Work/Chat as
+  courier-only until verified.
 - Trust: hooks require one-time `/hooks` review; re-trust on every hook-definition change
   (hash-based) → keep the hook a stable one-line shim that execs a versioned script.
+  VERIFIED 2026-08-06 (0.144.5): untrusted hooks are skipped SILENTLY; headless runs can use
+  `codex exec --dangerously-bypass-hook-trust`. Also `[features] hooks = true` was still
+  required on 0.144.5 (GA default-on evidently lands in a newer build), and `SessionEnd` did
+  not fire under `codex exec` (Stop did — idle sweep covers close).
 - Transcripts: rollouts at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (full conversation;
   note: files are world-readable 0644). `history.jsonl` is prompt history only. Format
   explicitly "not a stable interface".
@@ -157,6 +171,10 @@ Headline findings:
 - Docs: geminicli.com/docs/{hooks/reference,cli/session-management,tools/mcp-server,extensions}.
 
 ### Google Antigravity
+- ⚠️ VERIFIED GAP 2026-08-06: on Antigravity IDE 1.107.0, doc-conform hooks.json (named-group
+  schema) in BOTH `.agents/` and `~/.gemini/config/` was never executed while agent sessions
+  ran fine — hooks appear version/flag-gated. MCP serve works (live orient). Capture fallback:
+  brain-dir ingestion.
 - Hooks: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`. Payload:
   `conversationId`, `workspacePaths`, **`transcriptPath`**
   (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`),
@@ -207,7 +225,11 @@ Headline findings:
   transcript export via hooks is a sanctioned surface.
 
 ### ChatGPT (consumer)
-- Passive capture: none. Manual export = Free/Plus/Pro only (not Business/Enterprise!).
+- Desktop app (Jul 2026 redesign): ChatGPT ↔ Codex global switcher; ChatGPT side has **Chat
+  and Work modes**. The Codex view is local Codex — full hook capture via the normal Codex
+  atoms (see Codex section). Chat/Work modes: no documented hook surface → courier only.
+- Passive capture (ChatGPT conversations): none. Manual export = Free/Plus/Pro only (not
+  Business/Enterprise!).
   **Compliance API (`api.chatgpt.com/v1/compliance`) = Enterprise/Edu workspaces only.**
 - Apps/connectors see tool-call args + `_meta` locale/userAgent/userLocation only; invoked-only,
   no passive context. Community reports dev-mode MCP disables ChatGPT memory in that chat.
