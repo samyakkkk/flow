@@ -38,6 +38,16 @@ const PUBLIC_PATHS = [
 // session in prod (enforced inside the routes themselves).
 const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens", "/api/machines"];
 
+// The `/<project>/v1/*` machine surface a MEMBER (non-owner) PAT may use: the
+// graph read/embed verbs, memory search/remember, transcript ingest, and
+// advisory corrections — everything a coding agent, capture hook, or connector
+// legitimately needs. Every OTHER /v1 segment (settings, sources, integrations,
+// agents, work-folders, events) is an OWNER action. Critical: this PAT door
+// forwards to the role-blind orchestrator with the project ADMIN token, so a
+// member reaching a non-listed path here escalates past the dashboard's
+// canManageIntegrations() gate. Enforce owner for anything off this list.
+const MEMBER_V1_PREFIXES = new Set(["verbs", "embed", "journal", "reconcile", "memory", "ingest", "corrections"]);
+
 function toLogin(req: NextRequest, clearCookie: boolean) {
   const url = req.nextUrl.clone();
   url.pathname = "/login";
@@ -143,6 +153,17 @@ async function routeRequest(req: NextRequest) {
         );
       }
       if (!project || !userCanAccess(patUser, name)) return notFound();
+      // Owner-only machine surface. Without this, a member PAT reaches the
+      // role-blind orchestrator (guarded only by the admin token route.ts
+      // injects) and performs owner actions — writing team settings, adding
+      // sources, starting server-side agents — bypassing canManageIntegrations().
+      // Members get the agent/capture surface only; everything else needs owner.
+      if (rest.startsWith("/v1/") && patUser.role !== "owner") {
+        const seg = rest.slice("/v1/".length).split("/")[0];
+        if (!MEMBER_V1_PREFIXES.has(seg)) {
+          return NextResponse.json({ error: "Owner only." }, { status: 403 });
+        }
+      }
     } else if (!project) {
       return notFound();
     }
