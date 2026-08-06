@@ -6,6 +6,7 @@
 //   GET  /v1/agents/sessions/:id/events   SSE: replay then live events
 //   POST /v1/agents/sessions/:id/prompt   {text} — steer (queues/cancels as needed)
 //   POST /v1/agents/sessions/:id/cancel   stop the current turn
+//   POST /v1/agents/sessions/:id/close    end the session + free its OS process
 //   POST /v1/agents/sessions/:id/permission {requestId, optionId|null}
 //   POST /v1/agents/sessions/:id/mode     {modeId}
 //   GET  /v1/agents/sessions/:id/diff     unified git diff of the checkout
@@ -24,6 +25,7 @@ import {
   type AgentBackend,
   BACKENDS,
   cancelSession,
+  closeFlowSession,
   createSession,
   detectAgents,
   getSession,
@@ -278,6 +280,17 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   app.post("/v1/agents/sessions/:id/cancel", async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await cancelSession(id);
+    if ("error" in r) return reply.code(400).send(r);
+    return r;
+  });
+
+  // End a session for real: the adapter closes the ACP session and kills the
+  // per-session agent CLI child; the row goes 'closed' (still resumable — a
+  // later prompt reloads it via session/load). This is the OS-process
+  // counterpart of archiving; without it every session leaks a child process.
+  app.post("/v1/agents/sessions/:id/close", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const r = await closeFlowSession(id);
     if ("error" in r) return reply.code(400).send(r);
     return r;
   });

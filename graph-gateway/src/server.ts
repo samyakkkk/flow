@@ -7,6 +7,7 @@ import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled } from "./embed.js";
 import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
+import { startWatchdog } from "./watchdog.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
@@ -150,6 +151,9 @@ const server = createServer(async (req, res) => {
 server.listen(port, "127.0.0.1", () => {
   const model = activeEmbeddingModel();
   console.log(`graph-gateway listening on http://127.0.0.1:${port} (default graph: '${DEFAULT_GRAPH}', embed model: ${model.id}, dim: ${model.dim})`);
+  // Self-exit when pids.json stops naming this pid (superseded/retired/
+  // deleted deployment). No-op unless `flow up` set FLOW_PIDS_PATH.
+  startWatchdog();
   // Start the local embedding model download immediately so it runs in
   // parallel with migrations — but only when the local model is the active
   // provider. An API model has nothing to download. runBootTasks awaits the

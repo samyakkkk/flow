@@ -98,6 +98,8 @@ ${c.bold("Usage")}
   flow down [name]      Stop a project. No name = all.
   flow ls               List projects, status, and dashboard URLs.
   flow doctor           Health-check every project — pages load, assets load, services up.
+     --reap             Also kill stale Flow processes nothing tracks (orphaned
+                        services, adapters, MCP servers).
   flow rm <name>        Stop and delete a project and its data.
   flow setup <name>     Connect the current git repo to a project: installs Flow's
                         capture hooks, MCP registration, skill, and instruction blocks
@@ -237,6 +239,55 @@ function isAlive(pid) {
   } catch {
     return false;
   }
+}
+
+/** The command line of a live process ("" when gone / unreadable). */
+function processCommand(pid) {
+  try {
+    const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+    return r.status === 0 ? (r.stdout ?? "").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+// PIDs recorded days ago may have been recycled by the OS for an unrelated
+// process — never signal a recorded pid unless its command line still points
+// into this checkout (the tsx supervisor and its node child both carry the
+// flowRoot path in their argv).
+function isThisDeploymentsService(pid) {
+  const cmd = processCommand(pid);
+  return cmd.length > 0 && cmd.includes(flowRoot);
+}
+
+// Every service pid this project EVER spawned (pids.json `history`), not just
+// the latest pair — `flow down` must be able to kill instances that a later
+// `flow up` (different port offset, crashed restart) stopped tracking.
+function appendPidHistory(pids, entries) {
+  const history = Array.isArray(pids.history) ? pids.history : [];
+  const next = [...history, ...entries];
+  // Compact: drop dead entries, keep at most the last 100 alive ones.
+  return next.filter((e) => e && typeof e.pid === "number" && isAlive(e.pid)).slice(-100);
+}
+
+// Kill every still-alive historical pid of this project (identity-verified).
+// SIGTERM first for graceful shutdown; the caller's grace/SIGKILL pass and the
+// services' own watchdogs cover stragglers. Returns the pids signalled.
+function reapPidHistory(name, { exclude = [] } = {}) {
+  const pids = readPids(name);
+  const history = Array.isArray(pids.history) ? pids.history : [];
+  const signalled = [];
+  for (const e of history) {
+    if (!e || typeof e.pid !== "number" || exclude.includes(e.pid)) continue;
+    if (!isAlive(e.pid) || !isThisDeploymentsService(e.pid)) continue;
+    try {
+      process.kill(e.pid, "SIGTERM");
+      signalled.push(e.pid);
+    } catch {
+      /* gone between check and kill */
+    }
+  }
+  return signalled;
 }
 
 // ── Spawn a service, returning the child pid ─────────────────────────────────
@@ -719,6 +770,12 @@ async function upProject(name, { rebuilt = false } = {}) {
   // level and handled in cmdUp — never touch it per project.)
   killPort(ports.gateway);
 
+  // Reap prior instances of THIS project that the port sweep can't see — a
+  // deployment once started under another FLOW_PORT_OFFSET (or whose ports
+  // drifted) keeps its services alive on ports we're not about to claim, and
+  // they'd sit there holding PID slots forever. pids.json history knows them.
+  reapPidHistory(name);
+
   // Stamp the code these services are spawned from (see the already-running
   // check above). Written before the spawns so a crash mid-start re-runs a
   // full start next time rather than trusting half-started services.
@@ -804,6 +861,11 @@ async function upProject(name, { rebuilt = false } = {}) {
     // docs, stats) — MCP spawns inject this per-process, the long-running
     // server needs it in its own env for CLI/remote verb callers.
     ORCHESTRATOR_URL: `http://localhost:${ports.orchestrator}`,
+    // Watchdog: the service self-exits when pids.json stops naming it (a
+    // newer `flow up` superseded it, or `flow down`/`flow rm` retired it and
+    // the kill didn't land — e.g. the controlling shell died mid-stop).
+    FLOW_PIDS_PATH: pidsJsonPath(name),
+    FLOW_SERVICE_ROLE: "gateway",
     NODE_ENV: "production",
   };
   // Direct LLM callers (classification) may use an OpenAI-compatible provider.
@@ -838,6 +900,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     // project's long-lived gateway model through GATEWAY_URL.
     GRAPH_NAME: graph,
     JOURNAL_PATH: journalPath,
+    // Same watchdog contract as the gateway (see gwEnv above).
+    FLOW_PIDS_PATH: pidsJsonPath(name),
+    FLOW_SERVICE_ROLE: "orchestrator",
     NODE_ENV: "production",
   };
 
@@ -848,7 +913,14 @@ async function upProject(name, { rebuilt = false } = {}) {
     logFile: orchLogFile,
   });
 
-  writePids(name, { gateway: gwPid, orchestrator: orchPid });
+  writePids(name, {
+    gateway: gwPid,
+    orchestrator: orchPid,
+    history: appendPidHistory(readPids(name), [
+      { pid: gwPid, svc: "gateway", at: Date.now() },
+      { pid: orchPid, svc: "orchestrator", at: Date.now() },
+    ]),
+  });
 
   // ── Wait for health (the deployment dashboard is handled in cmdUp) ─────────
   const [gwOk, orchOk] = await Promise.all([
@@ -931,7 +1003,10 @@ async function downProject(name) {
   const services = ["gateway", "orchestrator", "dashboard"];
   let touched = false;
 
-  // SIGTERM tracked pids, then SIGKILL survivors after a grace period.
+  // SIGTERM tracked pids, then SIGKILL survivors after a grace period. The
+  // pid history covers instances the latest pids.json pair no longer names
+  // (earlier spawns that survived a crashed/interrupted stop) — `flow down`
+  // kills every pid it ever spawned, not just the newest two.
   const alive = services.map((svc) => pids[svc]).filter((pid) => pid && isAlive(pid));
   for (const pid of alive) {
     try {
@@ -941,9 +1016,12 @@ async function downProject(name) {
       /* already gone */
     }
   }
-  if (alive.length) {
+  const historical = reapPidHistory(name, { exclude: alive });
+  if (historical.length) touched = true;
+  const signalled = [...alive, ...historical];
+  if (signalled.length) {
     await new Promise((r) => setTimeout(r, 3000));
-    for (const pid of alive) {
+    for (const pid of signalled) {
       if (isAlive(pid)) {
         try {
           process.kill(pid, "SIGKILL");
@@ -1036,6 +1114,116 @@ async function cmdLs() {
 
 const DOCTOR_PAGES = ["/", "/ask", "/agents", "/connections", "/permissions", "/activity", "/settings"];
 
+// ── Stale-process scan (doctor / doctor --reap) ──────────────────────────────
+//
+// Finds Flow-shaped OS processes that nothing tracks any more: services from
+// deployments whose controlling shell died without `flow down`, services
+// started from inside a Flow-managed source clone (workspace/repos/…), and
+// orphaned ACP adapters / MCP servers. Reports them always; kills them only
+// with --reap. Deliberately conservative — live processes belonging to OTHER
+// tools (a Zed-run claude-agent-acp, a Claude Code session's flow-graph MCP)
+// have a live non-init parent and are never touched.
+
+const PROCESS_SIGNATURES = [
+  { kind: "orchestrator", re: /orchestrator\/src\/index\.ts/ },
+  { kind: "gateway", re: /graph-gateway\/src\/server\.ts/ },
+  { kind: "mcp", re: /graph-gateway\/src\/mcp\.ts/ },
+  { kind: "acp-adapter", re: /claude-agent-acp|codex-acp/ },
+];
+
+function listFlowShapedProcesses() {
+  const out =
+    spawnSync("ps", ["-axo", "pid=,ppid=,etime=,command="], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }).stdout ?? "";
+  const procs = [];
+  for (const line of out.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+    if (!m) continue;
+    procs.push({ pid: Number(m[1]), ppid: Number(m[2]), etime: m[3], command: m[4] });
+  }
+  return procs;
+}
+
+// Every pid any project's pids.json (current + history) or dashboard.json
+// names right now — the set of processes this deployment claims.
+function trackedPidSet() {
+  const tracked = new Set();
+  for (const name of listProjectNames()) {
+    const pids = readPids(name);
+    for (const svc of ["gateway", "orchestrator", "dashboard"]) {
+      if (typeof pids[svc] === "number") tracked.add(pids[svc]);
+    }
+    for (const e of Array.isArray(pids.history) ? pids.history : []) {
+      if (e && typeof e.pid === "number") tracked.add(e.pid);
+    }
+  }
+  try {
+    const dash = JSON.parse(readFileSync(join(dataDir(), "dashboard.json"), "utf-8"))?.pid;
+    if (typeof dash === "number") tracked.add(dash);
+  } catch {
+    /* no dashboard tracked */
+  }
+  return tracked;
+}
+
+function findStaleFlowProcesses() {
+  const procs = listFlowShapedProcesses();
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const tracked = trackedPidSet();
+  // A process is "ours" if it, or any ancestor, is a tracked pid — the
+  // recorded pid is the tsx supervisor, whose node child (and ITS adapter and
+  // MCP children) are what ps actually shows doing the work.
+  const isTracked = (pid) => {
+    let cur = pid;
+    for (let hops = 0; hops < 8 && cur > 1; hops++) {
+      if (tracked.has(cur)) return true;
+      cur = byPid.get(cur)?.ppid ?? 1;
+    }
+    return false;
+  };
+
+  const stale = [];
+  for (const p of procs) {
+    const sig = PROCESS_SIGNATURES.find((s) => s.re.test(p.command));
+    if (!sig || p.pid === process.pid || isTracked(p.pid)) continue;
+    const fromSourceClone = /\/workspace\/(?:repos|worktrees)\//.test(p.command);
+    if (sig.kind === "orchestrator" || sig.kind === "gateway") {
+      // Untracked service: stale when it runs from THIS checkout or from any
+      // Flow-managed source clone (never a legitimate service home). Services
+      // of a genuinely different install are reported by their owner's doctor.
+      if (p.command.includes(flowRoot) || fromSourceClone) stale.push({ ...p, kind: sig.kind });
+    } else {
+      // Adapters/MCP servers: only ever legitimate as a child of a live
+      // harness or orchestrator. Reparented to init (ppid 1) = orphan. The
+      // flowRoot check keeps other installs' adapters (e.g. Zed's) off-limits.
+      if (p.ppid === 1 && (p.command.includes(flowRoot) || fromSourceClone)) stale.push({ ...p, kind: sig.kind });
+    }
+  }
+  return stale;
+}
+
+async function reapStaleFlowProcesses(stale) {
+  for (const p of stale) {
+    try {
+      process.kill(p.pid, "SIGTERM");
+    } catch {
+      /* gone */
+    }
+  }
+  await new Promise((r) => setTimeout(r, 3000));
+  let killed = 0;
+  for (const p of stale) {
+    if (isAlive(p.pid)) {
+      try {
+        process.kill(p.pid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
+    killed++;
+  }
+  return killed;
+}
+
 async function fetchStatus(url, opts = {}) {
   try {
     const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(4000), ...opts });
@@ -1045,7 +1233,8 @@ async function fetchStatus(url, opts = {}) {
   }
 }
 
-async function cmdDoctor() {
+async function cmdDoctor(args = []) {
+  const { values } = parseArgs({ args, options: { reap: { type: "boolean", default: false } } });
   const projects = listProjects();
   if (projects.length === 0) {
     console.log(c.dim("\n  No projects.\n"));
@@ -1109,6 +1298,25 @@ async function cmdDoctor() {
       console.log(`  ${label} ${FAIL} ${c.red(problems.slice(0, 5).join(", "))}`);
     }
   }
+  // Stale-process report: Flow-shaped processes nothing tracks (orphaned
+  // services, adapters, MCP servers). --reap kills them.
+  const stale = findStaleFlowProcesses();
+  if (stale.length > 0) {
+    console.log("");
+    for (const p of stale) {
+      const cmd = p.command.length > 90 ? p.command.slice(0, 87) + "…" : p.command;
+      console.log(`  ${c.yellow("stale")} ${String(p.pid).padEnd(7)} ${p.kind.padEnd(12)} ${c.dim(`up ${p.etime}`)}  ${c.dim(cmd)}`);
+    }
+    if (values.reap) {
+      const killed = await reapStaleFlowProcesses(stale);
+      console.log(`\n  ${OK} reaped ${killed} stale process${killed === 1 ? "" : "es"}`);
+    } else {
+      console.log(`\n  ${c.dim("Kill them with")}  flow doctor --reap`);
+    }
+  } else if (values.reap) {
+    console.log(`\n  ${OK} ${c.dim("no stale Flow processes found")}`);
+  }
+
   console.log("");
   if (anyFail) {
     console.log(c.dim("  If assets are stale, run  flow up  — it restarts the dashboard on the fresh build.\n"));
@@ -1334,7 +1542,7 @@ async function main() {
     } else if (cmd === "ls" || cmd === "list" || cmd === "ps") {
       await cmdLs();
     } else if (cmd === "doctor" || cmd === "check" || cmd === "health") {
-      await cmdDoctor();
+      await cmdDoctor(rest);
     } else if (cmd === "rm" || cmd === "remove" || cmd === "delete") {
       await cmdRm(rest);
     } else if (cmd === "setup" || cmd === "connect-repo") {

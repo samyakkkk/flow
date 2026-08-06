@@ -264,6 +264,13 @@ const start = async (): Promise<void> => {
     await app.listen({ port: PORT, host: "0.0.0.0" });
     console.log(`[orchestrator] listening on port ${PORT}`);
 
+    // Self-exit when pids.json stops naming this pid (superseded/retired/
+    // deleted deployment) — an orphaned orchestrator would otherwise run its
+    // pollers, adapters, and agent children forever. No-op unless `flow up`
+    // set FLOW_PIDS_PATH/FLOW_SERVICE_ROLE.
+    const { startWatchdog } = await import("./watchdog.js");
+    startWatchdog();
+
     // Recover jobs left 'running' by a crash/restart (S103)
     recoverStalledJobs();
 
