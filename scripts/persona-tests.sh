@@ -141,6 +141,16 @@ c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/$PROJECT/mcp" "${MCPHD
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 15)
 [ "$c" = "401" ] && ok "MCP rejects a request with NO token (401)" || bad "MCP no-token = $c (want 401)"
 
+# token revocation (a leaked connector token must be killable): revoke $PAT, then
+# confirm it's dead past the gateway's ~2s PAT-cache TTL.
+RID=$(echo "$PAT" | sed -E 's/^flowpat_([0-9a-f]+)_.*/\1/')
+c=$(curl -s -b "$OJ" -o /dev/null -w "%{http_code}" -X DELETE "$BASE/$PROJECT/api/tokens/$RID")
+[ "$c" = "200" ] && ok "token can be revoked (DELETE /api/tokens/<id> 200)" || bad "revoke = $c (want 200)"
+sleep 3
+c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/$PROJECT/mcp" -H "Authorization: Bearer $PAT" "${MCPHDR[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 15)
+[ "$c" = "401" ] && ok "revoked token is DEAD (401)" || bad "revoked token still works ($c)"
+
 # ── P4 · durability — the connected repo is still registered (survives runs) ──
 echo
 echo "P4 · DURABILITY (Sam, returning)"
