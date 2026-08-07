@@ -194,8 +194,15 @@ A subagent security review of this session's auth/token/gating/brain code found:
   282/282; personas 21/21. Full DNS-rebinding defense (runtime host resolution)
   is a further hardening if ever needed; the literal-IP targets are the ones
   that matter and are now closed.
-- **Finding 4 (LOW).** PAT hashing/constant-time/project-scoping all correct;
-  nits: no per-token expiry/revoke UI, 32-bit token id. Defense-in-depth only.
+- **Finding 4 (LOW) — revocation VERIFIED already implemented; only a cosmetic
+  nit remains.** The review's "no revocation" was imprecise: `DELETE /api/tokens/<id>`
+  exists (ownership-checked, self-revoke for `flow remotes remove`, ~2s gateway
+  TTL) AND a "Revoke" button is wired in AccessSettings' token list on the settings
+  page. VERIFIED end-to-end: mint → /mcp 200 → revoke → /mcp 401. Suite guards it
+  (23/23). This matters for D4 (connector tokens pasted into external apps can be
+  killed if leaked). Only residual: 32-bit token id — cosmetic (collision
+  astronomically unlikely, the 128-bit secret still gates auth); a longer id would
+  be a breaking token-format change, not worth it.
 - **Finding 5 (SAFE).** The `/mcp` consumer-connector path is correctly
   read-scoped + project-gated (forwards the PAT, not admin; gateway re-verifies).
 
