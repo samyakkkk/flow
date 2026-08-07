@@ -21,10 +21,27 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 echo "▸ Deploying $HERE → root@$IP:$REMOTE_DIR"
 [ -f "$KEY" ] || { echo "✗ ssh key not found: $KEY"; exit 1; }
 
-echo "▸ rsync source (excluding node_modules/.next/.git/data)…"
+echo "▸ rsync source (excluding node_modules/.next/.git/data + the box's deploy/.env)…"
 rsync -az --delete \
   --exclude node_modules --exclude .next --exclude .git --exclude data --exclude '*.log' \
+  --exclude 'deploy/.env' \
   -e "ssh -i $KEY -o StrictHostKeyChecking=no" "$HERE/" "root@$IP:$REMOTE_DIR/"
+
+# The DISTILLER needs an LLM key (docker-compose forwards OPENROUTER_API_KEY;
+# the orchestrator's llmApiKey() falls back to that env). Without it, captured
+# sessions are silently never distilled into the brain. Write deploy/.env on the
+# box from a secure LOCAL key file so the key survives redeploys (it's excluded
+# from the rsync above). Skips cleanly if no key file is present.
+KEYFILE="${FLOW_OPENROUTER_KEY_FILE:-/tmp/priya-test.env}"
+if [ -f "$KEYFILE" ]; then
+  ORK=$(grep -iE "OPENROUTER_API_KEY" "$KEYFILE" | head -1 | sed -E 's/.*OPENROUTER_API_KEY[=: ]+["'"'"']?([^"'"'"' ]+).*/\1/')
+  if [ -n "$ORK" ]; then
+    echo "▸ writing OPENROUTER_API_KEY to $REMOTE_DIR/deploy/.env (distiller LLM)…"
+    ssh -i "$KEY" -o StrictHostKeyChecking=no "root@$IP" "umask 077; cat > $REMOTE_DIR/deploy/.env" <<EOF
+OPENROUTER_API_KEY=$ORK
+EOF
+  fi
+fi
 
 echo "▸ rebuild + restart the flow container (FalkorDB volume kept)…"
 ssh -i "$KEY" -o StrictHostKeyChecking=no "root@$IP" \
