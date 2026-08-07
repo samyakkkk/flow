@@ -151,6 +151,20 @@ c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/$PROJECT/mcp" -H "Auth
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' --max-time 15)
 [ "$c" = "401" ] && ok "revoked token is DEAD (401)" || bad "revoked token still works ($c)"
 
+# distiller LLM is configured (the CORE value prop — else captured sessions never
+# become brain knowledge). remember a distinctive fact via the machine PAT, then
+# confirm it surfaces in search. Needs the LLM (OPENROUTER_API_KEY setting/env);
+# a dead distiller returns nothing. Owner PAT ($OPAT-style not needed — use a
+# fresh owner-minted token).
+DPAT=$(curl -s -b "$OJ" -X POST "$BASE/$PROJECT/api/tokens" -H 'Content-Type: application/json' -d '{"label":"distiller-probe"}' | jget "d.get('token','')")
+PHRASE="persona-distiller-probe uses cursor-based pagination with a 200-item page cap"
+curl -s -o /dev/null -X POST "$BASE/$PROJECT/mcp" -H "Authorization: Bearer $DPAT" "${MCPHDR[@]}" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"remember\",\"arguments\":{\"text\":\"For olostep-cli: $PHRASE (recorded by the persona test suite).\"}}}" --max-time 60
+sleep 14
+hit=$(curl -s -X POST "$BASE/$PROJECT/mcp" -H "Authorization: Bearer $DPAT" "${MCPHDR[@]}" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search_knowledge\",\"arguments\":{\"query\":\"cursor pagination 200 item page cap\"}}}" --max-time 25 | grep -ic "pagination\|cursor\|page cap")
+{ [ -n "$hit" ] && [ "$hit" -gt 0 ]; } && ok "distiller LLM works (remember → searchable brain knowledge)" || bad "distiller produced NO searchable knowledge — LLM transport unconfigured? (core value prop)"
+
 # ── P4 · durability — the connected repo is still registered (survives runs) ──
 echo
 echo "P4 · DURABILITY (Sam, returning)"
