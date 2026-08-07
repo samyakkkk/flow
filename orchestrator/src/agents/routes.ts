@@ -54,6 +54,30 @@ import {
   subscribe,
 } from "./runtime.js";
 
+// A remote-brain binding may be supplied by the caller; the agent connects OUT
+// to that URL with the caller's bearer. Reject the classic SSRF targets: a
+// REMOTE brain is never loopback (that's the LOCAL brain) nor a cloud-metadata /
+// link-local endpoint (169.254.169.254 etc. — the #1 SSRF credential-theft
+// target). Public domains and private-network deployments (a team's internal
+// box) still pass — only http(s), only non-loopback/non-metadata hosts.
+export function isSafeBrainUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return false;
+  if (host === "::1" || host === "0.0.0.0") return false;
+  if (/^127\./.test(host)) return false; // loopback
+  if (/^169\.254\./.test(host)) return false; // link-local + AWS/GCP/Azure metadata
+  if (host === "metadata.google.internal" || host === "metadata") return false;
+  if (host.startsWith("fd00:ec2:") || host === "fe80::a9fe:a9fe") return false; // IPv6 metadata/link-local
+  return true;
+}
+
 export function registerAgentRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: { owner?: string } }>("/v1/agents", async (req) => {
     const agents = await detectAgents();
@@ -178,7 +202,7 @@ export function registerAgentRoutes(app: FastifyInstance): void {
     // Remote-brain binding: accept only a well-formed http(s) MCP url; the token
     // is opaque (a machine PAT with a grant on the remote project).
     const brain =
-      body.brain && typeof body.brain.mcpUrl === "string" && /^https?:\/\//.test(body.brain.mcpUrl)
+      body.brain && typeof body.brain.mcpUrl === "string" && isSafeBrainUrl(body.brain.mcpUrl)
         ? { mcpUrl: body.brain.mcpUrl, token: typeof body.brain.token === "string" ? body.brain.token : undefined }
         : undefined;
     const result = await createSession({
