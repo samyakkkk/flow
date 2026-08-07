@@ -25,6 +25,7 @@ import {
 import { join, relative, basename } from "node:path";
 import { hostname, homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 
 import { portsForIndex, dashboardPort } from "./lib/ports.mjs";
@@ -274,6 +275,30 @@ function ensureDashboardBuild() {
     // no build yet
   }
   if (!stale) return false;
+  // Guard a recurring footgun: if a prior `npm install` ran with
+  // NODE_ENV=production, build-only devDeps (e.g. @tailwindcss/postcss) get
+  // pruned, and `next build` then fails — historically with a misleading
+  // "Cannot find @tailwindcss/postcss", or worse, a silently degraded build
+  // (empty middleware, broken /_global-error). Detect it, auto-remediate once
+  // with devDeps forced in, and fail with a precise message if we still can't.
+  const req = createRequire(join(dir, "package.json"));
+  const devDepsMissing = () => {
+    try { req.resolve("@tailwindcss/postcss"); return false; }
+    catch { return true; }
+  };
+  if (devDepsMissing()) {
+    console.log(c.dim("  build devDeps pruned (NODE_ENV=production install?) — reinstalling with devDeps…"));
+    spawnSync("npm", ["install", "--include=dev", "--no-audit", "--no-fund"], {
+      cwd: join(dir, ".."),
+      stdio: ["ignore", "ignore", "inherit"],
+      env: { ...process.env, NODE_ENV: "" },
+    });
+    if (devDepsMissing()) {
+      throw new Error(
+        "dashboard build devDeps missing (@tailwindcss/postcss): a prior `npm install` under NODE_ENV=production pruned them. Fix: `NODE_ENV= npm install --include=dev` in the repo root.",
+      );
+    }
+  }
   console.log(c.dim("  building dashboard (first run ~30s)…"));
   const res = spawnSync(nodeBin(dir, "next"), ["build"], {
     cwd: dir,
