@@ -227,6 +227,15 @@ The watchdog continues low-cost health-scanning (it caught 2 real bugs), but the
 substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
 
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — Verified the **full capture→distill loop on the deployment**
+  (previously only capture/session-row was confirmed). A member captured a
+  closed session (UserPromptSubmit + Stop-with-answer + SessionEnd); the closed
+  session shows `last_distilled_seq=2` in flow.db → `distillSession` RAN and
+  consumed the whole transcript. Brain stayed 49 (distiller is selective —
+  synthetic short Q&A yields no durable node; not a bug). Gotcha: `Stop` ≠
+  close; `SessionEnd` (END_EVENTS) closes and triggers distill immediately,
+  else the 45-min idle sweep. Core "sessions feed the brain" loop is wired +
+  running for member sessions on the remote deployment.
 - 2026-08-07 T+N — Stability tick: lifeline+Hetzner 200, brain intact (49 nodes, orient OK), member escalation still 403, 1 listener/port. No drift/regression. Nothing meaningful to add — verifiable work complete.
 - 2026-08-07 T+N — Health scan clean (no error-level patterns; INFO polling only),
   1 listener/port, lsof fix holds. Declared verifiable work substantially complete.
