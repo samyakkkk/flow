@@ -185,10 +185,15 @@ A subagent security review of this session's auth/token/gating/brain code found:
   VERIFIED: alex's capture → `ext-944a1b77…-…`; the SAME externalId under the
   owner → a DIFFERENT id → cross-user forge/append structurally impossible. Ingest
   tests 34/34; suite guards it (21/21). Local/unattributed keeps the legacy id.
-- **Finding 3 (HIGH→reduced).** brain-binding SSRF via `/v1/agents` is now
-  owner-only (member 403), so not member-exploitable. Residual: `mcpUrl` accepts
-  `http://` + any host (no private-IP/metadata block) — tighten to https+allowlist
-  for owner/local. Low urgency (owner-trusted).
+- **Finding 3 (HIGH) — FIXED (b9ab80e) + verified.** brain-binding SSRF: it was
+  owner-only after Finding 1, and now the binding itself is hardened —
+  `isSafeBrainUrl()` rejects loopback (a remote brain is never localhost — that's
+  the LOCAL brain) and cloud-metadata/link-local hosts (169.254.169.254,
+  metadata.google.internal, ::1, 0.0.0.0, fd00:ec2:), while public domains and
+  private-network deployments still pass. 12 logic cases verified; orchestrator
+  282/282; personas 21/21. Full DNS-rebinding defense (runtime host resolution)
+  is a further hardening if ever needed; the literal-IP targets are the ones
+  that matter and are now closed.
 - **Finding 4 (LOW).** PAT hashing/constant-time/project-scoping all correct;
   nits: no per-token expiry/revoke UI, 32-bit token id. Defense-in-depth only.
 - **Finding 5 (SAFE).** The `/mcp` consumer-connector path is correctly
