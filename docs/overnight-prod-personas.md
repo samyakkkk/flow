@@ -227,6 +227,7 @@ The watchdog continues low-cost health-scanning (it caught 2 real bugs), but the
 substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
 
 ## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — **MAJOR: the deployment's distiller was silently DEAD** — the core "sessions → brain knowledge" loop wasn't working. Two bugs: (1) `llmApiKey()` read only from settings, ignoring the OPENROUTER_API_KEY env docker-compose forwards → no LLM transport for the distiller (the indexer hid it via opencode's own config); (2) `maybeDistill` advanced last_distilled_seq on an LLM failure → sessions permanently lost, never retried. Fixed both (19b507e env-fallback + deploy writes the key; c222e8c defer-on-llm-error). VERIFIED: `remember` → searchable brain knowledge; suite guards it (24/24). Note: hand-crafted 2-event hook sessions don't distill (thin/selective) — the pipeline works; real sessions do.
 - 2026-08-07 T+N — Verified the **full capture→distill loop on the deployment**
   (previously only capture/session-row was confirmed). A member captured a
   closed session (UserPromptSubmit + Stop-with-answer + SessionEnd); the closed

@@ -40,6 +40,7 @@ run `scripts/deploy-hetzner.sh` from this worktree.
 | **C2 remote brain** | `POST /main/mcp` + machine PAT → 8 brain tools; `orient()` real knowledge; no token → 401 |
 | **D4 connectors** | member mints PAT → works as MCP connector (8 tools); cards+modal live |
 | **D1 durability** | brain/repo survive `docker compose up --build` + a hard `docker restart` (49→49 nodes, 18/18 after) |
+| **Distiller (core loop)** | FIXED a silently-dead distiller: `llmApiKey()` ignored the OPENROUTER_API_KEY env → captured sessions never became brain knowledge. Now env-fallback + deploy writes the key + `maybeDistill` no longer loses sessions on LLM failure. Verified `remember`→searchable; suite guards it (24/24). **Set OPENROUTER_API_KEY when you deploy.** |
 | **Reliability** | 3 crash-vector fixes + 2 global nets + entrypoint supervisor auto-recovering a killed service in ≤30s — all fault-tested |
 | **Security (CRITICAL, fixed)** | closed a member→owner escalation (member PAT could `PUT /v1/settings` via the `/v1/*` door, bypassing D3). Now member-allowlisted; verified member→403 / owner→200; suite guards it. 2 HIGH residuals documented in the plan's § Security posture (ingest attribution; brain-binding SSRF, now owner-only). |
 
