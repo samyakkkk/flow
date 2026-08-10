@@ -117,6 +117,36 @@ export function FirefliesIcon(props: IconProps) {
   );
 }
 
+// Source: Simple Icons — googlegemini (Gemini CLI). The four-point spark.
+export function GeminiIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12" />
+    </Svg>
+  );
+}
+
+// Cursor's mark is a dimensional cube; this is a clean monochrome prism that
+// reads as the logo at small sizes. TODO: replace with official mark.
+export function CursorIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 1 22.5 7v10L12 23 1.5 17V7L12 1zm0 2.3L4.4 7.65 12 12l7.6-4.35L12 3.3zM3.5 9.05v6.8l7.5 4.3v-6.8l-7.5-4.3zm17 0-7.5 4.3v6.8l7.5-4.3v-6.8z" />
+    </Svg>
+  );
+}
+
+// Antigravity has no Simple Icons entry; an upward mark with an orbit line
+// that reads as "anti-gravity". TODO: replace with official mark.
+export function AntigravityIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 2.5 18 13h-4v8h-4v-8H6L12 2.5z" />
+      <path d="M3 17.5c2 2.2 5.3 3.1 9 3.1s7-1 9-3.1v2.3c-2 2-5.3 3-9 3s-7-1-9-3v-2.3z" opacity=".5" />
+    </Svg>
+  );
+}
+
 const ICONS = {
   github: GithubIcon,
   linear: LinearIcon,
@@ -126,6 +156,9 @@ const ICONS = {
   opencode: OpenCodeIcon,
   openrouter: OpenRouterIcon,
   fireflies: FirefliesIcon,
+  gemini: GeminiIcon,
+  cursor: CursorIcon,
+  antigravity: AntigravityIcon,
 } as const;
 
 export type BrandName = keyof typeof ICONS;

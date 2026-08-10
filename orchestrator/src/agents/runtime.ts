@@ -699,6 +699,23 @@ export function slimEvent(ev: SessionEvent): SessionEvent {
   };
 }
 
+// External (hook-captured) sessions reuse the same transcript store as ACP
+// sessions but have no LiveSession — the ingest routes append here directly.
+// Returns the new max seq so callers can track high-water marks.
+export function appendTranscriptEvents(
+  id: string,
+  events: Array<Pick<SessionEvent, "kind" | "data">>
+): number {
+  const existing = readTranscript(id);
+  let seq = existing.length ? existing[existing.length - 1].seq : 0;
+  mkdirSync(SESSIONS_DIR, { recursive: true });
+  const lines = events
+    .map((e) => JSON.stringify({ seq: ++seq, ts: Date.now(), kind: e.kind, data: e.data }))
+    .join("\n");
+  appendFileSync(transcriptPath(id), lines + "\n");
+  return seq;
+}
+
 export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
   const p = transcriptPath(id);
   if (!existsSync(p)) return [];
