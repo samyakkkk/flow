@@ -1147,7 +1147,15 @@ export async function createSession(opts: {
   // the endpoint + machine token. Unset = local brain (unchanged behavior).
   brain?: BrainBinding | null;
 }): Promise<CreateSessionResult> {
-  const found = listRepoOptions().find((r) => r.name === opts.repo);
+  let found = listRepoOptions().find((r) => r.name === opts.repo);
+  // Remote-brain session in a raw work folder (the "run agents on my machine"
+  // door): there's no local repo to connect — the knowledge surface is the
+  // REMOTE brain, mounted per session. Synthesize a folder-only repo so the
+  // session can run; `repo` is just a display label here (flowGraphMcp uses the
+  // brain binding, not a local repo/branch). The workFolder is validated below.
+  if (!found && opts.brain?.mcpUrl && opts.workFolder) {
+    found = { name: opts.repo || "workspace", path: opts.workFolder, cloned: true, surface: "folder" };
+  }
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
   // EXISTING COPY target: validate it up front. A managed copy bypasses the
   // work-folder guards below — it was branched off a work folder already.
