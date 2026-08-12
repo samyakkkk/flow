@@ -1,6 +1,7 @@
 // Agents v1 HTTP surface. Everything the dashboard needs:
 //   GET  /v1/agents                       installed agents + connected repos
 //   GET  /v1/agents/sessions              session list (newest first)
+//   GET  /v1/agents/sessions/search       {q, limit?} — semantic session search
 //   POST /v1/agents/sessions              {backend, repo, prompt} → {id}
 //   GET  /v1/agents/sessions/:id          metadata + full transcript replay
 //   GET  /v1/agents/sessions/:id/events   SSE: replay then live events
@@ -53,6 +54,7 @@ import {
   steer,
   subscribe,
 } from "./runtime.js";
+import { searchSessions } from "./session-search.js";
 
 export function registerAgentRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: { owner?: string } }>("/v1/agents", async (req) => {
@@ -102,6 +104,18 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   });
 
   app.get("/v1/agents/sessions", async () => ({ sessions: listSessions() }));
+
+  // Semantic session search: cosine over per-session embeddings (gateway's
+  // local model) + lexical boost. `semantic:false` in the response means the
+  // query couldn't be embedded (model loading / gateway down) and results are
+  // lexical-only. Registered before /:id so "search" never binds as an id.
+  app.get("/v1/agents/sessions/search", async (req, reply) => {
+    const { q, limit } = req.query as { q?: string; limit?: string };
+    const query = q?.trim();
+    if (!query) return reply.code(400).send({ error: "q required" });
+    const lim = Math.max(1, Math.min(50, Number(limit) || 20));
+    return await searchSessions(query, lim);
+  });
 
   // Create a session. Response is one of:
   //   {id, separateCopy}                     — started (separateCopy=true → runs
