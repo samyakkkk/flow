@@ -34,6 +34,7 @@ interface MemoryItem {
   max_source_weight: string;
   created_at: number;
   updated_at: number;
+  last_reinforced_at: number | null;
   contributors: string[];
   sources: Record<string, number>;
   evidence: EvidenceRow[];
@@ -114,19 +115,26 @@ function DeleteButton({ onClick, title }: { onClick: () => void; title: string }
     <button
       onClick={onClick}
       title={title}
+      aria-label={title}
       style={{
         background: "transparent",
-        border: "1px solid var(--border)",
+        border: "none",
         borderRadius: 6,
         color: "var(--text-muted)",
         cursor: "pointer",
-        padding: "3px 8px",
-        fontSize: 11,
-        lineHeight: 1,
+        padding: 4,
+        lineHeight: 0,
         flexShrink: 0,
       }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = "var(--danger, #b91c1c)")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
     >
-      Delete
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M3 6h18" />
+        <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6M14 11v6" />
+      </svg>
     </button>
   );
 }
@@ -314,7 +322,7 @@ export default function KnowledgePage() {
                         <Chip color={TIER_COLORS[m.tier]}>{m.tier}</Chip>
                         {m.repo && <Chip>{m.repo}</Chip>}
                         <span style={{ flex: 1 }} />
-                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{timeAgo(m.updated_at * 1000)}</span>
+                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{timeAgo((m.last_reinforced_at ?? m.created_at) * 1000)}</span>
                         <DeleteButton onClick={() => deleteItem(m.id, "memory")} title="Delete this memory and its evidence" />
                       </div>
                       <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.5 }}>{m.claim}</div>
