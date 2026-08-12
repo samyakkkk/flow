@@ -113,6 +113,7 @@ export interface KnowledgeMemory {
   max_source_weight: string;
   created_at: number;
   updated_at: number;
+  last_reinforced_at: number | null;
   contributors: string[];
   sources: Record<string, number>;
   evidence: KnowledgeEvidence[];
@@ -140,8 +141,11 @@ export function listKnowledge(opts: {
   limit?: number;
   offset?: number;
 } = {}): KnowledgeList {
+  // NOT updated_at: the decay sweep rewrites updated_at on every active row
+  // (sweepMemories runs after each distill), so it always reads "minutes ago".
+  // Reinforcement time is the honest freshness signal.
   const memories = db
-    .prepare(`SELECT * FROM memories WHERE status = 'active' ORDER BY updated_at DESC LIMIT ?`)
+    .prepare(`SELECT * FROM memories WHERE status = 'active' ORDER BY COALESCE(last_reinforced_at, created_at) DESC LIMIT ?`)
     .all(MEMORY_CAP) as MemoryRow[];
 
   const attached = db
@@ -172,6 +176,7 @@ export function listKnowledge(opts: {
       max_source_weight: m.max_source_weight,
       created_at: m.created_at,
       updated_at: m.updated_at,
+      last_reinforced_at: m.last_reinforced_at,
       contributors: contributors.slice(0, 6),
       sources,
       evidence: obs.slice(0, EVIDENCE_PER_MEMORY).map((o) => ({
