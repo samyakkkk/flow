@@ -19,6 +19,9 @@ process.env.LINEAR_API_KEY = "lin_api_test";
 delete process.env.SLACK_BOT_TOKEN;
 delete process.env.FLOW_GATEWAY_URL;
 delete process.env.GRAPH_GATEWAY_URL;
+// A default PostHog key ships in the settings registry — point the host at a
+// dead local port so no test can ever reach the real capture endpoint.
+process.env.FLOW_TELEMETRY_POSTHOG_HOST = "http://127.0.0.1:9";
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -27,12 +30,14 @@ import type { TelemetrySnapshot } from "../src/telemetry.js";
 let telemetryInstanceId: () => string;
 let telemetrySnapshot: () => Promise<TelemetrySnapshot>;
 let sendTelemetry: () => Promise<boolean>;
+let reportError: (scope: string, err: unknown) => Promise<boolean>;
+let getSetting: (key: string) => string | undefined;
 let putSetting: (key: string, value: string) => void;
 let db: import("better-sqlite3").Database;
 
 before(async () => {
-  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry } = await import("../src/telemetry.js"));
-  ({ putSetting } = await import("../src/settings.js"));
+  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry, reportError } = await import("../src/telemetry.js"));
+  ({ getSetting, putSetting } = await import("../src/settings.js"));
   ({ default: db } = await import("../src/db.js"));
 
   // agent_sessions is created by the agents runtime, not db.ts's baseline —
@@ -122,8 +127,15 @@ describe("telemetry snapshot", () => {
     }
   });
 
-  test("sendTelemetry is a no-op without a PostHog key", async () => {
-    assert.equal(await sendTelemetry(), false);
+  test("a default PostHog key ships in the registry; FLOW_TELEMETRY_DISABLE=1 is a hard off", async () => {
+    assert.match(getSetting("FLOW_TELEMETRY_POSTHOG_KEY") ?? "", /^phc_/);
+    process.env.FLOW_TELEMETRY_DISABLE = "1";
+    try {
+      assert.equal(await sendTelemetry(), false);
+      assert.equal(await reportError("test", new Error("nope")), false);
+    } finally {
+      delete process.env.FLOW_TELEMETRY_DISABLE;
+    }
   });
 
   test("sendTelemetry posts a PostHog capture event keyed by instance id", async () => {
@@ -156,5 +168,41 @@ describe("telemetry snapshot", () => {
     assert.equal(props.sessions_total, 3);
     assert.equal(props.$process_person_profile, false); // anonymous-tier events
     assert.equal("instance_id" in props, false); // identity travels as distinct_id only
+  });
+
+  test("reportError sends class + Flow frame, never the message", async () => {
+    let captured: Record<string, unknown> | null = null;
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        captured = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    putSetting("FLOW_TELEMETRY_POSTHOG_HOST", `http://127.0.0.1:${port}`);
+
+    const err = new TypeError("secret /Users/someone/private-repo/path leaked");
+    try {
+      assert.equal(await reportError("test-scope", err), true);
+    } finally {
+      server.close();
+    }
+
+    assert.ok(captured, "capture endpoint was hit");
+    const body = captured as Record<string, unknown>;
+    assert.equal(body.event, "flow_error");
+    assert.equal(body.distinct_id, telemetryInstanceId());
+    const props = body.properties as Record<string, unknown>;
+    assert.equal(props.scope, "test-scope");
+    assert.equal(props.error_name, "TypeError");
+    // The message (which can embed user paths) must never travel.
+    assert.equal(JSON.stringify(body).includes("private-repo"), false);
+    // This test file lives under orchestrator/ — the frame is basename:line.
+    if (props.frame !== undefined) {
+      assert.match(String(props.frame), /^[^/\\]+:\d+$/);
+    }
   });
 });

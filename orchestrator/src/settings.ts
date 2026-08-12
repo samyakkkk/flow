@@ -199,7 +199,8 @@ export const SETTINGS: SettingDef[] = [
     key: "FLOW_TELEMETRY_POSTHOG_KEY",
     secret: false,
     description:
-      "PostHog project API key (phc_…) for Flow's anonymous usage snapshot — counts and booleans only, audit the exact payload at GET /v1/telemetry. Unset = telemetry off. FLOW_TELEMETRY_DISABLE=1 force-disables.",
+      "PostHog project API key (phc_…) for Flow's anonymous usage snapshot — counts and booleans only, audit the exact payload at GET /v1/telemetry. The default is Flow's own project (a public write-only key). Set empty or FLOW_TELEMETRY_DISABLE=1 to opt out.",
+    default: "phc_A9NCvdsZWDbNgoDNeku45iBArjCjHFobPyBw2XqRgfB8",
     appliesTo: "pipeline",
   },
   {

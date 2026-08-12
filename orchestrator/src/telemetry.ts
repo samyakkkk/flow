@@ -63,6 +63,10 @@ export interface TelemetrySnapshot {
   sessions_last_7d: number;
   sessions_last_30d: number;
   sessions_by_backend: Record<string, number>;
+  jobs_total: number;
+  jobs_done: number;
+  jobs_failed: number;
+  errors_since_boot: number;
   worktrees_created_total: number;
   worktrees_active: number;
   work_folders_total: number;
@@ -223,6 +227,10 @@ export async function telemetrySnapshot(): Promise<TelemetrySnapshot> {
       nowSec - 30 * day
     ),
     sessions_by_backend: sessionsByBackend(),
+    jobs_total: count("SELECT count(*) AS c FROM jobs"),
+    jobs_done: count("SELECT count(*) AS c FROM jobs WHERE status = 'done'"),
+    jobs_failed: count("SELECT count(*) AS c FROM jobs WHERE status = 'failed'"),
+    errors_since_boot: errorEventCount,
     worktrees_created_total: count(
       "SELECT count(DISTINCT worktree_id) AS c FROM agent_sessions WHERE worktree_id IS NOT NULL"
     ),
@@ -273,8 +281,68 @@ export async function sendTelemetry(): Promise<boolean> {
   }
 }
 
+// ------------------------------------------------------------------
+// Error reporting — same pipeline, same rules. An error event carries the
+// error CLASS and a Flow-source frame (basename:line of OUR open-source
+// files), never the message: messages routinely embed user paths, repo
+// names, and URLs. Capped per process so a crash loop can't burn the
+// PostHog quota.
+// ------------------------------------------------------------------
+
+const ERROR_EVENTS_MAX_PER_PROCESS = 50;
+let errorEventCount = 0;
+
+// First stack frame that points into Flow's own source, reduced to
+// basename:line ("runtime.ts:1151"). Frames outside our tree (user cwd,
+// node internals) are skipped — their paths are not ours to send.
+function flowFrame(stack: string | undefined): string | null {
+  if (!stack) return null;
+  for (const line of stack.split("\n")) {
+    const m = /\(?([^()\s]+\.(?:ts|mts|mjs|js)):(\d+):\d+\)?$/.exec(line.trim());
+    if (!m) continue;
+    const p = m[1];
+    if (!/\/(?:orchestrator|graph-gateway|dashboard|bin)\/[^ ]*$/.test(p)) continue;
+    return `${path.basename(p)}:${m[2]}`;
+  }
+  return null;
+}
+
+export async function reportError(scope: string, err: unknown): Promise<boolean> {
+  if (errorEventCount >= ERROR_EVENTS_MAX_PER_PROCESS) return false;
+  const target = posthogTarget();
+  if (!target) return false;
+  errorEventCount++;
+  const e = err instanceof Error ? err : new Error(String(err));
+  const code = (e as NodeJS.ErrnoException).code;
+  try {
+    const res = await fetch(target.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        api_key: target.apiKey,
+        event: "flow_error",
+        distinct_id: telemetryInstanceId(),
+        properties: {
+          scope,
+          error_name: e.name,
+          ...(typeof code === "string" ? { error_code: code } : {}),
+          ...(flowFrame(e.stack) ? { frame: flowFrame(e.stack) } : {}),
+          version: orchestratorVersion(),
+          flow_mode: getFlowMode(),
+          $process_person_profile: false,
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 let firstTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
+let monitorInstalled = false;
 
 export function startTelemetryReporter(): void {
   if (process.env.FLOW_TELEMETRY_DISABLE === "1") {
@@ -285,6 +353,13 @@ export function startTelemetryReporter(): void {
   // unconditionally — setting the key from the dashboard later just works.
   if (!posthogTarget()) {
     console.log("[telemetry] idle — set FLOW_TELEMETRY_POSTHOG_KEY to enable usage reporting");
+  }
+  // uncaughtExceptionMonitor OBSERVES crashes without altering crash
+  // behavior (unlike an 'uncaughtException' listener, which would swallow
+  // them). Node 22 throws unhandled rejections, so they land here too.
+  if (!monitorInstalled) {
+    monitorInstalled = true;
+    process.on("uncaughtExceptionMonitor", (err) => void reportError("uncaught", err));
   }
   const interval = parseInt(process.env.FLOW_TELEMETRY_INTERVAL_MS ?? "", 10) || DEFAULT_INTERVAL_MS;
   firstTimer = setTimeout(() => void sendTelemetry(), FIRST_SEND_DELAY_MS);
