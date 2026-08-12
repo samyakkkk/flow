@@ -1,0 +1,160 @@
+// telemetry.test.ts — the usage snapshot is numbers/booleans only, the
+// instance id is stable, reporting stays off without a PostHog key, and the
+// capture payload sends counts under a stable anonymous distinct_id.
+
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer, type Server } from "node:http";
+
+// Setup: workspace + in-memory DB before any imports that touch db
+const workspace = mkdtempSync(join(tmpdir(), "flow-telemetry-"));
+process.env.OPENCODE_WORKSPACE_DIR = workspace;
+process.env.REPOS_JSON_PATH = join(workspace, "repos.json");
+process.env.DB_PATH = ":memory:";
+process.env.FLOW_ADMIN_TOKEN = "test-token-telemetry";
+process.env.FLOW_FAKE_OPENCODE = "1";
+process.env.FLOW_DRAIN_DISABLE = "1";
+process.env.LINEAR_API_KEY = "lin_api_test";
+delete process.env.SLACK_BOT_TOKEN;
+delete process.env.FLOW_GATEWAY_URL;
+delete process.env.GRAPH_GATEWAY_URL;
+
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert/strict";
+import type { TelemetrySnapshot } from "../src/telemetry.js";
+
+let telemetryInstanceId: () => string;
+let telemetrySnapshot: () => Promise<TelemetrySnapshot>;
+let sendTelemetry: () => Promise<boolean>;
+let putSetting: (key: string, value: string) => void;
+let db: import("better-sqlite3").Database;
+
+before(async () => {
+  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry } = await import("../src/telemetry.js"));
+  ({ putSetting } = await import("../src/settings.js"));
+  ({ default: db } = await import("../src/db.js"));
+
+  // agent_sessions is created by the agents runtime, not db.ts's baseline —
+  // create the same shape here rather than booting the whole ACP runtime.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      backend TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      worktree_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
+  writeFileSync(
+    process.env.REPOS_JSON_PATH!,
+    JSON.stringify({
+      repos: [
+        { name: "app", url: "https://github.com/acme/app", branch: "main", lastIndexedCommit: "abc123" },
+        { name: "notes", url: "", branch: "main", kind: "docs" },
+      ],
+    })
+  );
+
+  const now = Date.now();
+  const ins = db.prepare(
+    `INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, worktree_id, created_at, updated_at)
+     VALUES (?, ?, 'app', '/tmp/x', 't', 'closed', ?, ?, ?)`
+  );
+  // Two flow-native sessions sharing one worktree, one captured external session.
+  ins.run("s1", "claude", "/wt/a", now, now);
+  ins.run("s2", "claude", "/wt/a", now, now);
+  ins.run("ext-codex-abc", "ext:codex", null, now, now);
+
+  // Two live managed worktrees on disk under <workspace>/worktrees/<repo>/<slug>
+  mkdirSync(join(workspace, "worktrees", "app", "fix-login"), { recursive: true });
+  mkdirSync(join(workspace, "worktrees", "app", "add-tests"), { recursive: true });
+});
+
+after(() => rmSync(workspace, { recursive: true, force: true }));
+
+describe("telemetry snapshot", () => {
+  test("instance id is minted once and stable", () => {
+    const a = telemetryInstanceId();
+    const b = telemetryInstanceId();
+    assert.equal(a, b);
+    assert.match(a, /^[0-9a-f-]{36}$/);
+  });
+
+  test("snapshot reports counts and booleans only — no names, paths, or content", async () => {
+    const snap = await telemetrySnapshot();
+
+    assert.equal(snap.sources_total, 2);
+    assert.equal(snap.sources_code, 1);
+    assert.equal(snap.sources_docs, 1);
+    assert.equal(snap.sources_indexed, 1);
+
+    assert.equal(snap.sessions_total, 3);
+    assert.equal(snap.sessions_via_flow, 2);
+    assert.equal(snap.sessions_captured_external, 1);
+    assert.equal(snap.sessions_last_7d, 3);
+    assert.deepEqual(snap.sessions_by_backend, { claude: 2, "ext:codex": 1 });
+
+    assert.equal(snap.worktrees_created_total, 1); // distinct worktree_id
+    assert.equal(snap.worktrees_active, 2); // dirs on disk
+
+    assert.equal(snap.connected_linear, true); // env key set
+    assert.equal(snap.connected_slack, false);
+    assert.equal(snap.graph_nodes, null); // no gateway configured ≠ zero nodes
+
+    // Every value is a number, boolean, null, or a number-valued map — the
+    // payload can never carry repo names, paths, or message content.
+    for (const [key, value] of Object.entries(snap)) {
+      if (key === "sessions_by_backend") {
+        for (const v of Object.values(value as Record<string, number>)) {
+          assert.equal(typeof v, "number");
+        }
+      } else if (["instance_id", "flow_mode", "version", "platform"].includes(key)) {
+        assert.equal(typeof value, "string");
+      } else {
+        assert.ok(value === null || typeof value === "number" || typeof value === "boolean", key);
+      }
+    }
+  });
+
+  test("sendTelemetry is a no-op without a PostHog key", async () => {
+    assert.equal(await sendTelemetry(), false);
+  });
+
+  test("sendTelemetry posts a PostHog capture event keyed by instance id", async () => {
+    let captured: Record<string, unknown> | null = null;
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        captured = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+
+    putSetting("FLOW_TELEMETRY_POSTHOG_KEY", "phc_test_key");
+    putSetting("FLOW_TELEMETRY_POSTHOG_HOST", `http://127.0.0.1:${port}`);
+    try {
+      assert.equal(await sendTelemetry(), true);
+    } finally {
+      server.close();
+    }
+
+    assert.ok(captured, "capture endpoint was hit");
+    const body = captured as Record<string, unknown>;
+    assert.equal(body.api_key, "phc_test_key");
+    assert.equal(body.event, "flow_snapshot");
+    assert.equal(body.distinct_id, telemetryInstanceId());
+    const props = body.properties as Record<string, unknown>;
+    assert.equal(props.sessions_total, 3);
+    assert.equal(props.$process_person_profile, false); // anonymous-tier events
+    assert.equal("instance_id" in props, false); // identity travels as distinct_id only
+  });
+});

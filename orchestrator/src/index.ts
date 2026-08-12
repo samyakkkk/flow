@@ -29,6 +29,7 @@ import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
+import { registerTelemetryRoutes, startTelemetryReporter, stopTelemetryReporter } from "./telemetry.js";
 
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT ?? "7500", 10);
 
@@ -87,6 +88,7 @@ registerMemoryRoutes(app);
 // repo-level. flow.db is primary — this is a read-only projection lookup.
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
+registerTelemetryRoutes(app);
 
 // ------------------------------------------------------------------
 // Adapter webhook routes
@@ -240,6 +242,7 @@ app.get<{ Querystring: { status?: string } }>(
 app.addHook("onClose", async () => {
   stopDrainer();
   stopAllPollers();
+  stopTelemetryReporter();
   // Kill live indexer CLIs (and their process groups) — an orphaned indexer
   // surviving a restart would keep writing to the graph while boot recovery
   // re-queues a duplicate job for the same repo.
@@ -283,6 +286,9 @@ const start = async (): Promise<void> => {
 
     // Start all registered pollers (no-ops if FLOW_POLL_DISABLE=1)
     startAllPollers();
+
+    // Daily anonymous usage snapshot to PostHog (idle until the key is set)
+    startTelemetryReporter();
 
     // Boot Slack Socket Mode adapter (no-op if tokens absent)
     bootSlackAdapter().catch((err) =>
