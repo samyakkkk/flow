@@ -110,6 +110,9 @@ ${c.bold("Usage")}
 
 ${c.bold("Options")}
   --mode local|prod     For a new project (default: local). Local needs no login.
+  --no-telemetry        Turn off Flow's anonymous usage stats (counts only, never
+                        code or names — audit at GET /v1/telemetry). Saved to the
+                        project .env; --telemetry turns it back on.
 
 ${c.bold("Examples")}
   flow up acme          ${c.dim("# start acme — offers to create it if it doesn't exist")}
@@ -139,6 +142,18 @@ function parseEnvFile(filePath) {
     env[key] = val;
   }
   return env;
+}
+
+// Upsert (value string) or remove (value null) a KEY=VALUE line in an env
+// file, leaving comments and other keys untouched. Creates the file on first
+// write.
+function setEnvKey(filePath, key, value) {
+  const lines = existsSync(filePath) ? readFileSync(filePath, "utf-8").split("\n") : [];
+  const re = new RegExp(`^\\s*${key}\\s*=`);
+  const kept = lines.filter((line) => !re.test(line));
+  while (kept.length > 0 && kept[kept.length - 1].trim() === "") kept.pop();
+  if (value !== null) kept.push(`${key}=${value}`);
+  writeFileSync(filePath, kept.length ? kept.join("\n") + "\n" : "", "utf-8");
 }
 
 // The OpenRouter key powers the gateway's semantic find_entity + embed-on-write.
@@ -579,8 +594,15 @@ async function cmdUp(args) {
     options: {
       mode: { type: "string", default: "local" },
       "no-update": { type: "boolean", default: false },
+      // Anonymous usage telemetry (see orchestrator GET /v1/telemetry for the
+      // exact payload). The choice is SAVED to the project .env so it sticks
+      // across restarts — a one-shot flag would silently re-enable later.
+      "no-telemetry": { type: "boolean", default: false },
+      telemetry: { type: "boolean", default: false },
     },
   });
+  if (values["no-telemetry"] && values.telemetry) die("Pick one: --telemetry or --no-telemetry");
+  const telemetryChoice = values["no-telemetry"] ? "off" : values.telemetry ? "on" : null;
   if (!values["no-update"]) maybeSelfUpdate(); // may re-exec and not return
   const targetName = positionals[0] ?? null;
 
@@ -622,9 +644,29 @@ async function cmdUp(args) {
   const rebuilt = ensureDashboardBuild(); // shared .next; only prints if it rebuilds
   console.log("");
 
+  // Persist the telemetry choice BEFORE the spawn so the orchestrator env
+  // picks it up. Written per project: .env is the project-scoped config that
+  // upProject already feeds into every service.
+  if (telemetryChoice) {
+    for (const name of names) {
+      setEnvKey(join(projectDir(name), ".env"), "FLOW_TELEMETRY_DISABLE", telemetryChoice === "off" ? "1" : null);
+    }
+    console.log(c.dim(`  telemetry ${telemetryChoice} — saved to ${names.length > 1 ? "each project's" : "the project"} .env\n`));
+  }
+
   const results = [];
   for (const name of names) {
     results.push(await upProject(name, { rebuilt }));
+  }
+
+  // An already-running project kept its old process (and old env) — the saved
+  // choice only lands on the next restart, and we never bounce services
+  // ourselves.
+  if (telemetryChoice) {
+    const kept = results.filter((r) => r.ok && r.alreadyRunning);
+    for (const r of kept) {
+      console.log(`  ${c.dim(`${r.name}: telemetry ${telemetryChoice} takes effect on restart —`)} flow down ${r.name} && flow up ${r.name}`);
+    }
   }
 
   // Legacy per-project dashboards (pre-single-dashboard installs) die here;
