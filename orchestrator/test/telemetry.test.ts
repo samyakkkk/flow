@@ -35,14 +35,14 @@ let sendTelemetry: () => Promise<boolean>;
 let reportError: (scope: string, err: unknown) => Promise<boolean>;
 let track: (event: string, props: Record<string, number | boolean | string>) => void;
 let sanitizeTrackProps: (raw: unknown) => Record<string, number | boolean>;
+let bumpCounter: (name: string, by?: number) => void;
 let getSetting: (key: string) => string | undefined;
 let putSetting: (key: string, value: string) => void;
 let db: import("better-sqlite3").Database;
 
 before(async () => {
-  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry, reportError, track, sanitizeTrackProps } = await import(
-    "../src/telemetry.js"
-  ));
+  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry, reportError, track, sanitizeTrackProps, bumpCounter } =
+    await import("../src/telemetry.js"));
   ({ getSetting, putSetting } = await import("../src/settings.js"));
   ({ default: db } = await import("../src/db.js"));
 
@@ -121,7 +121,7 @@ describe("telemetry snapshot", () => {
     // Every value is a number, boolean, null, or a number-valued map — the
     // payload can never carry repo names, paths, or message content.
     for (const [key, value] of Object.entries(snap)) {
-      if (key === "sessions_by_backend") {
+      if (["sessions_by_backend", "jobs_by_type", "counters"].includes(key)) {
         for (const v of Object.values(value as Record<string, number>)) {
           assert.equal(typeof v, "number");
         }
@@ -151,6 +151,15 @@ describe("telemetry snapshot", () => {
     } finally {
       delete process.env.FLOW_FAKE_OPENCODE;
     }
+  });
+
+  test("bumpCounter accumulates durably and lands in the snapshot", async () => {
+    bumpCounter("brain_search_total", 3);
+    bumpCounter("brain_search_total");
+    bumpCounter("memory_remember_total");
+    const snap = await telemetrySnapshot();
+    assert.equal(snap.counters.brain_search_total, 4);
+    assert.equal(snap.counters.memory_remember_total, 1);
   });
 
   test("sanitizeTrackProps keeps only sane numeric/boolean keys", () => {
@@ -197,6 +206,9 @@ describe("telemetry snapshot", () => {
     assert.equal(props.sessions_total, 3);
     assert.equal(props.$process_person_profile, false); // anonymous-tier events
     assert.equal("instance_id" in props, false); // identity travels as distinct_id only
+    // Counters flatten to top-level chartable properties.
+    assert.equal(props.brain_search_total, 4);
+    assert.equal("counters" in props, false);
   });
 
   test("reportError sends class + Flow frame, never the message", async () => {

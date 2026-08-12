@@ -66,7 +66,10 @@ export interface TelemetrySnapshot {
   jobs_total: number;
   jobs_done: number;
   jobs_failed: number;
+  jobs_by_type: Record<string, number>;
+  corrections_total: number;
   errors_since_boot: number;
+  counters: Record<string, number>;
   worktrees_created_total: number;
   worktrees_active: number;
   work_folders_total: number;
@@ -76,6 +79,36 @@ export interface TelemetrySnapshot {
   connected_github: boolean;
   connected_fireflies: boolean;
   connected_llm_key: boolean;
+}
+
+// Durable counters for HIGH-FREQUENCY actions (brain queries fire dozens of
+// times per session — a network event per query would be real load and quota
+// burn; a SQLite upsert is microseconds and restart-proof). Totals ride in
+// the daily snapshot; PostHog computes rates from the per-instance deltas.
+const COUNTER_PREFIX = "telemetry:counter:";
+
+export function bumpCounter(name: string, by = 1): void {
+  try {
+    db.prepare(
+      `INSERT INTO config (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT)`
+    ).run(COUNTER_PREFIX + name, String(by), by);
+  } catch {
+    /* counters are never load-bearing */
+  }
+}
+
+export function readCounters(): Record<string, number> {
+  const out: Record<string, number> = {};
+  try {
+    const rows = db
+      .prepare("SELECT key, value FROM config WHERE key LIKE ?")
+      .all(`${COUNTER_PREFIX}%`) as Array<{ key: string; value: string }>;
+    for (const r of rows) out[r.key.slice(COUNTER_PREFIX.length)] = parseInt(r.value, 10) || 0;
+  } catch {
+    /* fresh DB */
+  }
+  return out;
 }
 
 export function telemetryInstanceId(): string {
@@ -117,13 +150,11 @@ function count(sql: string, ...params: unknown[]): number {
 // to seconds in SQL so second-resolution rows (external capture) compare too.
 const CREATED_AT_SEC = "(CASE WHEN created_at > 100000000000 THEN created_at / 1000 ELSE created_at END)";
 
-function sessionsByBackend(): Record<string, number> {
+function countsBy(sql: string): Record<string, number> {
   const out: Record<string, number> = {};
   try {
-    const rows = db
-      .prepare("SELECT backend, count(*) AS c FROM agent_sessions GROUP BY backend")
-      .all() as Array<{ backend: string; c: number }>;
-    for (const r of rows) out[r.backend] = r.c;
+    const rows = db.prepare(sql).all() as Array<{ k: string; c: number }>;
+    for (const r of rows) out[r.k] = r.c;
   } catch {
     /* table absent on ancient DBs — counts stay empty */
   }
@@ -226,11 +257,14 @@ export async function telemetrySnapshot(): Promise<TelemetrySnapshot> {
       `SELECT count(*) AS c FROM agent_sessions WHERE ${CREATED_AT_SEC} >= ?`,
       nowSec - 30 * day
     ),
-    sessions_by_backend: sessionsByBackend(),
+    sessions_by_backend: countsBy("SELECT backend AS k, count(*) AS c FROM agent_sessions GROUP BY backend"),
     jobs_total: count("SELECT count(*) AS c FROM jobs"),
     jobs_done: count("SELECT count(*) AS c FROM jobs WHERE status = 'done'"),
     jobs_failed: count("SELECT count(*) AS c FROM jobs WHERE status = 'failed'"),
+    jobs_by_type: countsBy("SELECT type AS k, count(*) AS c FROM jobs GROUP BY type"),
+    corrections_total: count("SELECT count(*) AS c FROM corrections"),
     errors_since_boot: errorEventCount,
+    counters: readCounters(),
     worktrees_created_total: count(
       "SELECT count(DISTINCT worktree_id) AS c FROM agent_sessions WHERE worktree_id IS NOT NULL"
     ),
@@ -291,9 +325,10 @@ async function capture(event: string, properties: Record<string, unknown>): Prom
 export async function sendTelemetry(): Promise<boolean> {
   try {
     const snap = await telemetrySnapshot();
-    const { instance_id, ...properties } = snap;
+    const { instance_id, counters, ...properties } = snap;
     void instance_id; // identity travels as distinct_id only
-    return await capture("flow_snapshot", properties);
+    // Counters flatten to top-level properties so PostHog can chart them.
+    return await capture("flow_snapshot", { ...properties, ...counters });
   } catch {
     return false;
   }
