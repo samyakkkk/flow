@@ -32,6 +32,7 @@ let headline: typeof import("../src/memory/headline.js");
 let cards: typeof import("../src/memory/cards.js");
 let findHits: typeof import("../src/memory/find-hits.js");
 let corpusObserve: typeof import("../src/memory/corpus-observe.js");
+let knowledge: typeof import("../src/memory/knowledge.js");
 let cosine: (a: Float32Array, b: Float32Array) => number;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -81,6 +82,7 @@ before(async () => {
   cards = await import("../src/memory/cards.js");
   findHits = await import("../src/memory/find-hits.js");
   corpusObserve = await import("../src/memory/corpus-observe.js");
+  knowledge = await import("../src/memory/knowledge.js");
   cosine = (await import("../src/embed.js")).cosine;
   store.setEmbedder(stubEmbedder);
 });
@@ -1264,5 +1266,85 @@ describe("find_entity memory hits + quota (Section D)", () => {
     } finally {
       store.setEmbedder(stubEmbedder);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Knowledge Base (dashboard): listKnowledge attribution + the delete cascade.
+describe("knowledge base (list + delete)", () => {
+  before(() => store.setEmbedder(stubEmbedder));
+
+  test("listKnowledge: memories carry attribution; unconsolidated corpus rows page separately", async () => {
+    clearMemory();
+    db.prepare("INSERT OR REPLACE INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run("kb-s1", "ext:claude", "acme", "/w", "Fix the webhook retry", "closed", 1, 1);
+    db.prepare("INSERT INTO slack_messages (id, channel, user_id, text, ts, thread_ts, permalink) VALUES (?,?,?,?,?,?,?)")
+      .run("kb-m1", "C-eng", "U-sam", "retries must be idempotent", "1700000000.100", null, "https://slack/kb1");
+
+    // A distilled session observation → memory (attribution via agent_sessions).
+    const o = await store.insertObservation({ source: "session", repo: "acme", claim: "webhook retries must be idempotent", kind: "constraint", source_weight: "user_stated", session_id: "kb-s1" });
+    await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    // A corpus observation that never consolidates (memory_id NULL).
+    await store.insertObservation({ source: "slack", claim: "retries must be idempotent", kind: "gotcha", source_weight: "user_stated", source_id: "kb-m1", source_url: "https://slack/kb1" });
+
+    const out = knowledge.listKnowledge({});
+    assert.equal(out.memories.length, 1);
+    const m = out.memories[0];
+    assert.match(m.claim, /idempotent/);
+    assert.equal(m.tier, strength.strengthTier(m.strength));
+    assert.deepEqual(m.sources, { session: 1 });
+    assert.ok(m.contributors[0].includes("claude session"), `session attribution names the engine: ${m.contributors[0]}`);
+    assert.ok(m.contributors[0].includes("Fix the webhook retry"), "session attribution carries the title");
+    assert.equal(m.evidence.length, 1);
+
+    assert.equal(out.corpus.total, 1);
+    const c = out.corpus.rows[0];
+    assert.equal(c.source, "slack");
+    assert.equal(c.by, "@U-sam in #C-eng", "slack attribution joins user + channel via source_id");
+    assert.equal(c.source_url, "https://slack/kb1");
+
+    // Source + substring filters hit the corpus SQL path.
+    assert.equal(knowledge.listKnowledge({ source: "linear" }).corpus.total, 0);
+    assert.equal(knowledge.listKnowledge({ q: "idempotent" }).corpus.total, 1);
+    assert.equal(knowledge.listKnowledge({ q: "no-such-token" }).corpus.total, 0);
+  });
+
+  test("deleteMemory: hard cascade — observations, anchors and FTS rows all go", async () => {
+    clearMemory();
+    const o = await store.insertObservation({ source: "session", repo: "acme", claim: "zebraflux cache is write-through", kind: "decision", source_weight: "agent_inferred", session_id: "kb-s2" });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    anchors.setAnchors("memory", res.memoryId, ["svc:cache"], "files");
+    anchors.setAnchors("observation", o.id, ["svc:cache"], "files");
+
+    const out = knowledge.deleteMemory(res.memoryId);
+    assert.deepEqual(out, { observations: 1 });
+    assert.equal(store.getMemory(res.memoryId), undefined);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations WHERE memory_id = ?").get(res.memoryId).n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM anchors").get().n, 0);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM observations_fts WHERE observations_fts MATCH 'zebraflux'").get().n,
+      0,
+      "FTS mirror follows the delete via trigger",
+    );
+    assert.equal(knowledge.deleteMemory("nope"), null);
+  });
+
+  test("deleteObservation: recomputes parent counts; deleting the last evidence deletes the memory", async () => {
+    clearMemory();
+    const o1 = await store.insertObservation({ source: "session", repo: "acme", claim: "gadgetron uses blue-green deploys", kind: "decision", source_weight: "user_stated", session_id: "kb-s3" });
+    const res = await consolidate.consolidateObservation(o1, async () => ({ verdict: "new" as const }));
+    const o2 = await store.insertObservation({ source: "session", repo: "acme", claim: "gadgetron uses blue-green deploys", kind: "decision", source_weight: "user_stated", session_id: "kb-s4", memory_id: res.memoryId });
+    store.updateMemory(res.memoryId, { evidence_count: 2, people_count: 2 });
+
+    const first = knowledge.deleteObservation(o2.id);
+    assert.deepEqual(first, { memory_deleted: false });
+    const m = store.getMemory(res.memoryId)!;
+    assert.equal(m.evidence_count, 1);
+    assert.equal(m.people_count, 1);
+
+    const second = knowledge.deleteObservation(o1.id);
+    assert.deepEqual(second, { memory_deleted: true });
+    assert.equal(store.getMemory(res.memoryId), undefined, "a claim with zero provenance is deleted outright");
+    assert.equal(knowledge.deleteObservation("nope"), null);
   });
 });

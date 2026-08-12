@@ -10,7 +10,7 @@ const PRIMARY_ITEMS = [
   { href: "/", label: "Dashboard (Home)" },
   { href: "/agents", label: "Agents / Sessions" },
   { href: "/connections", label: "Connections" },
-  { href: "/inbox", label: "Inbox" },
+  { href: "/knowledge", label: "Knowledge Base" },
   { href: "/settings", label: "Settings" },
 ];
 
