@@ -251,34 +251,60 @@ export async function telemetrySnapshot(): Promise<TelemetrySnapshot> {
 
 function posthogTarget(): { url: string; apiKey: string } | null {
   if (process.env.FLOW_TELEMETRY_DISABLE === "1") return null;
+  // The fake-opencode flag marks a test process — the default key is real,
+  // and a test run must never emit events.
+  if (process.env.FLOW_FAKE_OPENCODE === "1") return null;
   const apiKey = getSetting("FLOW_TELEMETRY_POSTHOG_KEY");
   if (!apiKey) return null;
   const host = getSetting("FLOW_TELEMETRY_POSTHOG_HOST") || "https://us.i.posthog.com";
   return { url: `${host.replace(/\/$/, "")}/capture/`, apiKey };
 }
 
-export async function sendTelemetry(): Promise<boolean> {
+// One capture call — every event goes through here. Best-effort by design:
+// an unreachable PostHog must never affect Flow.
+async function capture(event: string, properties: Record<string, unknown>): Promise<boolean> {
   const target = posthogTarget();
   if (!target) return false;
   try {
-    const snap = await telemetrySnapshot();
-    const { instance_id, ...properties } = snap;
     const res = await fetch(target.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         api_key: target.apiKey,
-        event: "flow_snapshot",
-        distinct_id: instance_id,
-        properties: { ...properties, $process_person_profile: false },
+        event,
+        distinct_id: telemetryInstanceId(),
+        properties: {
+          ...properties,
+          version: orchestratorVersion(),
+          flow_mode: getFlowMode(),
+          $process_person_profile: false,
+        },
       }),
       signal: AbortSignal.timeout(10_000),
     });
     return res.ok;
   } catch {
-    // Best-effort by design: an unreachable PostHog must never affect Flow.
     return false;
   }
+}
+
+export async function sendTelemetry(): Promise<boolean> {
+  try {
+    const snap = await telemetrySnapshot();
+    const { instance_id, ...properties } = snap;
+    void instance_id; // identity travels as distinct_id only
+    return await capture("flow_snapshot", properties);
+  } catch {
+    return false;
+  }
+}
+
+// Discrete usage events — the "verbs" layer next to the snapshot's "nouns":
+// individually timestamped by PostHog, so frequency/retention insights work.
+// Same privacy rules as everything here: values must be numbers, booleans, or
+// fixed enums (backend ids, placement kinds) — never titles, names, or paths.
+export function track(event: string, properties: Record<string, number | boolean | string>): void {
+  void capture(event, properties);
 }
 
 // ------------------------------------------------------------------
@@ -309,35 +335,17 @@ function flowFrame(stack: string | undefined): string | null {
 
 export async function reportError(scope: string, err: unknown): Promise<boolean> {
   if (errorEventCount >= ERROR_EVENTS_MAX_PER_PROCESS) return false;
-  const target = posthogTarget();
-  if (!target) return false;
+  if (!posthogTarget()) return false;
   errorEventCount++;
   const e = err instanceof Error ? err : new Error(String(err));
   const code = (e as NodeJS.ErrnoException).code;
-  try {
-    const res = await fetch(target.url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        api_key: target.apiKey,
-        event: "flow_error",
-        distinct_id: telemetryInstanceId(),
-        properties: {
-          scope,
-          error_name: e.name,
-          ...(typeof code === "string" ? { error_code: code } : {}),
-          ...(flowFrame(e.stack) ? { frame: flowFrame(e.stack) } : {}),
-          version: orchestratorVersion(),
-          flow_mode: getFlowMode(),
-          $process_person_profile: false,
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  const frame = flowFrame(e.stack);
+  return capture("flow_error", {
+    scope,
+    error_name: e.name,
+    ...(typeof code === "string" ? { error_code: code } : {}),
+    ...(frame ? { frame } : {}),
+  });
 }
 
 let firstTimer: NodeJS.Timeout | null = null;
@@ -379,6 +387,22 @@ export function stopTelemetryReporter(): void {
 // Route — the audit window: exactly what a phone-home would send.
 // ------------------------------------------------------------------
 
+// Events the CLI may relay through us (it has no PostHog key of its own).
+// A whitelist plus number/boolean-only properties keeps this from becoming an
+// arbitrary-string funnel into our project under the admin token.
+const CLI_TRACKABLE = new Set(["flow_setup_run"]);
+
+export function sanitizeTrackProps(raw: unknown): Record<string, number | boolean> {
+  const out: Record<string, number | boolean> = {};
+  if (typeof raw !== "object" || raw === null) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (Object.keys(out).length >= 20) break;
+    if (!/^[a-z0-9_]{1,40}$/.test(k)) continue;
+    if (typeof v === "number" || typeof v === "boolean") out[k] = v;
+  }
+  return out;
+}
+
 export function registerTelemetryRoutes(app: FastifyInstance): void {
   app.get("/v1/telemetry", async (_req, reply) => {
     const snapshot = await telemetrySnapshot();
@@ -387,4 +411,16 @@ export function registerTelemetryRoutes(app: FastifyInstance): void {
       reporting: posthogTarget() ? "on" : "off",
     });
   });
+
+  app.post<{ Body: { event?: string; properties?: unknown } }>(
+    "/v1/telemetry/track",
+    async (req, reply) => {
+      const { event, properties } = req.body ?? {};
+      if (!event || !CLI_TRACKABLE.has(event)) {
+        return reply.code(400).send({ error: "unknown event" });
+      }
+      track(event, sanitizeTrackProps(properties));
+      return reply.code(202).send({ ok: true });
+    }
+  );
 }

@@ -13,7 +13,9 @@ process.env.OPENCODE_WORKSPACE_DIR = workspace;
 process.env.REPOS_JSON_PATH = join(workspace, "repos.json");
 process.env.DB_PATH = ":memory:";
 process.env.FLOW_ADMIN_TOKEN = "test-token-telemetry";
-process.env.FLOW_FAKE_OPENCODE = "1";
+// Deliberately NOT setting FLOW_FAKE_OPENCODE: that flag hard-disables
+// telemetry (so the rest of the suite can't leak events), and this file needs
+// sends to reach its local capture server.
 process.env.FLOW_DRAIN_DISABLE = "1";
 process.env.LINEAR_API_KEY = "lin_api_test";
 delete process.env.SLACK_BOT_TOKEN;
@@ -31,12 +33,16 @@ let telemetryInstanceId: () => string;
 let telemetrySnapshot: () => Promise<TelemetrySnapshot>;
 let sendTelemetry: () => Promise<boolean>;
 let reportError: (scope: string, err: unknown) => Promise<boolean>;
+let track: (event: string, props: Record<string, number | boolean | string>) => void;
+let sanitizeTrackProps: (raw: unknown) => Record<string, number | boolean>;
 let getSetting: (key: string) => string | undefined;
 let putSetting: (key: string, value: string) => void;
 let db: import("better-sqlite3").Database;
 
 before(async () => {
-  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry, reportError } = await import("../src/telemetry.js"));
+  ({ telemetryInstanceId, telemetrySnapshot, sendTelemetry, reportError, track, sanitizeTrackProps } = await import(
+    "../src/telemetry.js"
+  ));
   ({ getSetting, putSetting } = await import("../src/settings.js"));
   ({ default: db } = await import("../src/db.js"));
 
@@ -138,6 +144,29 @@ describe("telemetry snapshot", () => {
     }
   });
 
+  test("FLOW_FAKE_OPENCODE=1 (test processes) also hard-disables sends", async () => {
+    process.env.FLOW_FAKE_OPENCODE = "1";
+    try {
+      assert.equal(await sendTelemetry(), false);
+    } finally {
+      delete process.env.FLOW_FAKE_OPENCODE;
+    }
+  });
+
+  test("sanitizeTrackProps keeps only sane numeric/boolean keys", () => {
+    assert.deepEqual(
+      sanitizeTrackProps({
+        harness_claude: true,
+        detected_count: 3,
+        repo_name: "secret-repo", // strings are dropped wholesale
+        "weird key!": 1,
+        nested: { a: 1 },
+      }),
+      { harness_claude: true, detected_count: 3 }
+    );
+    assert.deepEqual(sanitizeTrackProps("junk"), {});
+  });
+
   test("sendTelemetry posts a PostHog capture event keyed by instance id", async () => {
     let captured: Record<string, unknown> | null = null;
     const server: Server = createServer((req, res) => {
@@ -204,5 +233,36 @@ describe("telemetry snapshot", () => {
     if (props.frame !== undefined) {
       assert.match(String(props.frame), /^[^/\\]+:\d+$/);
     }
+  });
+
+  test("track() fires a discrete usage event with enum-shaped props", async () => {
+    let captured: Record<string, unknown> | null = null;
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        captured = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    putSetting("FLOW_TELEMETRY_POSTHOG_HOST", `http://127.0.0.1:${port}`);
+
+    track("flow_session_started", { backend: "claude", placement: "separate_copy", native: true });
+    // track() is fire-and-forget — wait for the capture to land.
+    const deadline = Date.now() + 3000;
+    while (!captured && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    server.close();
+
+    assert.ok(captured, "capture endpoint was hit");
+    const body = captured as Record<string, unknown>;
+    assert.equal(body.event, "flow_session_started");
+    assert.equal(body.distinct_id, telemetryInstanceId());
+    const props = body.properties as Record<string, unknown>;
+    assert.equal(props.backend, "claude");
+    assert.equal(props.placement, "separate_copy");
+    assert.equal(props.native, true);
+    assert.equal(typeof props.version, "string"); // common context rides along
   });
 });

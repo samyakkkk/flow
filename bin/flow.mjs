@@ -1339,6 +1339,22 @@ async function cmdSetup(rest) {
     /* orchestrator not running — fine */
   }
 
+  // Usage ping via the orchestrator's telemetry pipeline (the CLI holds no
+  // PostHog key). Booleans only — which tools got wired, nothing about the
+  // repo. Best-effort; orchestrator not running = no event.
+  try {
+    const props = { shared: values.share === true, detected_count: detected.length };
+    for (const h of ALL_HARNESSES) props[`harness_${h}`] = harnesses.includes(h);
+    await fetch(`http://localhost:${ports.orchestrator}/v1/telemetry/track`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ event: "flow_setup_run", properties: props }),
+      signal: AbortSignal.timeout(1500),
+    });
+  } catch {
+    /* telemetry is never load-bearing */
+  }
+
   console.log(`
   ${OK} ${c.bold(repoDir)}
     → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
