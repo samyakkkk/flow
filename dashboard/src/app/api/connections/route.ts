@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionToken } from "@/lib/auth";
+import { getSessionToken, canManageIntegrations } from "@/lib/auth";
 import { readLocalConfig, writeLocalConfig } from "@/lib/localConfig";
 import { requireProject } from "@/lib/projectContext";
 import { orcFetch } from "@/lib/orchestrator";
@@ -21,6 +21,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Connecting sources / integration tokens is an admin act. Members can't.
+  if (!(await canManageIntegrations())) {
+    return NextResponse.json({ error: "Integrations are managed by an owner." }, { status: 403 });
+  }
 
   const body = await req.json() as Record<string, unknown>;
   const kind = body.kind as string;

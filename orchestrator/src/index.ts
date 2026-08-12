@@ -30,6 +30,19 @@ import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
 
+// Global safety net. This service is spawned DETACHED with no supervisor, and
+// the container healthcheck only probes the dashboard — so an unhandled error
+// here would silently kill agent/ingest/index handling while the container
+// still looks "healthy". Fastify already isolates per-request handler errors;
+// this catches background tasks, timers, and EventEmitter 'error's we missed.
+// Log and keep serving rather than let Node crash the whole process.
+process.on("unhandledRejection", (reason) => {
+  console.error("[orchestrator] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[orchestrator] uncaughtException:", (err as Error)?.stack ?? err);
+});
+
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT ?? "7500", 10);
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });

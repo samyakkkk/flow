@@ -10,6 +10,26 @@ let db: FalkorDB | null = null;
 async function connect(): Promise<FalkorDB> {
   if (!db) {
     db = await FalkorDB.connect({ socket: { host, port } });
+    // A FalkorDB/redis socket can close unexpectedly (server restart, network
+    // blip). node-redis auto-reconnects — but it EMITS an 'error' event, and an
+    // 'error' event with NO listener is rethrown by Node, crashing this process
+    // (the gateway, or an indexer's MCP subprocess). Observed on the box as
+    // "Emitted 'error' event on FalkorDB instance … Unhandled 'error' event".
+    // Attach listeners so a blip is logged, not fatal. Best-effort across
+    // falkordb client shapes (the instance re-emits; the raw connection is the
+    // source). See memory: users-service Redis silent wedge (missing listener).
+    const attach = (emitter: unknown) => {
+      const e = emitter as { on?: (ev: string, cb: (err: unknown) => void) => void } | null;
+      try {
+        e?.on?.("error", (err) =>
+          console.error("[falkordb] client error (auto-reconnecting):", (err as Error)?.message ?? err),
+        );
+      } catch {
+        /* not an event emitter on this falkordb version — ignore */
+      }
+    };
+    attach(db);
+    attach((db as { connection?: unknown }).connection);
   }
   return db;
 }

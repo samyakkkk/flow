@@ -9,7 +9,7 @@
 //   flow --help
 
 import { parseArgs } from "node:util";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   writeFileSync,
@@ -23,7 +23,9 @@ import {
   statSync,
 } from "node:fs";
 import { join, relative, basename } from "node:path";
+import { hostname, homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 
 import { portsForIndex, dashboardPort } from "./lib/ports.mjs";
@@ -99,6 +101,8 @@ ${c.bold("Usage")}
   flow ls               List projects, status, and dashboard URLs.
   flow doctor           Health-check every project — pages load, assets load, services up.
   flow rm <name>        Stop and delete a project and its data.
+  flow connect <url>    Connect this machine to a deployed Flow (device flow → token).
+  flow remotes          List connected deployments (remove with: flow remotes remove <name>).
   flow setup <name>     Connect the current git repo to a project: installs Flow's
                         capture hooks, MCP registration, skill, and instruction blocks
                         into every coding tool's config (Claude Code, Codex, opencode,
@@ -271,6 +275,30 @@ function ensureDashboardBuild() {
     // no build yet
   }
   if (!stale) return false;
+  // Guard a recurring footgun: if a prior `npm install` ran with
+  // NODE_ENV=production, build-only devDeps (e.g. @tailwindcss/postcss) get
+  // pruned, and `next build` then fails — historically with a misleading
+  // "Cannot find @tailwindcss/postcss", or worse, a silently degraded build
+  // (empty middleware, broken /_global-error). Detect it, auto-remediate once
+  // with devDeps forced in, and fail with a precise message if we still can't.
+  const req = createRequire(join(dir, "package.json"));
+  const devDepsMissing = () => {
+    try { req.resolve("@tailwindcss/postcss"); return false; }
+    catch { return true; }
+  };
+  if (devDepsMissing()) {
+    console.log(c.dim("  build devDeps pruned (NODE_ENV=production install?) — reinstalling with devDeps…"));
+    spawnSync("npm", ["install", "--include=dev", "--no-audit", "--no-fund"], {
+      cwd: join(dir, ".."),
+      stdio: ["ignore", "ignore", "inherit"],
+      env: { ...process.env, NODE_ENV: "" },
+    });
+    if (devDepsMissing()) {
+      throw new Error(
+        "dashboard build devDeps missing (@tailwindcss/postcss): a prior `npm install` under NODE_ENV=production pruned them. Fix: `NODE_ENV= npm install --include=dev` in the repo root.",
+      );
+    }
+  }
   console.log(c.dim("  building dashboard (first run ~30s)…"));
   const res = spawnSync(nodeBin(dir, "next"), ["build"], {
     cwd: dir,
@@ -284,12 +312,29 @@ function ensureDashboardBuild() {
 // Is anything listening on a TCP port? Deterministic (unlike a health probe
 // that can flake and trick us into starting a second process on a used port).
 function portInUse(port) {
-  try {
-    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
-    return out.length > 0;
-  } catch {
-    return false;
+  // Fast path: lsof (present on macOS + most Linux). spawnSync does NOT throw
+  // when lsof is missing — it returns { error, status: null } — so distinguish
+  // "lsof ran" from "lsof absent" explicitly. Reading a missing lsof as "port
+  // free" makes `flow up` spawn a DUPLICATE on a live port (EADDRINUSE) — which
+  // is exactly what happened in the container (node:22 ships no lsof).
+  const r = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
+  if (!r.error && r.status !== null) {
+    return (r.stdout ?? "").trim().length > 0;
   }
+  // lsof absent — node-native TCP connect probe: a successful connect to
+  // 127.0.0.1:port means something is listening there.
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `const s=require('net').connect(${port},'127.0.0.1');` +
+        `s.on('connect',()=>{s.destroy();process.exit(0)});` +
+        `s.on('error',()=>process.exit(3));` +
+        `setTimeout(()=>{s.destroy();process.exit(3)},800);`,
+    ],
+    { encoding: "utf8", timeout: 2000 },
+  );
+  return probe.status === 0;
 }
 
 // Kill whatever holds a TCP port (best-effort).
@@ -348,6 +393,11 @@ function ensureAuthStore(mode) {
   store.users ??= [];
   store.grants ??= {};
   store.tokens ??= [];
+  // Stable identity for this deployment, independent of its URL/IP. A team can
+  // move the box, change the DNS name, or get a new EC2 IP — the deploymentId
+  // stays constant, so a machine reconnecting to the new address updates its
+  // existing remote in place instead of forking a duplicate. Minted once.
+  store.deploymentId ??= randomUUID();
   let setupToken = null;
   if (mode === "prod" && store.users.length === 0) {
     store.setupToken ??= randomBytes(4).toString("hex");
@@ -491,7 +541,7 @@ function printTable(headers, rows) {
 // so callers (explicit create, or create-on-`up`) control their own output.
 // Names that collide with the dashboard's deployment-level URLs (/login,
 // /api/…) or the legacy /p/ prefix — a project can't live at those paths.
-const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs", "mcp", "connect"]);
 
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
@@ -1164,6 +1214,244 @@ async function cmdRm(args) {
   console.log(`  ${OK} removed ${c.bold(name)}\n`);
 }
 
+// ── Remotes: connect this machine to other Flow deployments ──────────────────
+//
+// A "remote" is another Flow deployment (a team's EC2, a second box) this
+// machine holds a credential for. `flow connect <url>` runs a device flow:
+// the dashboard mints a personal access token for the approving user, and it
+// lands in ~/.flow/config.json — machine-level, shared by every alias, never
+// inside a project's data dir. The PAT inherits the user's project grants;
+// revoking it in the dashboard cuts this machine off within seconds.
+
+function userConfigPath() {
+  return join(homedir(), ".flow", "config.json");
+}
+
+function readUserConfig() {
+  try {
+    return JSON.parse(readFileSync(userConfigPath(), "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeUserConfig(cfg) {
+  mkdirSync(join(homedir(), ".flow"), { recursive: true });
+  writeFileSync(userConfigPath(), JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+}
+
+function openInBrowser(target) {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    spawn(cmd, [target], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // Printing the URL is the fallback; never fail the flow over a browser.
+  }
+}
+
+async function cmdConnect(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { name: { type: "string" }, code: { type: "string" } },
+    allowPositionals: true,
+  });
+  let url = positionals[0];
+  if (!url) die(`Usage: flow connect <dashboard-url> [--name <remote-name>]`);
+  if (!/^https?:\/\//.test(url)) {
+    url = (/^(localhost|127\.)/.test(url) ? "http://" : "https://") + url;
+  }
+  url = url.replace(/\/+$/, "");
+
+  // Sanity check: is this a Flow deployment, and does it need connecting?
+  let status;
+  try {
+    const res = await fetch(`${url}/api/auth/status`, { signal: AbortSignal.timeout(8000) });
+    status = await res.json();
+  } catch (err) {
+    die(`Couldn't reach ${url} — is that the dashboard URL? (${err instanceof Error ? err.message : err})`);
+  }
+  if (status.mode !== "prod") {
+    die(`${url} runs in local mode — the dashboard and CLI already share the machine, nothing to connect.`);
+  }
+
+  // Stable identity: key the remote by deploymentId, not URL, so a later
+  // address change (new EC2 IP, renamed DNS) reconnects the SAME remote in
+  // place instead of forking a duplicate. Older deployments predate the
+  // endpoint (null id) — those fall back to URL-based naming.
+  let deploymentId = null;
+  try {
+    const dep = await fetch(`${url}/api/deployment`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
+    deploymentId = dep?.deploymentId ?? null;
+  } catch {
+    // Non-fatal — proceed with URL-based identity.
+  }
+
+  const label = hostname();
+  // Pairing secret: lets pages served by THIS deployment (in a browser on
+  // THIS machine) call the local dashboard cross-origin — see the execution
+  // door in dashboard/src/proxy.ts. Generated here, shared with the
+  // deployment via the device flow, kept locally in the remote entry.
+  const pairing = randomBytes(24).toString("hex");
+  // Where a browser on this machine can reach THIS Flow's dashboard — the
+  // deployment hands it back to the user's pages so the execution client
+  // probes the right port (offsets exist: test aliases, multiple installs).
+  const localUrl = `http://localhost:${dashboardPort()}`;
+
+  // ── One-command install path: --code carries a pre-blessed code the
+  // dashboard already minted for the logged-in user. Skip the browser
+  // approval round-trip; just complete it with this machine's pairing.
+  let token;
+  if (values.code) {
+    const res = await fetch(`${url}/api/auth/device/${values.code}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label, pairing, local_url: localUrl }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.token) {
+      die(body.error ?? `Connect failed (${res.status}) — the install code may have expired; get a fresh command from the dashboard.`);
+    }
+    token = body.token;
+    saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
+    return;
+  }
+
+  const startRes = await fetch(`${url}/api/auth/device`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label, pairing, local_url: localUrl }),
+  });
+  const start = await startRes.json();
+  if (!startRes.ok) die(start.error ?? `Connect failed (${startRes.status})`);
+
+  const approveUrl = `${url}/connect?code=${start.code}`;
+  console.log(`\n  Approve this machine (${c.bold(label)}) in your browser:`);
+  console.log(`  ${c.cyan(approveUrl)}\n`);
+  openInBrowser(approveUrl);
+
+  process.stdout.write(`  ${c.dim("Waiting for approval…")} `);
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await fetch(`${url}/api/auth/device/${start.code}/claim`, { method: "POST" }).catch(() => null);
+    if (!res) continue; // transient network blip — keep polling
+    if (res.status === 404) {
+      console.log("");
+      die("Connect code expired — run `flow connect` again.");
+    }
+    const body = await res.json().catch(() => ({}));
+    if (body.status === "approved" && body.token) {
+      token = body.token;
+      break;
+    }
+  }
+  console.log("");
+  if (!token) die("Timed out waiting for approval (10 minutes) — run `flow connect` again.");
+
+  saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
+}
+
+// Write (or reconnect-in-place) a remote to ~/.flow/config.json, keyed by
+// deploymentId so an address change updates rather than forks. Shared by the
+// classic browser-approval path and the one-command --code path.
+function saveRemote(url, deploymentId, token, pairing, localUrl, preferredName) {
+  const cfg = readUserConfig();
+  cfg.remotes ??= {};
+
+  let name = preferredName;
+  let addressChanged = false;
+  if (deploymentId) {
+    for (const [n, r] of Object.entries(cfg.remotes)) {
+      if (r?.deploymentId === deploymentId) {
+        name ??= n;
+        addressChanged = r.url !== url;
+        break;
+      }
+    }
+  }
+  name ??= new URL(url).host.replace(/[^a-zA-Z0-9._-]/g, "-");
+
+  cfg.remotes[name] = {
+    kind: "remote",
+    deploymentId,
+    url,
+    token,
+    pairing,
+    localUrl,
+    connectedAt: new Date().toISOString(),
+  };
+  writeUserConfig(cfg);
+
+  const verb = addressChanged ? "Reconnected" : "Connected";
+  console.log(`  ${OK} ${verb} ${c.bold(name)} → ${url}`);
+  if (addressChanged) console.log(`    ${c.dim("(same deployment — address updated in place)")}`);
+  console.log(`    ${c.dim("Saved to ~/.flow/config.json — list with")} flow remotes`);
+  console.log(`    ${c.dim("MCP endpoint for agents:")} ${url}/<project>/mcp ${c.dim("(bearer = this machine's token)")}\n`);
+}
+
+async function cmdRemotes(args) {
+  const sub = args[0];
+  const cfg = readUserConfig();
+  const remotes = cfg.remotes ?? {};
+
+  if (!sub || sub === "ls" || sub === "list") {
+    // Only actual remote deployments — the config also holds a `kind:"local"`
+    // entry (the local flow root), which is not a remote and rendered as a junk
+    // "undefined … since ?" row before this filter.
+    const names = Object.keys(remotes).filter((n) => {
+      const r = remotes[n];
+      return r && r.kind !== "local" && r.url;
+    });
+    if (names.length === 0) {
+      console.log(`\n  No remotes. Connect one with: ${c.bold("flow connect <dashboard-url>")}\n`);
+      return;
+    }
+    console.log("");
+    for (const n of names) {
+      const r = remotes[n];
+      const id = (r.token?.match(/^flowpat_([0-9a-f]{8})_/) ?? [])[1] ?? "????????";
+      console.log(
+        `  ${c.bold(n.padEnd(20))} ${r.url}  ${c.dim(`token flowpat_${id}_…  since ${r.connectedAt?.slice(0, 10) ?? "?"}`)}`
+      );
+    }
+    console.log("");
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const name = args[1];
+    if (!name || !remotes[name]) {
+      die(`No remote "${name ?? ""}". Have: ${Object.keys(remotes).join(", ") || "(none)"}`);
+    }
+    const r = remotes[name];
+    // Best-effort server-side revoke (a PAT may revoke itself); the local
+    // entry goes away regardless, and the dashboard Connect page can clean
+    // up a leftover token.
+    const id = (r.token?.match(/^flowpat_([0-9a-f]{8})_/) ?? [])[1];
+    if (id) {
+      try {
+        const res = await fetch(`${r.url}/api/tokens/${id}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${r.token}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        console.log(
+          `  ${res.ok ? OK : c.yellow("!")} ${res.ok ? "revoked server-side" : "server-side revoke failed — revoke on the dashboard's /connect page"}`
+        );
+      } catch {
+        console.log(`  ${c.yellow("!")} couldn't reach ${r.url} — revoke on the dashboard's /connect page`);
+      }
+    }
+    delete remotes[name];
+    cfg.remotes = remotes;
+    writeUserConfig(cfg);
+    console.log(`  ${OK} removed remote ${c.bold(name)}\n`);
+    return;
+  }
+
+  die(`Usage: flow remotes [remove <name>]`);
+}
+
 // ── flow setup — bind the current repo to a project + materialize atoms ──────
 //
 // Folder → (deployment, project) binding, resolved ONCE here and baked into
@@ -1215,6 +1503,7 @@ async function cmdSetup(rest) {
       remove: { type: "boolean" },
       harness: { type: "string" },
       all: { type: "boolean" },
+      remote: { type: "string" }, // bind to a project on a connected deployment (flow connect)
     },
     allowPositionals: true,
   });
@@ -1237,20 +1526,75 @@ async function cmdSetup(rest) {
         (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
     );
   }
-  const project = readProject(name); // throws with a helpful message if unknown
-  const index = listProjectNames().indexOf(name);
-  const ports = portsForIndex(index);
-  const env = parseEnvFile(join(projectDir(name), ".env"));
-  const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
-  const graph = project.graph ?? name;
+  let projectEntry;
+  let repoName;
+  let registered = false;
+  let workFolderUrl; // where to register the WORK folder (best-effort)
+  let workFolderToken;
+  const remoteName = values.remote ?? "local";
 
-  const { name: repoName, registered } = resolveRepoName(name, repoDir);
+  if (values.remote) {
+    // ── Remote binding: this repo's sessions read/write a project on a
+    // deployed Flow (EC2). Everything routes through that deployment's public
+    // per-project dashboard routes with the machine's PAT; MCP uses the remote
+    // /<project>/mcp endpoint (bridged to stdio by flow-mcp). No local project,
+    // no FalkorDB access, no gateway source on this box.
+    const cfg = readUserConfig();
+    const remoteEntry = cfg.remotes?.[values.remote];
+    if (!remoteEntry?.url) {
+      const have = Object.keys(cfg.remotes ?? {}).join(", ") || "(none — run: flow connect <url>)";
+      die(`No connected deployment "${values.remote}". Connected: ${have}`);
+    }
+    const base = remoteEntry.url.replace(/\/+$/, "");
+    const tok = remoteEntry.token ?? "";
 
-  materializeMachine({
-    flowRoot,
-    projectName: name,
-    shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
-    projectEntry: {
+    // Validate the project exists there (and grab its graph) via the public
+    // project list — a wrong name fails here with a clear message instead of
+    // silently materializing a dead binding.
+    let graph = name;
+    try {
+      const list = await fetch(`${base}/api/projects`, {
+        headers: tok ? { authorization: `Bearer ${tok}` } : {},
+        signal: AbortSignal.timeout(10000),
+      }).then((r) => (r.ok ? r.json() : null));
+      const proj = list?.projects?.find((p) => p.name === name);
+      if (list && !proj) {
+        const names = (list.projects ?? []).map((p) => p.name).join(", ") || "(none you can access)";
+        die(`Deployment "${values.remote}" has no project "${name}" you can access. Available: ${names}`);
+      }
+      if (proj?.graph) graph = proj.graph;
+    } catch (err) {
+      die(`Couldn't reach deployment "${values.remote}" (${base}): ${err instanceof Error ? err.message : err}`);
+    }
+
+    // Remote deployments own their own source registry; we can't read it here,
+    // so use the git-derived name and don't claim it's a registered source.
+    repoName = resolveRepoName(name, repoDir).name;
+    registered = false;
+    workFolderUrl = `${base}/${name}/v1/work-folders`;
+    workFolderToken = tok;
+    projectEntry = {
+      remote: values.remote,
+      deploymentId: remoteEntry.deploymentId ?? null,
+      orchestratorUrl: `${base}/${name}`,
+      gatewayUrl: `${base}/${name}`,
+      mcpUrl: `${base}/${name}/mcp`,
+      graphName: graph,
+      token: tok,
+    };
+  } else {
+    const project = readProject(name); // throws with a helpful message if unknown
+    const index = listProjectNames().indexOf(name);
+    const ports = portsForIndex(index);
+    const env = parseEnvFile(join(projectDir(name), ".env"));
+    const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
+    const graph = project.graph ?? name;
+    const resolved = resolveRepoName(name, repoDir);
+    repoName = resolved.name;
+    registered = resolved.registered;
+    workFolderUrl = `http://localhost:${ports.orchestrator}/v1/work-folders`;
+    workFolderToken = token;
+    projectEntry = {
       remote: "local",
       orchestratorUrl: `http://localhost:${ports.orchestrator}`,
       gatewayUrl: `http://localhost:${ports.gateway}`,
@@ -1260,7 +1604,14 @@ async function cmdSetup(rest) {
       falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
       tsxBin: nodeBin(gatewayDir(), "tsx"),
       gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
-    },
+    };
+  }
+
+  materializeMachine({
+    flowRoot,
+    projectName: name,
+    shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
+    projectEntry,
   });
 
   // Default: only the tools this machine actually has. `--all` pre-wires
@@ -1278,28 +1629,31 @@ async function cmdSetup(rest) {
     repoDir,
     project: name,
     repo: repoName,
+    remote: remoteName,
     share: values.share === true,
     harnesses,
   });
 
   // WORK-surface registration (work_folders): best-effort — the binding above
   // is complete without it; this makes the folder appear in the dashboard.
+  // Local → the local orchestrator; remote → the deployment's public route.
   let workFolderOk = false;
   try {
-    const res = await fetch(`http://localhost:${ports.orchestrator}/v1/work-folders`, {
+    const res = await fetch(workFolderUrl, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${workFolderToken}` },
       body: JSON.stringify({ path: repoDir, repo: registered ? repoName : undefined }),
       signal: AbortSignal.timeout(3000),
     });
     workFolderOk = res.ok;
   } catch {
-    /* orchestrator not running — fine */
+    /* deployment unreachable — fine, registers on next flow up / reconnect */
   }
 
+  const where = values.remote ? `${c.bold(remoteName)} (remote)` : "local";
   console.log(`
   ${OK} ${c.bold(repoDir)}
-    → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    → project ${c.bold(name)} on ${where}, repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
     tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
@@ -1337,6 +1691,10 @@ async function main() {
       await cmdDoctor();
     } else if (cmd === "rm" || cmd === "remove" || cmd === "delete") {
       await cmdRm(rest);
+    } else if (cmd === "connect") {
+      await cmdConnect(rest);
+    } else if (cmd === "remotes" || cmd === "remote") {
+      await cmdRemotes(rest);
     } else if (cmd === "setup" || cmd === "connect-repo") {
       await cmdSetup(rest);
     } else if (cmd === "create" || cmd === "new" || cmd === "project") {

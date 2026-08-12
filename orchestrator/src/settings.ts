@@ -341,7 +341,20 @@ export function getSetting(key: string): string | undefined {
 // LLM_API_KEY wins; OPENROUTER_API_KEY remains a fallback so existing setups
 // keep working. Empty string = no key (callers degrade, they don't crash).
 export function llmApiKey(): string {
-  return getSetting("LLM_API_KEY") ?? getSetting("OPENROUTER_API_KEY") ?? "";
+  // Settings win (dashboard-configured), but fall back to the ENV the deploy
+  // already passes (docker-compose forwards OPENROUTER_API_KEY). Without this
+  // fallback a headless deployment's DISTILLER had no LLM transport even when
+  // OPENROUTER_API_KEY was set in the env — so captured sessions were silently
+  // never distilled into the brain (the indexer still worked via opencode's own
+  // config, which hid the gap). The env path makes the distiller work
+  // out-of-the-box on any deploy that provides the key.
+  return (
+    getSetting("LLM_API_KEY") ??
+    getSetting("OPENROUTER_API_KEY") ??
+    process.env.LLM_API_KEY ??
+    process.env.OPENROUTER_API_KEY ??
+    ""
+  );
 }
 
 export function llmBaseUrl(): string {

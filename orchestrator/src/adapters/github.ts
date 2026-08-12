@@ -29,13 +29,14 @@ import { getSetting } from "../settings.js";
 
 // ------------------------------------------------------------------
 // Registered repos: {owner/repo → watched branch}
-// In production these come from the config DB; we support env override too.
+// Populated at runtime from the dashboard repo_added flow (watchRepo) and the
+// indexed-repos registry; env override below. Must start EMPTY — a hardcoded
+// demo seed (acme/api-service, acme/web-app) made every real deployment's
+// github-poller ls-remote non-existent repos every cycle (recurring 404 error
+// logs + wasted polls).
 // ------------------------------------------------------------------
 
-export const registeredRepos: Map<string, string> = new Map([
-  ["acme/api-service", "main"],
-  ["acme/web-app", "main"],
-]);
+export const registeredRepos: Map<string, string> = new Map();
 
 // Allow env override: FLOW_WATCHED_REPOS='owner/repo:branch,owner/repo:branch'
 if (process.env.FLOW_WATCHED_REPOS) {

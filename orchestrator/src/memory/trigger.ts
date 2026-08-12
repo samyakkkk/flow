@@ -62,16 +62,26 @@ export async function maybeDistill(id: string, branch: string | null = null): Pr
   if (maxSeq <= since) return false; // nothing new since last distill
 
   const slimEvents: SlimEvent[] = events.map((e) => ({ kind: e.kind, data: e.data }));
+  let result: { ran: boolean; reason?: string };
   try {
-    await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents });
+    result = await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents });
   } catch (err) {
     console.warn(`[memory] distill failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
-  // Advance the high-water mark even on a zero-observation run — the content was
-  // consumed; re-reading it yields nothing new.
+  // Do NOT advance the high-water mark on a transient LLM/transport failure —
+  // distillSession swallows those (returns {ran:false, reason:'llm-error…'}
+  // rather than throwing), and advancing here would permanently mark the
+  // session distilled so a later sweep (once the LLM is back) never retries it,
+  // silently losing the session's content from the brain.
+  if (!result.ran && result.reason?.startsWith("llm-error")) {
+    console.warn(`[memory] distill deferred for ${id}: ${result.reason} (will retry on the next idle sweep)`);
+    return false;
+  }
+  // Advance even on a zero-observation run that actually ran (or an
+  // empty-transcript) — that content was consumed; re-reading yields nothing new.
   setDistilledSeq(maxSeq, id);
-  return true;
+  return result.ran;
 }
 
 // Fire-and-forget: queue a distill without blocking the caller (setStatus).

@@ -249,6 +249,67 @@ if (!p) {
   console.error(\`flow-mcp: unknown project "\${args.project}" — re-run: flow setup \${args.project ?? "<name>"}\`);
   process.exit(1);
 }
+
+// REMOTE binding → bridge stdio ↔ the deployment's public /<project>/mcp
+// endpoint (streamable-HTTP, stateless JSON). The harness speaks plain stdio
+// MCP; the brain lives on EC2. No secret in the repo (token read here from
+// config.json), and an address change is a one-line config update — the
+// baked registration never moves. Local bindings fall through to the
+// gateway-spawn path below.
+if (p.mcpUrl) {
+  const url = p.mcpUrl;
+  const token = p.token ?? "";
+  let buf = "";
+  const forward = async (msg) => {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          ...(token ? { authorization: "Bearer " + token } : {}),
+        },
+        body: JSON.stringify(msg),
+      });
+      // Notifications (no id) get 202/no body — nothing to write back.
+      if (msg.id === undefined || res.status === 202) return;
+      const ct = res.headers.get("content-type") || "";
+      const text = await res.text();
+      let payload = text;
+      if (ct.includes("text/event-stream")) {
+        // Take the JSON from the last non-empty data: line.
+        const lines = text.split(/\\r?\\n/).filter((l) => l.startsWith("data:"));
+        payload = lines.length ? lines[lines.length - 1].slice(5).trim() : "";
+      }
+      if (payload) process.stdout.write(payload.trim() + "\\n");
+    } catch (err) {
+      if (msg.id !== undefined) {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0", id: msg.id,
+          error: { code: -32000, message: "flow-mcp remote bridge: " + (err?.message ?? String(err)) },
+        }) + "\\n");
+      }
+    }
+  };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      forward(msg);
+    }
+  });
+  process.stdin.on("end", () => process.exit(0));
+  // Keep the process alive on stdin.
+  process.stdin.resume();
+  // Do not fall through to the local spawn.
+  // eslint-disable-next-line no-unused-vars
+} else {
 let branch = "";
 try {
   branch = execFileSync("git", ["branch", "--show-current"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
@@ -273,6 +334,7 @@ const env = {
 env.PATH = dirname(process.execPath) + ":" + (env.PATH ?? "/usr/bin:/bin");
 const child = spawn(p.tsxBin, [p.gatewayMcp], { env, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));
+}
 `;
 }
 
@@ -412,22 +474,22 @@ const HOOK_EVENTS = [
   { name: "SessionEnd" },
 ];
 
-function hookCmd(harness, project, repo) {
-  return `"${SHIM_PATH}" --harness ${harness} --project ${project} --repo ${repo} --remote local`;
+function hookCmd(harness, project, repo, remote = "local") {
+  return `"${SHIM_PATH}" --harness ${harness} --project ${project} --repo ${repo} --remote ${remote}`;
 }
 
 // GUI-app dialect: explicit node, because the shebang can't resolve one on the
 // system PATH. Terminal tools keep the plain form — notably Codex, whose hook
 // line is trust-hashed and must never change.
-function hookCmdGui(harness, project, repo) {
-  return `"${NODE_BIN}" ${hookCmd(harness, project, repo)}`;
+function hookCmdGui(harness, project, repo, remote = "local") {
+  return `"${NODE_BIN}" ${hookCmd(harness, project, repo, remote)}`;
 }
 
 function renderClaude(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   const settingsPath = join(repoDir, ".claude", "settings.json");
   const settings = readJson(settingsPath, {});
-  settings.hooks = mergeHooksObject(settings.hooks, HOOK_EVENTS, () => hookCmd("claude", project, repo));
+  settings.hooks = mergeHooksObject(settings.hooks, HOOK_EVENTS, () => hookCmd("claude", project, repo, remote));
   // Pre-approve the .mcp.json THIS setup writes — the user consented by
   // running `flow setup`; without it every headless/first run drops flow-graph.
   settings.enableAllProjectMcpServers = true;
@@ -462,11 +524,11 @@ function renderClaude(ctx) {
 }
 
 function renderCodex(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   const hooksPath = join(repoDir, ".codex", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
   hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: 5 } })), () =>
-    hookCmd("codex", project, repo)
+    hookCmd("codex", project, repo, remote)
   );
   writeJson(hooksPath, hooksFile);
 
@@ -514,7 +576,7 @@ export function ensureCodexMachineConfig(repoDir, codexHome = join(homedir(), ".
 }
 
 function renderOpencode(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   const pluginPath = join(repoDir, ".opencode", "plugins", "flow.ts");
   mkdirSync(dirname(pluginPath), { recursive: true });
   writeFileSync(pluginPath, opencodePlugin(project, repo), "utf-8");
@@ -531,7 +593,7 @@ function renderOpencode(ctx) {
 }
 
 function renderGemini(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   const settingsPath = join(repoDir, ".gemini", "settings.json");
   const settings = readJson(settingsPath, {});
   settings.hooks = mergeHooksObject(
@@ -541,7 +603,7 @@ function renderGemini(ctx) {
       { name: "AfterAgent", extra: { timeout: 5000 } },
       { name: "SessionEnd", extra: { timeout: 5000 } },
     ],
-    () => hookCmd("gemini", project, repo)
+    () => hookCmd("gemini", project, repo, remote)
   );
   settings.mcpServers = {
     ...(settings.mcpServers ?? {}),
@@ -556,7 +618,7 @@ function renderGemini(ctx) {
 // Cursor hook config dialect differs from the Claude-family shape: flat
 // event → [{command}] arrays plus a mandatory version field.
 function renderCursor(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   const hooksPath = join(repoDir, ".cursor", "hooks.json");
   const file = readJson(hooksPath, {});
   file.version = 1;
@@ -596,7 +658,7 @@ function renderCursor(ctx) {
 }
 
 function renderAntigravity(ctx) {
-  const { repoDir, project, repo } = ctx;
+  const { repoDir, project, repo, remote = "local" } = ctx;
   // Antigravity's dialect: hooks.json maps NAMED GROUPS → event → entries.
   // We own the "flow-capture" group and never touch others.
   const hooksPath = join(repoDir, ".agents", "hooks.json");
@@ -771,6 +833,7 @@ export function materializeRepo(ctx) {
     [ctx.repoDir]: {
       project: ctx.project,
       repo: ctx.repo,
+      remote: ctx.remote ?? "local",
       harnesses,
       version: ATOMS_VERSION,
       owned,
