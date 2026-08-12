@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
+import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
 import {
   createSessionWorktree,
   listWorktrees,
@@ -446,6 +447,8 @@ export function listRepoOptions(): RepoOption[] {
 //   start_untracked — JSON array of untracked paths that pre-existed the
 //                     session (excluded from the SESSION-scope diff).
 //   worktree_id     — reserved for Phase B (isolated worktrees); unused today.
+//   search_text/embedding/embedded_at — semantic session search (existing DBs
+//   get them via migration 15; see session-search.ts).
 db.exec(`
   CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY,
@@ -461,6 +464,9 @@ db.exec(`
     start_untracked TEXT,
     worktree_id TEXT,
     last_distilled_seq INTEGER,
+    search_text TEXT,
+    embedding BLOB,
+    embedded_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
@@ -737,6 +743,11 @@ export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
 // sessions don't spin up a timer; FLOW_DISTILLER=0 disables both.
 setTranscriptReader((id) => readTranscript(id).map((e) => ({ seq: e.seq, kind: e.kind, data: e.data })));
 startIdleSweep();
+
+// Same wiring for semantic session search (embeds session docs off the hot
+// path; FLOW_SESSION_SEARCH=0 disables the sweep).
+setSessionTranscriptReader((id) => readTranscript(id).map((e) => ({ kind: e.kind, data: e.data })));
+startSessionEmbedSweep();
 
 // ---------------------------------------------------------------------------
 // ACP connections — one adapter process per backend, shared across sessions
