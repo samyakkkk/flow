@@ -36,7 +36,7 @@ const PUBLIC_PATHS = [
 
 // Deployment-level API prefixes that carry no project scope but DO require a
 // session in prod (enforced inside the routes themselves).
-const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens", "/api/machines"];
+const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens", "/api/machines", "/api/execution-runner"];
 
 // The `/<project>/v1/*` machine surface a MEMBER (non-owner) PAT may use: the
 // graph read/embed verbs, memory search/remember, transcript ingest, and

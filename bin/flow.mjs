@@ -543,7 +543,7 @@ function printTable(headers, rows) {
 // /api/…) or the legacy /p/ prefix — a project can't live at those paths.
 const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs", "mcp", "connect"]);
 
-function createProject(name, { mode = "local", graph } = {}) {
+function createProject(name, { mode = "local", graph, kind } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     die(`Invalid project name "${name}" — use only letters, digits, _ and -`);
   }
@@ -569,7 +569,7 @@ function createProject(name, { mode = "local", graph } = {}) {
   mkdirSync(workspaceDir, { recursive: true });
   mkdirSync(join(dir, "logs"), { recursive: true });
 
-  writeProject(name, { name, graph: graphName, mode, ports, repos: [] });
+  writeProject(name, { name, graph: graphName, mode, ports, repos: [], ...(kind ? { kind } : {}) });
 
   const adminToken = randomBytes(24).toString("hex");
   writeFileSync(
@@ -724,6 +724,13 @@ async function upProject(name, { rebuilt = false } = {}) {
   mkdirSync(logsDir, { recursive: true });
 
   const { ports, graph, mode } = project;
+  // A "runner" is a gateway-less project: an orchestrator that runs coding
+  // agents for connected clouds, binding each cloud's brain over MCP per
+  // session (see runtime.ts flowGraphMcp). It has no local gateway, no
+  // FalkorDB, no indexer — so skip all of that below and health-check only the
+  // orchestrator. This is the "run agents on my machine" runner `flow connect`
+  // stands up.
+  const isRunner = project.kind === "runner";
   const label = c.bold(name.padEnd(16));
 
   // Already running? Use port-in-use, not a health probe — a flaky probe used
@@ -767,7 +774,7 @@ async function upProject(name, { rebuilt = false } = {}) {
   // spawn die with EADDRINUSE while the STALE process answers the health
   // check — "ready", but serving old code. (The dashboard port is deployment-
   // level and handled in cmdUp — never touch it per project.)
-  killPort(ports.gateway);
+  if (!isRunner) killPort(ports.gateway);
 
   // Stamp the code these services are spawned from (see the already-running
   // check above). Written before the spawns so a crash mid-start re-runs a
@@ -783,12 +790,14 @@ async function upProject(name, { rebuilt = false } = {}) {
   // This project is (re)using its graph on purpose — clear any deletion
   // tombstone a previous `flow rm` left, or the gateway will refuse writes.
   // Best-effort: if FalkorDB isn't up yet the services will say so loudly.
-  try {
-    const falkorHost = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
-    const falkorPort = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
-    await clearGraphTombstone({ graph, host: falkorHost, port: falkorPort });
-  } catch {
-    /* FalkorDB not reachable yet — nothing to clear */
+  if (!isRunner) {
+    try {
+      const falkorHost = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
+      const falkorPort = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+      await clearGraphTombstone({ graph, host: falkorHost, port: falkorPort });
+    } catch {
+      /* FalkorDB not reachable yet — nothing to clear */
+    }
   }
 
   // Determine paths for this project
@@ -804,7 +813,7 @@ async function upProject(name, { rebuilt = false } = {}) {
   // on every write. Convergent and idempotent on each full start, same
   // philosophy as the gateway's boot reconcilers; cpSync overwrites template
   // files and leaves any extra workspace files alone.
-  if (existsSync(workspaceDir)) {
+  if (!isRunner && existsSync(workspaceDir)) {
     const templateOpencode = join(indexWorkspaceDir(), ".opencode");
     if (existsSync(templateOpencode)) {
       // Plugin-era tool files must be actively removed: cpSync overwrites but
@@ -839,7 +848,9 @@ async function upProject(name, { rebuilt = false } = {}) {
     writeFileSync(join(workspaceDir, "opencode.json"), JSON.stringify(opencodeConfig, null, 2) + "\n", "utf-8");
   }
 
-  // ── Gateway ────────────────────────────────────────────────────────────────
+  // ── Gateway (skipped for a brainless runner) ───────────────────────────────
+  let gwPid = null;
+  if (!isRunner) {
   const gwLogFile = join(logsDir, "gateway.log");
   const gwEnv = {
     ...projectEnv,
@@ -866,12 +877,13 @@ async function upProject(name, { rebuilt = false } = {}) {
     }
   }
 
-  const gwPid = spawnService({
+  gwPid = spawnService({
     cwd: gatewayDir(),
     cmd: [nodeBin(gatewayDir(), "tsx"), "src/server.ts"],
     env: gwEnv,
     logFile: gwLogFile,
   });
+  }
 
   // ── Orchestrator ───────────────────────────────────────────────────────────
   const orchLogFile = join(logsDir, "orchestrator.log");
@@ -902,7 +914,7 @@ async function upProject(name, { rebuilt = false } = {}) {
 
   // ── Wait for health (the deployment dashboard is handled in cmdUp) ─────────
   const [gwOk, orchOk] = await Promise.all([
-    waitForHealth(`http://localhost:${ports.gateway}/health`, 25000),
+    isRunner ? Promise.resolve(true) : waitForHealth(`http://localhost:${ports.gateway}/health`, 25000),
     waitForHealth(`http://localhost:${ports.orchestrator}/health`, 25000),
   ]);
 
@@ -1312,10 +1324,11 @@ async function cmdConnect(args) {
       die(body.error ?? `Connect failed (${res.status}) — the install code may have expired; get a fresh command from the dashboard.`);
     }
     token = body.token;
-    saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
-    return;
   }
 
+  // No pre-blessed code (or it didn't yield a token) → interactive browser
+  // approval. Skipped entirely on the one-command `--code` path above.
+  if (!token) {
   const startRes = await fetch(`${url}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1347,8 +1360,12 @@ async function cmdConnect(args) {
   }
   console.log("");
   if (!token) die("Timed out waiting for approval (10 minutes) — run `flow connect` again.");
+  }
 
   saveRemote(url, deploymentId, token, pairing, localUrl, values.name);
+  // Stand up this machine's execution runner so the user can immediately run
+  // agents here against the cloud's brain — the second half of the one command.
+  await ensureRunnerUp();
 }
 
 // Write (or reconnect-in-place) a remote to ~/.flow/config.json, keyed by
@@ -1387,6 +1404,34 @@ function saveRemote(url, deploymentId, token, pairing, localUrl, preferredName) 
   if (addressChanged) console.log(`    ${c.dim("(same deployment — address updated in place)")}`);
   console.log(`    ${c.dim("Saved to ~/.flow/config.json — list with")} flow remotes`);
   console.log(`    ${c.dim("MCP endpoint for agents:")} ${url}/<project>/mcp ${c.dim("(bearer = this machine's token)")}\n`);
+}
+
+// Stand up (and boot) THIS machine's execution runner: a gateway-less local
+// project — an orchestrator with no brain of its own — that runs coding agents
+// for any cloud you've connected. Each session binds the cloud project's brain
+// over MCP (RemoteBrainComposer → runtime.ts flowGraphMcp), so ONE runner
+// serves every deployment. `flow connect` calls this so a brand-new user is
+// ready to run agents here without a second command. Idempotent: reuses the
+// runner if it exists; a plain `flow up` also boots it like any other project.
+async function ensureRunnerUp() {
+  let name = "runner";
+  if (existsSync(projectJsonPath(name)) && readProject(name).kind !== "runner") {
+    name = "flow-runner"; // a real project already owns "runner" — leave it be
+  }
+  if (!existsSync(projectJsonPath(name))) {
+    createProject(name, { mode: "local", kind: "runner" });
+  }
+  console.log(`\n  ${c.dim("Setting up this machine to run agents (brain stays on the cloud)…")}`);
+  preflightNativeDeps();
+  const rebuilt = ensureDashboardBuild();
+  const res = await upProject(name, { rebuilt });
+  spawnDashboard(deploymentMode());
+  const dashOk = await waitForHealth(`http://localhost:${dashboardPort()}/login`, 45000);
+  if (res.ok && dashOk) {
+    console.log(`  ${OK} ${c.bold("Ready.")} Refresh the dashboard tab, then pick a folder and run an agent here.\n`);
+  } else {
+    console.log(`  ${c.yellow("!")} Runner didn't fully start — run ${c.bold("flow up")} and check the logs.\n`);
+  }
 }
 
 async function cmdRemotes(args) {

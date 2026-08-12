@@ -10,12 +10,8 @@
 // connected", so we never tell someone with Flow installed to reinstall.
 // Renders nothing in local mode: the page already IS the local dashboard.
 import { useState, useEffect, useCallback } from "react";
-import { discoverLocal, localFetch, type LocalLink } from "@/lib/executionClient";
-
-interface LocalProject {
-  name: string;
-  mode: string;
-}
+import { discoverLocal, type LocalLink } from "@/lib/executionClient";
+import { RemoteBrainComposer } from "@/components/RemoteBrainComposer";
 
 type State = "probing" | "connected" | "lna-denied" | "installed-not-running" | "not-connected";
 
@@ -53,7 +49,6 @@ export function LocalExecutionCard() {
   const [mode, setMode] = useState<"local" | "prod" | null>(null);
   const [state, setState] = useState<State>("probing");
   const [link, setLink] = useState<LocalLink | null>(null);
-  const [projects, setProjects] = useState<LocalProject[]>([]);
   const [installCmd, setInstallCmd] = useState<string>("");
   const [copied, setCopied] = useState(false);
 
@@ -63,13 +58,6 @@ export function LocalExecutionCard() {
     if (l && l.base !== undefined) {
       // base "" means the page itself is the local dashboard (same origin).
       setLink(l);
-      if (l.base) {
-        const projs = await localFetch(l, "/api/projects")
-          .then((r) => (r.ok ? r.json() : { projects: [] }))
-          .then((d) => d.projects ?? [])
-          .catch(() => []);
-        setProjects(projs);
-      }
       setState("connected");
       return;
     }
@@ -116,31 +104,17 @@ export function LocalExecutionCard() {
     return <div style={wrap}>Checking for a local Flow on this machine…</div>;
   }
 
-  if (state === "connected") {
-    const base = link?.base ?? "";
+  if (state === "connected" && link) {
     return (
       <div style={wrap}>
-        <span style={{ color: "var(--success, #34c759)", marginRight: 8 }}>●</span>
-        <strong>This machine&apos;s Flow is connected.</strong>{" "}
-        <span style={{ color: "var(--text-secondary)" }}>
-          Sessions run natively on your machine
-          {projects.length > 0 ? (
-            <>
-              {" — open a local project: "}
-              {projects.map((p, i) => (
-                <span key={p.name}>
-                  {i > 0 && ", "}
-                  <a href={`${base}/${p.name}/agents`} target="_blank" rel="noreferrer">
-                    {p.name}
-                  </a>
-                </span>
-              ))}
-              .
-            </>
-          ) : (
-            "."
-          )}
-        </span>
+        <div>
+          <span style={{ color: "var(--success, #34c759)", marginRight: 8 }}>●</span>
+          <strong>This machine&apos;s Flow is connected.</strong>
+        </div>
+        {/* The composer: pick a local WORKSPACE, run on your machine, brain =
+            this deployment's project. It discovers this machine's runner (set
+            up by `flow connect`) through the door — no local project to pick. */}
+        <RemoteBrainComposer link={link} />
       </div>
     );
   }
