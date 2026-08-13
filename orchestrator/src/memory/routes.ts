@@ -31,6 +31,7 @@ import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 import { rememberText } from "./distiller.js";
 import { getOrientDocs } from "./orient-doc.js";
+import { bumpCounter } from "../telemetry.js";
 
 export interface MemoryStats {
   memories: number;
@@ -65,6 +66,7 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
         if (queries.length > SEARCH_MEMORY_MAX_BATCH) {
           return reply.code(400).send({ error: `too many queries (${queries.length}); max ${SEARCH_MEMORY_MAX_BATCH} per call` });
         }
+        bumpCounter("brain_search_total", queries.length);
         const res = await searchMemoryBatch({ queries, repo: b.repo ?? null, limit: b.limit });
         const total = res.groups.reduce((n, g) => n + g.result.memories.length + g.result.corpus.length, 0);
         console.log(`[memory] batch search ${queries.length}q → ${total} hits in ${res.durationMs}ms`);
@@ -78,6 +80,7 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       if (!b.query || !String(b.query).trim()) {
         return reply.code(400).send({ error: "query is required" });
       }
+      bumpCounter("brain_search_total");
       const res = await searchMemory({ query: String(b.query), repo: b.repo ?? null, limit: b.limit });
       // Log latency to the activity stream (stdout) — the retrieval budget is
       // <300ms; a slow call is a signal worth seeing.
@@ -124,10 +127,12 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
         if (queries.length > SEARCH_MEMORY_MAX_BATCH) {
           return reply.code(400).send({ error: `too many queries (${queries.length}); max ${SEARCH_MEMORY_MAX_BATCH}` });
         }
+        bumpCounter("brain_hits_total", queries.length);
         const groups = await memoryHitsForQueries(queries, repo, { limit: b.limit });
         return reply.send({ quota: MEMORY_HIT_QUOTA, groups });
       }
       if (!b.query || !String(b.query).trim()) return reply.code(400).send({ error: "query is required" });
+      bumpCounter("brain_hits_total");
       const groups = await memoryHitsForQueries([String(b.query)], repo, { limit: b.limit });
       return reply.send({ quota: MEMORY_HIT_QUOTA, hits: groups[0].hits });
     },
@@ -144,6 +149,7 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       const text = String(b.text ?? "").trim();
       if (!text) return reply.code(400).send({ error: "text is required" });
       if (text.length > 20_000) return reply.code(400).send({ error: "text too long (20k max)" });
+      bumpCounter("memory_remember_total");
       const ctx = {
         text,
         repo: b.repo ? String(b.repo) : null,
@@ -162,6 +168,7 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
   // The ambient tier — rendered orient docs, served verbatim into the
   // gateway's orient(). A scope with no members returns null, never "".
   app.get<{ Querystring: { repo?: string } }>("/v1/memory/orient-doc", async (req) => {
+    bumpCounter("brain_orient_total");
     return getOrientDocs(req.query.repo?.trim() || null);
   });
 }
