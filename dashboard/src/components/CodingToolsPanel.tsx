@@ -59,6 +59,7 @@ export function CodingToolsPanel() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [nativePending, setNativePending] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [openRepo, setOpenRepo] = useState<string | null>(null);
@@ -88,23 +89,31 @@ export function CodingToolsPanel() {
   // real paths from their own pickers); in-page browser as the fallback.
   const pickFolder = async () => {
     setBusy(true);
+    setNativePending(true);
     try {
       const res = await fetch(prefix("/api/fs/native-pick"), { method: "POST" });
       const json = (await res.json()) as { path?: string; canceled?: boolean; unsupported?: boolean };
       if (json.path) {
         openConfirm(json.path);
-        setBusy(false);
         return;
       }
-      if (json.canceled) {
-        setBusy(false);
-        return;
-      }
+      if (json.canceled) return;
+      setPickerOpen(true);
     } catch {
-      /* fall through to in-page picker */
+      setPickerOpen(true);
+    } finally {
+      setNativePending(false);
+      setBusy(false);
     }
-    setBusy(false);
+  };
+
+  // The dialog opened on the SERVER's screen — if the user is reaching this
+  // dashboard through a tunnel or ssh -L, that screen isn't theirs and we
+  // can't tell from the network. Escape hatch: dismiss the server-side dialog
+  // and browse the server's filesystem in-page instead.
+  const browseInstead = () => {
     setPickerOpen(true);
+    void fetch(prefix("/api/fs/native-pick/cancel"), { method: "POST" }).catch(() => {});
   };
 
   const connect = async () => {
@@ -189,6 +198,14 @@ export function CodingToolsPanel() {
         >
           {busy ? "Choosing…" : "+ Connect a workspace"}
         </button>
+        {nativePending && !pickerOpen && (
+          <div className="text-[11px] text-ink/50 leading-snug text-center">
+            A Finder window opened on the machine running Flow.{" "}
+            <button className="underline hover:text-ink" onClick={browseInstead}>
+              Don&apos;t see it? Browse from here instead
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-2 text-[11px] text-ink/45">
           <span className="h-px bg-line flex-1" />
           or, in any terminal

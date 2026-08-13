@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { requireProject } from "@/lib/projectContext";
+import { trackNativePick, untrackNativePick, cancelNativePick } from "@/lib/nativePick";
 
 const SCRIPT = [
   'tell application "System Events" to activate',
@@ -20,8 +21,12 @@ export async function POST(): Promise<NextResponse> {
   if (project.mode !== "local" || process.platform !== "darwin") {
     return NextResponse.json({ unsupported: true });
   }
+  // A new pick supersedes a pending one (another tab, a retry) — dismiss it
+  // so two dialogs never stack on the server's screen.
+  cancelNativePick();
   return new Promise<NextResponse>((resolve) => {
-    execFile("osascript", SCRIPT, { timeout: 5 * 60 * 1000 }, (err, stdout) => {
+    const child = execFile("osascript", SCRIPT, { timeout: 5 * 60 * 1000 }, (err, stdout) => {
+      untrackNativePick(child);
       if (err) {
         // Exit 1 + "User canceled" (-128) is the normal dismiss; a killed
         // process (timeout, shutdown) counts as a dismiss too, not as
@@ -34,5 +39,6 @@ export async function POST(): Promise<NextResponse> {
       const path = stdout.trim().replace(/\/$/, "");
       resolve(NextResponse.json(path ? { path } : { canceled: true }));
     });
+    trackNativePick(child);
   });
 }
