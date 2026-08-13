@@ -18,7 +18,7 @@ import { readFileSync, appendFileSync, mkdirSync, statSync, writeFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const VERSION = "1";
+const VERSION = "2";
 const FLOW_DIR = join(homedir(), ".flow");
 const DEADLINE_MS = 2500;
 
@@ -86,6 +86,39 @@ function redactDeep(v) {
   return v;
 }
 
+// Resolve a local project's ingest endpoint straight from the Flow data dir:
+// project.json carries the orchestrator port, .env the admin token. Best
+// effort — any missing piece returns undefined and the caller drops.
+function resolveLocalProject(flowRoot, project) {
+  try {
+    const pdir = join(flowRoot, "data", "projects", project);
+    const pj = JSON.parse(readFileSync(join(pdir, "project.json"), "utf8"));
+    const port = pj?.ports?.orchestrator;
+    if (!port) return undefined;
+    let token;
+    try {
+      token = /^FLOW_ADMIN_TOKEN=(.+)$/m.exec(readFileSync(join(pdir, ".env"), "utf8"))?.[1]?.trim();
+    } catch {}
+    return { url: `http://localhost:${port}`, token };
+  } catch {
+    return undefined;
+  }
+}
+
+// Sessions spawned inside a Flow-managed worktree are Flow-run (agents tab)
+// even when the runtime predates the FLOW_SESSION_ID env guard — their cwd
+// lives under <flowRoot>/data/. The ACP runtime already captures them.
+function isFlowManagedCwd(cwd) {
+  if (!cwd) return false;
+  try {
+    const cfg = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8"));
+    for (const r of Object.values(cfg.remotes ?? {})) {
+      if (r?.kind === "local" && r.flowRoot && String(cwd).startsWith(join(r.flowRoot, "data"))) return true;
+    }
+  } catch {}
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 async function main() {
   // Sessions Flow itself runs are already captured by the ACP runtime —
@@ -100,6 +133,7 @@ async function main() {
     logLine("unparseable stdin, dropped");
     return;
   }
+  if (isFlowManagedCwd(payload?.cwd)) return;
 
   // The binding (--project) resolves to a machine-level config entry written
   // by `flow setup` — never resolved from the payload at capture time.
@@ -109,6 +143,15 @@ async function main() {
     const cfg = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8"));
     const proj = args.project ? cfg.projects?.[args.project] : undefined;
     remote = proj ? { url: proj.orchestratorUrl, token: proj.token } : cfg.remotes?.[remoteName];
+    // kind:"local" remotes carry only flowRoot (no url) — resolve the
+    // orchestrator port + token from the project's own data dir so capture
+    // works even when the projects.<name> entry was never written.
+    if (!remote?.url) {
+      const r = cfg.remotes?.[remoteName];
+      if (r?.kind === "local" && r.flowRoot && args.project) {
+        remote = resolveLocalProject(r.flowRoot, args.project);
+      }
+    }
   } catch {}
   if (!remote?.url) {
     logLine(`no binding for project "${args.project}" / remote "${remoteName}" in ~/.flow/config.json, dropped`);
