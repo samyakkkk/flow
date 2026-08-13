@@ -18,6 +18,12 @@ import type { SlimEvent } from "./slim.js";
 export const IDLE_MS = 45 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
+// Per-session observation ceiling. A single long-lived dev session once
+// produced 360 of 746 total observations via unbounded incremental distills;
+// past this cap the session's remaining content is consumed without
+// extraction. (Soft pressure starts earlier — see prompt.BUDGET_PRESSURE_AT.)
+export const SESSION_OBS_HARD_CAP = 60;
+
 // Injectable transcript reader — avoids a hard import cycle with runtime.ts and
 // lets tests feed synthetic transcripts. Set by wireDistillTrigger().
 type TranscriptReader = (id: string) => Array<{ seq: number; kind: string; data: unknown }>;
@@ -61,11 +67,29 @@ export async function maybeDistill(id: string, branch: string | null = null): Pr
   const since = meta.last_distilled_seq ?? 0;
   if (maxSeq <= since) return false; // nothing new since last distill
 
+  const priorObservations = (
+    db.prepare(`SELECT count(*) AS n FROM observations WHERE session_id = ?`).get(id) as { n: number }
+  ).n;
+  if (priorObservations >= SESSION_OBS_HARD_CAP) {
+    // Budget exhausted: consume the content (advance the mark) so the sweep
+    // stops re-reading it, but extract nothing further from this session.
+    console.warn(`[memory] session ${id} hit the ${SESSION_OBS_HARD_CAP}-observation cap; consuming without extraction`);
+    setDistilledSeq(maxSeq, id);
+    return false;
+  }
+
   const slimEvents: SlimEvent[] = events.map((e) => ({ kind: e.kind, data: e.data }));
+  let outcome;
   try {
-    await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents });
+    outcome = await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents, priorObservations });
   } catch (err) {
     console.warn(`[memory] distill failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+  if (!outcome.ran && outcome.reason?.startsWith("llm-error")) {
+    // Transport failure — leave the high-water mark so the next idle sweep
+    // retries this content instead of silently losing the tail.
+    console.warn(`[memory] distill deferred for ${id}: ${outcome.reason} (will retry on the next idle sweep)`);
     return false;
   }
   // Advance the high-water mark even on a zero-observation run — the content was

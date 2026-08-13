@@ -691,6 +691,98 @@ describe("distiller trigger: idle sweep", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Distiller v2: session observation budget + provenance-honesty prompt. One
+// 3-day session once produced 360/746 observations — the budget caps that
+// failure mode at the trigger, and the prompt raises the bar under pressure.
+describe("distiller session budget + prompt v2", () => {
+  let trigger: typeof import("../src/memory/trigger.js");
+  let promptMod: typeof import("../src/memory/prompt.js");
+
+  before(async () => {
+    trigger = await import("../src/memory/trigger.js");
+    promptMod = await import("../src/memory/prompt.js");
+    store.setEmbedder(stubEmbedder);
+    trigger.setTranscriptReader(() => [
+      { seq: 1, kind: "user_prompt", data: { text: "One more durable fact: deploys go through the blue/green script only." } },
+    ]);
+  });
+
+  beforeEach(() => db.exec("DELETE FROM agent_sessions"));
+
+  function insertSession(id: string): void {
+    const staleMs = Date.now() - trigger.IDLE_MS - 60_000;
+    db.prepare(
+      "INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', 'acme', '/tmp', 't', 'idle', ?, ?)",
+    ).run(id, staleMs, staleMs);
+  }
+
+  function seedObservations(sessionId: string, n: number): void {
+    const ins = db.prepare(
+      "INSERT INTO observations (id, source, repo, session_id, claim, kind, source_weight) VALUES (?, 'session', 'acme', ?, ?, 'gotcha', 'agent_inferred')",
+    );
+    for (let i = 0; i < n; i++) ins.run(`${sessionId}-obs-${i}`, sessionId, `seeded claim ${i}`);
+  }
+
+  test("prompt: budget pressure section appears only at the threshold", () => {
+    const calm = promptMod.buildDistillerPrompt("T", { priorObservations: promptMod.BUDGET_PRESSURE_AT - 1 });
+    assert.ok(!calm.includes("SESSION BUDGET PRESSURE"));
+    const pressured = promptMod.buildDistillerPrompt("T", { priorObservations: promptMod.BUDGET_PRESSURE_AT });
+    assert.ok(pressured.includes("SESSION BUDGET PRESSURE"));
+    assert.ok(pressured.includes(`${promptMod.BUDGET_PRESSURE_AT} observations`));
+  });
+
+  test("prompt v2 carries the intent channel and provenance rules", () => {
+    const p = promptMod.DISTILLER_PROMPT_HEADER;
+    assert.ok(p.includes("THE HUMAN'S CONTEXT"), "user-intent extraction channel");
+    assert.ok(p.includes("VERBATIM FRAGMENT"), "verbatim quote instruction");
+    assert.ok(p.includes("NO FABRICATED VERIFICATION"), "anti-fabrication rule");
+    assert.ok(p.includes("PROVENANCE HONESTY"), "permission-denial != user rule");
+    assert.ok(p.includes("REJECTED ALTERNATIVES"), "rejected alternatives target");
+  });
+
+  test("a session at the hard cap consumes content without an LLM call", async () => {
+    insertSession("capped-1");
+    seedObservations("capped-1", trigger.SESSION_OBS_HARD_CAP);
+    let llmCalled = false;
+    llm.setLlmTransport(async () => {
+      llmCalled = true;
+      return "[]";
+    });
+    const ran = await trigger.maybeDistill("capped-1");
+    assert.equal(ran, false);
+    assert.equal(llmCalled, false, "no extraction past the cap");
+    const meta = db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'capped-1'").get() as any;
+    assert.equal(meta.last_distilled_seq, 1, "content is consumed so the sweep stops re-reading it");
+    const n = (db.prepare("SELECT count(*) AS n FROM observations WHERE session_id = 'capped-1'").get() as any).n;
+    assert.equal(n, trigger.SESSION_OBS_HARD_CAP, "no new observations");
+  });
+
+  test("llm transport failure defers: high-water mark NOT advanced", async () => {
+    insertSession("deferred-1");
+    llm.setLlmTransport(async () => {
+      throw new Error("transport down");
+    });
+    const ran = await trigger.maybeDistill("deferred-1");
+    assert.equal(ran, false);
+    const meta = db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'deferred-1'").get() as any;
+    assert.equal(meta.last_distilled_seq, null, "tail must be retried on the next sweep, not lost");
+  });
+
+  test("under the cap the distill runs and passes prior count into the prompt", async () => {
+    insertSession("under-1");
+    seedObservations("under-1", promptMod.BUDGET_PRESSURE_AT + 3);
+    let sawPressure = false;
+    llm.setLlmTransport(async (prompt: string) => {
+      sawPressure = prompt.includes("SESSION BUDGET PRESSURE");
+      return "[]";
+    });
+    const ran = await trigger.maybeDistill("under-1");
+    assert.equal(ran, true);
+    assert.ok(sawPressure, "budget pressure note reaches the LLM");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Orient docs — the ambient tier. Membership is a derived view (nominated +
 // user_stated-or-corroborated + uncontested), the render is deterministic, and
 // docs rebuild from the distiller hook. These tests drive the real

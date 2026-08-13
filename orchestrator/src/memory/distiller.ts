@@ -25,6 +25,9 @@ export interface DistillContext {
   branch: string | null;
   events: SlimEvent[];
   judge?: Judge; // injectable; defaults to haikuJudge
+  // Observations this session already produced across earlier incremental
+  // distills — past prompt.BUDGET_PRESSURE_AT the prompt raises the bar.
+  priorObservations?: number;
 }
 
 export interface DistillOutcome {
@@ -43,7 +46,7 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
     return { ran: false, observations: 0, actions: {}, reason: "empty-transcript" };
   }
 
-  const prompt = buildDistillerPrompt(slimmed);
+  const prompt = buildDistillerPrompt(slimmed, { priorObservations: ctx.priorObservations });
   let reply: string;
   try {
     reply = await callLlm(prompt, { tier: "smart", feature: "distiller", model: distillerModel() });
