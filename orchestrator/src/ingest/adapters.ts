@@ -43,7 +43,7 @@ function agentChunk(text: string): NormalizedEvent {
   };
 }
 
-function created(harness: string, repo: string | null, title: string | null): NormalizedEvent {
+export function created(harness: string, repo: string | null, title: string | null): NormalizedEvent {
   return {
     kind: "created",
     data: { repo: repo ?? "", backend: `ext:${harness}`, title: title ?? "" },

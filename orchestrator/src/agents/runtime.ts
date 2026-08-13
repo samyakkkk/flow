@@ -856,7 +856,10 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
 
   const proc = spawn(attempt.command, attempt.args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: attempt.env,
+    // FLOW_SESSION_ID marks every CLI under this adapter as Flow-run so the
+    // flow-hook capture shim skips it — the runtime already persists these
+    // sessions natively; hook upload would double-capture them.
+    env: { ...attempt.env, FLOW_SESSION_ID: attempt.env.FLOW_SESSION_ID ?? "flow-acp" },
   });
   proc.stderr.on("data", (chunk: Buffer) => {
     try {

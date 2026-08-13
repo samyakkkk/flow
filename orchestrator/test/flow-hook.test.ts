@@ -131,6 +131,40 @@ describe("flow-hook shim", () => {
     assert.equal(code, 0);
   });
 
+  test("kind:local remote resolves port+token from the flowRoot data dir", async () => {
+    // The REAL shape `flow setup` writes: no url on the local remote, no
+    // projects.<name> entry — the shim must self-resolve from project.json.
+    const flowRoot = join(home, "flow-root");
+    const pdir = join(flowRoot, "data", "projects", "myproj");
+    mkdirSync(pdir, { recursive: true });
+    writeFileSync(join(pdir, "project.json"), JSON.stringify({ name: "myproj", ports: { orchestrator: port } }));
+    writeFileSync(join(pdir, ".env"), `# comment\nFLOW_ADMIN_TOKEN=localtok\n`);
+    writeFileSync(
+      join(home, ".flow", "config.json"),
+      JSON.stringify({ remotes: { local: { kind: "local", flowRoot } } })
+    );
+    const count = received.length;
+    const { code } = await runShim(
+      ["--harness", "claude", "--project", "myproj", "--repo", "r", "--remote", "local"],
+      JSON.stringify(claudeStop)
+    );
+    assert.equal(code, 0);
+    assert.equal(received.length, count + 1);
+    assert.equal(received[count].auth, "Bearer localtok");
+    assert.equal(received[count].body.project, "myproj");
+  });
+
+  test("payload cwd under a local flowRoot/data is Flow-run: skipped", async () => {
+    const flowRoot = join(home, "flow-root");
+    const count = received.length;
+    const { code } = await runShim(
+      ["--harness", "claude", "--project", "myproj", "--repo", "r", "--remote", "local"],
+      JSON.stringify({ ...claudeStop, cwd: join(flowRoot, "data", "projects", "myproj", "workspace", "worktrees", "x") })
+    );
+    assert.equal(code, 0);
+    assert.equal(received.length, count, "agents-tab worktree session must not double-capture");
+  });
+
   test("dead server: exit 0 within the session-safe deadline", async () => {
     writeFileSync(
       join(home, ".flow", "config.json"),

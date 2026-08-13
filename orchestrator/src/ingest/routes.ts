@@ -16,6 +16,7 @@ import db from "../db.js";
 import { appendTranscriptEvents, readTranscript } from "../agents/runtime.js";
 import { onSessionClosed } from "../memory/trigger.js";
 import {
+  created,
   normalizeHook,
   normalizeOpencodeMessage,
   type NormalizedEvent,
@@ -98,6 +99,21 @@ export function registerIngestRoutes(app: FastifyInstance): void {
     const norm = normalizeHook(harness, event, repo ?? null);
     if (!norm.externalId) return reply.code(202).send({ ignored: true, reason: "no session id" });
 
+    // Defer materialization until the session shows real content. Harnesses
+    // fire SessionStart for background/warmup sessions that never receive a
+    // prompt; creating rows for those floods the session list with empty
+    // captures (observed: 6 of 8 ext-claude rows were 150-byte created-only
+    // files). The `created` meta event is synthesized when content arrives.
+    // The dedupe key is still recorded so a re-post after materialization
+    // doesn't append a late duplicate meta event.
+    const rowId = extRowId(harness, norm.externalId);
+    const exists = rowStmt().get(rowId) !== undefined;
+    const hasContent = norm.events.some((e) => e.kind !== "created");
+    if (!exists && !hasContent) {
+      seenStmt().run(rowId, hashKey([norm.eventName, event]));
+      return reply.code(202).send({ ignored: true, reason: "no content yet", closed: norm.closed });
+    }
+
     const id = upsertExternalSession({
       harness,
       externalId: norm.externalId,
@@ -112,7 +128,13 @@ export function registerIngestRoutes(app: FastifyInstance): void {
     const key = hashKey([norm.eventName, event]);
     const fresh = seenStmt().run(id, key).changes === 1;
     let appended = 0;
-    if (fresh) appended = appendNew(id, norm.events) ? norm.events.length : 0;
+    if (fresh) {
+      let events = norm.events;
+      if (!exists && !events.some((e) => e.kind === "created")) {
+        events = [created(harness, repo ?? null, norm.title ?? norm.cwd), ...events];
+      }
+      appended = appendNew(id, events) ? events.length : 0;
+    }
 
     if (norm.closed) {
       closeStmt().run(Date.now(), id);

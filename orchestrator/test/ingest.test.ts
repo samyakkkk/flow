@@ -57,7 +57,10 @@ describe("claude dialect end-to-end", () => {
   test("a full hook sequence materializes a distillable session", async () => {
     for (const ev of claudeEvents) {
       const res = await postHook("claude", ev);
-      assert.equal(res.statusCode, 200, res.body);
+      // SessionStart alone is deferred (202) — promptless background sessions
+      // must not materialize rows. Content events land as 200.
+      const expected = ev.hook_event_name === "SessionStart" ? 202 : 200;
+      assert.equal(res.statusCode, expected, res.body);
     }
     const id = extRowId("claude", SID);
     const events = readTranscript(id);
@@ -114,9 +117,11 @@ describe("gemini dialect", () => {
     });
     assert.equal(res.statusCode, 200);
     const events = readTranscript(extRowId("gemini", "b97e6796-7709-42dd-ab3a-bd85b4863d25"));
+    // No SessionStart was ever posted — the meta event is synthesized when
+    // the first content event materializes the session.
     assert.deepEqual(
       events.map((e) => e.kind),
-      ["user_prompt", "update"]
+      ["created", "user_prompt", "update"]
     );
   });
 });
@@ -128,10 +133,11 @@ describe("version tolerance", () => {
       hook_event_name: "SomeFutureEvent",
       brand_new_field: { nested: true },
     });
-    assert.equal(res.statusCode, 200);
-    const body = res.json() as { ok: boolean; appended: number };
-    assert.equal(body.ok, true);
-    assert.equal(body.appended, 0); // nothing captured, but activity recorded
+    // Unknown event on an unmaterialized session: acknowledged + deferred —
+    // never an error, and never a row for a session with no content.
+    assert.equal(res.statusCode, 202);
+    const body = res.json() as { ignored: boolean };
+    assert.equal(body.ignored, true);
   });
 
   test("payload without a session id is ignored gracefully", async () => {
@@ -143,7 +149,8 @@ describe("version tolerance", () => {
     const big = "x".repeat(40000) + " CONCLUSION-MARKER";
     await postHook("codex", { session_id: "big-1", hook_event_name: "UserPromptSubmit", prompt: big });
     const events = readTranscript(extRowId("codex", "big-1"));
-    const text = (events[0].data as { text: string }).text;
+    assert.equal(events[0].kind, "created"); // synthesized meta event leads
+    const text = (events[1].data as { text: string }).text;
     assert.ok(text.length < 20000);
     assert.ok(text.endsWith("CONCLUSION-MARKER"));
   });
