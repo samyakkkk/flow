@@ -833,15 +833,50 @@ async function fetchMemoryStats(): Promise<MemoryStats | null> {
   }
 }
 
+// Living docs — the composed handbook. Orient lists the available chapters;
+// full bodies are read with read_docs (chapters can be long; orient stays one
+// page).
+interface DocListEntry {
+  scope: string;
+  chapter: string;
+  title: string;
+  members: number;
+  updated_at: number;
+}
+
+function docsBase(): string {
+  return (
+    process.env.FLOW_DOCS_URL ||
+    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/docs` : "")
+  );
+}
+
+async function fetchDocsList(scope?: string): Promise<DocListEntry[] | null> {
+  const base = docsBase();
+  if (!base) return null;
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  try {
+    const res = await fetch(`${base}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { docs: DocListEntry[] }).docs;
+  } catch {
+    return null;
+  }
+}
+
 async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || process.env.FLOW_REPO || "";
   const branch = input.branch || process.env.FLOW_BRANCH || "";
 
-  const [repoRows, counts, memStats, orientDocs] = await Promise.all([
+  const [repoRows, counts, memStats, orientDocs, docsList] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
     fetchMemoryStats(),
     fetchOrientDocs(repo),
+    fetchDocsList(),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -888,6 +923,18 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
     out.push(orientDocs.global);
     out.push("");
   }
+  // Living docs — chapter listing only; bodies via read_docs. Repo-scoped
+  // chapters first (most relevant), then global, capped to stay one-page.
+  if (docsList && docsList.length > 0) {
+    const ordered = [...docsList].sort((a, b) =>
+      a.scope === b.scope ? a.chapter.localeCompare(b.chapter) : a.scope === repo ? -1 : b.scope === repo ? 1 : a.scope.localeCompare(b.scope),
+    );
+    const bits = ordered.slice(0, 10).map((d) => `${d.scope}/${d.chapter} (${d.members})`);
+    out.push(
+      `DOCS: living handbook composed from memory, citations included — read a chapter with read_docs({scope, chapter}) when starting in an unfamiliar area; search all chapters with read_docs({q}). Chapters: ${bits.join(", ")}${ordered.length > 10 ? `, +${ordered.length - 10} more` : ""}.`,
+    );
+    out.push("");
+  }
   out.push(
     `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
       ((serviceIds as Array<{ id: string }>).length
@@ -925,6 +972,69 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
       "Store back as you work: remember (when the user says 'remember this', states a durable rule, or a hard-won discovery surfaces — send the text, the distiller files it), correct_graph (when the graph contradicts the code).",
   );
   return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// read_docs — the living handbook, one tool with three modes:
+//   {}                 → list chapters (scope, chapter, title, fact count)
+//   {scope, chapter}   → full chapter body (markdown with [mem:id] citations)
+//   {q}                → excerpt search across all chapter bodies
+// Thin proxy to the orchestrator's /v1/docs routes; the orchestrator owns
+// composition, the citation contract, and freshness.
+
+const readDocsInput = {
+  scope: z.string().optional().describe("Chapter scope: a repo name, or 'global' for project-wide facts. Pass with `chapter` to read a full chapter."),
+  chapter: z.string().optional().describe("Chapter key: architecture | operations | pitfalls | conventions | roadmap."),
+  q: z.string().optional().describe("Search across all chapter bodies instead of reading one; returns excerpt hits."),
+};
+
+async function readDocs(input: z.infer<z.ZodObject<typeof readDocsInput>>) {
+  const base = docsBase();
+  if (!base) return { status: "error", error: "No orchestrator configured for docs (ORCHESTRATOR_URL unset)." };
+  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  const headers = token ? { authorization: `Bearer ${token}` } : undefined;
+  try {
+    if (input.q?.trim()) {
+      const res = await fetch(`${base}/search?q=${encodeURIComponent(input.q)}`, { headers, signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return { status: "error", error: `Docs search failed (${res.status})` };
+      const { hits } = (await res.json()) as { hits: Array<{ scope: string; chapter: string; excerpt: string }> };
+      if (hits.length === 0) return { status: "ok", results: "(no doc sections match — try search_knowledge for raw memories)" };
+      return {
+        status: "ok",
+        results: hits.map((h) => `${h.scope}/${h.chapter}: ${h.excerpt}`).join("\n"),
+        hint: "Read a full chapter with read_docs({scope, chapter}).",
+      };
+    }
+    if (input.scope && input.chapter) {
+      const res = await fetch(`${base}/${encodeURIComponent(input.scope)}/${encodeURIComponent(input.chapter)}`, {
+        headers,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status === 404) return { status: "error", error: `No chapter ${input.scope}/${input.chapter}. List chapters with read_docs({}).` };
+      if (!res.ok) return { status: "error", error: `Doc read failed (${res.status})` };
+      const { doc } = (await res.json()) as { doc: { title: string; body_md: string; updated_at: number } };
+      return {
+        status: "ok",
+        title: `${doc.title} — ${input.scope}`,
+        body: doc.body_md,
+        hint: "Every fact cites its memory: drill any [mem:<id>] with get_entity.",
+      };
+    }
+    const res = await fetch(base + (input.scope ? `?scope=${encodeURIComponent(input.scope)}` : ""), {
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return { status: "error", error: `Docs list failed (${res.status})` };
+    const { docs } = (await res.json()) as { docs: Array<{ scope: string; chapter: string; title: string; members: number }> };
+    if (docs.length === 0) return { status: "ok", results: "(no docs yet — they compose as memories accumulate)" };
+    return {
+      status: "ok",
+      results: docs.map((d) => `${d.scope}/${d.chapter} — ${d.title} (${d.members} facts)`).join("\n"),
+      hint: "Read one with read_docs({scope, chapter}).",
+    };
+  } catch (err) {
+    return { status: "error", error: `Docs unavailable: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -998,6 +1108,12 @@ export const verbs = {
       "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: searchMemoryInput,
     handler: searchMemory,
+  },
+  read_docs: {
+    description:
+      "Read the team's LIVING DOCS: handbook chapters (Architecture & Decisions, How-Tos & Operations, Pitfalls & Gotchas, Working Agreements, Roadmap & Intent) auto-composed from the memory store — every fact carries a [mem:id] citation you can drill with get_entity. Call with no args to list chapters, {scope, chapter} to read one, {q} to search across all of them. Prefer reading a chapter over piecemeal memory searches when you're STARTING work in an unfamiliar area; use search_knowledge when you're hunting a specific symptom.",
+    shape: readDocsInput,
+    handler: readDocs,
   },
 } as const;
 

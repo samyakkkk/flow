@@ -41,6 +41,8 @@ const SESSION_VERBS = new Set([
   "remember",
   // Retrieve-only cross-session memory (distilled decisions/gotchas + corpus).
   "search_knowledge",
+  // Living handbook chapters composed from memories (list / read / search).
+  "read_docs",
 ]);
 // The graph-builder surface: exactly what the old .opencode/tools/graph.ts
 // plugin exposed, now served over MCP so workspaces need no npm install.

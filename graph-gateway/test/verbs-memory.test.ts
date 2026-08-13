@@ -219,3 +219,70 @@ describe("find_entity — unified memory hits (Section D)", () => {
     assert.equal(res.memory_hits.length, 3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// read_docs — the living-handbook verb. Global fetch is stubbed; the verb is a
+// thin proxy, so the tests pin the three modes' shapes + graceful degradation.
+describe("read_docs — living handbook proxy", () => {
+  const realFetch = globalThis.fetch;
+  let responses: Map<string, unknown>;
+
+  before(() => {
+    process.env.FLOW_DOCS_URL = "http://docs.mock/v1/docs";
+    responses = new Map();
+    globalThis.fetch = (async (url: string | URL) => {
+      const key = String(url);
+      if (!responses.has(key)) return new Response("{}", { status: 404 });
+      return new Response(JSON.stringify(responses.get(key)), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  });
+
+  test("list mode renders chapters with fact counts", async () => {
+    responses.set("http://docs.mock/v1/docs", {
+      docs: [
+        { scope: "acme", chapter: "architecture", title: "Architecture & Decisions", members: 12 },
+        { scope: "global", chapter: "conventions", title: "Working Agreements", members: 4 },
+      ],
+    });
+    const res = await callVerb("read_docs", {});
+    assert.equal(res.status, "ok");
+    assert.ok(res.results.includes("acme/architecture — Architecture & Decisions (12 facts)"));
+    assert.ok(res.hint.includes("read_docs({scope, chapter})"));
+  });
+
+  test("read mode returns the full body with the citation hint", async () => {
+    responses.set("http://docs.mock/v1/docs/acme/pitfalls", {
+      doc: { title: "Pitfalls & Gotchas", body_md: "### Ingest\n\nDeduped by hash [mem:abc].", updated_at: 1 },
+    });
+    const res = await callVerb("read_docs", { scope: "acme", chapter: "pitfalls" });
+    assert.equal(res.status, "ok");
+    assert.ok(res.body.includes("[mem:abc]"));
+    assert.ok(res.hint.includes("get_entity"));
+  });
+
+  test("missing chapter → actionable error", async () => {
+    const res = await callVerb("read_docs", { scope: "acme", chapter: "nope" });
+    assert.equal(res.status, "error");
+    assert.ok(res.error.includes("read_docs({})"));
+  });
+
+  test("search mode returns scope/chapter-prefixed excerpts", async () => {
+    responses.set("http://docs.mock/v1/docs/search?q=hash", {
+      hits: [{ scope: "acme", chapter: "architecture", title: "Architecture & Decisions", excerpt: "Deduped by content hash [mem:abc]." }],
+    });
+    const res = await callVerb("read_docs", { q: "hash" });
+    assert.equal(res.status, "ok");
+    assert.ok(res.results.startsWith("acme/architecture:"));
+  });
+
+  test("orchestrator down → status error, never a throw", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const res = await callVerb("read_docs", {});
+    assert.equal(res.status, "error");
+    assert.ok(res.error.includes("Docs unavailable"));
+    globalThis.fetch = realFetch;
+    delete process.env.FLOW_DOCS_URL;
+  });
+});
