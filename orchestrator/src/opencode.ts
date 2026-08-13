@@ -29,6 +29,12 @@ import {
   resolveOpencodeBin,
 } from "./indexer-runtime.js";
 import { finishActivity, recordActivityLine, startActivity } from "./job-activity.js";
+import {
+  IndexerFailureError,
+  classifyIndexerFailure,
+  isInternalFailure,
+  preflightIndexEnvironment,
+} from "./indexer-failure.js";
 import { indexLog } from "./index-log.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
 
@@ -313,16 +319,47 @@ export interface RepoStatus {
   lastIndexedCommit: string | null;
   lastIndexedAt: string | null;
   lastError: string | null;
+  // Classified failure (see indexer-failure.ts): machine-readable code, the
+  // concrete fix, and when it happened — so the dashboard can say "Claude
+  // Code is signed out — run /login" instead of a hover-only stderr dump.
+  lastErrorCode: string | null;
+  lastErrorHint: string | null;
+  lastFailedAt: number | null;
   runningJobId: string | null;
   queuedJobId: string | null;
 }
 
+// The most recent REAL terminal outcome for a repo. Walks terminal jobs
+// newest-first: a 'done' means the latest outcome was success (no failure to
+// show); a 'failed' with an internal bookkeeping error (superseded, repo
+// removed, restart re-queue) is skipped — those are lifecycle noise, not
+// something a user must fix.
+function latestRealFailure(
+  repo: string,
+): { error: string; code: string | null; hint: string | null; at: number } | null {
+  const rows = db
+    .prepare(
+      `SELECT status, result_json, updated_at FROM jobs
+       WHERE type = 'index_repo' AND repo = ? AND status IN ('done', 'failed')
+       ORDER BY updated_at DESC, rowid DESC LIMIT 20`,
+    )
+    .all(repo) as { status: string; result_json: string | null; updated_at: number }[];
+  for (const row of rows) {
+    if (row.status === "done") return null;
+    let parsed: { error?: string; code?: string; hint?: string } = {};
+    try {
+      parsed = JSON.parse(row.result_json ?? "{}") as typeof parsed;
+    } catch {
+      /* legacy/corrupt row — treat its raw text as the message below */
+    }
+    const error = parsed.error ?? row.result_json ?? "indexing failed";
+    if (isInternalFailure(error)) continue;
+    return { error, code: parsed.code ?? null, hint: parsed.hint ?? null, at: row.updated_at };
+  }
+  return null;
+}
+
 export function repoStatuses(): RepoStatus[] {
-  const lastFailed = db.prepare(
-    `SELECT result_json FROM jobs
-     WHERE type = 'index_repo' AND repo = ? AND status = 'failed'
-     ORDER BY updated_at DESC LIMIT 1`,
-  );
   const runningJob = db.prepare(
     `SELECT id FROM jobs WHERE type = 'index_repo' AND repo = ? AND status = 'running' LIMIT 1`,
   );
@@ -332,27 +369,26 @@ export function repoStatuses(): RepoStatus[] {
     // Either field proves a successful index — local-tier repos may lack a
     // commit (see updateRepoIndexCommit) but always get lastIndexedAt.
     const indexed = Boolean(entry.lastIndexedCommit || entry.lastIndexedAt);
-    let lastError: string | null = null;
+    // A repo that indexed fine last week but has failed every night since
+    // must NOT show "indexed" — the failure is the current truth, and hiding
+    // it is exactly how a signed-out Claude goes unnoticed for a month.
+    const failure = running || parked ? null : latestRealFailure(entry.name);
     let status: RepoStatus["status"];
     if (running) status = "indexing";
     else if (parked) status = "queued";
+    else if (failure) status = "failed";
     else if (indexed) status = "indexed";
-    else {
-      const failed = lastFailed.get(entry.name) as { result_json: string | null } | undefined;
-      if (failed?.result_json) {
-        lastError = (JSON.parse(failed.result_json) as { error?: string }).error ?? null;
-        status = "failed";
-      } else {
-        status = "never_indexed";
-      }
-    }
+    else status = "never_indexed";
     return {
       name: entry.name,
       branch: entry.branch,
       status,
       lastIndexedCommit: entry.lastIndexedCommit ?? null,
       lastIndexedAt: entry.lastIndexedAt ?? null,
-      lastError,
+      lastError: failure?.error ?? null,
+      lastErrorCode: failure?.code ?? null,
+      lastErrorHint: failure?.hint ?? null,
+      lastFailedAt: failure?.at ?? null,
       runningJobId: running,
       queuedJobId: parked,
     };
@@ -727,6 +763,18 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
   }
 
   try {
+    // Environment preflight for graph-writing jobs: a dead gateway or
+    // FalkorDB otherwise surfaces 45 minutes later as a cryptic CLI error —
+    // or not at all (the CLI exits 0 while every graph write bounced). Fail
+    // in seconds, naming the broken layer and the fix.
+    if (
+      !process.env.FLOW_FAKE_OPENCODE &&
+      (opts.type === "index_repo" || opts.type === "enrich" || opts.type === "correct_graph")
+    ) {
+      const pf = await preflightIndexEnvironment();
+      if (pf) throw new IndexerFailureError(pf);
+    }
+
     // Index jobs need the checkout on disk before the agent can read it.
     if (opts.type === "index_repo" && !process.env.FLOW_FAKE_OPENCODE) {
       const input = opts.input as { repo?: string; url?: string; branch?: string; trigger?: string };
@@ -818,14 +866,32 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       }
     }
   } catch (err) {
+    // Persist the CLASSIFIED failure so every consumer of this row — repo
+    // status, index_log, the dashboard — can tell the user what broke and how
+    // to fix it. `error` stays the human message (back-compat with every
+    // reader of result_json.error); code/hint/detail are the actionable bits.
+    const failure =
+      err instanceof IndexerFailureError
+        ? err.failure
+        : classifyIndexerFailure(undefined, { errorMessage: String(err) });
     updateJob.run({
       id,
       status: "failed",
-      result_json: JSON.stringify({ error: String(err) }),
+      result_json: JSON.stringify({
+        error: failure.message,
+        code: failure.code,
+        ...(failure.hint ? { hint: failure.hint } : {}),
+        ...(failure.detail ? { detail: failure.detail } : {}),
+      }),
     });
     finishActivity(id, "failed");
     if (opts.type === "index_repo" && repo) {
-      indexLog(repo, "failed", id, { error: String(err), duration_ms: Date.now() - startedAt });
+      indexLog(repo, "failed", id, {
+        error: failure.message,
+        code: failure.code,
+        ...(failure.detail ? { detail: failure.detail } : {}),
+        duration_ms: Date.now() - startedAt,
+      });
     }
     if (opts.type === "correct_graph") {
       const correctionId = (opts.input as { correction_id?: string }).correction_id;
@@ -1205,8 +1271,14 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
       prompt,
       response: (spawned.stderr ?? "").slice(-4000),
     });
-    if (spawned.error) throw spawned.error;
-    throw new Error(spawned.stderr || `opencode exited ${spawned.status}`);
+    throw new IndexerFailureError(
+      classifyIndexerFailure("opencode", {
+        status: spawned.status,
+        stdout: spawned.stdout,
+        stderr: spawned.stderr,
+        errorMessage: spawned.error?.message ?? `opencode exited ${spawned.status}`,
+      }),
+    );
   }
 
   // Parse JSONL output: each line is a JSON event.
@@ -1311,24 +1383,52 @@ async function runClaudeBackend(opts: JobInput, jobId: string): Promise<{ result
       prompt,
       response: (spawned.stderr ?? "").slice(-4000),
     });
-    if (spawned.error) throw spawned.error;
-    throw new Error(spawned.stderr || `claude exited ${spawned.status}`);
+    // Claude Code prints signed-out/limit errors on STDOUT (stream-json) as
+    // often as stderr — classify over both so "Please run /login" is caught.
+    throw new IndexerFailureError(
+      classifyIndexerFailure("claude", {
+        status: spawned.status,
+        stdout: spawned.stdout,
+        stderr: spawned.stderr,
+        errorMessage: spawned.error?.message ?? `claude exited ${spawned.status}`,
+      }),
+    );
   }
 
   // stream-json emits JSONL; the last {"type":"result"} line carries the final
   // text and session id. On parse failure keep the raw stdout as the result.
   let answerMd = "";
   let sessionId = "";
+  let resultIsError = false;
   for (const line of (spawned.stdout ?? "").split("\n").filter((l) => l.trim())) {
     try {
-      const evt = JSON.parse(line) as { type?: string; result?: string; session_id?: string };
+      const evt = JSON.parse(line) as { type?: string; result?: string; session_id?: string; is_error?: boolean };
       if (evt.type === "result") {
         if (typeof evt.result === "string") answerMd = evt.result;
         if (typeof evt.session_id === "string") sessionId = evt.session_id;
+        resultIsError = evt.is_error === true;
       }
     } catch {
       // ignore malformed lines
     }
+  }
+  // Claude can exit 0 while the run itself errored (is_error on the result
+  // line — signed-out, over limit, max turns). That MUST be a failed job, not
+  // a "done" one with an error message as its answer.
+  if (resultIsError) {
+    logLLM({
+      kind: "opencode_job", ref: jobId, model, ok: false, latencyMs,
+      error: answerMd.slice(0, 400) || "claude reported is_error",
+      prompt,
+      response: (spawned.stdout ?? "").slice(-4000),
+    });
+    throw new IndexerFailureError(
+      classifyIndexerFailure("claude", {
+        status: spawned.status,
+        stdout: (answerMd || "") + "\n" + (spawned.stdout ?? "").slice(-4000),
+        stderr: spawned.stderr,
+      }),
+    );
   }
   // Fallback caps at the stream tail — the full transcript is on disk.
   answerMd = answerMd || (spawned.stdout ?? "").slice(-4000) || "(no answer)";
@@ -1407,8 +1507,14 @@ async function runCodexBackend(opts: JobInput, jobId: string): Promise<{ result:
       prompt,
       response: (spawned.stderr ?? "").slice(-4000),
     });
-    if (spawned.error) throw spawned.error;
-    throw new Error(spawned.stderr || `codex exited ${spawned.status}`);
+    throw new IndexerFailureError(
+      classifyIndexerFailure("codex", {
+        status: spawned.status,
+        stdout: spawned.stdout,
+        stderr: spawned.stderr,
+        errorMessage: spawned.error?.message ?? `codex exited ${spawned.status}`,
+      }),
+    );
   }
 
   // Final text is written to --output-last-message; fall back to stdout.

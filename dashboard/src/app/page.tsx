@@ -22,6 +22,18 @@ interface IngestSource {
   status: string;
 }
 
+// Per-repo indexer state machine (GET /api/repos/status). The legacy
+// "!lastIndexedCommit means indexing" guess could never distinguish "still
+// working" from "failed on the very first index" — a signed-out Claude left
+// the page saying "Flow is learning." forever.
+interface RepoStatusRow {
+  name: string;
+  status: "never_indexed" | "queued" | "indexing" | "indexed" | "failed";
+  lastError: string | null;
+  lastErrorHint: string | null;
+  lastIndexedAt: string | null;
+}
+
 type HomeState = "loading" | "engine-down" | "no-brain" | "ready";
 
 export default function HomePage() {
@@ -29,6 +41,7 @@ export default function HomePage() {
   const [settings, setSettings] = useState<SettingItem[]>([]);
   const [sources, setSources] = useState<IngestSource[]>([]);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
+  const [repoStatuses, setRepoStatuses] = useState<RepoStatusRow[]>([]);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [graphNodeCount, setGraphNodeCount] = useState(0);
   const [graphEdgeCount, setGraphEdgeCount] = useState(0);
@@ -47,8 +60,16 @@ export default function HomePage() {
   );
 
   const hasSources = repos.length > 0;
-  const isAnyRepoIndexing = repos.some((r) => !r.lastIndexedCommit);
+  // Real state machine when available; the commit-presence guess only bridges
+  // the gap until /api/repos/status first answers (it can't tell a running
+  // first index from a FAILED one, so it must never be the steady-state
+  // source of truth).
+  const isAnyRepoIndexing =
+    repoStatuses.length > 0
+      ? repoStatuses.some((r) => r.status === "indexing" || r.status === "queued")
+      : repos.some((r) => !r.lastIndexedCommit);
   const isIndexing = sources.some((s) => s.catching_up) || isAnyRepoIndexing;
+  const indexFailures = repoStatuses.filter((r) => r.status === "failed" && r.lastError);
 
   const loadAll = useCallback(async () => {
     try {
@@ -62,10 +83,11 @@ export default function HomePage() {
         return;
       }
 
-      const [settingsRes, ingestRes, reposRes, auditRes, graphRes] = await Promise.allSettled([
+      const [settingsRes, ingestRes, reposRes, statusRes, auditRes, graphRes] = await Promise.allSettled([
         settingsResp.json() as Promise<SettingItem[]>,
         fetch(prefix("/api/ingest/status")).then((r) => r.json()) as Promise<{ sources: IngestSource[] }>,
         fetch(prefix("/api/repos")).then((r) => r.json()) as Promise<{ repos: RepoEntry[] }>,
+        fetch(prefix("/api/repos/status")).then((r) => r.json()) as Promise<{ repos: RepoStatusRow[] }>,
         fetch(prefix("/api/audit?limit=20")).then((r) => r.json()) as Promise<{ rows: AuditRow[] }>,
         fetch(prefix("/api/graph/overview")).then((r) => r.json()) as Promise<{ nodes: unknown[]; edges: unknown[] }>,
       ]);
@@ -73,12 +95,14 @@ export default function HomePage() {
       const s = settingsRes.status === "fulfilled" ? (Array.isArray(settingsRes.value) ? settingsRes.value : []) : [];
       const ingest = ingestRes.status === "fulfilled" ? (ingestRes.value.sources ?? []) : [];
       const rps = reposRes.status === "fulfilled" ? (reposRes.value.repos ?? []) : [];
+      const sts = statusRes.status === "fulfilled" ? (statusRes.value.repos ?? []) : [];
       const audit = auditRes.status === "fulfilled" ? (auditRes.value.rows ?? []) : [];
       const graph = graphRes.status === "fulfilled" ? graphRes.value : { nodes: [], edges: [] };
 
       setSettings(s);
       setSources(ingest);
       setRepos(rps);
+      setRepoStatuses(sts);
       setAuditRows(audit);
       setGraphNodeCount((graph.nodes ?? []).length);
       setGraphEdgeCount((graph.edges ?? []).length);
@@ -125,6 +149,10 @@ export default function HomePage() {
       fetch(prefix("/api/repos"))
         .then((r) => r.json())
         .then((d: { repos: RepoEntry[] }) => setRepos(d.repos ?? []))
+        .catch(() => {});
+      fetch(prefix("/api/repos/status"))
+        .then((r) => r.json())
+        .then((d: { repos: RepoStatusRow[] }) => setRepoStatuses(d.repos ?? []))
         .catch(() => {});
     }, interval);
     return () => clearInterval(iv);
@@ -183,7 +211,7 @@ export default function HomePage() {
           <div>
             <Kicker>{mode === "prod" ? "Production" : "Local mode"}</Kicker>
             <Heading as="h1" className="text-[30px] mt-1 font-medium">
-              {isIndexing ? "Flow is learning." : "Flow builds your brain."}
+              {isIndexing ? "Flow is learning." : indexFailures.length > 0 ? "Indexing needs attention." : "Flow builds your brain."}
             </Heading>
           </div>
           {hasSources && graphNodeCount > 0 && (
@@ -206,6 +234,7 @@ export default function HomePage() {
             onNodeClick={handleNodeClick}
             sources={sources}
             repos={repos}
+            failures={indexFailures.map((f) => ({ name: f.name, error: f.lastError!, hint: f.lastErrorHint }))}
           />
         </div>
 

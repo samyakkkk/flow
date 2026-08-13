@@ -32,6 +32,10 @@ interface BrainCanvasProps {
   onNodeClick?: (nodeName: string) => void;
   sources?: Array<{ source: string; catching_up: boolean; last_poll_at: number }>;
   repos?: Array<{ name: string; lastIndexedCommit?: string; kind?: string }>;
+  // Classified index failures from /api/repos/status. The brain canvas is the
+  // first thing a new user watches — when indexing dies (Claude signed out,
+  // graph DB down) THIS is where it must say so, not silently sit "building".
+  failures?: Array<{ name: string; error: string; hint: string | null }>;
 }
 
 export function BrainCanvas({
@@ -44,6 +48,7 @@ export function BrainCanvas({
   onNodeClick,
   sources = [],
   repos = [],
+  failures = [],
 }: BrainCanvasProps) {
   const { prefix } = useProject();
   const [activity, setActivity] = useState<IndexActivityData | null>(null);
@@ -109,6 +114,52 @@ export function BrainCanvas({
     }
   }
 
+  // ── Stage 0 + failures: the first index DIED (nothing in the graph, no job
+  // running). Saying "connect sources" here would be a lie — the user already
+  // connected one. Say what broke and how to fix it.
+  if (stage === 0 && failures.length > 0) {
+    return (
+      <div
+        className="rounded-2xl border p-8 text-white flex flex-col items-center justify-center text-center relative overflow-hidden shadow-sm"
+        style={{ background: "rgb(54, 55, 38)", borderColor: "rgba(220,120,100,0.5)", height, maxHeight: height }}
+        data-testid="brain-index-failed"
+      >
+        <div className="max-w-lg flex flex-col items-center gap-3.5 z-10 rise-in">
+          <div
+            className="w-12 h-12 rounded-full border flex items-center justify-center shadow-md"
+            style={{ borderColor: "rgba(220,120,100,0.6)", background: "rgba(220,120,100,0.1)", color: "rgb(235,160,140)" }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M12 8v5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <circle cx="12" cy="16.5" r="1.2" fill="currentColor" />
+              <path d="M10.3 3.8 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+          </div>
+          <div style={{ fontFamily: "var(--font-display)" }} className="text-white text-xl font-medium tracking-tight">
+            Indexing couldn&apos;t finish
+          </div>
+          {failures.slice(0, 2).map((f) => (
+            <div key={f.name} className="flex flex-col items-center gap-1">
+              <p className="text-white/80 text-xs leading-relaxed max-w-md">
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-white/60">{f.name}: </span>
+                {f.error}
+              </p>
+              {f.hint && (
+                <p className="text-xs leading-relaxed max-w-md" style={{ color: "rgb(235,190,140)" }}>
+                  {f.hint}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-[10px] font-mono text-white/30 border-t border-white/10 pt-2">
+          <span>THE BRAIN</span>
+          <span style={{ color: "rgb(235,160,140)" }}>INDEXING FAILED — FIX ABOVE, THEN REINDEX</span>
+        </div>
+      </div>
+    );
+  }
+
   // ── Stage 0: Empty Brain Canvas ──────────────────────────────────────────────
   if (stage === 0) {
     return (
@@ -171,6 +222,29 @@ export function BrainCanvas({
           isIndexing={isIndexing}
           onNodeClick={onNodeClick}
         />
+
+        {/* Reindex trouble on a live brain: the graph still serves the last
+            good index, but new commits aren't landing. Quiet banner, loud
+            enough to notice. Suppressed while a (retry) job is running. */}
+        {stage === 2 && failures.length > 0 && (
+          <div
+            className="absolute bottom-3 left-3 right-3 p-3 rounded-xl border text-white flex flex-col gap-1 z-20 shadow-xl rise-in"
+            style={{ background: "rgba(20,10,8,0.88)", borderColor: "rgba(220,120,100,0.45)", backdropFilter: "blur(8px)" }}
+            data-testid="brain-reindex-failed"
+          >
+            {failures.slice(0, 2).map((f) => (
+              <div key={f.name} className="flex flex-col gap-0.5">
+                <span className="text-xs" style={{ color: "rgb(235,160,140)" }}>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{f.name}</span> — indexing is failing: {f.error}
+                </span>
+                {f.hint && <span className="text-[11px] text-white/70">{f.hint}</span>}
+              </div>
+            ))}
+            <span className="text-[10px] text-white/40">
+              The brain still serves its last good index — it just isn&apos;t learning new commits.
+            </span>
+          </div>
+        )}
 
         {/* Embedded Ingestion Overlay directly inside Brain Container */}
         {stage === 1 && (

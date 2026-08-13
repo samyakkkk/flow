@@ -665,16 +665,26 @@ async function cmdUp(args) {
 
   console.log(`\n${c.bold("Flow")}`);
   preflightNativeDeps();
-  const fk = await ensureFalkordb();
-  if (fk === "launched") console.log(c.dim("  FalkorDB launched (first run)"));
-  else if (fk === "started") console.log(c.dim("  FalkorDB started"));
+  const fk = await ensureFalkordb({ dataDir: dataDir() });
+  if (fk.relocatedFrom) {
+    // The default port was squatted (interrupted install, someone's Redis) —
+    // say what happened and where the graph DB actually lives now.
+    console.log(
+      `  ${c.yellow("!")} Port ${fk.relocatedFrom} is busy — ${fk.reason ?? "not usable"}.`
+    );
+    console.log(
+      `    FalkorDB now runs on port ${c.bold(String(fk.port))} instead ` +
+        c.dim(`(saved as this machine's default — future runs use it automatically)`)
+    );
+  } else if (fk.status === "launched") console.log(c.dim("  FalkorDB launched (first run)"));
+  else if (fk.status === "started") console.log(c.dim("  FalkorDB started"));
   // "running" / "external": already reachable — stay quiet.
   const rebuilt = ensureDashboardBuild(); // shared .next; only prints if it rebuilds
   console.log("");
 
   const results = [];
   for (const name of names) {
-    results.push(await upProject(name, { rebuilt }));
+    results.push(await upProject(name, { rebuilt, falkor: fk }));
   }
 
   // Legacy per-project dashboards (pre-single-dashboard installs) die here;
@@ -717,7 +727,7 @@ async function cmdUp(args) {
   console.log("");
 }
 
-async function upProject(name, { rebuilt = false } = {}) {
+async function upProject(name, { rebuilt = false, falkor = null } = {}) {
   const project = readProject(name);
   const dir = projectDir(name);
   const logsDir = join(dir, "logs");
@@ -787,13 +797,25 @@ async function upProject(name, { rebuilt = false } = {}) {
   // Parse project .env
   const projectEnv = parseEnvFile(join(dir, ".env"));
 
+  // Where FalkorDB actually lives: a project .env pin wins; then the target
+  // cmdUp verified (which includes any relocation off a squatted port); then
+  // ambient env / machine default; then stock. Resolved ONCE here and passed
+  // to both services so they can never disagree with what `flow up` checked.
+  const falkorHost =
+    projectEnv.FALKOR_HOST ?? falkor?.host ?? process.env.FALKOR_HOST ?? "localhost";
+  const falkorPort = Number(
+    projectEnv.FALKOR_PORT ??
+      falkor?.port ??
+      process.env.FALKOR_PORT ??
+      readGlobalKey(dir, "FALKOR_PORT") ??
+      6379
+  );
+
   // This project is (re)using its graph on purpose — clear any deletion
   // tombstone a previous `flow rm` left, or the gateway will refuse writes.
   // Best-effort: if FalkorDB isn't up yet the services will say so loudly.
   if (!isRunner) {
     try {
-      const falkorHost = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
-      const falkorPort = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
       await clearGraphTombstone({ graph, host: falkorHost, port: falkorPort });
     } catch {
       /* FalkorDB not reachable yet — nothing to clear */
@@ -854,6 +876,8 @@ async function upProject(name, { rebuilt = false } = {}) {
   const gwLogFile = join(logsDir, "gateway.log");
   const gwEnv = {
     ...projectEnv,
+    FALKOR_HOST: falkorHost,
+    FALKOR_PORT: String(falkorPort),
     GRAPH_NAME: graph,
     GATEWAY_PORT: String(ports.gateway),
     JOURNAL_PATH: journalPath,
@@ -889,6 +913,9 @@ async function upProject(name, { rebuilt = false } = {}) {
   const orchLogFile = join(logsDir, "orchestrator.log");
   const orchEnv = {
     ...projectEnv,
+    // Inherited by indexer MCP subprocesses — they talk to FalkorDB directly.
+    FALKOR_HOST: falkorHost,
+    FALKOR_PORT: String(falkorPort),
     DB_PATH: dbPath,
     ORCHESTRATOR_PORT: String(ports.orchestrator),
     GATEWAY_URL: `http://localhost:${ports.gateway}`,
@@ -1209,7 +1236,9 @@ async function cmdRm(args) {
     console.log(`  ${c.dim(`· graph ${project.graph} kept (shared with ${sharedWith.name})`)}`);
   } else {
     const host = projectEnv.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost";
-    const port = Number(projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379);
+    const port = Number(
+      projectEnv.FALKOR_PORT ?? process.env.FALKOR_PORT ?? readGlobalKey(projectDir(name), "FALKOR_PORT") ?? 6379
+    );
     let result;
     try {
       result = await deleteProjectGraph({ graph: project.graph, host, port });
@@ -1646,7 +1675,9 @@ async function cmdSetup(rest) {
       graphName: graph,
       token,
       falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
-      falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
+      falkorPort: Number(
+        env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? readGlobalKey(projectDir(name), "FALKOR_PORT") ?? 6379
+      ),
       tsxBin: nodeBin(gatewayDir(), "tsx"),
       gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
     };

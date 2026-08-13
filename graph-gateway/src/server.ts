@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { callVerb, verbs } from "./verbs.js";
 import { record, tail } from "./journal.js";
-import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
+import { DEFAULT_GRAPH, deletedGraphError, pingFalkordb, run } from "./graph.js";
 import { reconcileEmbeddings, runBootTasks } from "./reconcile.js";
 import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled } from "./embed.js";
@@ -60,6 +60,14 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
   try {
     if (req.method === "GET" && url.pathname === "/health") {
+      // ?deep=1 also probes FalkorDB (bounded, ~2.5s worst case). The HTTP
+      // status stays 200 either way — the gateway itself IS alive — callers
+      // (indexer preflight, dashboard health) read falkordb.ok to distinguish
+      // "brain service up" from "brain database actually reachable".
+      if (url.searchParams.get("deep") === "1") {
+        const falkordb = await pingFalkordb();
+        return json(res, 200, { ok: true, verbs: Object.keys(verbs), falkordb });
+      }
       return json(res, 200, { ok: true, verbs: Object.keys(verbs) });
     }
     if (TOKEN) {
