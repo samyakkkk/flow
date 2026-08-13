@@ -691,6 +691,124 @@ describe("distiller trigger: idle sweep", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Living docs — handbook chapters composed from memories. The composer LLM is
+// injected; the citation contract (every member cited exactly, no foreign
+// citations) is validated in code with a deterministic fallback, so these
+// tests drive both the honest path and the misbehaving-model path.
+describe("living docs (composed handbook)", () => {
+  let docs: typeof import("../src/memory/docs.js");
+
+  before(async () => {
+    docs = await import("../src/memory/docs.js");
+    store.setEmbedder(stubEmbedder);
+  });
+
+  beforeEach(() => db.exec("DELETE FROM docs"));
+
+  async function seed(claim: string, opts: { kind?: string; weight?: string; repo?: string | null; contradictions?: number } = {}) {
+    const o = await store.insertObservation({
+      source: "session", repo: opts.repo === undefined ? "acme" : opts.repo, claim,
+      kind: opts.kind ?? "decision", source_weight: opts.weight ?? "agent_inferred",
+      retrieval_keys: [], ambient: false, session_id: "s-docs",
+    });
+    const res = await consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+    if (opts.contradictions) {
+      db.prepare("UPDATE memories SET contradiction_count = ? WHERE id = ?").run(opts.contradictions, res.memoryId);
+    }
+    return res;
+  }
+
+  test("membership: kinds map to chapters, contested memories excluded, user_stated first", async () => {
+    await seed("we deploy with blue green scripts because rollback must be instant", { kind: "decision", weight: "user_stated" });
+    await seed("the queue worker cannot run on node 18", { kind: "constraint" });
+    await seed("run make smoke before any release", { kind: "how_to" });
+    await seed("contested claim about caching", { kind: "decision", contradictions: 1 });
+    const arch = docs.docMembers("acme", docs.CHAPTERS.find((c) => c.chapter === "architecture")!);
+    assert.equal(arch.length, 2, "contested decision excluded, how_to not in architecture");
+    assert.equal(arch[0].max_source_weight, "user_stated", "user_stated ordered first");
+    const ops = docs.docMembers("acme", docs.CHAPTERS.find((c) => c.chapter === "operations")!);
+    assert.equal(ops.length, 1);
+  });
+
+  test("compose: valid LLM body stored with citations; unchanged fingerprint skips the LLM", async () => {
+    await seed("we chose sqlite over postgres because deployments must be single-file", { kind: "decision", weight: "user_stated" });
+    let calls = 0;
+    llm.setLlmTransport(async (prompt: string) => {
+      calls++;
+      // Cite every [mem:id] listed in the prompt exactly once.
+      const ids = [...prompt.matchAll(/\[mem:([A-Za-z0-9-]+)\]/g)].map((m) => m[1]);
+      const unique = [...new Set(ids)];
+      return `### Storage\n\nSQLite is the store ${unique.map((i) => `[mem:${i}]`).join(" ")}.`;
+    });
+    const spec = docs.CHAPTERS.find((c) => c.chapter === "architecture")!;
+    const r1 = await docs.composeDoc("acme", spec);
+    assert.equal(r1.composed, true);
+    assert.equal(r1.via, "llm");
+    const stored = docs.getDoc("acme", "architecture");
+    assert.ok(stored!.body_md.includes("SQLite is the store"));
+    assert.equal(stored!.composed_via, "llm");
+    const callsAfterFirst = calls;
+    const r2 = await docs.composeDoc("acme", spec);
+    assert.equal(r2.composed, false, "same fingerprint → skip");
+    assert.equal(calls, callsAfterFirst, "no second LLM call");
+    // membership change → recompose
+    await seed("workers scale horizontally behind the queue", { kind: "decision" });
+    const r3 = await docs.composeDoc("acme", spec);
+    assert.equal(r3.composed, true);
+    assert.equal((docs.getDoc("acme", "architecture") as any).revision, 2);
+  });
+
+  test("citation contract: dropped or hallucinated citations → deterministic fallback", async () => {
+    const res = await seed("retries use exponential backoff capped at one minute", { kind: "decision" });
+    llm.setLlmTransport(async () => "Nice prose that cites nothing at all.");
+    const spec = docs.CHAPTERS.find((c) => c.chapter === "architecture")!;
+    const r = await docs.composeDoc("acme", spec);
+    assert.equal(r.via, "fallback", "citation violation must not be stored");
+    const stored = docs.getDoc("acme", "architecture")!;
+    assert.ok(stored.body_md.includes(`[mem:${res.memoryId}]`), "fallback cites every member");
+
+    // hallucinated citation id → also rejected
+    db.exec("DELETE FROM docs");
+    llm.setLlmTransport(async (prompt: string) => {
+      const ids = [...prompt.matchAll(/\[mem:([A-Za-z0-9-]+)\]/g)].map((m) => m[1]);
+      return `${[...new Set(ids)].map((i) => `[mem:${i}]`).join(" ")} and also [mem:invented-id-123].`;
+    });
+    const r2 = await docs.composeDoc("acme", spec);
+    assert.equal(r2.via, "fallback", "foreign citation must not be stored");
+  });
+
+  test("empty scope deletes the doc row; scopes enumerate global + repos", async () => {
+    await seed("global project fact with no repo", { repo: null, kind: "decision" });
+    llm.setLlmTransport(async (prompt: string) => {
+      const ids = [...new Set([...prompt.matchAll(/\[mem:([A-Za-z0-9-]+)\]/g)].map((m) => m[1]))];
+      return ids.map((i) => `fact [mem:${i}]`).join("\n");
+    });
+    assert.deepEqual(docs.docScopes(), ["global"]);
+    const spec = docs.CHAPTERS.find((c) => c.chapter === "architecture")!;
+    await docs.composeDoc("global", spec);
+    assert.ok(docs.getDoc("global", "architecture"));
+    db.exec("DELETE FROM observations; DELETE FROM memories;");
+    store.invalidateVectorCache();
+    const r = await docs.composeDoc("global", spec);
+    assert.equal(r.composed, false);
+    assert.equal(docs.getDoc("global", "architecture"), undefined, "empty membership removes the doc");
+  });
+
+  test("searchDocs returns an excerpt window around the hit", async () => {
+    await seed("the ingest pipeline dedupes hook events by content hash", { kind: "decision" });
+    llm.setLlmTransport(async (prompt: string) => {
+      const ids = [...new Set([...prompt.matchAll(/\[mem:([A-Za-z0-9-]+)\]/g)].map((m) => m[1]))];
+      return `### Ingest\n\nHook events are deduped by content hash ${ids.map((i) => `[mem:${i}]`).join(" ")}.`;
+    });
+    await docs.composeDoc("acme", docs.CHAPTERS.find((c) => c.chapter === "architecture")!);
+    const hits = docs.searchDocs("content hash");
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].chapter, "architecture");
+    assert.ok(hits[0].excerpt.includes("content hash"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Top-K consolidation + dedupe sweep. Best-only matching let duplicates
 // through (the true dup was often the SECOND-closest candidate), and nothing
 // ever re-compared existing memories — production accumulated 4x copies of

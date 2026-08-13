@@ -23,6 +23,12 @@
 //                                                     (observations + anchors).
 //   DELETE /v1/memory/observation/:id                → delete one observation
 //                                                     (parent counts recomputed).
+//   GET  /v1/docs?scope=                             → living-doc chapters
+//                                                     (composed handbook), no bodies.
+//   GET  /v1/docs/search?q=                          → excerpt hits across doc bodies.
+//   GET  /v1/docs/:scope/:chapter                    → one chapter with body_md.
+//   POST /v1/docs/rebuild {scope?, force?}           → recompose (force bypasses
+//                                                     the fingerprint gate).
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -38,6 +44,7 @@ import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 import { rememberText } from "./distiller.js";
 import { getOrientDocs } from "./orient-doc.js";
+import { listDocs, getDoc, searchDocs, composeScope, composeAllDocs, queueDocsCompose } from "./docs.js";
 import { listKnowledge, deleteMemory, deleteObservation } from "./knowledge.js";
 
 export interface MemoryStats {
@@ -198,6 +205,7 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
     const out = deleteObservation(decodeURIComponent(req.params.id));
     if (!out) return reply.code(404).send({ error: "observation not found" });
     console.log(`[memory] observation ${req.params.id} deleted (memory_deleted=${out.memory_deleted})`);
+    queueDocsCompose("all"); // membership may have changed; fingerprint-gated
     return { ok: true, ...out };
   });
 
@@ -205,6 +213,32 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
     const out = deleteMemory(decodeURIComponent(req.params.id));
     if (!out) return reply.code(404).send({ error: "memory not found" });
     console.log(`[memory] memory ${req.params.id} deleted (${out.observations} observation(s) cascaded)`);
+    queueDocsCompose("all"); // membership may have changed; fingerprint-gated
     return { ok: true, ...out };
+  });
+
+  // ── Living docs: handbook chapters composed from memories ────────────────
+
+  app.get<{ Querystring: { scope?: string } }>("/v1/docs", async (req) => {
+    return { docs: listDocs(req.query.scope?.trim() || undefined) };
+  });
+
+  app.get<{ Querystring: { q?: string } }>("/v1/docs/search", async (req) => {
+    return { hits: searchDocs(req.query.q ?? "") };
+  });
+
+  app.get<{ Params: { scope: string; chapter: string } }>("/v1/docs/:scope/:chapter", async (req, reply) => {
+    const doc = getDoc(decodeURIComponent(req.params.scope), req.params.chapter);
+    if (!doc) return reply.code(404).send({ error: "doc not found" });
+    return { doc };
+  });
+
+  // Recompose — force=1 bypasses the fingerprint gate. Runs inline (compose
+  // is seconds, and the caller wants the fresh doc); scope narrows the work.
+  app.post<{ Body: { scope?: string | null; force?: boolean } }>("/v1/docs/rebuild", async (req) => {
+    const scope = req.body?.scope?.trim() || null;
+    const force = req.body?.force === true;
+    const results = scope ? await composeScope(scope, { force }) : await composeAllDocs({ force });
+    return { ok: true, results };
   });
 }

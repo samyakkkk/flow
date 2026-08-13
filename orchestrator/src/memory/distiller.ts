@@ -18,6 +18,7 @@ import { consolidateObservation, type Judge } from "./consolidate.js";
 import { haikuJudge } from "./judge.js";
 import { sweepMemories, dedupeSweep } from "./maintenance.js";
 import { rebuildOrientDocsFor } from "./orient-doc.js";
+import { queueDocsCompose } from "./docs.js";
 
 export interface DistillContext {
   sessionId: string;
@@ -78,6 +79,9 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
     }
   }
   rebuildOrientDocsFor(ctx.repo);
+  // Living-doc chapters recompose off the hot path; fingerprint gating makes
+  // the no-change case free.
+  if (raws.length > 0) queueDocsCompose(ctx.repo);
 
   return { ran: true, observations: raws.length, actions };
 }
@@ -129,6 +133,7 @@ export async function rememberText(ctx: RememberContext): Promise<DistillOutcome
   }
   sweepMemories();
   rebuildOrientDocsFor(ctx.repo);
+  queueDocsCompose(ctx.repo);
 
   return { ran: true, observations: raws.length, actions, ...(verbatim ? { reason: "verbatim-fallback" } : {}) };
 }
