@@ -1,0 +1,17 @@
+{
+  "_comment": "Retrieval use-cases: realistic queries a future agent or teammate would issue, each targeting one planted fact. A hit = any returned memory/corpus row that the judge matches to the target gist. Phrasings deliberately vary: verbatim symptom, paraphrase, and task-shaped ('how do I…') per the search guidance.",
+  "cases": [
+    { "target": "no-marketplace", "type": "memory", "queries": ["plugin marketplace", "how are merchant plugins distributed", "central registry for plugins"] },
+    { "target": "verify-as-consumer", "type": "memory", "queries": ["how should I verify checkout changes", "testing like a real merchant"] },
+    { "target": "signing-secret-crash", "type": "memory", "queries": ["Cannot read properties of undefined (reading 'signingSecret')", "webhook worker crashes on boot", "WEBHOOK_SIGNING_SECRET"] },
+    { "target": "cookie-domain-cart", "type": "memory", "queries": ["cart disappears on mobile safari", "apple pay return flow empty cart", "session cookie domain www"] },
+    { "target": "webhook-retry-5x", "type": "memory", "queries": ["do failed webhooks retry", "merchant received same webhook multiple times", "dead_letters table"] },
+    { "target": "staging-postmark", "type": "memory", "queries": ["does staging send real email", "mailhog staging capture"] },
+    { "target": "stripe-env", "type": "memory", "queries": ["STRIPE_SECRET_KEY missing", "payment env for deploy target"] },
+    { "target": "self-serve-refunds-plan", "type": "memory", "queries": ["refund roadmap", "are we building self serve refunds"] },
+    { "target": "onboarding-northstar", "type": "memory", "queries": ["onboarding goal", "how fast should merchant onboarding be", "signup to first checkout"] },
+    { "target": "slack-rate-limit-decision", "type": "corpus", "gist": "Rate limiting moves from the app layer to the gateway; express-rate-limit middleware gets deleted; no new app-level limits", "queries": ["rate limiting gateway", "express-rate-limit removal"] },
+    { "target": "slack-sandbox-reset", "type": "corpus", "gist": "The sandbox payment provider resets all test data every Sunday 02:00 UTC — vanished weekend test orders are expected", "queries": ["test orders vanished over the weekend", "sandbox data reset schedule"] },
+    { "target": "linear-acme-42", "type": "corpus", "gist": "ACME-42 migrates per-merchant rate limits into gateway config, blocked on gateway 2.3 rollout", "queries": ["ACME-42", "per-merchant limits gateway config"] }
+  ]
+}

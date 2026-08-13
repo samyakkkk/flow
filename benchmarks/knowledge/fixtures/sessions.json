@@ -1,0 +1,248 @@
+{
+  "_comment": "Scripted session transcripts for the knowledge-pipeline benchmark. Each session carries planted ground truth: `expected` facts the distiller MUST extract (gist matched by an LLM judge; `intent:true` marks the user-context channel the v1 prompt systematically missed) and `forbidden` items it MUST NOT extract. Event shapes mirror what the runtime persists (see orchestrator/src/memory/slim.ts).",
+  "repo": "acme-checkout",
+  "sessions": [
+    {
+      "id": "s01-rationale-decision",
+      "title": "distribution: no marketplace",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "plugin distribution" } },
+        { "kind": "user_prompt", "data": { "text": "for the merchant plugins, we will NOT use a central marketplace. the reason is that every merchant self-hosts the admin panel on their own VPS, there is no central acme server to serve a marketplace from. generate install artifacts per-instance at setup time instead. i also considered a shared registry with signed bundles and rejected it - it recreates the central server we are avoiding." } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Understood — per-instance artifact generation it is. I've built the installer to emit artifacts parameterized with the instance URL and per-merchant token at setup time. No registry, no central fetch; each admin panel serves its own artifacts." } } },
+        { "kind": "user_prompt", "data": { "text": "great, ship it" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Done. The setup flow now writes the plugin bundle with the instance URL baked in; tests pass." } } }
+      ],
+      "expected": [
+        {
+          "key": "no-marketplace",
+          "gist": "Merchant plugins are distributed WITHOUT a central marketplace: install artifacts are generated per-instance at setup time, because every merchant self-hosts the admin panel on their own VPS and there is no central server. A shared signed-bundle registry was considered and rejected for recreating the central server.",
+          "kind": "decision",
+          "source": "user_stated",
+          "intent": true
+        }
+      ],
+      "forbidden": [
+        { "key": "trivia-shipped", "gist": "The installer was built / the session shipped the artifact generator / tests pass" }
+      ]
+    },
+    {
+      "id": "s02-meta-preference",
+      "title": "how I want verification done",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "verify checkout flow" } },
+        { "kind": "user_prompt", "data": { "text": "you keep verifying by curling endpoints. that is not verification. always test like a real merchant would: create a store, add a product, go through the whole checkout as a shopper, see the money move in the sandbox. mimic the consumer journey end to end, every time." } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Point taken — I ran the full journey: created a fresh store, added a product, checked out as a shopper, and confirmed the sandbox charge appeared. The tax line was correct this time." } } }
+      ],
+      "expected": [
+        {
+          "key": "verify-as-consumer",
+          "gist": "Verification must be done as a real merchant/shopper journey end to end (create store, add product, complete checkout, see sandbox charge) — not by curling endpoints.",
+          "kind": "preference",
+          "source": "user_stated",
+          "intent": true
+        }
+      ],
+      "forbidden": [
+        { "key": "trivia-taxline", "gist": "The tax line was correct in this session's run" }
+      ]
+    },
+    {
+      "id": "s03-error-proven-gotcha",
+      "title": "webhook worker crash",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "webhook worker crash" } },
+        { "kind": "user_prompt", "data": { "text": "the webhook worker keeps crashing on boot in staging, logs attached. figure it out" } },
+        { "kind": "error", "data": { "text": "TypeError: Cannot read properties of undefined (reading 'signingSecret') at WebhookVerifier.init (src/webhooks/verify.ts:41) — env WEBHOOK_SIGNING_SECRET unset in staging" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Root cause found and fixed: WebhookVerifier.init dereferences config.signingSecret unconditionally, so a missing WEBHOOK_SIGNING_SECRET env crashes the worker at boot instead of failing one verification. Staging never had the secret set. I added a boot-time guard that fails fast with a clear message naming the missing env var, and set the secret in staging. Worker boots clean now." } } }
+      ],
+      "expected": [
+        {
+          "key": "signing-secret-crash",
+          "gist": "A missing WEBHOOK_SIGNING_SECRET env var crashes the webhook worker at boot (TypeError reading 'signingSecret' in WebhookVerifier.init / src/webhooks/verify.ts) rather than failing a single verification.",
+          "kind": "gotcha",
+          "source": "error_proven",
+          "intent": false
+        }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "s04-lookup-only",
+      "title": "how does tax calc work",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "how does tax calc work" } },
+        { "kind": "user_prompt", "data": { "text": "how does the tax calculation work for EU orders?" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "EU orders flow through TaxResolver.forRegion('eu') which applies the destination country's VAT rate from the rates table, with the reverse-charge path for B2B orders carrying a validated VAT ID. The rates table refreshes weekly from the upstream feed. Nothing here is custom per merchant." } } },
+        { "kind": "user_prompt", "data": { "text": "thanks" } }
+      ],
+      "expected": [],
+      "forbidden": [
+        { "key": "lookup-echo", "gist": "EU orders use TaxResolver / VAT rates / reverse charge (any restatement of the explained mechanics as a memory)" }
+      ]
+    },
+    {
+      "id": "s05-ruled-out-hypothesis",
+      "title": "carts vanish on mobile",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "carts vanish on mobile" } },
+        { "kind": "user_prompt", "data": { "text": "shoppers on mobile safari report their carts vanish after a few minutes. find out why" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "First hypothesis: Redis eviction dropping cart keys under memory pressure. Checking eviction stats and TTLs now." } } },
+        { "kind": "user_prompt", "data": { "text": "and?" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Redis is exonerated — zero evictions, cart keys alive with correct TTLs while a reporter's cart was already 'gone'. The real cause: the session cookie is set with Domain=www.acme-checkout.com, and mobile Safari opens the apple-pay return flow on acme-checkout.com without the www — no cookie, fresh anonymous session, cart looks empty. Fix shipped: cookie Domain=.acme-checkout.com (leading dot), verified on a device — cart survives the return flow now." } } }
+      ],
+      "expected": [
+        {
+          "key": "cookie-domain-cart",
+          "gist": "Mobile-Safari cart loss was caused by the session cookie being scoped to www.acme-checkout.com while the Apple Pay return flow lands on the bare domain — fixed by setting cookie Domain=.acme-checkout.com. (Redis eviction was investigated and ruled out.)",
+          "kind": "gotcha",
+          "source": "agent_inferred",
+          "intent": false
+        }
+      ],
+      "forbidden": [
+        { "key": "redis-eviction-cause", "gist": "Redis eviction under memory pressure causes cart loss (the ruled-out hypothesis stated as fact)" }
+      ]
+    },
+    {
+      "id": "s06-permission-denial",
+      "title": "disk cleanup",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "disk cleanup" } },
+        { "kind": "user_prompt", "data": { "text": "the build box is out of disk, clean it up" } },
+        { "kind": "update", "data": { "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "docker system prune -af" } },
+        { "kind": "update", "data": { "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed", "content": [ { "content": { "text": "Permission denied by policy: destructive command requires explicit approval" } } ] } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "The policy layer blocked docker system prune. I freed 9GB instead by clearing the npm cache and removing dangling build artifacts under /tmp/builds older than 7 days. Disk is at 61% now." } } }
+      ],
+      "expected": [],
+      "forbidden": [
+        { "key": "fake-user-rule", "gist": "The user has a rule/preference against docker system prune or destructive docker commands" }
+      ]
+    },
+    {
+      "id": "s07-duplicate-a",
+      "title": "payment webhook retries (first discovery)",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "webhook retry semantics" } },
+        { "kind": "user_prompt", "data": { "text": "do we retry failed payment webhooks? a merchant asked" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Yes — confirmed in src/webhooks/dispatch.ts: failed deliveries retry 5 times with exponential backoff starting at 30s and doubling (30s, 1m, 2m, 4m, 8m), then land in the dead_letters table for manual replay. I've verified the dead-letter path with a forced failure." } } }
+      ],
+      "expected": [
+        {
+          "key": "webhook-retry-5x",
+          "gist": "Failed payment webhook deliveries retry 5 times with exponential backoff starting at 30 seconds (doubling each attempt), then go to the dead_letters table for manual replay (src/webhooks/dispatch.ts).",
+          "kind": "decision",
+          "source": "agent_inferred",
+          "intent": false,
+          "dedupe_group": "webhook-retry"
+        }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "s08-duplicate-b",
+      "title": "payment webhook retries (second discovery)",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "merchant webhook complaint" } },
+        { "kind": "user_prompt", "data": { "text": "merchant says they got the same webhook 6 times, is that a bug?" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Not a bug — their endpoint was returning 500s, and our dispatcher retries failed webhook deliveries up to five times with exponential backoff (first retry after 30 seconds, doubling), before dead-lettering. Six deliveries = the original plus five retries. Their fix is to return 200 on duplicate receipt; ours is nothing." } } }
+      ],
+      "expected": [
+        {
+          "key": "webhook-retry-5x-again",
+          "gist": "Webhook deliveries that fail are retried up to 5 times with exponential backoff (first retry 30s, doubling) before dead-lettering.",
+          "kind": "decision",
+          "source": "agent_inferred",
+          "intent": false,
+          "dedupe_group": "webhook-retry"
+        }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "s09-contradiction",
+      "title": "staging email path changed",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "staging emails" } },
+        { "kind": "user_prompt", "data": { "text": "heads up: staging now sends REAL email through Postmark since yesterday. the old mailhog capture is gone. be careful with test orders using real addresses" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Noted — staging email goes out for real via Postmark now; Mailhog capture is gone. I'll use @example.test addresses for test orders so nothing real receives mail." } } }
+      ],
+      "preseed_memory": {
+        "claim": "Staging never sends real email: all outbound mail on staging is captured by Mailhog and no external SMTP is configured.",
+        "kind": "constraint",
+        "source_weight": "agent_inferred"
+      },
+      "expected": [
+        {
+          "key": "staging-postmark",
+          "gist": "Staging sends real email via Postmark (the Mailhog capture was removed), so test orders must use non-real addresses.",
+          "kind": "constraint",
+          "source": "user_stated",
+          "intent": false,
+          "contradicts_preseed": true
+        }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "s10-secret",
+      "title": "deploy env setup",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "deploy env setup" } },
+        { "kind": "user_prompt", "data": { "text": "set up the payment env for the new deploy target. key is sk-live-BENCH-FAKE-KEY-000001, keep it out of the repo obviously" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Configured — the deploy target reads STRIPE_SECRET_KEY from the environment store; nothing landed in the repo. Deploys fail fast with a named error when the variable is missing." } } }
+      ],
+      "expected": [
+        {
+          "key": "stripe-env",
+          "gist": "The deploy target requires STRIPE_SECRET_KEY in the environment store; deploys fail fast with a named error when it is missing.",
+          "kind": "constraint",
+          "source": "agent_inferred",
+          "intent": false
+        }
+      ],
+      "forbidden": [
+        { "key": "leaked-key", "gist": "Any claim containing the literal secret key value sk-live-BENCH", "literal": "sk-live-BENCH" }
+      ]
+    },
+    {
+      "id": "s11-roadmap",
+      "title": "refunds self-serve later",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "refund handling" } },
+        { "kind": "user_prompt", "data": { "text": "for now refunds stay manual through support. but next quarter i want shoppers to self-serve refunds from the order portal, within a merchant-set window. build nothing yet, just keep it in mind while designing the order model" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "Understood — refunds stay manual for now. I've kept the order state machine open for a shopper-initiated refund transition later (states are data-driven, no code change needed to add one), and noted the merchant-set refund window as a future merchant setting." } } }
+      ],
+      "expected": [
+        {
+          "key": "self-serve-refunds-plan",
+          "gist": "Committed future intention: shoppers will self-serve refunds from the order portal within a merchant-set window (targeted next quarter); refunds stay manual through support until then.",
+          "kind": "plan",
+          "source": "user_stated",
+          "intent": true
+        }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "s12-ux-northstar",
+      "title": "onboarding bar",
+      "events": [
+        { "kind": "created", "data": { "repo": "acme-checkout", "backend": "claude", "title": "merchant onboarding" } },
+        { "kind": "user_prompt", "data": { "text": "the bar for onboarding: a new merchant goes from signup to their first successful checkout in under ten minutes, with exactly one command on their server. every onboarding decision gets measured against that sentence. if a step doesn't serve it, kill the step" } },
+        { "kind": "update", "data": { "sessionUpdate": "agent_message_chunk", "content": { "text": "That's a crisp bar. Auditing the current flow against it: the DNS verification step and the manual webhook URL paste both fail the test — I've folded DNS verification into the install command and auto-registered the webhook URL. Signup-to-first-checkout is now 4 steps." } } }
+      ],
+      "expected": [
+        {
+          "key": "onboarding-northstar",
+          "gist": "The onboarding north star: a new merchant goes from signup to first successful checkout in under ten minutes with exactly one command on their server — every onboarding decision is measured against this.",
+          "kind": "decision",
+          "source": "user_stated",
+          "intent": true
+        }
+      ],
+      "forbidden": [
+        { "key": "trivia-steps", "gist": "The flow is now 4 steps / DNS verification was folded in this session" }
+      ]
+    }
+  ]
+}

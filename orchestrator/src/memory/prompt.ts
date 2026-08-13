@@ -40,6 +40,10 @@ When the source is the human, WEAVE A SHORT VERBATIM FRAGMENT of their words int
 
 Extract 0 to 5 observations. Fewer is better. MOST routine sessions yield 0-2. A session that just edited some files, answered a lookup question, or did mechanical work yields an empty array.
 
+SESSION LENGTH IS NOT THE SIGNAL. A three-message session that diagnosed a root cause (with the error and the confirmed fix in the transcript), settled a decision, stated a rule, or committed a plan yields its 1-2 observations exactly like a long session would. Return [] because the CONTENT is trivial, never because the transcript is short. Conversely, "later/next quarter we will X" stated by the human IS a plan worth extracting even when nothing was built this session.
+
+LOOKUP nuance: a session that merely re-explains code yields [] — but when the ANSWER surfaces a settled behavioral contract the session also VERIFIED (retry/backoff semantics, delivery guarantees, reset schedules), that contract is durable knowledge even though the session was a question. An error event whose root cause was found AND the fix confirmed in-transcript is ALWAYS extraction-worthy (gotcha, error_proven).
+
 Each observation is an object:
 {
   "claim": "1-3 self-contained sentences. Must stand alone without the transcript. State the durable fact, decision (with its stated why), or rule. For user-stated claims, include a short verbatim fragment of the user's words in quotation marks.",
@@ -74,7 +78,7 @@ source guide:
 5. NO SESSION TRIVIA. Never record "edited file X", "the agent read Y", "ran the tests", "created a PR", "user said thanks". Only reusable knowledge. Ask: "would this help a DIFFERENT future task on this repo?" If no, drop it.
 6. NO SESSION STATE OR PROGRESS. Never record the current status of THIS task, a todo list, "still need to…", what is done vs remaining, or anything describing where this session left off. Those are stale the moment the session ends. (A committed future DECISION about the project is a \`plan\`; a leftover task checkbox is not.)
 7. VOLATILE CHOICES ARE POINT-IN-TIME, NOT DURABLE RECIPES. Any claim about a specific model, vendor, library version, pricing, or API-shape that changes over time MUST be source "agent_inferred" and phrased as a point-in-time observation ("as of this session, X was Y"). NEVER weld a volatile choice into a durable how_to.
-8. NO SECRETS. Never extract tokens, API keys, passwords, connection strings, or personal contact info. If a claim requires a secret to be useful, drop it.
+8. NO SECRET VALUES. Never extract tokens, API keys, passwords, connection strings, or personal contact info — the VALUES. Naming a secret's ENV VAR or its role is fine and often essential ("deploys fail fast when STRIPE_SECRET_KEY is unset" is a good constraint; the key value itself must never appear). Do not suppress an otherwise-durable fact just because it concerns credentials.
 9. SELF-CONTAINED CLAIMS. A claim that only makes sense with the transcript open is useless. Resolve pronouns and "this/that". Name the actual thing.
 10. PREFER user_stated and error_proven over agent_inferred. Speculation is noise.
 11. DEDUPE. If two observations say the same thing, merge into one.

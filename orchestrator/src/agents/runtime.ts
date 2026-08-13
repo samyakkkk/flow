@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
+import { startReembedSweep } from "../memory/maintenance.js";
 import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
 import {
   createSessionWorktree,
@@ -748,6 +749,11 @@ startIdleSweep();
 // path; FLOW_SESSION_SEARCH=0 disables the sweep).
 setSessionTranscriptReader((id) => readTranscript(id).map((e) => ({ kind: e.kind, data: e.data })));
 startSessionEmbedSweep();
+
+// Backfill memory/observation vectors that are NULL or from a previous
+// embedding model (dimension mismatch) — vector search and the dedupe sweep
+// are blind to such rows. FLOW_MEMORY_REEMBED=0 disables.
+startReembedSweep();
 
 // ---------------------------------------------------------------------------
 // ACP connections — one adapter process per backend, shared across sessions

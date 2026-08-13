@@ -1,0 +1,28 @@
+{
+  "_comment": "Slack + Linear corpus fixtures. These flow through observeCorpus (evidence tier: observations with memory_id NULL, searchable but never consolidated). Retrieval queries in queries.json assert they surface.",
+  "slack": [
+    {
+      "text": "decision from the infra sync: rate limiting moves from the app layer to the gateway. the express-rate-limit middleware gets deleted once gateway limits are live — do not add new limits at app level",
+      "by": "dana",
+      "channel": "C-ENG",
+      "source_id": "slack-evt-9001",
+      "source_url": "https://acme.slack.com/archives/C-ENG/p1755150000000100"
+    },
+    {
+      "text": "reminder: the sandbox payment provider resets all test data every sunday 02:00 UTC. if your weekend test orders vanish, that's why — not a bug",
+      "by": "priya",
+      "channel": "C-ENG",
+      "source_id": "slack-evt-9002",
+      "source_url": "https://acme.slack.com/archives/C-ENG/p1755150000000200"
+    }
+  ],
+  "linear": [
+    {
+      "text": "ACME-42: Migrate rate limiting to gateway — move per-merchant limits out of express-rate-limit into the gateway config; app-level middleware removal is the last step; blocked on gateway 2.3 rollout",
+      "by": "dana",
+      "identifier": "ACME-42",
+      "source_id": "linear-ACME-42",
+      "source_url": "https://linear.app/acme/issue/ACME-42"
+    }
+  ]
+}

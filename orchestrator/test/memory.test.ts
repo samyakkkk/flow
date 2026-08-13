@@ -892,6 +892,34 @@ describe("top-K consolidation + dedupe sweep", () => {
     assert.equal(calls, callsFirst, "second sweep judges nothing new");
   });
 
+  test("reembedSweep backfills NULL and wrong-dimension vectors", async () => {
+    await seedMemory("first fact about the widget pipeline");
+    await seedMemory("second fact about the deploy path");
+    // Simulate the live pathology: one row NULL, one row from an old model
+    // (wrong dimension — stub is 64-dim, fake an 8-float blob).
+    const rows = db.prepare("SELECT id FROM memories ORDER BY created_at").all() as any[];
+    db.prepare("UPDATE memories SET embedding = NULL WHERE id = ?").run(rows[0].id);
+    db.prepare("UPDATE memories SET embedding = ? WHERE id = ?").run(Buffer.alloc(8 * 4), rows[1].id);
+    const out = await maintenance.reembedSweep();
+    assert.ok(out.embedded >= 2, `expected >=2 embedded, got ${out.embedded}`);
+    assert.equal(out.remaining, 0);
+    const fixed = db.prepare("SELECT embedding FROM memories").all() as any[];
+    for (const f of fixed) assert.equal(f.embedding.length, 64 * 4, "vectors match the live embedder dimension");
+  });
+
+  test("reembedSweep is a no-op with the embedder down (retries later)", async () => {
+    await seedMemory("a fact that will lose its vector");
+    db.prepare("UPDATE memories SET embedding = NULL").run();
+    const prev = store.getEmbedder();
+    store.setEmbedder(async () => {
+      throw new Error("gateway down");
+    });
+    const out = await maintenance.reembedSweep();
+    assert.equal(out.embedded, 0);
+    assert.equal(out.remaining, -1, "signals embedder unreachable");
+    store.setEmbedder(prev);
+  });
+
   test("decay sweep leaves updated_at alone on surviving rows", async () => {
     await seedMemory("timestamps must stay honest across sweeps");
     db.exec("UPDATE memories SET updated_at = 1000");

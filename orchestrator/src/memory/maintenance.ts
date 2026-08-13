@@ -25,9 +25,9 @@ import db from "../db.js";
 import { computeStrength, STRENGTH_FLOOR } from "./strength.js";
 import { strongerWeight } from "./strength.js";
 import type { MemoryRow } from "./store.js";
-import { activeMemoryRows, getMemory, invalidateVectorCache } from "./store.js";
+import { activeMemoryRows, getMemory, invalidateVectorCache, getEmbedder, observationEmbedText } from "./store.js";
 import { recomputeStrength, type Judge } from "./consolidate.js";
-import { cosine, blobToVec } from "../embed.js";
+import { cosine, blobToVec, vecToBlob } from "../embed.js";
 import { invalidateHeadlineCache } from "./headline.js";
 
 db.exec(`
@@ -71,6 +71,97 @@ export function sweepMemories(now = Math.floor(Date.now() / 1000)): { recomputed
   // drop the whole headline cache so get_entity re-renders fresh.
   invalidateHeadlineCache();
   return { recomputed: rows.length, sunk };
+}
+
+// ---------------------------------------------------------------------------
+// Embedding backfill
+//
+// Memories/observations embed at WRITE time, best-effort: rows written while
+// the embedder was down carry NULL, and rows written under a previous
+// embedding model carry vectors of the wrong DIMENSION (observed live: 262 of
+// 383 active memories NULL + 121 stale 1536-dim vectors vs the current
+// 768-dim space — vector search silently degraded to FTS-only, and the dedupe
+// sweep was blind to two thirds of the store). Graph nodes have a reconciler
+// for exactly this; memory rows had nothing. This sweep is that reconciler:
+// re-embed every row whose vector is missing or dimensionally wrong, in
+// budgeted batches, using whatever embedder is currently wired.
+
+export async function reembedSweep(limit = 100): Promise<{ embedded: number; failed: number; remaining: number }> {
+  const embedder = getEmbedder();
+  // Probe the live dimension once — also proves the embedder is reachable.
+  let dim: number;
+  try {
+    const probe = await embedder("dimension probe");
+    if (!probe || probe.length === 0) return { embedded: 0, failed: 0, remaining: -1 };
+    dim = probe.length;
+  } catch {
+    return { embedded: 0, failed: 0, remaining: -1 }; // embedder down; retry next sweep
+  }
+  const wrong = `(embedding IS NULL OR length(embedding) != ${dim * 4})`;
+
+  let embedded = 0;
+  let failed = 0;
+  const memRows = db
+    .prepare(`SELECT id, claim, retrieval_keys FROM memories WHERE status = 'active' AND ${wrong} LIMIT ?`)
+    .all(limit) as Array<{ id: string; claim: string; retrieval_keys: string | null }>;
+  for (const r of memRows) {
+    try {
+      const keys = r.retrieval_keys ? (JSON.parse(r.retrieval_keys) as string[]) : [];
+      const vec = await embedder(observationEmbedText(r.claim, keys).slice(0, 2000));
+      if (!vec) throw new Error("embedder returned null");
+      // updated_at untouched: a vector refresh is not a content change.
+      db.prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(vecToBlob(vec), r.id);
+      embedded++;
+    } catch {
+      failed++;
+    }
+  }
+
+  const obsRows = db
+    .prepare(`SELECT id, claim, retrieval_keys FROM observations WHERE ${wrong} LIMIT ?`)
+    .all(Math.max(0, limit - memRows.length)) as Array<{ id: string; claim: string; retrieval_keys: string | null }>;
+  for (const r of obsRows) {
+    try {
+      const keys = r.retrieval_keys ? (JSON.parse(r.retrieval_keys) as string[]) : [];
+      const vec = await embedder(observationEmbedText(r.claim, keys).slice(0, 2000));
+      if (!vec) throw new Error("embedder returned null");
+      db.prepare(`UPDATE observations SET embedding = ? WHERE id = ?`).run(vecToBlob(vec), r.id);
+      embedded++;
+    } catch {
+      failed++;
+    }
+  }
+
+  if (embedded > 0) invalidateVectorCache();
+  const remaining =
+    (db.prepare(`SELECT count(*) AS n FROM memories WHERE status = 'active' AND ${wrong}`).get() as { n: number }).n +
+    (db.prepare(`SELECT count(*) AS n FROM observations WHERE ${wrong}`).get() as { n: number }).n;
+  return { embedded, failed, remaining };
+}
+
+let _reembedTimer: ReturnType<typeof setInterval> | null = null;
+const REEMBED_INTERVAL_MS = 10 * 60 * 1000;
+
+// Periodic backfill: cheap when there's nothing to do (one probe + two
+// indexed counts). FLOW_MEMORY_REEMBED=0 disables.
+export function startReembedSweep(): void {
+  if (_reembedTimer || process.env.FLOW_MEMORY_REEMBED === "0") return;
+  const tick = () =>
+    void reembedSweep().then((r) => {
+      if (r.embedded > 0 || r.failed > 0) {
+        console.log(`[memory] re-embed sweep: ${r.embedded} embedded, ${r.failed} failed, ${r.remaining} remaining`);
+      }
+    });
+  setTimeout(tick, 30 * 1000).unref?.(); // shortly after boot
+  _reembedTimer = setInterval(tick, REEMBED_INTERVAL_MS);
+  _reembedTimer.unref?.();
+}
+
+export function stopReembedSweep(): void {
+  if (_reembedTimer) {
+    clearInterval(_reembedTimer);
+    _reembedTimer = null;
+  }
 }
 
 // ---------------------------------------------------------------------------
