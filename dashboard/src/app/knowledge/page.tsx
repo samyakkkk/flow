@@ -1,5 +1,6 @@
 "use client";
 import { Shell } from "@/components/Shell";
+import { MarkdownContent } from "@/components/Markdown";
 import { timeAgo } from "@/lib/time";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProject } from "@/lib/useProject";
@@ -54,6 +55,16 @@ interface KnowledgeResponse {
   stats?: { memories: number; observations: number; bySource: Record<string, number> };
   memories?: MemoryItem[];
   corpus?: { rows: CorpusItem[]; total: number; limit: number; offset: number };
+}
+
+interface DocEntry {
+  id: string;
+  scope: string;
+  chapter: string;
+  title: string;
+  members: number;
+  composed_via: string;
+  updated_at: number;
 }
 
 interface CorrectionRow {
@@ -155,7 +166,51 @@ export default function KnowledgePage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [corrections, setCorrections] = useState<CorrectionRow[]>([]);
   const [showCorrections, setShowCorrections] = useState(false);
+  const [docsList, setDocsList] = useState<DocEntry[]>([]);
+  const [docBodies, setDocBodies] = useState<Record<string, string>>({});
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+  const [recomposing, setRecomposing] = useState(false);
   const { prefix } = useProject();
+
+  const loadDocs = useCallback(() => {
+    fetch(prefix("/api/docs"))
+      .then((r) => r.json())
+      .catch(() => ({ docs: [] }))
+      .then((d: { docs?: DocEntry[] }) => setDocsList(d.docs ?? []));
+  }, [prefix]);
+
+  useEffect(() => loadDocs(), [loadDocs]);
+
+  function openChapter(d: DocEntry) {
+    if (openDoc === d.id) {
+      setOpenDoc(null);
+      return;
+    }
+    setOpenDoc(d.id);
+    if (!docBodies[d.id]) {
+      fetch(prefix(`/api/docs?scope=${encodeURIComponent(d.scope)}&chapter=${encodeURIComponent(d.chapter)}`))
+        .then((r) => r.json())
+        .catch(() => ({}))
+        .then((res: { doc?: { body_md: string } }) => {
+          if (res.doc) setDocBodies((prev) => ({ ...prev, [d.id]: res.doc!.body_md }));
+        });
+    }
+  }
+
+  async function recomposeDocs() {
+    setRecomposing(true);
+    try {
+      await fetch(prefix("/api/docs"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
+      setDocBodies({});
+      loadDocs();
+    } finally {
+      setRecomposing(false);
+    }
+  }
 
   const load = useCallback(
     (opts: { q: string; source: string; offset: number; append: boolean }) => {
@@ -230,6 +285,35 @@ export default function KnowledgePage() {
 
   const stats = data.stats;
 
+  // Chapter filter: title/scope match, plus body text when already loaded.
+  const visibleDocs = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return docsList;
+    return docsList.filter(
+      (d) =>
+        d.title.toLowerCase().includes(needle) ||
+        d.scope.toLowerCase().includes(needle) ||
+        d.chapter.toLowerCase().includes(needle) ||
+        (docBodies[d.id] ?? "").toLowerCase().includes(needle),
+    );
+  }, [docsList, q, docBodies]);
+
+  const docScopes = useMemo(() => {
+    const scopes = new Map<string, DocEntry[]>();
+    for (const d of visibleDocs) {
+      const list = scopes.get(d.scope) ?? [];
+      list.push(d);
+      scopes.set(d.scope, list);
+    }
+    return [...scopes.entries()].sort(([a], [b]) => (a === "global" ? 1 : b === "global" ? -1 : a.localeCompare(b)));
+  }, [visibleDocs]);
+
+  // [mem:id] citations render as superscript daggers anchoring to the memory
+  // cards below — visible provenance without breaking the prose.
+  function citeToAnchor(md: string): string {
+    return md.replace(/\[mem:([A-Za-z0-9-]+)\]/g, '<sup><a href="#mem-$1" title="show the memory behind this fact">†</a></sup>');
+  }
+
   return (
     <Shell>
       <div style={{ marginBottom: 24 }}>
@@ -294,6 +378,83 @@ export default function KnowledgePage() {
         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading…</div>
       ) : (
         <>
+          {/* Living docs — the composed handbook, docs-first */}
+          {docsList.length > 0 && (
+            <section style={{ marginBottom: 32 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Docs</h2>
+                <span style={{ flex: 1 }} />
+                <button
+                  onClick={recomposeDocs}
+                  disabled={recomposing}
+                  title="Recompose every chapter from the current memories"
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    borderRadius: 999,
+                    color: "var(--text-muted)",
+                    cursor: recomposing ? "wait" : "pointer",
+                    padding: "3px 10px",
+                    fontSize: 11,
+                  }}
+                >
+                  {recomposing ? "recomposing…" : "recompose"}
+                </button>
+              </div>
+              <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-secondary)" }}>
+                A living handbook composed from the memories below — nobody maintains it; it recomposes as knowledge
+                changes. Every fact links (†) to the memory it came from.
+              </p>
+              {docScopes.map(([scope, entries]) => (
+                <div key={scope} style={{ marginBottom: 10 }}>
+                  <div style={{ fontFamily: "monospace", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                    {scope === "global" ? "project-wide" : scope}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {entries.map((d) => {
+                      const open = openDoc === d.id;
+                      return (
+                        <div key={d.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                          <button
+                            onClick={() => openChapter(d)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              width: "100%",
+                              background: "transparent",
+                              border: "none",
+                              padding: "10px 16px",
+                              cursor: "pointer",
+                              textAlign: "left",
+                            }}
+                          >
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{d.title}</span>
+                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                              {d.members} {d.members === 1 ? "fact" : "facts"} · {timeAgo(d.updated_at * 1000)}
+                              {d.composed_via === "fallback" && " · plain render"}
+                            </span>
+                            <span style={{ flex: 1 }} />
+                            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{open ? "▾" : "▸"}</span>
+                          </button>
+                          {open && (
+                            <div style={{ padding: "0 16px 14px", borderTop: "1px solid var(--border)" }}>
+                              {docBodies[d.id] ? (
+                                <MarkdownContent md={citeToAnchor(docBodies[d.id])} className="docs-chapter" />
+                              ) : (
+                                <div style={{ padding: "10px 0", fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+
           {/* Distilled memories */}
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
@@ -310,11 +471,13 @@ export default function KnowledgePage() {
                   return (
                     <div
                       key={m.id}
+                      id={`mem-${m.id}`}
                       style={{
                         background: "var(--surface)",
                         border: "1px solid var(--border)",
                         borderRadius: 8,
                         padding: "12px 16px",
+                        scrollMarginTop: 80,
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
