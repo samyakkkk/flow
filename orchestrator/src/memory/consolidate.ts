@@ -49,17 +49,30 @@ export interface ConsolidateResult {
   created: boolean;
 }
 
-// Best cosine match among candidate memories for this observation's embedding.
-function bestMatch(obs: ObservationRow, candidates: MemoryRow[]): { mem: MemoryRow; sim: number } | null {
-  if (!obs.embedding) return null;
+// How many above-band candidates the judge inspects per observation. Judging
+// ONLY the single best cosine match let near-duplicates through: when the best
+// match judged "new" (or a slightly-closer unrelated memory outranked the true
+// duplicate), the duplicate was never even compared — production accumulated
+// 4x copies of the same decision. Bounded at K to cap judge-call cost.
+export const TOP_K = 3;
+
+// Top-K cosine matches (all >= minSim) among candidate memories, best first.
+export function topMatches(
+  obs: ObservationRow,
+  candidates: MemoryRow[],
+  k = TOP_K,
+  minSim = T_LO,
+): Array<{ mem: MemoryRow; sim: number }> {
+  if (!obs.embedding) return [];
   const q = blobToVec(obs.embedding);
-  let best: { mem: MemoryRow; sim: number } | null = null;
+  const scored: Array<{ mem: MemoryRow; sim: number }> = [];
   for (const m of candidates) {
     if (!m.embedding) continue;
     const sim = cosine(q, blobToVec(m.embedding));
-    if (!best || sim > best.sim) best = { mem: m, sim };
+    if (sim >= minSim) scored.push({ mem: m, sim });
   }
-  return best;
+  scored.sort((a, b) => b.sim - a.sim);
+  return scored.slice(0, k);
 }
 
 // Recompute + persist a memory's derived fields (people, evidence, keys,
@@ -90,49 +103,45 @@ export async function consolidateObservation(obs: ObservationRow, judge: Judge):
   // repos merges and strengthens instead of duplicating per family. The T_LO
   // band + judge already own the same/new decision; widening candidates only
   // adds cheap in-process cosine comparisons.
-  const match = bestMatch(obs, activeMemoryRows());
+  const matches = topMatches(obs, activeMemoryRows());
 
-  // No candidate at all, or below T_LO → brand-new memory.
-  if (!match || match.sim < T_LO) {
-    const mem = createMemory(obs);
-    recomputeStrength(mem.id);
-    await anchorAfterConsolidate(mem.id);
-    return { action: "new", memoryId: mem.id, created: true };
-  }
+  // No candidate at/above T_LO → brand-new memory.
+  // Otherwise walk the top-K best-first: the first non-"new" verdict wins.
+  // A "new" verdict on the closest match no longer ends the search — the
+  // true duplicate is often the SECOND-closest candidate.
+  for (const match of matches) {
+    const { verdict, refinedClaim } = await judge(match.mem, obs);
+    if (verdict === "new") continue;
 
-  // At/above T_LO → the judge decides.
-  const { verdict, refinedClaim } = await judge(match.mem, obs);
+    // same | refines | contradicts all ATTACH the observation to the matched memory.
+    attachObservation(match.mem.id, obs.id);
+    const now = Math.floor(Date.now() / 1000);
+    const nextWeight = strongerWeight(match.mem.max_source_weight, obs.source_weight);
 
-  if (verdict === "new") {
-    const mem = createMemory(obs);
-    recomputeStrength(mem.id);
-    await anchorAfterConsolidate(mem.id);
-    return { action: "new", memoryId: mem.id, created: true };
-  }
-
-  // same | refines | contradicts all ATTACH the observation to the matched memory.
-  attachObservation(match.mem.id, obs.id);
-  const now = Math.floor(Date.now() / 1000);
-  const nextWeight = strongerWeight(match.mem.max_source_weight, obs.source_weight);
-
-  if (verdict === "contradicts") {
-    updateMemory(match.mem.id, {
-      contradiction_count: match.mem.contradiction_count + 1,
-      max_source_weight: nextWeight,
-      last_reinforced_at: now,
-    });
-  } else {
-    // same or refines: reinforce.
-    const fields: Partial<MemoryRow> = { max_source_weight: nextWeight, last_reinforced_at: now };
-    if (verdict === "refines" && refinedClaim && refinedClaim.trim()) {
-      fields.claim = refinedClaim.trim();
+    if (verdict === "contradicts") {
+      updateMemory(match.mem.id, {
+        contradiction_count: match.mem.contradiction_count + 1,
+        max_source_weight: nextWeight,
+        last_reinforced_at: now,
+      });
+    } else {
+      // same or refines: reinforce.
+      const fields: Partial<MemoryRow> = { max_source_weight: nextWeight, last_reinforced_at: now };
+      if (verdict === "refines" && refinedClaim && refinedClaim.trim()) {
+        fields.claim = refinedClaim.trim();
+      }
+      updateMemory(match.mem.id, fields);
     }
-    updateMemory(match.mem.id, fields);
+
+    recomputeStrength(match.mem.id);
+    await anchorAfterConsolidate(match.mem.id);
+    return { action: verdict, memoryId: match.mem.id, created: false };
   }
 
-  recomputeStrength(match.mem.id);
-  await anchorAfterConsolidate(match.mem.id);
-  return { action: verdict, memoryId: match.mem.id, created: false };
+  const mem = createMemory(obs);
+  recomputeStrength(mem.id);
+  await anchorAfterConsolidate(mem.id);
+  return { action: "new", memoryId: mem.id, created: true };
 }
 
 // Resolve a memory's anchors and invalidate the headline cache for any node it

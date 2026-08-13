@@ -16,7 +16,7 @@ import { callLlm, distillerModel, distillerEnabled } from "./llm.js";
 import { insertObservation, rawToNewObservation } from "./store.js";
 import { consolidateObservation, type Judge } from "./consolidate.js";
 import { haikuJudge } from "./judge.js";
-import { sweepMemories } from "./maintenance.js";
+import { sweepMemories, dedupeSweep } from "./maintenance.js";
 import { rebuildOrientDocsFor } from "./orient-doc.js";
 
 export interface DistillContext {
@@ -66,9 +66,17 @@ export async function distillSession(ctx: DistillContext): Promise<DistillOutcom
     actions[res.action] = (actions[res.action] ?? 0) + 1;
   }
 
-  // Cheap maintenance sweep on completion (recency decay → sink under floor),
-  // then refresh the ambient tier — membership may have changed either way.
+  // Cheap maintenance sweep on completion (recency decay → sink under floor).
+  // When new observations landed, also resolve a small budget of near-dup
+  // pairs — this is how historical duplicates drain without a manual pass.
   sweepMemories();
+  if (raws.length > 0) {
+    try {
+      await dedupeSweep(judge, { maxPairs: 5 });
+    } catch {
+      /* best-effort; next distill retries */
+    }
+  }
   rebuildOrientDocsFor(ctx.repo);
 
   return { ran: true, observations: raws.length, actions };

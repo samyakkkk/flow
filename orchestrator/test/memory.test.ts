@@ -691,6 +691,100 @@ describe("distiller trigger: idle sweep", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Top-K consolidation + dedupe sweep. Best-only matching let duplicates
+// through (the true dup was often the SECOND-closest candidate), and nothing
+// ever re-compared existing memories — production accumulated 4x copies of
+// the same decision and direct contradictions living side by side.
+describe("top-K consolidation + dedupe sweep", () => {
+  async function seedMemory(claim: string, opts: { weight?: string } = {}) {
+    const o = await store.insertObservation({
+      source: "session", repo: "acme", claim, kind: "decision",
+      source_weight: opts.weight ?? "agent_inferred", retrieval_keys: [], ambient: false, session_id: "s-dd",
+    });
+    return consolidate.consolidateObservation(o, async () => ({ verdict: "new" as const }));
+  }
+
+  test("the second-closest candidate gets judged when the closest says new", async () => {
+    // Two existing memories share tokens with the new observation; the judge
+    // says "new" for one and "same" for the other — the observation must fold
+    // into the SAME one regardless of cosine ordering between the two.
+    await seedMemory("indexing repos runs serially one at a time in a global queue");
+    await seedMemory("the dashboard runs on a single fixed port with project URL segments");
+    const o = await store.insertObservation({
+      source: "session", repo: "acme",
+      claim: "repo indexing is serial: one repo at a time through a single global queue",
+      kind: "decision", source_weight: "user_stated", retrieval_keys: [], ambient: false, session_id: "s-dd",
+    });
+    const judged: string[] = [];
+    const res = await consolidate.consolidateObservation(o, async (a) => {
+      judged.push(a.claim);
+      return { verdict: a.claim.includes("indexing") ? ("same" as const) : ("new" as const) };
+    });
+    assert.equal(res.action, "same");
+    const target = db.prepare("SELECT claim FROM memories WHERE id = ?").get(res.memoryId) as any;
+    assert.ok(target.claim.includes("indexing"), "folded into the true duplicate");
+    // Both above-band candidates were eligible; at least the winner was judged.
+    assert.ok(judged.length >= 1);
+  });
+
+  test("dedupeSweep merges a same-pair: observations move, dup sinks", async () => {
+    const r1 = await seedMemory("multi-repo indexing runs serially by default one repo at a time", { weight: "user_stated" });
+    const r2 = await seedMemory("repos index sequentially by default a single repo at a time globally");
+    const before = db.prepare("SELECT count(*) AS n FROM memories WHERE status='active'").get() as any;
+    assert.equal(before.n, 2);
+    const out = await maintenance.dedupeSweep(async () => ({ verdict: "same" as const }), { minSim: 0.3 });
+    assert.equal(out.merged, 1);
+    const active = db.prepare("SELECT id FROM memories WHERE status='active'").all() as any[];
+    assert.equal(active.length, 1);
+    const survivor = active[0].id;
+    const moved = db.prepare("SELECT count(*) AS n FROM observations WHERE memory_id = ?").get(survivor) as any;
+    assert.equal(moved.n, 2, "both observations attached to the survivor");
+    const sunk = db.prepare("SELECT status FROM memories WHERE id = ?").get(survivor === r1.memoryId ? r2.memoryId : r1.memoryId) as any;
+    assert.equal(sunk.status, "sunk");
+    const surv = db.prepare("SELECT max_source_weight, evidence_count FROM memories WHERE id = ?").get(survivor) as any;
+    assert.equal(surv.max_source_weight, "user_stated", "stronger provenance survives the merge");
+    assert.equal(surv.evidence_count, 2);
+  });
+
+  test("contradicting pair: both marked contested, both stay active", async () => {
+    await seedMemory("openrouter serves embeddings at the v1 embeddings endpoint");
+    await seedMemory("openrouter does not serve embeddings it is chat only");
+    const out = await maintenance.dedupeSweep(async () => ({ verdict: "contradicts" as const }), { minSim: 0.3 });
+    assert.equal(out.contradicted, 1);
+    const rows = db.prepare("SELECT status, contradiction_count FROM memories").all() as any[];
+    assert.equal(rows.length, 2);
+    for (const r of rows) {
+      assert.equal(r.status, "active");
+      assert.equal(r.contradiction_count, 1);
+    }
+  });
+
+  test("judged pairs are never re-judged (dedupe_seen converges)", async () => {
+    await seedMemory("alpha beta gamma delta settles the queue design");
+    await seedMemory("alpha beta gamma delta settles the queue design exactly");
+    let calls = 0;
+    const judge = async () => {
+      calls++;
+      return { verdict: "new" as const };
+    };
+    await maintenance.dedupeSweep(judge, { minSim: 0.3 });
+    const callsFirst = calls;
+    assert.ok(callsFirst >= 1);
+    await maintenance.dedupeSweep(judge, { minSim: 0.3 });
+    assert.equal(calls, callsFirst, "second sweep judges nothing new");
+  });
+
+  test("decay sweep leaves updated_at alone on surviving rows", async () => {
+    await seedMemory("timestamps must stay honest across sweeps");
+    db.exec("UPDATE memories SET updated_at = 1000");
+    maintenance.sweepMemories();
+    const row = db.prepare("SELECT updated_at, status FROM memories").get() as any;
+    assert.equal(row.status, "active");
+    assert.equal(row.updated_at, 1000, "sweep must not rewrite updated_at on active rows");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Distiller v2: session observation budget + provenance-honesty prompt. One
 // 3-day session once produced 360/746 observations — the budget caps that
 // failure mode at the trigger, and the prompt raises the bar under pressure.
