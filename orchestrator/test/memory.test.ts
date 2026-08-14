@@ -978,6 +978,11 @@ describe("distiller session budget + prompt v2", () => {
     assert.ok(p.includes("NO FABRICATED VERIFICATION"), "anti-fabrication rule");
     assert.ok(p.includes("PROVENANCE HONESTY"), "permission-denial != user rule");
     assert.ok(p.includes("REJECTED ALTERNATIVES"), "rejected alternatives target");
+    // v2.1 — from the real-transcript Fable audit (session 14daac73): the
+    // model kept technical findings and dropped every human statement, and
+    // filed an unratified agent proposal with settled framing.
+    assert.ok(p.includes("PRIORITIZATION UNDER THE BUDGET"), "human context outranks technical finds");
+    assert.ok(p.includes("AGENT PROPOSALS ARE NOT DECISIONS"), "unratified proposals stay plans");
   });
 
   test("a session at the hard cap consumes content without an LLM call", async () => {
