@@ -380,6 +380,7 @@ export function AddFolder({
 
   const { prefix } = useProject();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [nativePicking, setNativePicking] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState("");
   const [result, setResult] = useState<Inspect | null>(null);
@@ -426,10 +427,12 @@ export function AddFolder({
 
   async function openNativePicker() {
     setInspecting(true);
+    setNativePicking(true);
     setInspectError("");
     try {
       const res = await fetch(prefix("/api/fs/pick-folder"), { method: "POST" });
       const json = await res.json() as { path?: string; cancelled?: boolean; error?: string };
+      setNativePicking(false);
       if (json.cancelled) {
         setInspecting(false);
         return;
@@ -445,11 +448,20 @@ export function AddFolder({
         return;
       }
     } catch {
+      setNativePicking(false);
       setInspecting(false);
       setPickerOpen(true);
       return;
     }
     setInspecting(false);
+  }
+
+  // The native dialog opened on the SERVER's screen — through a tunnel or
+  // ssh -L that isn't the user's screen, and the network can't tell us.
+  // Escape hatch: dismiss the server-side dialog, browse in-page instead.
+  function browseInstead() {
+    setPickerOpen(true);
+    void fetch(prefix("/api/fs/native-pick/cancel"), { method: "POST" }).catch(() => {});
   }
 
   async function runAdd(sources: AddPayload[]) {
@@ -488,6 +500,18 @@ export function AddFolder({
       >
         {inspecting ? "Inspecting..." : "Choose folder…"}
       </button>
+
+      {nativePicking && !pickerOpen && (
+        <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+          A Finder window opened on the machine running Flow.{" "}
+          <button
+            onClick={browseInstead}
+            style={{ background: "none", border: "none", padding: 0, fontSize: 12, color: "var(--ink)", textDecoration: "underline", cursor: "pointer" }}
+          >
+            Don&apos;t see it? Browse from here instead
+          </button>
+        </p>
+      )}
 
       {inspectError && <ErrorBox message={inspectError} />}
 

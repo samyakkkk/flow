@@ -8,11 +8,9 @@ import { useProject } from "@/lib/useProject";
 import { BrainGraph } from "@/components/BrainGraph";
 import { Kicker, Button, StatusPill } from "@/components/ui";
 import { MarkdownContent } from "@/components/Markdown";
-import { MentionTextarea, type FileEntry, type SlashCommand } from "@/components/MentionTextarea";
+import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
 import { DiffView, type DiffFile } from "@/components/DiffView";
 import { BranchSelect } from "@/components/BranchSelect";
-import { AgentConfigControls } from "@/components/AgentConfigControls";
-import { normalizeConfigOptions, type ConfigOption } from "@/lib/acpConfig";
 
 // ---------------------------------------------------------------------------
 // Attachment helpers — any file type, not just images. Images ride inline to
@@ -118,8 +116,47 @@ interface PermissionReq {
 }
 
 // ACP session config option — the model selector (category "model") and any
-// thought/reasoning-level toggles the agent advertises. Types + normalizers
-// live in @/lib/acpConfig, shared with the kickoff composer.
+// thought/reasoning-level toggles the agent advertises. Select-type only in
+// the UI for now (models are select); boolean options are passed through but
+// not yet rendered.
+interface ConfigSelectValue {
+  value: string;
+  name: string;
+}
+interface ConfigOption {
+  id: string;
+  name: string;
+  type?: string;
+  category?: string;
+  currentValue?: string | boolean;
+  options?: ConfigSelectValue[];
+}
+
+// Options may arrive flat or grouped ({group, options}); flatten to leaves.
+function flattenConfigValues(raw: unknown): ConfigSelectValue[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ConfigSelectValue[] = [];
+  for (const item of raw as Array<Record<string, unknown>>) {
+    if (item && Array.isArray(item.options)) {
+      out.push(...flattenConfigValues(item.options));
+    } else if (item && typeof item.value === "string") {
+      out.push({ value: item.value, name: String(item.name ?? item.value) });
+    }
+  }
+  return out;
+}
+
+function normalizeConfigOptions(raw: unknown): ConfigOption[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Array<Record<string, unknown>>).map((o) => ({
+    id: String(o.id),
+    name: String(o.name ?? o.id),
+    type: o.type as string | undefined,
+    category: o.category as string | undefined,
+    currentValue: o.currentValue as string | boolean | undefined,
+    options: flattenConfigValues(o.options),
+  }));
+}
 
 function contentText(c: unknown): string {
   if (!c) return "";
@@ -137,7 +174,6 @@ function reduceEvents(events: SessionEvent[]): {
   graphNodeIds: string[];
   modes: { currentModeId?: string; availableModes?: Array<{ id: string; name: string }> } | null;
   configOptions: ConfigOption[];
-  commands: SlashCommand[];
 } {
   const blocks: Block[] = [];
   let status = "starting";
@@ -145,7 +181,6 @@ function reduceEvents(events: SessionEvent[]): {
   let error: string | undefined;
   let modes: ReturnType<typeof reduceEvents>["modes"] = null;
   let configOptions: ConfigOption[] = [];
-  let commands: SlashCommand[] = [];
   const permissions = new Map<string, PermissionReq>();
   const graphIds: string[] = [];
 
@@ -263,19 +298,6 @@ function reduceEvents(events: SessionEvent[]): {
             if (Array.isArray(co)) configOptions = normalizeConfigOptions(co);
             break;
           }
-          case "available_commands_update": {
-            // The agent (Claude Code / Codex / OpenCode) advertises its slash
-            // commands over ACP. Arrives as a full snapshot — replace verbatim.
-            const raw = (u as { availableCommands?: unknown }).availableCommands;
-            if (Array.isArray(raw)) {
-              commands = (raw as Array<Record<string, unknown>>).map((c) => ({
-                name: String(c.name ?? ""),
-                description: String(c.description ?? ""),
-                hint: (c.input as { hint?: string } | undefined)?.hint,
-              }));
-            }
-            break;
-          }
           default:
             break;
         }
@@ -295,7 +317,6 @@ function reduceEvents(events: SessionEvent[]): {
     graphNodeIds: [...new Set(graphIds)].slice(-40),
     modes,
     configOptions,
-    commands,
   };
 }
 
@@ -310,6 +331,14 @@ function statusPill(status: string): { kind: "live" | "ok" | "warn" | "idle"; la
 }
 
 const AGENT_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
+
+// Selector order in the header: model, then mode, then reasoning effort, then rest.
+function configRank(category?: string): number {
+  if (category === "model") return 0;
+  if (category === "mode") return 1;
+  if (category === "thought_level" || category === "model_config") return 2;
+  return 3;
+}
 
 export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
@@ -427,19 +456,6 @@ export function AgentSession({ id }: { id: string }) {
   }, [id]);
 
   const view = useMemo(() => reduceEvents(events), [events]);
-
-  // OpenCode only advertises custom commands + skills over ACP; its built-in
-  // slash commands live in each of its UIs. Of those, /compact is the only one
-  // its ACP adapter actually executes (unknown commands are silently dropped),
-  // so surface just that one. Skip if a future version starts advertising it.
-  const commands = useMemo(() => {
-    if (meta?.backend !== "opencode") return view.commands;
-    if (view.commands.some((c) => c.name === "compact")) return view.commands;
-    return [
-      ...view.commands,
-      { name: "compact", description: "Summarize the conversation to free up context" },
-    ];
-  }, [view.commands, meta?.backend]);
 
   // Recent graph highlights: last 45s of graph events light up the brain.
   const [now, setNow] = useState(0);
@@ -890,16 +906,47 @@ export function AgentSession({ id }: { id: string }) {
             </div>
           )}
         </div>
-        {/* Config-driven selectors (model, mode, thought level, toggles) —
-            advertised by the agent over ACP; shared renderer with the kickoff
-            composer. Changing one calls setSessionConfigOption / setSessionMode. */}
-        <AgentConfigControls
-          configOptions={view.configOptions}
-          modes={view.modes}
-          onChange={(configId, value) => act("config", { configId, value })}
-          onModeChange={(modeId) => act("mode", { modeId })}
-          disabled={archived || busy}
-        />
+        {/* Model + other config selectors (model first) — the agent advertises
+            these on session create; changing one calls setSessionConfigOption. */}
+        {/* Config-driven selectors (model, mode, effort) — the modern unified
+            mechanism. Model first, then mode, then reasoning effort. */}
+        {[...view.configOptions]
+          .filter((o) => o.type !== "boolean" && (o.options?.length ?? 0) > 0)
+          .sort((a, b) => configRank(a.category) - configRank(b.category))
+          .map((o) => (
+            <select
+              key={o.id}
+              value={typeof o.currentValue === "string" ? o.currentValue : ""}
+              onChange={(e) => act("config", { configId: o.id, value: e.target.value })}
+              disabled={archived || busy}
+              className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
+              style={{ fontFamily: "var(--font-mono)" }}
+              title={o.name}
+            >
+              {o.options!.map((v) => (
+                <option key={v.value} value={v.value}>
+                  {o.category === "model" ? v.name : `${o.name}: ${v.name}`}
+                </option>
+              ))}
+            </select>
+          ))}
+        {/* Fallback: agents that expose modes but not configOptions. */}
+        {view.configOptions.length === 0 && view.modes?.availableModes && view.modes.availableModes.length > 0 && (
+          <select
+            value={view.modes.currentModeId ?? ""}
+            onChange={(e) => act("mode", { modeId: e.target.value })}
+            disabled={archived}
+            className="rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11px] text-ink disabled:opacity-50"
+            style={{ fontFamily: "var(--font-mono)" }}
+            title="Agent mode"
+          >
+            {view.modes.availableModes.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        )}
         <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
         {running && (
           <Button variant="secondary" onClick={() => act("cancel")} disabled={busy}>
@@ -945,7 +992,7 @@ export function AgentSession({ id }: { id: string }) {
                           {b.files.map((f, i) => (
                             <span
                               key={i}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-line bg-paper px-2 py-1 text-[11.5px] text-text max-w-[220px]"
+                              className="inline-flex items-center gap-1.5 rounded-md border border-line bg-paper/90 px-2 py-1 text-[11px] text-text max-w-[220px]"
                               title={f.name}
                             >
                               <FileIcon />
@@ -954,55 +1001,85 @@ export function AgentSession({ id }: { id: string }) {
                           ))}
                         </div>
                       )}
-                      <p className="text-ink text-[13.5px] whitespace-pre-wrap break-words">{b.text}</p>
+                      <p className="text-ink text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{b.text}</p>
                     </div>
                   );
                 case "agent":
                   return (
-                    <div key={b.key} className="max-w-[92%] text-[13.5px]">
+                    <div key={b.key} className="max-w-[92%] text-[13.5px] leading-relaxed">
                       <MarkdownContent md={b.text} />
                     </div>
                   );
                 case "thought":
                   return (
-                    <details key={b.key} className="max-w-[92%]">
+                    <details key={b.key} className="max-w-[92%] group rounded-md border border-line/60 bg-paper/40 px-3 py-1.5">
                       <summary
                         style={{ fontFamily: "var(--font-mono)" }}
-                        className="text-[10px] uppercase tracking-wider text-text-muted cursor-pointer select-none"
+                        className="text-[10.5px] uppercase tracking-wider text-text-muted cursor-pointer select-none flex items-center gap-1.5 hover:text-ink transition"
                       >
-                        Thinking…
+                        <span className="text-[9px] text-text-muted transition-transform group-open:rotate-90">▶</span>
+                        <span>Thinking…</span>
                       </summary>
-                      <p className="text-text-muted text-[12px] italic whitespace-pre-wrap break-words mt-1">{b.text}</p>
+                      <p className="text-text-muted text-[12px] italic whitespace-pre-wrap break-words mt-2 border-t border-line/40 pt-1.5">{b.text}</p>
                     </details>
                   );
-                case "tools":
+                case "tools": {
+                  // Conductor-style grouped tool calls capsule
+                  const allDone = b.calls.every((c) => c.status === "completed");
+                  const hasFailed = b.calls.some((c) => c.status === "failed");
+                  const countLabel = b.calls.length === 1 ? "1 tool call" : `${b.calls.length} tool calls`;
+                  const isSingle = b.calls.length === 1;
+
                   return (
-                    <div key={b.key} className="flex flex-col gap-1 max-w-[92%]">
-                      {b.calls.map((c) => (
-                        <div
-                          key={c.toolCallId}
-                          className="flex items-center gap-2 rounded-md border border-line px-2.5 py-1.5"
-                          style={{ background: c.isGraph ? "rgba(255,247,129,0.25)" : "var(--cream)" }}
-                        >
+                    <div key={b.key} className="max-w-[92%] border border-line rounded-lg bg-paper/50 overflow-hidden text-[12px]">
+                      <details className="group">
+                        <summary className="w-full px-3 py-2 flex items-center justify-between hover:bg-sand/30 font-mono text-text cursor-pointer select-none transition">
+                          <div className="flex items-center gap-2 min-w-0 pr-2">
+                            <span className="text-[9px] text-text-muted transition-transform group-open:rotate-90">▶</span>
+                            <span className="font-medium text-ink truncate">
+                              {countLabel}
+                              {!isSingle && (
+                                <span className="text-text-muted font-normal text-[11px] ml-1.5">
+                                  · {b.calls.slice(0, 3).map((c) => c.title.replace(/^mcp__|^flow-graph[_-]?/i, "")).join(", ")}{b.calls.length > 3 ? "…" : ""}
+                                </span>
+                              )}
+                            </span>
+                          </div>
                           <span
-                            className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
+                            className="text-[10px] px-2 py-0.5 rounded-full font-mono flex-shrink-0"
                             style={{
-                              background:
-                                c.status === "completed"
-                                  ? "var(--ok)"
-                                  : c.status === "failed"
-                                  ? "#b3261e"
-                                  : "var(--warn)",
+                              background: hasFailed ? "rgba(168,80,70,0.12)" : allDone ? "rgba(90,140,90,0.12)" : "rgba(184,134,60,0.12)",
+                              color: hasFailed ? "var(--danger)" : allDone ? "var(--ok)" : "var(--warn)",
                             }}
-                          />
-                          <span style={{ fontFamily: "var(--font-mono)" }} className="text-[11px] text-text truncate">
-                            {c.isGraph ? "🧠 " : ""}
-                            {c.title}
+                          >
+                            {hasFailed ? "failed" : allDone ? "completed" : "running"}
                           </span>
+                        </summary>
+                        <div className="border-t border-line bg-cream/40 px-3 py-2 flex flex-col gap-1.5 font-mono text-[11px] text-text">
+                          {b.calls.map((c) => (
+                            <div key={c.toolCallId} className="flex items-center gap-2">
+                              <span
+                                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                style={{
+                                  background:
+                                    c.status === "completed"
+                                      ? "var(--ok)"
+                                      : c.status === "failed"
+                                      ? "var(--danger)"
+                                      : "var(--warn)",
+                                }}
+                              />
+                              <span className="truncate">
+                                {c.isGraph ? "🧠 " : ""}
+                                {c.title}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </details>
                     </div>
                   );
+                }
                 case "graph":
                   return (
                     <div key={b.key} className="max-w-[92%]">
@@ -1289,13 +1366,12 @@ export function AgentSession({ id }: { id: string }) {
                 }}
                 onPaste={handlePaste}
                 fetchFiles={fetchFiles}
-                commands={commands}
                 placeholder={
                   archived
                     ? "This session ended before the last restart — start a new one to continue."
                     : running
-                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, / for commands, drop or paste files)"
-                    : "Send a follow-up… (@ to tag a file, / for commands, drop or paste files)"
+                    ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, drop or paste files)"
+                    : "Send a follow-up… (@ to tag a file, drop or paste files)"
                 }
                 rows={1}
                 autoGrow
