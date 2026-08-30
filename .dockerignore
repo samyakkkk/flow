@@ -1,0 +1,9 @@
+.git
+node_modules
+**/node_modules
+data
+dashboard/.next
+**/*.log
+mockups
+images
+landing

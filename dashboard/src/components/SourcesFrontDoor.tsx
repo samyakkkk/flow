@@ -39,6 +39,10 @@ export interface RepoStatusEntry {
   lastIndexedCommit: string | null;
   lastIndexedAt: string | null;
   lastError: string | null;
+  // Classified failure: what broke (code), the concrete fix (hint), when.
+  lastErrorCode: string | null;
+  lastErrorHint: string | null;
+  lastFailedAt: number | null;
 }
 
 // One row of the durable indexer trail (GET /api/index-log).
@@ -477,6 +481,29 @@ function SourceRow({ s, st, onChanged }: { s: SourceEntry; st?: RepoStatusEntry;
           )}
         </div>
       </div>
+
+      {/* Index failure: what broke and how to fix it — visible, not a hover
+          tooltip. A signed-out Claude or a dead graph DB otherwise stays
+          invisible until someone wonders why the brain is stale. */}
+      {status === "failed" && st?.lastError && (
+        <div
+          className="px-3 py-2 flex flex-col gap-1"
+          style={{ borderTop: "1px solid rgba(168,80,70,0.25)", background: "rgba(168,80,70,0.06)" }}
+          data-testid="index-failure"
+        >
+          <span style={{ fontSize: 11, color: "var(--danger)" }}>{st.lastError}</span>
+          {st.lastErrorHint && (
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              <span style={{ fontWeight: 600 }}>Fix:</span> {st.lastErrorHint}
+            </span>
+          )}
+          {st.lastIndexedAt && (
+            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+              The graph still serves the last good index ({timeAgo(st.lastIndexedAt)}).
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Live indexer activity — appears while an index job runs */}
       {s.kind !== "docs" && <IndexActivityStrip repo={s.name} active={indexing || watchActivity} />}

@@ -195,6 +195,21 @@ export const SETTINGS: SettingDef[] = [
     description: "Slack channel ID to DM for proposed actions",
     appliesTo: "slack",
   },
+  {
+    key: "FLOW_TELEMETRY_POSTHOG_KEY",
+    secret: false,
+    description:
+      "PostHog project API key (phc_…) for Flow's anonymous usage snapshot — counts and booleans only, audit the exact payload at GET /v1/telemetry. The default is Flow's own project (a public write-only key). Set empty or FLOW_TELEMETRY_DISABLE=1 to opt out.",
+    default: "phc_A9NCvdsZWDbNgoDNeku45iBArjCjHFobPyBw2XqRgfB8",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "FLOW_TELEMETRY_POSTHOG_HOST",
+    secret: false,
+    description: "PostHog instance host for usage snapshots (EU cloud: https://eu.i.posthog.com)",
+    default: "https://us.i.posthog.com",
+    appliesTo: "pipeline",
+  },
 ];
 
 // Build a lookup map for O(1) access
@@ -341,7 +356,20 @@ export function getSetting(key: string): string | undefined {
 // LLM_API_KEY wins; OPENROUTER_API_KEY remains a fallback so existing setups
 // keep working. Empty string = no key (callers degrade, they don't crash).
 export function llmApiKey(): string {
-  return getSetting("LLM_API_KEY") ?? getSetting("OPENROUTER_API_KEY") ?? "";
+  // Settings win (dashboard-configured), but fall back to the ENV the deploy
+  // already passes (docker-compose forwards OPENROUTER_API_KEY). Without this
+  // fallback a headless deployment's DISTILLER had no LLM transport even when
+  // OPENROUTER_API_KEY was set in the env — so captured sessions were silently
+  // never distilled into the brain (the indexer still worked via opencode's own
+  // config, which hid the gap). The env path makes the distiller work
+  // out-of-the-box on any deploy that provides the key.
+  return (
+    getSetting("LLM_API_KEY") ??
+    getSetting("OPENROUTER_API_KEY") ??
+    process.env.LLM_API_KEY ??
+    process.env.OPENROUTER_API_KEY ??
+    ""
+  );
 }
 
 export function llmBaseUrl(): string {

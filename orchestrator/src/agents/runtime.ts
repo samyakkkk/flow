@@ -18,6 +18,7 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
+import { track } from "../telemetry.js";
 import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
 import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
 import {
@@ -507,6 +508,11 @@ export interface LiveSession {
   repo: string;
   branch?: string; // git branch of the checkout at session create (remember-verb default + distiller context)
   cwd: string;
+  // Set when this session's folder is bound to a REMOTE deployment — the agent
+  // runs here but its brain (MCP) is the remote project's. In-memory for the
+  // session's lifetime; a reconnect after an orchestrator restart falls back to
+  // the local brain (acceptable — the session re-mounts on next create).
+  brain?: BrainBinding | null;
   // Working-tree snapshot captured at session start, for the SESSION-scope
   // diff. startSha is a git commit object (stash-create or HEAD); null in an
   // empty repo. startUntracked is the pre-existing untracked file list, which
@@ -935,6 +941,23 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
       }
     }
   });
+  // A spawn-level failure (missing/again binary, EACCES, resource limit) emits
+  // an 'error' event on the child — and an 'error' event with NO listener is
+  // RETHROWN by Node, crashing the whole orchestrator. Treat it like an exit:
+  // drop the connection and fail the bound sessions, but never take the process
+  // down over one agent that couldn't start.
+  proc.on("error", (err) => {
+    const msg = (err as Error)?.message ?? String(err);
+    adapterLog(backend, `adapter process error: ${msg}`);
+    connections.delete(backend);
+    for (const flowId of c.sessionsByAcpId.values()) {
+      const s = sessions.get(flowId);
+      if (s && s.status !== "closed" && s.status !== "error") {
+        s.turnActive = false;
+        setStatus(s, "error", { error: `${backend} adapter failed to start: ${msg}` });
+      }
+    }
+  });
   return c;
 }
 
@@ -992,7 +1015,7 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
     const resp = await c.conn.loadSession({
       sessionId: acpSessionId,
       cwd: s.cwd,
-      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "")],
+      mcpServers: [flowGraphMcp(s.id, s.repo, s.branch ?? "", s.brain)],
     });
     s.modes = resp.modes ?? s.modes;
     s.configOptions = resp.configOptions ?? s.configOptions;
@@ -1009,7 +1032,32 @@ async function resumeConnection(s: LiveSession): Promise<Connection> {
 // ---------------------------------------------------------------------------
 // Flow graph MCP injection (read-only) + activity routing
 
-function flowGraphMcp(flowSessionId: string, repo = "", branch = ""): acp.McpServer {
+// Local-control-plane / remote-brain: when a session's work folder is bound to
+// a REMOTE deployment (via `flow setup <project> --remote`), the agent runs
+// HERE (this machine) but reads/writes the remote project's brain over HTTP
+// MCP — no local gateway, no local FalkorDB. The remote /<project>/mcp handles
+// orient/search/remember/correct_graph server-side, so all we mount is the
+// bearer-authed HTTP endpoint. ACP agents that advertise McpServer::Http
+// consume it directly.
+export interface BrainBinding {
+  mcpUrl: string; // e.g. https://flow.acme.com/<project>/mcp
+  token?: string; // personal access token with a grant on that project
+}
+
+function flowGraphMcp(
+  flowSessionId: string,
+  repo = "",
+  branch = "",
+  brain?: BrainBinding | null,
+): acp.McpServer {
+  if (brain?.mcpUrl) {
+    return {
+      type: "http",
+      name: "flow-graph",
+      url: brain.mcpUrl,
+      headers: brain.token ? [{ name: "Authorization", value: `Bearer ${brain.token}` }] : [],
+    };
+  }
   const orchPort = process.env.ORCHESTRATOR_PORT ?? "7500";
   const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
   const gatewayToken = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
@@ -1104,8 +1152,22 @@ export async function createSession(opts: {
   // First-turn attachments (images inline, files written into the checkout) —
   // same handling as steered prompts.
   attachments?: PromptAttachment[];
+  // Local-control-plane / remote-brain: when set, this session's brain (the
+  // flow-graph MCP) is the REMOTE deployment's project over HTTP instead of the
+  // local gateway. The caller — a dashboard served BY a deployment but driving
+  // this local orchestrator, or the CLI in a `--remote` work folder — resolves
+  // the endpoint + machine token. Unset = local brain (unchanged behavior).
+  brain?: BrainBinding | null;
 }): Promise<CreateSessionResult> {
-  const found = listRepoOptions().find((r) => r.name === opts.repo);
+  let found = listRepoOptions().find((r) => r.name === opts.repo);
+  // Remote-brain session in a raw work folder (the "run agents on my machine"
+  // door): there's no local repo to connect — the knowledge surface is the
+  // REMOTE brain, mounted per session. Synthesize a folder-only repo so the
+  // session can run; `repo` is just a display label here (flowGraphMcp uses the
+  // brain binding, not a local repo/branch). The workFolder is validated below.
+  if (!found && opts.brain?.mcpUrl && opts.workFolder) {
+    found = { name: opts.repo || "workspace", path: opts.workFolder, cloned: true, surface: "folder" };
+  }
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
   // EXISTING COPY target: validate it up front. A managed copy bypasses the
   // work-folder guards below — it was branched off a work folder already.
@@ -1168,7 +1230,14 @@ export async function createSession(opts: {
     if ("error" in wt) return { error: `Couldn't create a separate copy: ${wt.error}` };
     cwd = wt.path;
     worktreeId = wt.path; // the worktree path is the stable, derivable id
+    track("flow_worktree_created", {});
   }
+
+  track("flow_session_started", {
+    backend: opts.backend,
+    placement: opts.worktreePath ? "existing_worktree" : opts.placement === "separate_copy" ? "separate_copy" : "in_place",
+    native: true,
+  });
 
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -1177,6 +1246,7 @@ export async function createSession(opts: {
     backend: opts.backend,
     repo: opts.repo,
     cwd,
+    brain: opts.brain ?? null,
     worktreeId,
     title,
     status: "starting",
@@ -1206,7 +1276,7 @@ export async function createSession(opts: {
       const c = await ensureConnection(opts.backend);
       const resp = await c.conn.newSession({
         cwd,
-        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "")],
+        mcpServers: [flowGraphMcp(id, opts.repo, s.branch ?? "", s.brain)],
       });
       s.acpSessionId = String(resp.sessionId);
       s.modes = resp.modes ?? null;

@@ -45,6 +45,17 @@ export async function requireOwner(): Promise<AuthUser | null> {
 }
 
 /**
+ * Gate for integration/admin config (GitHub PAT, Slack/Linear tokens, source
+ * connect). LOCAL mode = single user on their own box → always allowed. PROD
+ * = only the owner may see/edit integrations; a member is refused. Returns
+ * true when the caller may proceed.
+ */
+export async function canManageIntegrations(): Promise<boolean> {
+  if (IS_LOCAL) return true;
+  return (await requireOwner()) !== null;
+}
+
+/**
  * Legacy name for requireSession() — kept so the ~38 routes written against
  * the per-project-dashboard era compile unchanged. Same contract: the scoped
  * project's admin token, or null.

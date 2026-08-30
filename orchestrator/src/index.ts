@@ -29,6 +29,20 @@ import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
 import { startAllPollers, stopAllPollers, getAllPollStatus } from "./pollers/engine.js";
 import { registerSettingsRoutes } from "./settings.js";
+import { registerTelemetryRoutes, startTelemetryReporter, stopTelemetryReporter } from "./telemetry.js";
+
+// Global safety net. This service is spawned DETACHED with no supervisor, and
+// the container healthcheck only probes the dashboard — so an unhandled error
+// here would silently kill agent/ingest/index handling while the container
+// still looks "healthy". Fastify already isolates per-request handler errors;
+// this catches background tasks, timers, and EventEmitter 'error's we missed.
+// Log and keep serving rather than let Node crash the whole process.
+process.on("unhandledRejection", (reason) => {
+  console.error("[orchestrator] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[orchestrator] uncaughtException:", (err as Error)?.stack ?? err);
+});
 
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT ?? "7500", 10);
 
@@ -87,6 +101,7 @@ registerMemoryRoutes(app);
 // repo-level. flow.db is primary — this is a read-only projection lookup.
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
+registerTelemetryRoutes(app);
 
 // ------------------------------------------------------------------
 // Adapter webhook routes
@@ -240,6 +255,7 @@ app.get<{ Querystring: { status?: string } }>(
 app.addHook("onClose", async () => {
   stopDrainer();
   stopAllPollers();
+  stopTelemetryReporter();
   // Kill live indexer CLIs (and their process groups) — an orphaned indexer
   // surviving a restart would keep writing to the graph while boot recovery
   // re-queues a duplicate job for the same repo.
@@ -283,6 +299,9 @@ const start = async (): Promise<void> => {
 
     // Start all registered pollers (no-ops if FLOW_POLL_DISABLE=1)
     startAllPollers();
+
+    // Daily anonymous usage snapshot to PostHog (idle until the key is set)
+    startTelemetryReporter();
 
     // Boot Slack Socket Mode adapter (no-op if tokens absent)
     bootSlackAdapter().catch((err) =>

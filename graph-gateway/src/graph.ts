@@ -10,6 +10,26 @@ let db: FalkorDB | null = null;
 async function connect(): Promise<FalkorDB> {
   if (!db) {
     db = await FalkorDB.connect({ socket: { host, port } });
+    // A FalkorDB/redis socket can close unexpectedly (server restart, network
+    // blip). node-redis auto-reconnects — but it EMITS an 'error' event, and an
+    // 'error' event with NO listener is rethrown by Node, crashing this process
+    // (the gateway, or an indexer's MCP subprocess). Observed on the box as
+    // "Emitted 'error' event on FalkorDB instance … Unhandled 'error' event".
+    // Attach listeners so a blip is logged, not fatal. Best-effort across
+    // falkordb client shapes (the instance re-emits; the raw connection is the
+    // source). See memory: users-service Redis silent wedge (missing listener).
+    const attach = (emitter: unknown) => {
+      const e = emitter as { on?: (ev: string, cb: (err: unknown) => void) => void } | null;
+      try {
+        e?.on?.("error", (err) =>
+          console.error("[falkordb] client error (auto-reconnecting):", (err as Error)?.message ?? err),
+        );
+      } catch {
+        /* not an event emitter on this falkordb version — ignore */
+      }
+    };
+    attach(db);
+    attach((db as { connection?: unknown }).connection);
   }
   return db;
 }
@@ -33,6 +53,48 @@ export async function run(
 export async function raw() {
   const conn = await connect();
   return conn.connection;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what} did not answer within ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
+// Deep-health probe: is FalkorDB actually answering? Bounded so a dead DB
+// reports in ~2s instead of hanging the health endpoint. Deliberately never
+// runs a graph query — GRAPH.QUERY auto-creates the graph as a side effect.
+// The indexer's preflight calls this via GET /health?deep=1 so a job can say
+// "your graph DB is down" up front instead of failing 45 minutes in.
+export async function pingFalkordb(timeoutMs = 2500): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const conn = (await withTimeout(raw(), timeoutMs, "FalkorDB connect")) as {
+      ping?: () => Promise<string>;
+      get: (k: string) => Promise<string | null>;
+    };
+    // ping() on any node-redis-shaped client; a plain GET is an equivalent
+    // round-trip on client versions without it.
+    const reply = conn.ping
+      ? await withTimeout(conn.ping(), timeoutMs, "FalkorDB PING")
+      : ((await withTimeout(conn.get("flow:health-probe"), timeoutMs, "FalkorDB GET")), "PONG");
+    return String(reply).toUpperCase() === "PONG"
+      ? { ok: true }
+      : { ok: false, error: `unexpected PING reply: ${String(reply).slice(0, 80)}` };
+  } catch (err) {
+    // A refused connection surfaces as an AggregateError with an EMPTY
+    // message (one entry per address family) — dig out something readable.
+    const first = (err as { errors?: unknown[] }).errors?.[0];
+    const msg =
+      (err instanceof Error && err.message) ||
+      (first instanceof Error && first.message) ||
+      (err as { code?: string }).code ||
+      String(err);
+    return { ok: false, error: String(msg).split("\n")[0] };
+  }
 }
 
 // Deleted-graph tombstone (set by `flow rm`, cleared by `flow up`). FalkorDB

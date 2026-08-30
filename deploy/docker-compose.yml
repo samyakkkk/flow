@@ -4,24 +4,34 @@
 #         npm install && npm install -g .
 #         flow up <name>
 #
-#   `flow up` runs the services natively (fast, per-project, hot dashboard) and
-#   starts ONLY FalkorDB in Docker for you. See the README quickstart.
+#   This compose file is the HEADLESS SERVER deploy (EC2 or any Docker host).
+#   It runs the same `flow` CLI inside one container (deploy/entrypoint.sh:
+#   `flow project create --mode prod` + `flow up`), with FalkorDB as a
+#   sidecar. Only the dashboard port is published — gateway and orchestrator
+#   stay on 127.0.0.1 inside the container, exactly like a laptop install.
 #
-#   This file is an EXPERIMENTAL full-container deploy (used for EC2). It builds
-#   every service into an image. Run it from THIS directory:
+#   Run from this directory:
+#         cd deploy && docker compose up --build -d
+#         docker compose logs -f flow     # the one-time setup code prints here
 #
-#         cd deploy && docker compose up --build
+#   First boot prints a SETUP CODE — open https://your-domain/login (or
+#   http://<host>:7600/login) and create the owner account with it.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  # ── FalkorDB (graph store + browser UI) ──────────────────────────────────
   falkordb:
     image: falkordb/falkordb:latest
-    ports:
-      - "6379:6379"   # Redis protocol (graph-gateway client)
-      - "3000:3000"   # FalkorDB browser UI (internal only; expose via Caddy if needed)
+    # No published ports: only Flow (on the compose network) talks to it.
+    # DURABILITY: FalkorDB's data dir is /var/lib/falkordb/data (redis `dir`),
+    # NOT /data — the volume MUST mount there or the graph lives only in the
+    # container's ephemeral layer and every restart/redeploy wipes the brain.
+    # AOF (appendonly) persists every write immediately; RDB snapshots alone
+    # miss small graphs (the default 100-writes-in-300s threshold never fires
+    # for a modest index), so a restart before a snapshot loses everything.
+    environment:
+      - REDIS_ARGS=--appendonly yes --appendfsync everysec
     volumes:
-      - falkordb-data:/data
+      - falkordb-data:/var/lib/falkordb/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -30,90 +40,23 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # ── Graph gateway (typed verb API over FalkorDB, port 7433) ──────────────
-  gateway:
+  flow:
     build:
-      context: ../graph-gateway
+      context: ..
+      dockerfile: deploy/Dockerfile
     ports:
-      - "7433:7433"
+      # Dashboard — front with Caddy/HTTPS in production (see ec2.md).
+      # Override the host port when 7600 is taken (e.g. a local flow):
+      #   FLOW_DASHBOARD_PORT=8700 docker compose up
+      - "${FLOW_DASHBOARD_PORT:-7600}:7600"
     environment:
-      - FALKOR_HOST=falkordb
-      - FALKOR_PORT=6379
-      - GRAPH_NAME=${GRAPH_NAME:-acme-v1}
+      - FLOW_PROJECT=${FLOW_PROJECT:-main}
+      # Optional: LLM key for the indexer/classifier in headless mode.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
     volumes:
-      - gateway-journal:/app/data  # append-only journal (journal.jsonl)
+      - flow-data:/app/data # projects, auth store, SQLite, logs
     depends_on:
       falkordb:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e",
-             "fetch('http://localhost:7433/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    restart: unless-stopped
-
-  # ── Orchestrator (event bus, classifier, policy router, port 7500) ────────
-  orchestrator:
-    build:
-      context: ../orchestrator
-    ports:
-      - "7500:7500"
-    environment:
-      # Required
-      - FLOW_ADMIN_TOKEN=${FLOW_ADMIN_TOKEN}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - GATEWAY_URL=http://gateway:7433
-      - GRAPH_NAME=${GRAPH_NAME:-acme-v1}
-      # opencode is bundled: the orchestrator depends on `opencode-ai`, which
-      # `npm ci` installs into the image — so index/answer jobs work in-container.
-      # Set FLOW_FAKE_OPENCODE=1 only to smoke-test without real model calls.
-      - FLOW_FAKE_OPENCODE=${FLOW_FAKE_OPENCODE:-}
-      # Optional — Slack Socket Mode
-      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
-      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
-      # Optional — Linear
-      - LINEAR_API_KEY=${LINEAR_API_KEY:-}
-      - LINEAR_WEBHOOK_SECRET=${LINEAR_WEBHOOK_SECRET:-}
-      - LINEAR_DEFAULT_TEAM_ID=${LINEAR_DEFAULT_TEAM_ID:-}
-      # Optional — GitHub
-      - GITHUB_PAT=${GITHUB_PAT:-}
-      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
-      - FLOW_WATCHED_REPOS=${FLOW_WATCHED_REPOS:-}
-      # Optional — Fireflies
-      - FIREFLIES_API_KEY=${FIREFLIES_API_KEY:-}
-      # Tuning
-      - CLASSIFIER_MODEL=${CLASSIFIER_MODEL:-}
-      - GRAPH_BUILDER_MODEL=${GRAPH_BUILDER_MODEL:-}
-      - FLOW_CONFIDENCE_FLOOR=${FLOW_CONFIDENCE_FLOOR:-}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-    volumes:
-      - orchestrator-data:/app/data  # SQLite (flow.db) and other persistent data
-    depends_on:
-      gateway:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e",
-             "fetch('http://localhost:7500/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-
-  # ── Dashboard (Next.js UI, port 7600) ────────────────────────────────────
-  dashboard:
-    build:
-      context: ../dashboard
-    ports:
-      - "7600:7600"
-    environment:
-      - ORCHESTRATOR_URL=http://orchestrator:7500
-      - GATEWAY_URL=http://gateway:7433
-      - FLOW_ADMIN_TOKEN=${FLOW_ADMIN_TOKEN}
-    depends_on:
-      orchestrator:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e",
@@ -121,10 +64,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 40s
+      start_period: 120s # first boot builds the dashboard
     restart: unless-stopped
 
 volumes:
   falkordb-data:
-  gateway-journal:
-  orchestrator-data:
+  flow-data:

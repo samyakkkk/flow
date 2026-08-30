@@ -1,0 +1,271 @@
+# Overnight Autonomous Run — Prod Dashboard + Persona Validation (2026-08-07)
+
+**Owner:** Samyak · **Agent:** Opus 4.8 (this session) · **Duration:** ~12h
+**Goal:** Wake up to *working shit* — a Flow prod deployment an admin can set up
+from scratch, wire GitHub repos into (via the provided PAT), and that a normal
+member can log into and actually use. Proven by real persona test agents driving
+a real browser.
+
+This file is the source of truth. I **keep it updated** — check items off, append
+to the Progress Log, add tasks as I find them. The 30-min cron watchdog reads
+this file to resume if my session dies.
+
+---
+
+## ⛔ HARD CONSTRAINTS (never violate)
+
+1. **NEVER** `flow down` / `flow down flow` — the **`flow` project on :7600 is
+   what THIS agent session runs on**. Killing it kills me. I may `down` *other*
+   deployments (ec2sim, locsim, flow-test1) freely.
+2. Never rebuild/restart/redeploy the user's **:7600 main flow**. All code
+   testing runs on **`ec2sim` (:8600)** — worktree code, own db.
+3. ec2sim has its OWN FalkorDB (`flow-falkordb-ec2sim`); safe to cycle. Never
+   bounce the shared `flow-falkordb` / main gateway.
+4. Secrets are mode-600, **never echoed**: GitHub PAT
+   `~/.config/flow-test-github-pat.env`, Hetzner `~/.config/hetzner-flow-test.env`
+   (+ ssh key `~/.config/hetzner-flow-test-key`), OpenRouter `/tmp/priya-test.env`.
+5. Confirm before anything hard-to-reverse & outward-facing beyond the sandbox
+   (deleting the Hetzner server; force-pushing). Redeploying the app is fine.
+6. Guard installs: `NODE_ENV= npm ci --include=dev` (production omits devDeps →
+   dashboard build breaks). Never run installs with NODE_ENV=production.
+
+## 🗺️ Environment map
+
+| Thing | Where | Notes |
+|---|---|---|
+| Main flow (MY LIFELINE) | `localhost:7600` | project `flow`. **NEVER touch.** |
+| Local test rig | `ec2sim` → `localhost:8600` | worktree code, offset 1000, db `flow-falkordb-ec2sim`. Rebuild/restart freely. |
+| Prod deployment | `https://167-233-240-21.nip.io` | Hetzner, docker compose, prod mode. Persona target. |
+| Worktree (code) | `.../worktrees/flow/we-re-listening-to-bu85` | branch `flow/we-re-listening-to-bu85` |
+| Hetzner box | IP `167.233.240.21` | ssh `~/.config/hetzner-flow-test-key`; code at `/root/flow` |
+| GitHub PAT | `~/.config/flow-test-github-pat.env` | user `samyakkkk`; olostep/olostep-api repos |
+
+**Deploy to Hetzner:** rsync worktree → `/root/flow` (exclude
+node_modules/.next/.git/data), then
+`ssh -i <key> root@167.233.240.21 'cd /root/flow/deploy && docker compose up --build -d flow'`.
+FalkorDB volume persists (D1). In-container build installs devDeps cleanly.
+
+## 🧠 Gotchas already learned (don't re-discover)
+- `NODE_ENV=production` shell → npm omits devDeps → build fails w/ misleading
+  `@tailwindcss/postcss` / workStore errors. Fix: `NODE_ENV= npm ci --include=dev`.
+- Chrome LNA: public-origin→localhost needs a per-origin permission grant; the
+  agent browser auto-denies it. Door mechanics testable via curl/relaxed flags.
+- ec2sim runs natively on macOS → CLI *detection* there is false; test detection
+  on Hetzner (real headless prod), not ec2sim.
+- Prod owner-gating: `canManageIntegrations()` (local=allowed, prod=owner-only).
+
+---
+
+## ✅ Task checklist  (keep updated)
+
+### Phase 0 — Foundation
+- [x] Secure GitHub PAT (mode 600) + verify auth & repo list (user samyakkkk)
+- [x] Pick isolated local test rig (ec2sim :8600, worktree code, own db)
+- [x] Write this plan
+- [x] Bring up ec2sim, verify it builds+serves (:8600 → 200, main :7600 still 200)
+- [x] 30-min cron watchdog (session-only — resumes on idle; can't resurrect a fully dead process)
+- [x] Cloud/persona **testing skill** — `.claude/skills/flow-cloud-test/SKILL.md` (authored from real experience)
+
+### Phase 1 — D3: role-based integrations + admin GitHub config + repo browse (CENTRAL — personas need it)
+- [x] API already works: owner-gated PAT storage + `/api/github/repos` browse + add_repos→index (RepoPicker.tsx / api/github/repos/route.ts)
+- [x] VALIDATED on Hetzner `main` as owner: save_pat 200 · list 89 repos via PAT · add olostep-cli → status "indexing" (running job)
+- [x] UI: added `useViewer` hook; IntegrationCatalog + Connections page gate to read-only for prod members (commit 1d7280f)
+- [x] Deployed to Hetzner + VERIFIED via real browser: owner sees full editor (Connect btns, "1 REPOS ✓"); member `alex@acme.dev` sees "What feeds this project's brain" read-only, 0 Connect buttons, still gets own-tools panel. Member 403'd server-side. Screenshots: /tmp/persona-owner-integrations.png, /tmp/persona-member-*.png
+- [x] BONUS: indexed repo (olostep-cli) shows as a node in the brain graph — full pipeline works end to end
+**D3 DONE ✓**
+
+**KEY DEPLOYMENT FACTS (learned):**
+- Deployment is **single-project** by design (entrypoint brings up only
+  `FLOW_PROJECT=main`). Use **`main`** for personas. The `acme` project is a
+  dead manual experiment — its orchestrator (:7500) doesn't survive restart.
+- Real per-project ports on the box: gateway 7443, orchestrator 7510, dash 7600.
+- Owner `sam@acme.dev` / `hetznertest1` is a GLOBAL owner; can access `main`.
+- ⚠️ Bug for later: redeploy leaves any *secondary* project's services down
+  (only FLOW_PROJECT restarts). Fine for single-project prod; note for multi.
+
+### Phase 2 — D4: consumer connectors without a marketplace
+- [x] Insight: /<project>/mcp is already a bearer-authed remote MCP → connectors = URL + token, no marketplace
+- [x] ConsumerConnectorModal (URL + mint PAT + per-app steps) + CodingToolsPanel cards become real Connect buttons in prod (commit a5c0a7e)
+- [x] VERIFIED: member mints PAT via /api/tokens → PAT works against /main/mcp (all 8 brain tools). Cards render for member on Hetzner. Modal+cards live in deployed build.
+**D4 DONE ✓** (member-allowed personal connector; instance-parameterized by origin+project)
+
+### Phase 3 — C2: local execution + remote brain
+- [x] Thread `BrainBinding` through orchestrator createSession + both mount sites (commit 4e2ecd5) — typechecks
+- [x] POST /v1/agents/sessions accepts {brain:{mcpUrl,token}}
+- [x] **Remote brain PROVEN**: POST Hetzner /main/mcp + machine PAT → 8 brain tools; orient() returns real indexed-repo knowledge; no token → 401
+- [ ] Dashboard dual-origin composer sends the binding (LNA-gated e2e — needs real user browser grant; building blocks in place)
+- [x] **Execution door PROVEN working** (2026-08-07): `proxy.ts` (Next 16 `middleware.ts`→`proxy.ts` rename) emits CORS + Private-Network-Access for a connected origin, denies unknown origins — verified via `scripts/verify-door.sh` on a fresh local-mode build.
+- [x] **Root-caused the "connected but couldn't reach its Flow"**: user's `:7600` runs the *parent checkout* (no door code; `/api/deployment`→404); the door build had also been silently degraded by the `NODE_ENV=production` devDeps prune (empty middleware manifest). Fixed the prune permanently in `bin/flow.mjs ensureDashboardBuild()` + added `scripts/verify-door.sh`.
+- [x] **Door is LOCAL-mode only by design** → `ec2sim :8600` (prod) is the wrong target; it simulates the server side. See [[decision_flow_execution_door_local_only]]. Clean path for the user: merge this branch so their local `:7600` gets the door (can't do in-session — restarts the lifeline).
+**C2 core done ✓ (remote brain proven, orchestrator ready, door proven); full browser e2e needs a local-mode flow on this branch (merge → :7600, or a parallel local instance) + the user's LNA grant.**
+
+### Phase 4 — Persona validation (headline deliverable) — DONE ✓
+- [x] Prod project: `main` on Hetzner + owner `sam@acme.dev` + member `alex@acme.dev`
+- [x] 5 personas defined (who/when/what/why) — `docs/personas.md`
+- [x] Test agents: `scripts/persona-tests.sh` (21 API assertions) + agent-browser
+      screenshots (owner editor vs member read-only) — admin sets up GitHub, member
+      accesses read-only + links own tools + captures sessions
+- [x] Pass/fail per persona: **21/21 green** (P1 owner, P2 member+gating+capture,
+      P3 remote brain, P4 durability, P5 connector). Fixed everything found,
+      including a CRITICAL security escalation surfaced mid-run.
+- [x] Persona report: `docs/personas.md` (status matrix) + `docs/HANDOFF.md`
+
+### Phase 5 — Hardening (done)
+- [x] `flow remotes` junk `local … undefined … since ?` row — fixed (commit b3ca314)
+- [x] One-command Hetzner redeploy + smoke script (scripts/deploy-hetzner.sh, e82edb9) — verified rebuild→17/17
+- [x] Code review of session diff (subagent) — 3 low/med findings; fixed the member-control flash (80f4b17)
+- [x] Member capture path (ingest hook + PAT) verified + automated (17/17)
+- [x] docs/HANDOFF.md — morning deploy-ready summary
+
+### C2 — precise remaining scope (investigated, deliberately not built blind)
+DONE + proven: orchestrator accepts `{brain:{mcpUrl,token}}` on POST
+/v1/agents/sessions and mounts it as the flow-graph MCP (runtime.ts); the remote
+brain answers over HTTP+PAT (8 tools, orient returns real knowledge, 401 w/o token).
+Remaining (all NEW plumbing, can't be fully validated headlessly):
+1. **Resolve-from-folder**: `work_folders` (orchestrator/src/agents/work-folders.ts)
+   has NO remote/brain field, and `flow setup --remote` bakes the binding into
+   hook commands + the flow-mcp bridge (bin/lib/materialize.mjs), not a store
+   createSession reads. Need: a remote-binding column on work_folders + record it
+   in setup + resolve it in createSession (→ pass brain). Testable on ec2sim.
+2. **Dashboard dual-origin composer**: browser (served by deployment) → localhost
+   execution door with the brain binding. **LNA-gated** — the agent browser
+   auto-denies Local Network Access, so this can't be validated headlessly.
+3. Resume-after-restart drops the in-memory brain binding (falls back to local);
+   persist mcpUrl if remote-brain machines lack a local gateway.
+Left as a clean, well-specified follow-up — building new feature plumbing that
+can't be e2e-verified tonight would risk "working" for "more".
+
+---
+
+## 🔭 Watch / next ticks (for the cron watchdog to pick up)
+- [x] 2nd repo indexed → **brain grew to 48 nodes** (MCP read_query, cypher arg). Both repos `indexed`.
+- [x] BUG FOUND + FIXED: github-poller had a hardcoded demo seed (acme/api-service,
+      acme/web-app) → recurring 404s on every deployment. Removed (commit 6074922);
+      deployed; verified **0 phantom errors** after a full poll cycle. Tests 20/20.
+- [x] **CRASH BUG FOUND + FIXED + FAULT-TESTED**: gateway's FalkorDB client had NO
+      'error' listener → an unexpected socket close (server restart/blip) emitted
+      an unhandled 'error' event → Node rethrows → **gateway crash**. Attached
+      listeners (commit 0c78895). Fault-injected a FalkorDB restart: flow container
+      stayed healthy, gateway logged "[falkordb] client error (auto-reconnecting)"
+      + reconnected, brain queryable (48 nodes). Same class as the users-service
+      Redis silent wedge. This is a real reliability win for every deployment.
+- [ ] If agent-browser recovers, capture the owner GitHub-modal + D4 connector-modal
+      screenshots (visual evidence; API already green 18/18).
+- [ ] C2 dashboard dual-origin composer (only if the user wants it built blind —
+      it's LNA-gated, can't be validated headlessly; orchestrator + remote brain ready).
+- [ ] Consider persisting `brain.mcpUrl` for session resume (review finding #1).
+
+## 🛡️ Reliability hardening (this session)
+- Fixed 3 crash vectors + 2 defense-in-depth nets, all deployed + tests 282/282:
+  1. github-poller hardcoded demo seed → recurring 404s (6074922)
+  2. gateway FalkorDB client had no 'error' listener → crash on socket close; **fault-tested** (0c78895)
+  3. ACP agent spawn had no 'error' listener → crash on ENOENT/EACCES (5cb3961)
+  4. global unhandledRejection/uncaughtException nets on orchestrator + gateway (fe3d5c3)
+  5. **AUTO-RECOVERY supervisor** in the container entrypoint (56d7122) — re-runs
+     idempotent `flow up` every 30s; portInUse restarts only dead services, no
+     rebuild, no setup-code spam. **FAULT-TESTED:** killed the orchestrator →
+     endpoint 502 → supervisor restarted it within 30s → back to 200. The
+     silent-partial-outage gap is CLOSED and self-healing. (Chosen over a
+     healthcheck tweak, which Docker's restart policy ignores.)
+
+## 🔐 Security posture (adversarial review 2026-08-07)
+A subagent security review of this session's auth/token/gating/brain code found:
+- **Finding 1 (CRITICAL) — FIXED + verified + regression-guarded (275dcfc).** A
+  member PAT could hit `/<project>/v1/settings` `/v1/sources` `/v1/agents`
+  `/v1/work-folders` directly — the proxy checked only any-grant and route.ts
+  injects the ADMIN token into the role-blind orchestrator, bypassing D3's
+  canManageIntegrations() gate. VERIFIED exploit: member `PUT /v1/settings` →
+  200, wrote LINEAR_API_KEY. Fix: proxy now allows members only the agent/capture
+  surface (verbs/embed/journal/reconcile/memory/ingest/corrections); every other
+  /v1 segment requires owner (403). Verified: member settings/sources/agents →
+  403, ingest+mcp → 200, owner → 200. Suite guards it (20/20).
+- **Finding 2 (HIGH) — FIXED + verified + regression-guarded (58fbffd).** The
+  ingest hook built the row id `ext-<harness>-<externalId>` from client input with
+  no attribution → an insider member could forge/append another user's captured
+  session (brain memory-poisoning). Fix: proxy verifies the PAT and stamps a
+  trusted `x-flow-pat-user` (stripping any client value) → route.ts forwards it →
+  orchestrator namespaces the row id by user (`ext-<userId>-<harness>-<externalId>`).
+  VERIFIED: alex's capture → `ext-944a1b77…-…`; the SAME externalId under the
+  owner → a DIFFERENT id → cross-user forge/append structurally impossible. Ingest
+  tests 34/34; suite guards it (21/21). Local/unattributed keeps the legacy id.
+- **Finding 3 (HIGH) — FIXED (b9ab80e) + verified.** brain-binding SSRF: it was
+  owner-only after Finding 1, and now the binding itself is hardened —
+  `isSafeBrainUrl()` rejects loopback (a remote brain is never localhost — that's
+  the LOCAL brain) and cloud-metadata/link-local hosts (169.254.169.254,
+  metadata.google.internal, ::1, 0.0.0.0, fd00:ec2:), while public domains and
+  private-network deployments still pass. 12 logic cases verified; orchestrator
+  282/282; personas 21/21. Full DNS-rebinding defense (runtime host resolution)
+  is a further hardening if ever needed; the literal-IP targets are the ones
+  that matter and are now closed.
+- **Finding 4 (LOW) — revocation VERIFIED already implemented; only a cosmetic
+  nit remains.** The review's "no revocation" was imprecise: `DELETE /api/tokens/<id>`
+  exists (ownership-checked, self-revoke for `flow remotes remove`, ~2s gateway
+  TTL) AND a "Revoke" button is wired in AccessSettings' token list on the settings
+  page. VERIFIED end-to-end: mint → /mcp 200 → revoke → /mcp 401. Suite guards it
+  (23/23). This matters for D4 (connector tokens pasted into external apps can be
+  killed if leaked). Only residual: 32-bit token id — cosmetic (collision
+  astronomically unlikely, the 128-bit secret still gates auth); a longer id would
+  be a breaking token-format change, not worth it.
+- **Finding 5 (SAFE).** The `/mcp` consumer-connector path is correctly
+  read-scoped + project-gated (forwards the PAT, not admin; gateway re-verifies).
+
+## ✅ State of completion (2026-08-07, after N watchdog ticks)
+Verifiable overnight work is **substantially complete**. Delivered + validated:
+- **Features:** D1–D5, C1, C2 core — 5 personas, 21/21 API assertions green.
+- **Reliability:** 3 crash-vector fixes + 2 global nets + entrypoint supervisor +
+  lsof/portInUse fix — all fault-tested; hard `docker restart` recovery proven.
+- **Security:** both member-exploitable findings (CRITICAL escalation + HIGH
+  ingest forgery) fixed, verified as real exploits before/after, regression-guarded.
+- **Tests:** orchestrator 282/282, gateway 24/24, personas 21/21. Health-scans clean.
+- **Docs:** HANDOFF, personas, this plan, flow-cloud-test skill, 4 memories.
+
+**Genuinely remaining (all blocked from headless validation or low-value):**
+- C2 dashboard composer (browser LNA auto-denied) + resolve-from-folder plumbing
+  (new feature, spec'd above) — won't build un-verifiable feature code blind.
+- Finding 3 SSRF residual (owner-only now; a string check wouldn't stop DNS
+  rebinding, so no false-confidence validation) + Finding 4 LOW nits.
+- Minor: prod dashboard polls /v1/agents/sessions though prod runs no server-side
+  agents (C1) — harmless INFO noise; not worth a change.
+The watchdog continues low-cost health-scanning (it caught 2 real bugs), but the
+substantive verifiable work is done. HANDOFF.md is the morning deploy guide.
+
+## 📓 Progress Log (newest first)
+- 2026-08-07 T+N — **C2 door: root-caused + fixed the build, proven working.** User granted Chrome LNA but the prod page still said "connected, but couldn't reach its Flow." Traced it end-to-end: (a) the page probes the `localUrl` from `~/.flow/config.json` — the `hetzner` remote registered `localhost:7600`, i.e. the user's REAL/main flow (not ec2sim); (b) `:7600` runs the *parent checkout* with none of this branch's code (`/api/deployment`→404); (c) the door code (`dashboard/src/proxy.ts`, Next 16's renamed `middleware.ts`→`proxy.ts`) had also been silently degraded by the `NODE_ENV=production` devDeps prune → empty middleware manifest → no CORS. Clean-rebuilt (NODE_ENV unset) → `ƒ Proxy (Middleware)` + door emits CORS/PNA for the connected origin, denies unknown (verified via new `scripts/verify-door.sh`). **Key finding:** the door opens ONLY in local mode (`IS_LOCAL`), so `ec2sim :8600` (prod) is the wrong target — it's the server side. Full browser e2e needs a LOCAL-mode flow on this branch: either merge → the user's `:7600` gets it (restarts the lifeline, can't do in-session), or a parallel local instance. Permanent fixes shipped: `bin/flow.mjs ensureDashboardBuild()` now auto-remediates pruned devDeps + fails precisely; `scripts/verify-door.sh` makes the door a one-command check. Memory: [[decision_flow_execution_door_local_only]], [[feedback_empirical_test_first]], strengthened [[gotcha_flow_devdeps_node_env_build]].
+- 2026-08-07 T+N — Verified reboot-survival config (no reboot needed): docker `is-enabled`=enabled + both containers `restart=unless-stopped` + 4G swap + FalkorDB volume (D1) → a VM reboot auto-recovers the whole deployment. Green, no fix. Resilience is now complete across ALL failure modes: service crash (supervisor ≤30s, fault-tested), container restart (tested), VM reboot (config-verified).
+- 2026-08-07 T+N — Ran down the distiller extraction after the LLM-config fix. CONCLUSION: distiller is **healthy**. In-container `complete()` succeeds (http transport, valid key, valid default model anthropic/claude-sonnet-4.6). The `remember` path verbatim-falls-back BY DESIGN — the model correctly refuses to 'distill' an explicit "remember this:" instruction as potential fabrication and the fact is stored verbatim (searchable). Real session TRANSCRIPTS distill into structured observations (local test on transcript-style content → 2 valid observations). Also: adding the LLM key beneficially **upgraded embeddings** local→openai:text-embedding-3-small (1536-dim), all 49 nodes re-embedded, semantic search verified. idle-sweep is wired (runtime.ts:744). No memory failures in logs. Core capture→distill→embed→search loop is functional end to end.
+- 2026-08-07 T+N — **MAJOR: the deployment's distiller was silently DEAD** — the core "sessions → brain knowledge" loop wasn't working. Two bugs: (1) `llmApiKey()` read only from settings, ignoring the OPENROUTER_API_KEY env docker-compose forwards → no LLM transport for the distiller (the indexer hid it via opencode's own config); (2) `maybeDistill` advanced last_distilled_seq on an LLM failure → sessions permanently lost, never retried. Fixed both (19b507e env-fallback + deploy writes the key; c222e8c defer-on-llm-error). VERIFIED: `remember` → searchable brain knowledge; suite guards it (24/24). Note: hand-crafted 2-event hook sessions don't distill (thin/selective) — the pipeline works; real sessions do.
+- 2026-08-07 T+N — Verified the **full capture→distill loop on the deployment**
+  (previously only capture/session-row was confirmed). A member captured a
+  closed session (UserPromptSubmit + Stop-with-answer + SessionEnd); the closed
+  session shows `last_distilled_seq=2` in flow.db → `distillSession` RAN and
+  consumed the whole transcript. Brain stayed 49 (distiller is selective —
+  synthetic short Q&A yields no durable node; not a bug). Gotcha: `Stop` ≠
+  close; `SessionEnd` (END_EVENTS) closes and triggers distill immediately,
+  else the 45-min idle sweep. Core "sessions feed the brain" loop is wired +
+  running for member sessions on the remote deployment.
+- 2026-08-07 T+N — Stability tick: lifeline+Hetzner 200, brain intact (49 nodes, orient OK), member escalation still 403, 1 listener/port. No drift/regression. Nothing meaningful to add — verifiable work complete.
+- 2026-08-07 T+N — Health scan clean (no error-level patterns; INFO polling only),
+  1 listener/port, lsof fix holds. Declared verifiable work substantially complete.
+- 2026-08-07 T+N — Broadened validation: **gateway tests 24/24** (regression on my
+  graph.ts/server.ts changes; orchestrator was 282/282 → all my code covered).
+  **Hard container-restart durability test:** `docker restart deploy-flow-1` →
+  brain nodes 49→49 (survived), dashboard back in 16s, **18/18 personas**, 1
+  listener/port (supervisor + lsof fix hold across a full restart). The complete
+  durability + recovery story is validated end-to-end.
+- 2026-08-07 T+N — **Caught + fixed a regression my own supervisor introduced.**
+  node:22 ships no `lsof`; `bin/flow.mjs portInUse` spawnSync'd lsof and (since
+  spawnSync returns `{error}` not a throw on ENOENT) read every port as FREE →
+  the supervisor's periodic `flow up` spawned DUPLICATE gateway/orchestrator →
+  EADDRINUSE every 30s (absorbed by the new global net, so no crash, just spam).
+  Found via the routine log health-scan. Fix (52acc29): Dockerfile installs
+  lsof+procps AND portInUse falls back to a node-native TCP probe when lsof is
+  absent (both paths unit-tested). Verified on the box: 1 listener/port, EADDRINUSE
+  count stable across a supervisor cycle, `flow up` → "already running", 18/18.
+  Lesson: the global net masked the symptom in logs — log-scanning is what caught it.
+- 2026-08-07 T+N — **18/18 persona suite green** (owner setup, member gating+capture+can't-manage-users, remote brain, connector, durability). Multi-repo verified (2 repos registered). Deployed + smoke-tested via scripts/deploy-hetzner.sh. Code-reviewed (subagent) → fixed member-control flash. Skill + HANDOFF + deploy script shipped. 12 commits, branch clean. agent-browser went flaky mid-run (early owner/member screenshots captured). C2 composer left as documented LNA-gated follow-up.
+- 2026-08-07 T0 — Plan created. PAT secured+verified. ec2sim = local rig. Earlier
+  this session: fixed devDeps/NODE_ENV build break (no code change); committed
+  home UI fixes (b8b1466); deployed+verified on Hetzner.
+
+## 👥 Personas (define & script in Phase 4)
+**Defined + scripted in `docs/personas.md`** — 5 personas (Priya/owner, Alex/member, Jordan/agent-runner, Sam/returning-owner, Maya/consumer), each with a journey + automated validation. All member-exploitable paths verified.

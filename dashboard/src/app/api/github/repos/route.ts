@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionToken } from "@/lib/auth";
+import { getSessionToken, canManageIntegrations } from "@/lib/auth";
 import { readLocalConfig } from "@/lib/localConfig";
 import { requireProject } from "@/lib/projectContext";
 import { orcFetch } from "@/lib/orchestrator";
@@ -73,6 +73,9 @@ async function tryGitHubPat(pat: string): Promise<RepoResult[] | null> {
 export async function GET(): Promise<NextResponse> {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canManageIntegrations())) {
+    return NextResponse.json({ error: "Integrations are managed by an owner." }, { status: 403 });
+  }
 
   // Try gh CLI first (local-mode convenience)
   const ghRepos = tryGhCli();
@@ -100,6 +103,9 @@ export async function GET(): Promise<NextResponse> {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canManageIntegrations())) {
+    return NextResponse.json({ error: "Integrations are managed by an owner." }, { status: 403 });
+  }
 
   const body = (await req.json()) as { action?: string; pat?: string; repos?: RepoResult[] };
 

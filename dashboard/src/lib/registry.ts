@@ -12,6 +12,10 @@ export interface RegistryProject {
   name: string;
   graph: string;
   mode: "local" | "prod";
+  // "runner" is a gateway-less local project `flow connect` stands up to run
+  // coding agents against a connected cloud's brain — it has no brain of its
+  // own. Everything else is a normal brain-carrying project.
+  kind: "project" | "runner";
   dir: string;
   orchestratorUrl: string;
   gatewayUrl: string;
@@ -55,6 +59,7 @@ function loadAll(): Map<string, RegistryProject> {
           name: string;
           graph: string;
           mode: string;
+          kind?: string;
           ports: { gateway: number; orchestrator: number };
         };
         const env = parseEnvFile(path.join(dir, ".env"));
@@ -62,6 +67,7 @@ function loadAll(): Map<string, RegistryProject> {
           name: entry,
           graph: p.graph ?? entry,
           mode: p.mode === "prod" ? "prod" : "local",
+          kind: p.kind === "runner" ? "runner" : "project",
           dir,
           orchestratorUrl: `http://127.0.0.1:${p.ports.orchestrator}`,
           gatewayUrl: `http://127.0.0.1:${p.ports.gateway}`,
@@ -90,7 +96,7 @@ export function getRegistryProject(name: string): RegistryProject | null {
 // First URL segments that can never be project names (deployment-level
 // surfaces + the legacy /p/ prefix). The CLI refuses these at create time;
 // checking here too keeps a hand-made project dir from shadowing /login.
-export const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+export const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs", "mcp", "connect"]);
 
 /** Valid project-name shape (mirrors the CLI's create validation). */
 export function isValidProjectName(name: string): boolean {

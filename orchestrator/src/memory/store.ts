@@ -8,6 +8,7 @@ import db from "../db.js";
 import { blobToVec, vecToBlob, embedText as gatewayEmbed } from "../embed.js";
 import { repoFamily } from "./repo-family.js";
 import type { RawObservation } from "./parse.js";
+import { track, bumpCounter } from "../telemetry.js";
 
 // An embedder returns a 768-dim vector or null (model not ready). Injectable.
 export type Embedder = (text: string) => Promise<Float32Array | null>;
@@ -191,6 +192,10 @@ export function createMemory(o: ObservationRow): MemoryRow {
   });
   db.prepare(`UPDATE observations SET memory_id = ? WHERE id = ?`).run(id, o.id);
   invalidateVectorCache();
+  // Memory creation is rare enough for a discrete event; `source` is the
+  // fixed observation-source enum (session/slack/linear/meeting), never text.
+  bumpCounter("memories_created_total");
+  track("flow_memory_saved", { source: o.source, kind: o.kind });
   return getMemory(id)!;
 }
 

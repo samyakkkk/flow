@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
+import { useMode } from "@/lib/useMode";
+import { LocalExecutionCard } from "@/components/LocalExecutionCard";
 import { Button } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { MentionTextarea, type FileEntry } from "@/components/MentionTextarea";
@@ -13,6 +15,7 @@ import {
   type AgentModes,
   type ConfigOption,
 } from "@/lib/acpConfig";
+import { loadKickoffPrefs, rememberKickoff } from "@/lib/kickoffPrefs";
 
 export interface Attachment {
   name: string;
@@ -82,7 +85,8 @@ export function AgentTaskComposer({
   onClearWorktreeTarget,
 }: AgentTaskComposerProps) {
   const router = useRouter();
-  const { prefix } = useProject();
+  const { project, prefix } = useProject();
+  const { mode } = useMode();
 
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
   const [repos, setRepos] = useState<RepoOption[]>([]);
@@ -144,11 +148,23 @@ export function AgentTaskComposer({
       const folders: WorkFolder[] = data.workFolders ?? [];
       setWorkFolders(folders);
 
-      const defaultBackend = detected.find((x: DetectedAgent) => x.installed)?.id || "";
+      // Last-used choices win over positional defaults — an engine you launched
+      // with yesterday beats "first installed", the folder you launched in
+      // beats "first registered". Falls back when the remembered one is gone.
+      const prefs = loadKickoffPrefs(project);
+      const rememberedBackend = detected.find(
+        (x: DetectedAgent) => x.id === prefs.backend && x.installed
+      )?.id;
+      const defaultBackend =
+        rememberedBackend || detected.find((x: DetectedAgent) => x.installed)?.id || "";
       setBackend((prev) => prev || defaultBackend);
 
       if (!workFolder) {
-        if (folders.length > 0) {
+        const rememberedFolder = folders.find((f) => f.path === prefs.workFolder);
+        if (rememberedFolder) {
+          setWorkFolder(rememberedFolder.path);
+          setRepo(rememberedFolder.repo || allRepos[0]?.name || "default");
+        } else if (folders.length > 0) {
           setWorkFolder(folders[0].path);
           setRepo(folders[0].repo || allRepos[0]?.name || "default");
         } else {
@@ -164,7 +180,7 @@ export function AgentTaskComposer({
     } catch {
       // swallow
     }
-  }, [prefix, workFolder]);
+  }, [prefix, project, workFolder]);
 
   useEffect(() => {
     refresh();
@@ -195,8 +211,27 @@ export function AgentTaskComposer({
         for (const o of opts) {
           if (o.currentValue !== undefined) seed[o.id] = o.currentValue;
         }
-        setConfigValues(seed);
-        setModeId(m?.currentModeId);
+        // Overlay what this engine last launched with — but only options the
+        // agent still advertises, with still-valid select values, and only
+        // where it differs from the agent's own default (equal values would
+        // just be redundant explicit config on session create).
+        const saved = loadKickoffPrefs(project).byBackend?.[backend];
+        const overlay: Record<string, string | boolean> = {};
+        for (const o of opts) {
+          const v = saved?.config?.[o.id];
+          if (v === undefined || v === o.currentValue) continue;
+          if (o.options && o.options.length > 0 && !o.options.some((s) => s.value === v)) {
+            continue;
+          }
+          overlay[o.id] = v;
+        }
+        setConfigValues({ ...seed, ...overlay });
+        setConfig(overlay);
+        const savedMode = m?.availableModes?.some((x) => x.id === saved?.modeId)
+          ? saved?.modeId
+          : undefined;
+        setModeId(savedMode ?? m?.currentModeId);
+        setModeChanged(Boolean(savedMode && savedMode !== m?.currentModeId));
       })
       .catch(() => {
         /* leave controls empty — the session page still shows them live */
@@ -207,7 +242,7 @@ export function AgentTaskComposer({
     return () => {
       cancelled = true;
     };
-  }, [backend, prefix]);
+  }, [backend, prefix, project]);
 
   const handleConfigChange = useCallback((configId: string, value: string | boolean) => {
     setConfigValues((v) => ({ ...v, [configId]: value }));
@@ -358,6 +393,15 @@ export function AgentTaskComposer({
         return;
       }
 
+      // The launch succeeded — remember every choice it was made with so the
+      // next kickoff starts from here instead of the hardcoded defaults.
+      rememberKickoff(project, {
+        backend,
+        workFolder: worktreeTarget ? undefined : workFolder,
+        config,
+        modeId,
+      });
+
       setPrompt("");
       setAttachments([]);
       onClearWorktreeTarget?.();
@@ -377,6 +421,16 @@ export function AgentTaskComposer({
     "Fix build errors and typescript issues",
     "Refactor UI layout and clean code",
   ];
+
+  // On a remote deployment (prod), the composer below is SERVER-backed — its
+  // CLI detection and session-create hit this deployment, i.e. they'd run the
+  // agent on the server and show the server's CLIs. That contradicts "tasks
+  // run on the CLIs on your machine" and the local-control-plane/remote-brain
+  // design. Until execution is wired to the user's localhost (C2), gate it:
+  // show this machine's connection state instead of a run surface that runs on
+  // the server. In local mode same-origin IS the local machine, so the
+  // composer is correct — render it as-is.
+  if (mode === "prod") return <LocalExecutionCard />;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionToken } from "@/lib/auth";
+import { getSessionToken, canManageIntegrations } from "@/lib/auth";
 import { orcFetch } from "@/lib/orchestrator";
 
 export interface SettingItem {
@@ -33,6 +33,9 @@ export async function GET(): Promise<NextResponse> {
 export async function PUT(req: NextRequest): Promise<NextResponse> {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canManageIntegrations())) {
+    return NextResponse.json({ error: "Settings are managed by an owner." }, { status: 403 });
+  }
 
   let body: Record<string, string>;
   try {
