@@ -18,6 +18,7 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
+import { track } from "../telemetry.js";
 import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
 import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
 import {
@@ -1229,7 +1230,14 @@ export async function createSession(opts: {
     if ("error" in wt) return { error: `Couldn't create a separate copy: ${wt.error}` };
     cwd = wt.path;
     worktreeId = wt.path; // the worktree path is the stable, derivable id
+    track("flow_worktree_created", {});
   }
+
+  track("flow_session_started", {
+    backend: opts.backend,
+    placement: opts.worktreePath ? "existing_worktree" : opts.placement === "separate_copy" ? "separate_copy" : "in_place",
+    native: true,
+  });
 
   const id = crypto.randomUUID();
   const now = Date.now();

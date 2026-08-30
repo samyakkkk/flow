@@ -36,6 +36,9 @@ import {
   preflightIndexEnvironment,
 } from "./indexer-failure.js";
 import { indexLog } from "./index-log.js";
+// Circular with telemetry.ts (it reads listWorkspaceRepos) — safe: both sides
+// only dereference inside function bodies, never at module init.
+import { track } from "./telemetry.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -179,6 +182,7 @@ export function registerRepo(url: string, branch: string): RepoEntry {
   const entry: RepoEntry = { name, url, branch, lastIndexedCommit: null, addedAt: new Date().toISOString() };
   registry.repos.push(entry);
   writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
+  track("flow_source_added", { kind: "code" });
   return entry;
 }
 
@@ -212,6 +216,7 @@ export function registerSource(entry: SourceRegistration): RepoEntry {
   };
   registry.repos.push(created);
   writeFileSync(reposJsonPath(), JSON.stringify(registry, null, 2));
+  track("flow_source_added", { kind: entry.kind ?? "code" });
   return created;
 }
 
@@ -827,6 +832,11 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
         mode: inc ? `incremental from ${inc.from.slice(0, 10)}` : "full",
         duration_ms: Date.now() - startedAt,
       });
+      track("flow_index_completed", {
+        ok: true,
+        incremental: Boolean(inc),
+        duration_s: Math.round((Date.now() - startedAt) / 1000),
+      });
       // Graph freshness props are code-maintained, not model-invented.
       const branch = (opts.input as { branch?: string }).branch;
       if (branch && !process.env.FLOW_FAKE_OPENCODE) void stampRepoNode(repo, branch, head);
@@ -891,6 +901,10 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
         code: failure.code,
         ...(failure.detail ? { detail: failure.detail } : {}),
         duration_ms: Date.now() - startedAt,
+      });
+      track("flow_index_completed", {
+        ok: false,
+        duration_s: Math.round((Date.now() - startedAt) / 1000),
       });
     }
     if (opts.type === "correct_graph") {

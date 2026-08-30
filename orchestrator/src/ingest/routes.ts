@@ -13,6 +13,7 @@
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import db from "../db.js";
+import { track } from "../telemetry.js";
 import { appendTranscriptEvents, readTranscript } from "../agents/runtime.js";
 import { onSessionClosed } from "../memory/trigger.js";
 import {
@@ -88,6 +89,7 @@ function upsertExternalSession(a: UpsertArgs): string {
   const row = rowStmt().get(id) as { id: string } | undefined;
   if (!row) {
     insertStmt().run(id, `ext:${a.harness}`, a.repo ?? "", a.cwd ?? "", a.title ?? "", "idle", now, now);
+    track("flow_session_started", { backend: `ext:${a.harness}`, placement: "external", native: false });
   } else {
     touchStmt().run(now, id);
     if (a.title) titleStmt().run(a.title, now, id);
