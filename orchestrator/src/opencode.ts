@@ -1257,7 +1257,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
 
   // For answer/continue jobs, return a structured answer; for others return minimal ok
   if (opts.type === "answer" || opts.type === "continue") {
-    return { result: parseAnswerPayload(answerMd), sessionId };
+    return { result: parseAnswerPayload(answerMd, textParts.at(-1)), sessionId };
   }
 
   return { result: { status: "ok", raw: answerMd }, sessionId };
@@ -1459,15 +1459,18 @@ async function runCodexBackend(opts: JobInput, jobId: string): Promise<{ result:
 
 // The answerer agent is instructed to return {answer_md, citations, confidence,
 // gaps} as JSON, usually inside a ```json fence with conversational preamble
-// around it. Extract and use it; fall back to the raw text if absent, so a
-// model that ignores the format still produces a readable answer.
-export function parseAnswerPayload(raw: string): {
+// around it. Extract and use it; fall back if absent, so a model that ignores
+// the format still produces a readable answer. `lastMessage` is the final text
+// block of the run — the fallback uses it (not the full stream) because the
+// stream also contains the model's working narration between tool calls
+// ("Let me check…"), which is noise to the person asking.
+export function parseAnswerPayload(raw: string, lastMessage?: string): {
   answer_md: string;
   citations: { kind: string; ref: string }[];
   confidence: number;
   gaps: string[];
 } {
-  const fallback = { answer_md: raw, citations: [], confidence: 0.7, gaps: [] };
+  const fallback = { answer_md: lastMessage?.trim() || raw, citations: [], confidence: 0.7, gaps: [] };
 
   // Try fenced json blocks first, then ALWAYS also the raw {...} span around
   // an "answer_md" key: when answer_md itself contains nested ``` fences, the
