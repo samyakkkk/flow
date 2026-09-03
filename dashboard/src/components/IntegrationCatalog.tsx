@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { BrandIcon } from "@/components/BrandIcon";
 import { RepoPicker } from "@/components/RepoPicker";
 import { AddFolder } from "@/components/AddFolder";
+import { SlackBotCard } from "@/components/SlackBotCard";
 import { Button, StatusPill, Kicker } from "@/components/ui";
 import { useProject } from "@/lib/useProject";
 import { FlowMode } from "@/lib/useMode";
@@ -32,7 +33,7 @@ interface IntegrationCatalogProps {
   onChanged: () => void;
 }
 
-type ModalKind = "none" | "github" | "folder" | "linear" | "fireflies" | "notes";
+type ModalKind = "none" | "github" | "folder" | "linear" | "fireflies" | "notes" | "slack";
 
 export function IntegrationCatalog({
   repos,
@@ -267,12 +268,12 @@ export function IntegrationCatalog({
             </p>
           </div>
 
-          <a
-            href={prefix("/connections")}
+          <button
+            onClick={() => setActiveModal("slack")}
             className="w-full py-1 text-center text-[9px] font-mono uppercase tracking-wider bg-sand border border-line rounded text-text-muted hover:text-ink transition-colors cursor-pointer"
           >
             {slackConnected ? "Connected ↗" : "Set up ↗"}
-          </a>
+          </button>
         </div>
       </div>
 
@@ -314,6 +315,30 @@ export function IntegrationCatalog({
       )}
 
       {/* 3. Linear Modal */}
+      {/* Slack Bot Modal — same wizard as the Connections page card */}
+      {activeModal === "slack" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-paper border border-line rounded-2xl w-full max-w-md p-5 shadow-2xl rise-in flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div className="flex items-center gap-2">
+                <BrandIcon name="slack" size={20} />
+                <span className="font-semibold text-ink text-sm">Slack bot</span>
+              </div>
+              <button
+                onClick={() => {
+                  setActiveModal("none");
+                  onChanged();
+                }}
+                className="text-text-muted hover:text-ink text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <SlackBotCard />
+          </div>
+        </div>
+      )}
+
       {activeModal === "linear" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
           <div className="bg-paper border border-line rounded-2xl w-full max-w-md p-5 shadow-2xl rise-in flex flex-col gap-4">
