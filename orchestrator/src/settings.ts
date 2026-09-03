@@ -152,13 +152,13 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "SLACK_BOT_TOKEN",
     secret: true,
-    description: "Slack bot OAuth token (xoxb-…) for Socket Mode adapter",
+    description: "Slack bot OAuth token (xoxb-…) for the Slack agent",
     appliesTo: "slack",
   },
   {
     key: "SLACK_APP_TOKEN",
     secret: true,
-    description: "Slack app-level token (xapp-…) for Socket Mode connection",
+    description: "Slack app-level token (xapp-…) for the Slack agent Socket Mode connection",
     appliesTo: "slack",
   },
   {
@@ -524,15 +524,16 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         console.error("[settings] reinitPollers error:", err);
       }
 
-      // Attempt Slack re-boot if tokens changed and in prod mode
-      if (slackChanged && (process.env.FLOW_MODE ?? "local") === "prod") {
+      // Hot-apply Slack agent: reconnect with new tokens, or disconnect when
+      // the dashboard cleared them (works in local and prod mode alike).
+      if (slackChanged) {
         try {
-          const { bootSlackAdapter } = await import("./adapters/slack.js");
-          bootSlackAdapter().catch((err) =>
-            console.error("[settings] Slack re-boot error:", err)
+          const { restartSlackAgent } = await import("./slack-agent/boot.js");
+          restartSlackAgent().catch((err) =>
+            console.error("[settings] Slack agent restart error:", err)
           );
         } catch (err) {
-          console.error("[settings] Slack adapter import error:", err);
+          console.error("[settings] Slack agent import error:", err);
         }
       }
 

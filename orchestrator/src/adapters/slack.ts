@@ -1,5 +1,18 @@
-// adapters/slack.ts — Bolt Socket Mode Slack adapter.
+// adapters/slack.ts — LEGACY Bolt Socket Mode Slack adapter. NOT BOOTED.
 //
+// MIGRATION(slack-agent): the launch-path Slack interface is
+// src/slack-agent/ (question-answering agent). This ambient adapter is
+// untested and intentionally no longer booted from index.ts or settings
+// hot-apply — one Slack app must own exactly one Socket Mode connection
+// (Slack round-robins events across connections and would silently split
+// traffic between the two). Paths still to migrate onto slack-agent:
+//   - ambient message capture → corpus (app.message handler below)
+//   - mention → event-pipeline routing (processEvent "slack.mention")
+//   - G10 slack-thread ↔ opencode-session binding (events.ts)
+//   - outbox slack_post/dm delivery (drainer.ts uses WebClient directly)
+// Until each moves, this file stays for reference; delete when empty.
+//
+// Original behavior:
 // Boots ONLY when SLACK_BOT_TOKEN + SLACK_APP_TOKEN are set.
 // Handles: app_mention → normalized slack mention event
 //          message (ambient) → normalized slack ambient event (skips bot's own messages)
@@ -98,7 +111,7 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
   // ------------------------------------------------------------------
   app.message(async ({ message }) => {
     // Only process user messages in channels
-    const msg = message as Record<string, unknown>;
+    const msg = message as unknown as Record<string, unknown>;
     const subtype = msg.subtype as string | undefined;
 
     // Skip bot messages, edits, deletes, etc.

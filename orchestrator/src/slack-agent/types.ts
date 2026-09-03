@@ -1,8 +1,4 @@
-// runtime/types.ts — the seam between Slack plumbing and the answering brain.
-//
-// Slack listeners build a RuntimeQuery and render the RuntimeAnswer; nothing
-// Slack-specific crosses this boundary, so the runtime can be swapped for a
-// customer-specific agent, a webhook, or a direct LLM call later.
+// slack-agent/types.ts — runtime seam types (no Slack imports, no side effects).
 
 export interface TranscriptTurn {
   role: "user" | "assistant";

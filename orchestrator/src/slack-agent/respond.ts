@@ -1,10 +1,10 @@
-// respond.ts — shared answer path for every surface (DM, group DM, channel,
+// slack-agent/respond.ts — shared answer path for every surface (DM, group DM, channel,
 // Slack Connect, threads). Sets the running status, gathers thread context,
 // asks the runtime, and streams the answer back with the agent-session UX.
 
 import { beginRun, endRun } from "./cancel.js";
 import { markEngaged } from "./engagement.js";
-import type { AgentRuntime, Surface, TranscriptTurn } from "./runtime/index.js";
+import type { AgentRuntime, Surface, TranscriptTurn } from "./types.js";
 
 // Bolt v5's sayStream/setStatus middleware args, typed loosely so we don't
 // fight the framework's still-evolving agent types.

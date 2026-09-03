@@ -1,4 +1,4 @@
-// engagement.ts — which channel threads the agent is part of.
+// slack-agent/engagement.ts — which channel threads the agent is part of.
 //
 // The agent only participates where explicitly invoked: DMs and group DMs are
 // always in-scope, but in channels (incl. Slack Connect) it answers only when

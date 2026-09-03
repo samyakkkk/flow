@@ -1,4 +1,4 @@
-// listeners/thread-context.ts — Slack's "what is the user viewing" context.
+// slack-agent/thread-context.ts — Slack's "what is the user viewing" context.
 //
 // assistant_thread_started / assistant_thread_context_changed deliver a
 // context object ({channel_id, team_id, ...}) describing where the user is

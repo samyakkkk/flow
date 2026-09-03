@@ -14,7 +14,8 @@ import { readIndexLog } from "./index-log.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
 import { registerGithubWebhook, registerGithubPoller, seedWatchedRepos } from "./adapters/github.js";
 import { registerMeetingRoutes, registerFirefliesPoller } from "./adapters/meetings.js";
-import { bootSlackAdapter } from "./adapters/slack.js";
+import { bootSlackAgent } from "./slack-agent/boot.js";
+import { registerSlackAgentRoutes } from "./slack-agent/routes.js";
 import { startDrainer, stopDrainer } from "./drainer.js";
 import { registerNotifyRoute } from "./notify.js";
 import { registerModeRoute } from "./mode.js";
@@ -87,6 +88,7 @@ registerMemoryRoutes(app);
 // repo-level. flow.db is primary — this is a read-only projection lookup.
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
+registerSlackAgentRoutes(app);
 
 // ------------------------------------------------------------------
 // Adapter webhook routes
@@ -284,9 +286,11 @@ const start = async (): Promise<void> => {
     // Start all registered pollers (no-ops if FLOW_POLL_DISABLE=1)
     startAllPollers();
 
-    // Boot Slack Socket Mode adapter (no-op if tokens absent)
-    bootSlackAdapter().catch((err) =>
-      console.error("[orchestrator] Slack adapter boot error:", err)
+    // Boot the Slack agent (no-op if tokens absent). This is THE Slack
+    // interface — the legacy ambient adapter (adapters/slack.ts) is not
+    // booted; see MIGRATION(slack-agent) notes there.
+    bootSlackAgent().catch((err) =>
+      console.error("[orchestrator] Slack agent boot error:", err)
     );
   } catch (err) {
     app.log.error(err);

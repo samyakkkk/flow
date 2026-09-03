@@ -1,4 +1,4 @@
-// listeners/index.ts — Slack event wiring.
+// slack-agent/listeners.ts — Slack event wiring.
 //
 // Participation rules (the agent only speaks where explicitly invoked):
 //   • 1:1 DM with the agent            → every message
@@ -9,11 +9,11 @@
 // delivers message.im for the agent's own DM conversations.
 
 import type { App } from "@slack/bolt";
-import { cancelRun } from "../cancel.js";
-import { isEngaged, markEngaged } from "../engagement.js";
-import { respond, stripMentions } from "../respond.js";
-import type { SayFn, SayStreamFn, SetStatusFn, SlackClientLike } from "../respond.js";
-import type { AgentRuntime, Surface } from "../runtime/index.js";
+import { cancelRun } from "./cancel.js";
+import { isEngaged, markEngaged } from "./engagement.js";
+import { respond, stripMentions } from "./respond.js";
+import type { SayFn, SayStreamFn, SetStatusFn, SlackClientLike } from "./respond.js";
+import type { AgentRuntime, Surface } from "./types.js";
 import { getThreadContext, setThreadContext } from "./thread-context.js";
 
 const SUGGESTED_PROMPTS = [

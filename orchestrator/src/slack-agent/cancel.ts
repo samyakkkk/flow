@@ -1,4 +1,4 @@
-// cancel.ts — in-flight run registry so agent_session_stopped can abort work.
+// slack-agent/cancel.ts — in-flight run registry so agent_session_stopped can abort work.
 //
 // One controller per thread: a new question in a thread supersedes (aborts)
 // the previous in-flight run, and Slack's native stop button aborts via the
