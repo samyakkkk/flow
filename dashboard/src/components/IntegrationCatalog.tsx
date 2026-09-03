@@ -53,8 +53,10 @@ export function IntegrationCatalog({
   const [notesText, setNotesText] = useState("");
   const [ingestingNotes, setIngestingNotes] = useState(false);
 
-  // Slack tooltip popover
-  const [slackPopover, setSlackPopover] = useState(false);
+  // Slack agent: connected when both tokens are set (managed on Connections)
+  const slackConnected =
+    settings.some((s) => s.key === "SLACK_BOT_TOKEN" && s.set) &&
+    settings.some((s) => s.key === "SLACK_APP_TOKEN" && s.set);
 
   const indexedUrls = new Set(repos.map((r) => r.url || r.name));
   const linearSet = settings.some((s) => s.key === "LINEAR_API_KEY" && s.set);
@@ -250,8 +252,8 @@ export function IntegrationCatalog({
           </Button>
         </div>
 
-        {/* 6. Slack Bot (Locked) */}
-        <div className="rounded-xl border border-line bg-paper/60 p-4 flex flex-col items-center text-center justify-between opacity-60 transition-all gap-2 min-h-[195px] relative">
+        {/* 6. Slack Bot — the Q&A agent; works in local and prod (Socket Mode) */}
+        <div className="rounded-xl border border-line bg-paper p-4 flex flex-col items-center text-center justify-between transition-all gap-2 min-h-[195px] relative">
           <div className="flex items-center justify-center pt-1 text-ink">
             <BrandIcon name="slack" size={32} />
           </div>
@@ -261,25 +263,16 @@ export function IntegrationCatalog({
               Slack Bot
             </h3>
             <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
-              Ambient listening in cloud
+              Ask Flow questions in Slack
             </p>
           </div>
 
-          <button
-            onClick={() => setSlackPopover((v) => !v)}
+          <a
+            href={prefix("/connections")}
             className="w-full py-1 text-center text-[9px] font-mono uppercase tracking-wider bg-sand border border-line rounded text-text-muted hover:text-ink transition-colors cursor-pointer"
           >
-            Locked ↗
-          </button>
-
-          {slackPopover && (
-            <div className="absolute bottom-full mb-2 right-0 left-0 p-2.5 rounded-lg border border-line bg-paper shadow-xl text-[10px] text-ink z-50 rise-in text-left">
-              <div className="font-semibold mb-0.5">Slack Locked</div>
-              <p className="text-text-muted text-[9px] leading-tight">
-                Requires production mode (<code className="font-mono text-ink">flow up --mode prod</code>).
-              </p>
-            </div>
-          )}
+            {slackConnected ? "Connected ↗" : "Set up ↗"}
+          </a>
         </div>
       </div>
 
