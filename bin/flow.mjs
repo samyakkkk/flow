@@ -296,25 +296,45 @@ function ensureDashboardBuild() {
   return true; // rebuilt — callers must restart running dashboards (shared .next)
 }
 
+// PIDs listening on a TCP port, from two sources merged. lsof alone is not
+// enough: on a live EC2 (2026-09-03) a long-lived next-server was invisible
+// to lsof — even under sudo — while `ss` (netlink) saw it. That blindness
+// made a self-update believe :7600 was free, kill nothing, and strand the
+// stale dashboard while its freshly-built replacement died on EADDRINUSE.
+// ss ships with iproute2 on Linux and names pids for the caller's own
+// sockets without root — exactly the case that matters (flow kills its own
+// services). macOS has no ss; lsof has not shown this blindness there.
+function portPids(port) {
+  const pids = new Set();
+  try {
+    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
+    for (const p of out.split("\n").filter(Boolean)) pids.add(Number(p));
+  } catch { /* lsof missing */ }
+  if (process.platform === "linux") {
+    try {
+      const out = (spawnSync("ss", ["-tlnp"], { encoding: "utf8" }).stdout ?? "");
+      for (const line of out.split("\n")) {
+        // Match the local-address column (":7600 "); LISTEN rows carry no
+        // real peer ports, so the peer column can't false-positive.
+        if (!line.includes(`:${port} `)) continue;
+        for (const m of line.matchAll(/pid=(\d+)/g)) pids.add(Number(m[1]));
+      }
+    } catch { /* ss missing */ }
+  }
+  return [...pids].filter((p) => Number.isFinite(p) && p > 0);
+}
+
 // Is anything listening on a TCP port? Deterministic (unlike a health probe
 // that can flake and trick us into starting a second process on a used port).
 function portInUse(port) {
-  try {
-    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
-    return out.length > 0;
-  } catch {
-    return false;
-  }
+  return portPids(port).length > 0;
 }
 
 // Kill whatever holds a TCP port (best-effort).
 function killPort(port) {
-  try {
-    const out = (spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "").trim();
-    for (const p of out.split("\n").filter(Boolean)) {
-      try { process.kill(Number(p), "SIGKILL"); } catch { /* gone */ }
-    }
-  } catch { /* lsof missing */ }
+  for (const p of portPids(port)) {
+    try { process.kill(p, "SIGKILL"); } catch { /* gone */ }
+  }
 }
 
 // ── Deployment-level state (data/): auth store + the singleton dashboard ────
