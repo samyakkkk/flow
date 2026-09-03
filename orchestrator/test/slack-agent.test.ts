@@ -42,6 +42,7 @@ test("buildQuestion folds thread transcript into the question", () => {
     ],
     context: { surface: "channel", channelId: "C1", threadTs: "1.0", userId: "U1" },
   });
+  assert.match(q, /^Style: you're answering a colleague in Slack/);
   assert.match(q, /Conversation so far/);
   assert.match(q, /User: what is the drainer\?/);
   assert.match(q, /Flow: It polls the outbox\./);

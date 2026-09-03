@@ -65,8 +65,17 @@ export class EchoRuntime implements AgentRuntime {
   }
 }
 
+// Slack-surface personality: the same answerer brain, addressed like a
+// colleague. Kept here (not in the answerer agent) so other surfaces —
+// dashboard ask, future interfaces — keep their own register.
+const SLACK_STYLE =
+  "Style: you're answering a colleague in Slack chat. Be friendly and concise — " +
+  "lead with the direct answer in a couple of sentences, plain conversational tone, " +
+  "no headers or heavy formatting. Keep it short by default and go deeper only when " +
+  "the question asks for detail.";
+
 export function buildQuestion(query: RuntimeQuery): string {
-  const parts: string[] = [];
+  const parts: string[] = [SLACK_STYLE, ""];
   if (query.transcript.length > 0) {
     const lines = query.transcript
       .slice(-20)
