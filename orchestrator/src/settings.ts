@@ -195,6 +195,21 @@ export const SETTINGS: SettingDef[] = [
     description: "Slack channel ID to DM for proposed actions",
     appliesTo: "slack",
   },
+  {
+    key: "FLOW_TELEMETRY_POSTHOG_KEY",
+    secret: false,
+    description:
+      "PostHog project API key (phc_…) for Flow's anonymous usage snapshot — counts and booleans only, audit the exact payload at GET /v1/telemetry. The default is Flow's own project (a public write-only key). Set empty or FLOW_TELEMETRY_DISABLE=1 to opt out.",
+    default: "phc_A9NCvdsZWDbNgoDNeku45iBArjCjHFobPyBw2XqRgfB8",
+    appliesTo: "pipeline",
+  },
+  {
+    key: "FLOW_TELEMETRY_POSTHOG_HOST",
+    secret: false,
+    description: "PostHog instance host for usage snapshots (EU cloud: https://eu.i.posthog.com)",
+    default: "https://us.i.posthog.com",
+    appliesTo: "pipeline",
+  },
 ];
 
 // Build a lookup map for O(1) access
