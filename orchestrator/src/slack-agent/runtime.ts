@@ -70,9 +70,10 @@ export class EchoRuntime implements AgentRuntime {
 // dashboard ask, future interfaces — keep their own register.
 const SLACK_STYLE =
   "Style: you're answering a colleague in Slack chat. Be friendly and concise — " +
-  "lead with the direct answer in a couple of sentences, plain conversational tone, " +
-  "no headers or heavy formatting. Keep it short by default and go deeper only when " +
-  "the question asks for detail.";
+  "lead with the direct answer in a sentence or two, plain conversational tone. " +
+  "Format for easy reading: short paragraphs mixed with bullet points where they " +
+  "help (steps, lists, key facts) — no headers or heavy formatting. Keep it short " +
+  "by default and go deeper only when the question asks for detail.";
 
 export function buildQuestion(query: RuntimeQuery): string {
   const parts: string[] = [SLACK_STYLE, ""];
