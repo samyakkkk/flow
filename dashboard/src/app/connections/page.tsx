@@ -3,6 +3,7 @@ import { Shell } from "@/components/Shell";
 import { AddFolder } from "@/components/AddFolder";
 import { AddRepoUrl } from "@/components/AddRepoUrl";
 import { RepoPicker } from "@/components/RepoPicker";
+import { SlackBotCard } from "@/components/SlackBotCard";
 import { useState, FormEvent, useEffect, useCallback } from "react";
 import { useMode } from "@/lib/useMode";
 import { useProject } from "@/lib/useProject";
@@ -477,61 +478,8 @@ export default function ConnectionsPage() {
             </div>
           </div>
 
-          {/* Slack card — mode gated */}
-          {isLocalMode ? (
-            <div
-              style={{
-                padding: "14px 16px",
-                background: "rgba(0,0,0,0.02)",
-                border: "1px dashed var(--border)",
-                borderRadius: 8,
-                opacity: 0.75,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Slack</span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    background: "var(--surface-2)",
-                    color: "var(--text-muted)",
-                    border: "1px solid var(--border)",
-                    fontWeight: 600,
-                  }}
-                >
-                  LOCKED
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--text-muted)",
-                  lineHeight: 1.5,
-                }}
-              >
-                Always-on only — Slack requires a deployed (prod) instance. Deploy to enable.
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                padding: "14px 16px",
-                background: "var(--surface-2)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Slack</span>
-                <StatusBadge on={!!(status?.slack_bot_token && status?.slack_app_token)} />
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                Socket Mode bot for ambient listening. Tokens are managed in Settings.
-              </div>
-            </div>
-          )}
+          {/* Slack bot — the Q&A agent; Socket Mode works in local and prod */}
+          <SlackBotCard />
         </div>
 
         {/* Keys now live in Settings */}

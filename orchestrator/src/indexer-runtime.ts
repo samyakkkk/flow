@@ -134,20 +134,50 @@ export function mcpServerSpec(opts: McpSpecOpts): {
 // Resolve the real, non-Flow-managed CLI executable on the user's machine.
 export async function resolveBackendExecutable(backend: IndexerBackend): Promise<string> {
   const localPath = await resolveLocalExecutable(backend);
-  if (!localPath) {
-    throw new Error(`"${backend}" CLI not found on PATH — install it or set INDEXER_RUNTIME to an installed backend.`);
+  if (localPath) return localPath;
+  if (backend === "opencode") {
+    const installed = await autoInstallOpencode();
+    if (installed) return installed;
   }
-  return localPath;
+  throw new Error(`"${backend}" CLI not found on PATH — install it or set INDEXER_RUNTIME to an installed backend.`);
+}
+
+// One-time opencode auto-install for headless Linux boxes (prod servers,
+// containers) where nobody ran setup.sh. Deliberately NOT on macOS: the
+// npm-distributed build ships unsigned and Gatekeeper SIGKILLs unsigned
+// arm64 binaries at exec — laptops get a signed build via setup.sh
+// (Homebrew / official installer) instead. Module-level promise so
+// concurrent jobs share a single install attempt.
+let opencodeAutoInstall: Promise<string | null> | null = null;
+
+function autoInstallOpencode(): Promise<string | null> {
+  if (process.platform === "darwin") return Promise.resolve(null);
+  if (!opencodeAutoInstall) {
+    opencodeAutoInstall = (async () => {
+      console.log("[indexer] opencode not found — auto-installing (npm install -g opencode-ai)…");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      await promisify(execFile)("npm", ["install", "-g", "opencode-ai"], { timeout: 300_000 });
+      const bin = await resolveLocalExecutable("opencode");
+      console.log(bin ? `[indexer] opencode auto-installed at ${bin}` : "[indexer] opencode install ran but binary still not resolvable");
+      return bin;
+    })().catch((err) => {
+      console.warn(`[indexer] opencode auto-install failed: ${err}`);
+      return null;
+    });
+  }
+  return opencodeAutoInstall;
 }
 
 // Resolve the opencode executable on the user's machine. Flow does NOT bundle
-// an opencode binary: the npm-distributed one ships unsigned, and macOS kills
-// unsigned arm64 binaries at exec (SIGKILL) — a fallback to it just trades a
-// clear error for a mysterious one. setup.sh installs a properly signed build
-// (Homebrew / official installer) when no coding CLI is present.
+// an opencode binary (the npm build ships unsigned and macOS Gatekeeper
+// SIGKILLs unsigned arm64 binaries at exec — see autoInstallOpencode); on
+// Linux a missing opencode triggers the one-time auto-install instead.
 export async function resolveOpencodeBin(): Promise<string> {
   const local = await resolveLocalExecutable("opencode");
   if (local) return local;
+  const installed = await autoInstallOpencode();
+  if (installed) return installed;
   throw new Error(
     "opencode CLI not found on PATH — run setup.sh, or install it: " +
       "`brew install sst/tap/opencode` (macOS) or `curl -fsSL https://opencode.ai/install | bash` (macOS/Linux).",

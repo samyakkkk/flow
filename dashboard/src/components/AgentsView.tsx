@@ -188,6 +188,45 @@ export function AgentsView() {
 
 const SESSIONS_SHOWN = 12;
 
+interface SessionSearchHit extends Omit<SessionRow, "live"> {
+  score: number;
+  snippet: string | null;
+}
+
+function SessionCard({
+  s,
+  snippet,
+  onNavigate,
+}: {
+  s: Omit<SessionRow, "live">;
+  snippet?: string | null;
+  onNavigate: (sid: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onNavigate(s.id)}
+      className="text-left rounded-lg border border-line bg-paper px-3.5 py-2.5 hover:bg-cream transition flex items-center gap-3 cursor-pointer"
+    >
+      <AgentBrandIcon backend={s.backend} className="text-ink flex-shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-ink text-[13px] truncate font-medium" style={{ fontFamily: "var(--font-display)" }}>
+          {s.title}
+        </p>
+        <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5 truncate">
+          {s.backend} · {timeAgo(s.updated_at)}
+          {s.worktree_id ? (
+            <span className="normal-case" title={`Ran on separate copy ${s.worktree_id}`}>
+              {" "}· ⎇ {s.worktree_id.split("/").pop()}
+            </span>
+          ) : null}
+        </p>
+        {snippet ? <p className="text-text-muted text-[11.5px] mt-1 line-clamp-2">{snippet}</p> : null}
+      </div>
+      <StatusPill kind={statusKind(s.status)}>{statusLabel(s.status)}</StatusPill>
+    </button>
+  );
+}
+
 function SessionsColumn({
   sessions,
   loading,
@@ -197,8 +236,35 @@ function SessionsColumn({
   loading: boolean;
   onNavigate: (sid: string) => void;
 }) {
+  const { prefix } = useProject();
   const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState("");
+  // null = not searching (show the recency list); [] = searched, no matches.
+  const [results, setResults] = useState<SessionSearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const shown = showAll ? sessions : sessions.slice(0, SESSIONS_SHOWN);
+
+  // Debounced semantic search — describe the session, not just its title.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return;
+    let stale = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(prefix(`/api/agents/sessions/search?q=${encodeURIComponent(q)}`));
+        const j = (r.ok ? await r.json() : {}) as { results?: SessionSearchHit[] };
+        if (!stale) setResults(j.results ?? []);
+      } catch {
+        if (!stale) setResults([]);
+      } finally {
+        if (!stale) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [query, prefix]);
 
   return (
     <div>
@@ -206,35 +272,47 @@ function SessionsColumn({
       <p className="text-text-muted text-[12.5px] mt-1 mb-3">
         Every agent run, newest first. ⎇ marks runs on a separate copy.
       </p>
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => {
+          const v = e.target.value;
+          setQuery(v);
+          if (v.trim()) {
+            setSearching(true);
+          } else {
+            setResults(null);
+            setSearching(false);
+          }
+        }}
+        placeholder="Search sessions — describe what you were working on…"
+        className="w-full mb-3 rounded-lg border border-line bg-paper px-3.5 py-2 text-[13px] text-ink placeholder:text-text-muted focus:outline-none focus:border-ink/40 transition"
+      />
       <div className="flex flex-col gap-2">
-        {sessions.length === 0 && !loading && (
-          <p className="text-text-muted text-[13px]">No sessions yet — start one above.</p>
+        {results !== null ? (
+          <>
+            {searching && results.length === 0 && (
+              <p className="text-text-muted text-[13px]">Searching…</p>
+            )}
+            {!searching && results.length === 0 && (
+              <p className="text-text-muted text-[13px]">No sessions match that.</p>
+            )}
+            {results.map((s) => (
+              <SessionCard key={s.id} s={s} snippet={s.snippet} onNavigate={onNavigate} />
+            ))}
+          </>
+        ) : (
+          <>
+            {sessions.length === 0 && !loading && (
+              <p className="text-text-muted text-[13px]">No sessions yet — start one above.</p>
+            )}
+            {shown.map((s) => (
+              <SessionCard key={s.id} s={s} onNavigate={onNavigate} />
+            ))}
+          </>
         )}
-        {shown.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => onNavigate(s.id)}
-            className="text-left rounded-lg border border-line bg-paper px-3.5 py-2.5 hover:bg-cream transition flex items-center gap-3 cursor-pointer"
-          >
-            <AgentBrandIcon backend={s.backend} className="text-ink flex-shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="text-ink text-[13px] truncate font-medium" style={{ fontFamily: "var(--font-display)" }}>
-                {s.title}
-              </p>
-              <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5 truncate">
-                {s.backend} · {timeAgo(s.updated_at)}
-                {s.worktree_id ? (
-                  <span className="normal-case" title={`Ran on separate copy ${s.worktree_id}`}>
-                    {" "}· ⎇ {s.worktree_id.split("/").pop()}
-                  </span>
-                ) : null}
-              </p>
-            </div>
-            <StatusPill kind={statusKind(s.status)}>{statusLabel(s.status)}</StatusPill>
-          </button>
-        ))}
       </div>
-      {sessions.length > SESSIONS_SHOWN && (
+      {results === null && sessions.length > SESSIONS_SHOWN && (
         <button
           onClick={() => setShowAll((v) => !v)}
           className="mt-2 text-[12px] text-text-muted hover:text-ink transition cursor-pointer"

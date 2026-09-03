@@ -10,6 +10,12 @@
 // Lifecycle: pending → sent (on success) | failed (error, max 3 retries).
 // If credentials for a target are absent, row stays pending (correct behaviour —
 // simulators assert on pending rows).
+//
+// MIGRATION(slack-agent): slack_post/dm delivery here uses WebClient directly
+// with SLACK_BOT_TOKEN, which now belongs to the slack-agent app
+// (src/slack-agent/). Outbound-only, so it coexists safely with the agent's
+// Socket Mode connection — but when the remaining slack paths migrate, route
+// these sends through slack-agent instead.
 
 import db from "./db.js";
 

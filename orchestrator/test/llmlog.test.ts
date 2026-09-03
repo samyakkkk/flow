@@ -103,6 +103,19 @@ describe("parseAnswerPayload", () => {
     assert.equal(fb.citations.length, 0);
   });
 
+  test("no-JSON fallback uses the last message, not the working narration", async () => {
+    const { parseAnswerPayload } = await import("../src/opencode.js");
+    const stream = "Let me check the config.Let me search more directly.The UI supports 6 coding harnesses.";
+    const p = parseAnswerPayload(stream, "The UI supports 6 coding harnesses.");
+    assert.equal(p.answer_md, "The UI supports 6 coding harnesses.");
+    // Without a last message, the raw stream is still better than nothing.
+    const fb = parseAnswerPayload(stream);
+    assert.equal(fb.answer_md, stream);
+    // JSON payload still wins over the last message when present.
+    const raw = 'narration```json\n{"answer_md":"real","citations":[],"confidence":0.9,"gaps":[]}\n```';
+    assert.equal(parseAnswerPayload(raw, "trailing text").answer_md, "real");
+  });
+
   test("nested code fences inside answer_md do not defeat extraction", async () => {
     const { parseAnswerPayload } = await import("../src/opencode.js");
     // The fenced ```json block gets truncated by the inner ``` — the brace-span

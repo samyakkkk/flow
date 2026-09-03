@@ -16,6 +16,13 @@
 //   GET  /v1/memory/orient-doc?repo=<name>           → {global, repo} rendered
 //                                                     ambient-tier docs (null
 //                                                     when a scope has none).
+//   GET  /v1/memory/list?q=&source=&limit=&offset=   → Knowledge Base: all
+//                                                     memories with attribution
+//                                                     + paged corpus rows.
+//   DELETE /v1/memory/:id                            → cascade-delete a memory
+//                                                     (observations + anchors).
+//   DELETE /v1/memory/observation/:id                → delete one observation
+//                                                     (parent counts recomputed).
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -31,6 +38,7 @@ import { getCard } from "./cards.js";
 import { memoryHitsForQueries, MEMORY_HIT_QUOTA } from "./find-hits.js";
 import { rememberText } from "./distiller.js";
 import { getOrientDocs } from "./orient-doc.js";
+import { listKnowledge, deleteMemory, deleteObservation } from "./knowledge.js";
 import { bumpCounter } from "../telemetry.js";
 
 export interface MemoryStats {
@@ -170,5 +178,40 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: { repo?: string } }>("/v1/memory/orient-doc", async (req) => {
     bumpCounter("brain_orient_total");
     return getOrientDocs(req.query.repo?.trim() || null);
+  });
+
+  // Knowledge Base (dashboard) — every memory with human attribution, plus
+  // the paged corpus of never-consolidated slack/linear/meeting observations.
+  app.get<{ Querystring: { q?: string; source?: string; limit?: string; offset?: string } }>(
+    "/v1/memory/list",
+    async (req) => {
+      const q = req.query;
+      return {
+        stats: memoryStats(),
+        ...listKnowledge({
+          q: q.q ?? null,
+          source: q.source?.trim() || null,
+          limit: q.limit ? Number(q.limit) || undefined : undefined,
+          offset: q.offset ? Number(q.offset) || 0 : 0,
+        }),
+      };
+    },
+  );
+
+  // Deletion — the one human curation act, from the Knowledge Base page.
+  // The observation route registers alongside the param route; Fastify prefers
+  // the static segment, so /observation/:id never collides with /:id.
+  app.delete<{ Params: { id: string } }>("/v1/memory/observation/:id", async (req, reply) => {
+    const out = deleteObservation(decodeURIComponent(req.params.id));
+    if (!out) return reply.code(404).send({ error: "observation not found" });
+    console.log(`[memory] observation ${req.params.id} deleted (memory_deleted=${out.memory_deleted})`);
+    return { ok: true, ...out };
+  });
+
+  app.delete<{ Params: { id: string } }>("/v1/memory/:id", async (req, reply) => {
+    const out = deleteMemory(decodeURIComponent(req.params.id));
+    if (!out) return reply.code(404).send({ error: "memory not found" });
+    console.log(`[memory] memory ${req.params.id} deleted (${out.observations} observation(s) cascaded)`);
+    return { ok: true, ...out };
   });
 }

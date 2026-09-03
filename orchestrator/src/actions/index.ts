@@ -130,6 +130,11 @@ export async function executeAuto(ctx: ActionContext): Promise<void> {
 // Per-source handlers
 // ------------------------------------------------------------------
 
+// MIGRATION(slack-agent): slack events no longer reach this handler — the
+// legacy adapter (adapters/slack.ts) is not booted. The launch-path Slack
+// interface is src/slack-agent/ (answers questions only). Corpus capture and
+// mention→answer routing below should be re-fed from slack-agent listeners
+// when ambient capture migrates; until then this code path is dormant.
 async function handleSlackAuto(event: NormalizedEvent, cls: ClassificationResult): Promise<void> {
   const p = event.payload as Record<string, string | undefined>;
   const c = cls.classification;

@@ -86,6 +86,11 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
   // If this slack message belongs to a thread that already has a bound
   // opencode session, skip the classifier entirely and enqueue a
   // "continue" job directly into that session.
+  // MIGRATION(slack-agent): slack events no longer arrive here — the legacy
+  // adapter is not booted. Thread continuity now lives in
+  // slack-agent/engagement.ts + the transcript fold in slack-agent/respond.ts;
+  // fold this session binding into the slack-agent runtime when ambient
+  // capture migrates.
   // ------------------------------------------------------------------
   if (event.source === "slack") {
     const p = event.payload as Record<string, string | undefined>;

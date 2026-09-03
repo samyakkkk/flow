@@ -3,7 +3,8 @@ import { getSessionToken } from "@/lib/auth";
 import { orcFetch } from "@/lib/orchestrator";
 
 // GET /api/corrections — proxy the orchestrator's corrections queue (agent
-// flags being verified against base-branch checkouts) for the inbox page.
+// flags being verified against base-branch checkouts) for the Knowledge Base
+// page's corrections section.
 
 export async function GET(req: Request) {
   const token = await getSessionToken();

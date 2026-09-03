@@ -220,6 +220,41 @@ export const MIGRATIONS: Migration[] = [
       db.exec(ORIENT_DOCS_SCHEMA);
     },
   },
+  {
+    id: 15,
+    name: "agent_sessions: semantic session search (search_text, embedding, embedded_at)",
+    up: (db) => {
+      // Same sequencing hazard as migration 7: agent_sessions is created at
+      // runtime.ts module load, AFTER migrations. Any DB below 7 gets the table
+      // from migration 7 earlier in this walk; this guard covers a DB stamped
+      // 7-14 that somehow never materialized it. No-op when it exists.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          id TEXT PRIMARY KEY,
+          backend TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          cwd TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          acp_session_id TEXT,
+          stop_reason TEXT,
+          error TEXT,
+          start_sha TEXT,
+          start_untracked TEXT,
+          worktree_id TEXT,
+          last_distilled_seq INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      // search_text — the compact doc that was embedded (also serves lexical
+      // fallback); embedding — 768-dim Gemma BLOB (see embed.ts); embedded_at —
+      // ms stamp compared against updated_at to detect stale vectors.
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN search_text TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN embedding BLOB");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN embedded_at INTEGER");
+    },
+  },
 ];
 
 // Orient docs — the AMBIENT memory tier. One rendered document per scope
