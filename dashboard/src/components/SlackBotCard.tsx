@@ -24,6 +24,7 @@ interface ManifestInfo {
   project: string;
   manifest: Record<string, unknown>;
   create_url: string;
+  icon_url?: string;
 }
 
 export function SlackBotCard() {
@@ -246,6 +247,22 @@ export function SlackBotCard() {
             <br />
             <strong>3.</strong> <em>Install App → Install to Workspace</em> → copy the Bot User OAuth
             Token (xoxb-…).
+            {manifestInfo?.icon_url ? (
+              <>
+                <br />
+                <strong>4.</strong> Optional: under <em>Basic Information → Display Information</em>,
+                upload{" "}
+                <a
+                  href={manifestInfo.icon_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "var(--accent, #4f46e5)", fontWeight: 600 }}
+                >
+                  the Flow avatar
+                </a>{" "}
+                as the app icon (Slack manifests can&apos;t set icons).
+              </>
+            ) : null}
           </div>
           <input
             value={botToken}

@@ -85,6 +85,13 @@ export function buildManifest(projectName: string): Record<string, unknown> {
   };
 }
 
+/**
+ * Official Flow avatar for the Slack app. Manifests cannot carry an icon
+ * (display_information has no icon field, and there's no upload API) — the
+ * wizard surfaces this URL for the manual upload on Basic Information.
+ */
+export const APP_ICON_URL = "https://flow-engineer.landinghero.app/avatar.jpg";
+
 /** Deep link that opens Slack's app-creation dialog with the manifest prefilled. */
 export function createAppUrl(projectName: string): string {
   const manifest = JSON.stringify(buildManifest(projectName));

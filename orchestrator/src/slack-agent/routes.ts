@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { FLOW_ROOT } from "../agents/runtime.js";
 import { slackAgentStatus } from "./boot.js";
-import { buildManifest, createAppUrl } from "./manifest.js";
+import { APP_ICON_URL, buildManifest, createAppUrl } from "./manifest.js";
 
 function projectName(): string {
   const projectDir = dirname(process.env.DB_PATH ?? join(FLOW_ROOT, "data", "flow.db"));
@@ -33,6 +33,7 @@ export function registerSlackAgentRoutes(app: FastifyInstance): void {
       project: name,
       manifest: buildManifest(name),
       create_url: createAppUrl(name),
+      icon_url: APP_ICON_URL,
     });
   });
 }
