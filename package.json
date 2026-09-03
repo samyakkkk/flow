@@ -15,7 +15,8 @@
   "workspaces": [
     "orchestrator",
     "graph-gateway",
-    "dashboard"
+    "dashboard",
+    "slack-agent"
   ],
   "private": true,
   "engines": {

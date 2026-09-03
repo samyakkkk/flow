@@ -1,0 +1,77 @@
+{
+  "display_information": {
+    "name": "Flow",
+    "description": "Ask Flow — your team's knowledge graph, decisions, and memory",
+    "background_color": "#1a1d21"
+  },
+  "features": {
+    "agent_view": {
+      "agent_description": "Ask Flow anything about your codebase, architecture, past decisions, gotchas, and team memory. DM me, mention @Flow in a channel, or add me to a group DM.",
+      "suggested_prompts": [
+        {
+          "title": "What is this project?",
+          "message": "Give me an overview of this project — what it is and how it fits together."
+        },
+        {
+          "title": "Find a past decision",
+          "message": "What did we decide about "
+        },
+        {
+          "title": "Explain a failure",
+          "message": "Have we seen this error before? "
+        }
+      ]
+    },
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "Flow",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "chat:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "users:read",
+        "reactions:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_home_opened",
+        "app_mention",
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
+        "agent_session_stopped",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
