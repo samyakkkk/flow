@@ -183,7 +183,9 @@ This repo is documented as connected to Flow project **${project}**.
 
 1. If \`flow-graph\` MCP tools are in your tool list → use them:
    \`orient\`, \`search_knowledge\`, \`remember\`, \`find_entity\`.
-2. Otherwise → run the CLI (a stable per-machine path; works in any tool with a shell):
+   If tools are deferred, use your tool discovery/search facility to find
+   \`flow-graph orient\` before concluding MCP is unavailable.
+2. Only if MCP is unavailable → run the CLI (requires network access from your shell):
    - \`~/.flow/bin/flow orient\`
    - \`~/.flow/bin/flow search "<symptom, identifier, or file path>"\`
    - \`~/.flow/bin/flow remember "<verbatim conclusion + context>"\`
@@ -214,7 +216,8 @@ This repo is documented as connected to Flow project **${project}**.
 
 function instructionBlock(project) {
   return `This repo is connected to Flow project "${project}" (knowledge graph + team
-memory). Use the \`flow-graph\` MCP tools if available, else the CLI:
+memory). Use the \`flow-graph\` MCP tools; discover/search deferred tools for
+\`flow-graph orient\` first if needed. Only if MCP is unavailable, use the CLI:
 \`~/.flow/bin/flow orient\` at session start, \`… search "<symptom>"\` when
 surprised, \`… remember "<conclusion>"\` when durable work concludes. If it
 reports a different project or NOT CONNECTED, stop and tell the user to run

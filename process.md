@@ -57,13 +57,13 @@ Load credentials directly into required process environment/config. Never echo t
 
 | Client | Local | Cloud / gap |
 | --- | --- | --- |
-| Claude | Native MCP passes after auth; `data/claude-local-authenticated.jsonl` | `data/claude-cloud.jsonl` returns correct cloud context; inspect native tool events |
-| Codex | Native MCP passes with explicit gpt-5.5; `data/codex-local-compatible.jsonl` | `data/codex-cloud.jsonl` fallback fails sandbox networking; investigate native discovery |
+| Claude | Native MCP passes after auth; `data/claude-local-authenticated.jsonl` | `data/claude-cloud.jsonl` confirms skill activation, ToolSearch and native MCP orient |
+| Codex | Native MCP passes with explicit gpt-5.5; `data/codex-local-compatible.jsonl` | Native MCP now passes; ordinary prompt retest in `data/codex-cloud-instructions.jsonl` passes after discovery instruction fix |
 | Gemini | CLI fallback passes; ignored skill file read refused; native MCP absent | Same partial outcome in `data/gemini-cloud.jsonl`; full support not passed |
 | Antigravity | Desktop reads skill and native orient succeeds; conversation “Repository Flow Orientation Guide” | Cloud desktop and capture pending |
 | VS Code Copilot | Desktop skill and native orient pass, about 17 seconds | Cloud desktop and capture pending |
 | Cursor | Launched into existing chat; fixture prompt not submitted | Local/cloud tests pending |
-| OpenCode | OpenRouter key stored privately | Setup/execution pending |
+| OpenCode | Local test pending | OpenRouter-backed session activates skill and calls native MCP; `data/opencode-cloud.jsonl` |
 
 Installed Codex CLI 0.153.4 rejected configured gpt-6-astra; explicit gpt-5.5 worked. Do not globally change user model. `--ignore-user-config` suppressed project MCP, so that mode is not representative. Direct cloud bridge smoke passes despite Codex cloud session failing to use it.
 
@@ -72,3 +72,5 @@ Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Clau
 ## Update log
 
 - 2026-09-06: Consolidated all task instructions and current evidence here, replacing the stale checkpoint. Added hook-to-memory verification as the final task, with extraction and subsequent retrieval required. Stored supplied OpenRouter key privately. Main integrations, remote source access and automation work remain in progress.
+
+- 2026-09-06: Codex cloud transport confirmed healthy; original failure was premature CLI fallback. Generated skill and instructions now require deferred MCP discovery before fallback. Ordinary-prompt retest passes; 12 setup/materializer tests pass. Claude cloud native skill/MCP evidence confirmed. OpenCode 1.17.20 with OpenRouter Claude Sonnet 4.6 activated Flow skill and called cloud native orient. Key placed in isolated local/cloud project .env (0600); cloud OpenCode installation underway. Gemini lists Flow connected and skill enabled, but headless tools remain missing; explicit-tool-permission test pending. No hook-to-memory completion claimed.
