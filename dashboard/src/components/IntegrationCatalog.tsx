@@ -5,7 +5,7 @@ import { BrandIcon } from "@/components/BrandIcon";
 import { RepoPicker } from "@/components/RepoPicker";
 import { AddFolder } from "@/components/AddFolder";
 import { SlackBotCard } from "@/components/SlackBotCard";
-import { Button, StatusPill, Kicker } from "@/components/ui";
+import { BodyText, Button, Heading } from "@/components/ui";
 import { useProject } from "@/lib/useProject";
 import { FlowMode } from "@/lib/useMode";
 
@@ -111,15 +111,7 @@ export function IntegrationCatalog({
   return (
     <div className="flex flex-col gap-4 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in">
       <div className="flex items-center justify-between border-b border-line pb-3">
-        <div>
-          <Kicker>Integrations & Sources</Kicker>
-          <h2
-            style={{ fontFamily: "var(--font-display)" }}
-            className="text-lg font-semibold text-ink mt-0.5"
-          >
-            Connect code and business context
-          </h2>
-        </div>
+        <Heading variant="section">Connect code and business context</Heading>
       </div>
 
       {msg && (
@@ -130,7 +122,7 @@ export function IntegrationCatalog({
       )}
 
       {/* Compact Grid of Small Integration Cards: Centered Naked Icon, Name, Description, Connect Button */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {/* 1. GitHub Repositories */}
         <div className="rounded-xl border border-line bg-cream p-4 flex flex-col items-center text-center justify-between hover:border-ink/30 transition-all gap-2 min-h-[195px]">
           <div className="flex items-center justify-center pt-1 text-ink">
@@ -138,12 +130,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               GitHub Repos
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Sync remote git repos & branches
-            </p>
+            </BodyText>
           </div>
 
           <Button
@@ -164,12 +156,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               Local Folder
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Connect local folder or checkout
-            </p>
+            </BodyText>
           </div>
 
           <Button
@@ -188,12 +180,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               Linear
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Sync issues, specs & tickets
-            </p>
+            </BodyText>
           </div>
 
           <Button
@@ -212,12 +204,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               Fireflies.ai
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Import meeting transcripts
-            </p>
+            </BodyText>
           </div>
 
           <Button
@@ -236,12 +228,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               Meeting Notes
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Paste raw transcript or notes
-            </p>
+            </BodyText>
           </div>
 
           <Button
@@ -260,12 +252,12 @@ export function IntegrationCatalog({
           </div>
 
           <div className="flex flex-col items-center gap-0.5">
-            <h3 style={{ fontFamily: "var(--font-display)" }} className="text-xs font-semibold text-ink">
+            <Heading as="h3" variant="card">
               Slack Bot
-            </h3>
-            <p className="text-text-muted text-[10px] leading-tight line-clamp-2">
+            </Heading>
+            <BodyText>
               Ask Flow questions in Slack
-            </p>
+            </BodyText>
           </div>
 
           <button

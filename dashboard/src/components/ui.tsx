@@ -10,18 +10,40 @@ export function Heading({
   children,
   className = "",
   as: Tag = "h2",
+  variant = "display",
 }: {
   children: React.ReactNode;
   className?: string;
   as?: "h1" | "h2" | "h3";
+  variant?: "display" | "section" | "card";
 }) {
+  const typography = {
+    display: "tracking-tight leading-[1.15]",
+    section: "text-[20px] font-normal leading-normal tracking-normal",
+    card: "text-[16px] font-normal leading-normal tracking-normal",
+  };
+
   return (
     <Tag
       style={{ fontFamily: "var(--font-display)" }}
-      className={`text-ink tracking-tight leading-[1.15] ${className}`}
+      className={`text-ink ${typography[variant]} ${className}`}
     >
       {children}
     </Tag>
+  );
+}
+
+export function BodyText({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <p className={`font-sans text-[12px] font-normal leading-relaxed tracking-normal text-text-muted ${className}`}>
+      {children}
+    </p>
   );
 }
 

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useProject } from "@/lib/useProject";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { BrandIcon, type BrandName } from "./BrandIcon";
+import { BodyText, Heading } from "./ui";
 
 interface ConnectedRepo {
   path: string;
@@ -153,14 +154,13 @@ export function CodingToolsPanel() {
     <div className="flex flex-col gap-3.5 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in h-full">
       {/* Header — value first: your tools, Flow-powered */}
       <div className="border-b border-line pb-3">
-        <div className="text-[11px] uppercase tracking-widest text-ink/50">Your AI interfaces</div>
-        <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+        <Heading variant="section">
           Use Flow in your own AI tools
-        </h2>
-        <p className="text-[12px] text-ink/55 mt-1 leading-snug">
+        </Heading>
+        <BodyText className="mt-1">
           Keep working where you already work. Connect a workspace and your AI interfaces get this
           project&apos;s memory — and every session they run teaches it.
-        </p>
+        </BodyText>
       </div>
 
       {/* The user's tools, up top: "yes, mine are covered" */}
@@ -282,7 +282,7 @@ export function CodingToolsPanel() {
           })}
         </div>
       ) : (
-        <div className="text-[12px] text-ink/50 py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</div>
+        <BodyText className="py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</BodyText>
       )}
 
       {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
@@ -290,19 +290,19 @@ export function CodingToolsPanel() {
         <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
           <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
           <div>
-            <div className="text-[11px] font-medium text-ink/70">ChatGPT chats</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
+            <Heading as="h3" variant="card">ChatGPT chats</Heading>
+            <BodyText>
               Needs a public connector — coming with your team deployment. (The desktop app&apos;s Codex view is already covered above.)
-            </div>
+            </BodyText>
           </div>
         </div>
         <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
           <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
           <div>
-            <div className="text-[11px] font-medium text-ink/70">claude.ai &amp; Cowork</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
+            <Heading as="h3" variant="card">claude.ai &amp; Cowork</Heading>
+            <BodyText>
               Needs a public connector + skill upload — coming with your team deployment. Works on every plan once live.
-            </div>
+            </BodyText>
           </div>
         </div>
       </div>
