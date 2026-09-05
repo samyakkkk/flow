@@ -900,7 +900,9 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   // MEMORY — cross-session distilled knowledge + corpus, reached via
   // search_knowledge (retrieve-only). Counts orient the agent to whether it's
   // worth a look; the one-liner tells it how to query.
-  if (memStats && (memStats.memories > 0 || memStats.observations > 0)) {
+  if (!memStats) {
+    out.push("MEMORY: unavailable — the memory service could not be read. This does not mean memory is empty; verify the connection and credentials before relying on memory results.");
+  } else if (memStats.memories > 0 || memStats.observations > 0) {
     const srcBits = Object.entries(memStats.bySource)
       .sort((a, b) => b[1] - a[1])
       .map(([s, n]) => `${n} ${s}`)
