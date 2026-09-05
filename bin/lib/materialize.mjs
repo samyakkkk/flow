@@ -299,6 +299,11 @@ if (!p) {
   console.error(\`flow-mcp: unknown project "\${args.project}" — re-run: flow setup \${args.project ?? "<name>"}\`);
   process.exit(1);
 }
+if (p.mcpUrl) {
+  const child = spawn(process.execPath, [p.httpMcpBridge, ...process.argv.slice(2)], { stdio: "inherit" });
+  child.on("error", () => { console.error("flow-mcp: remote connector could not start; rerun setup"); process.exit(1); });
+  child.on("exit", code => process.exit(code ?? 1));
+} else {
 let branch = "";
 try {
   branch = execFileSync("git", ["branch", "--show-current"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
@@ -323,6 +328,7 @@ const env = {
 env.PATH = dirname(process.execPath) + ":" + (env.PATH ?? "/usr/bin:/bin");
 const child = spawn(p.tsxBin, [p.gatewayMcp], { env, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));
+}
 `;
 }
 
@@ -448,6 +454,7 @@ export function materializeMachine({ flowRoot, projectName, projectEntry, shimSo
   cfg.remotes = { ...(cfg.remotes ?? {}), local: { kind: "local", flowRoot } };
   cfg.projects = { ...(cfg.projects ?? {}), [projectName]: projectEntry };
   writeJson(cfgPath, cfg);
+  chmodSync(cfgPath, 0o600);
 }
 
 // ---------------------------------------------------------------------------

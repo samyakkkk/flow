@@ -56,6 +56,7 @@ import {
 } from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
+import { discoverRemote } from "./lib/remote-setup.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1277,6 +1278,10 @@ async function cmdSetup(rest) {
       remove: { type: "boolean" },
       harness: { type: "string" },
       all: { type: "boolean" },
+      "gateway-url": { type: "string" },
+      "orchestrator-url": { type: "string" },
+      "token-env": { type: "string" },
+      repo: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -1299,30 +1304,46 @@ async function cmdSetup(rest) {
         (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
     );
   }
-  const project = readProject(name); // throws with a helpful message if unknown
-  const index = listProjectNames().indexOf(name);
-  const ports = portsForIndex(index);
-  const env = parseEnvFile(join(projectDir(name), ".env"));
-  const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
-  const graph = project.graph ?? name;
+  const isRemote = Boolean(values["gateway-url"] || values["orchestrator-url"] || values["token-env"]);
+  let projectEntry;
+  let repoName;
+  let registered = false;
+  if (isRemote) {
+    if (!values["gateway-url"] || !values["orchestrator-url"] || !values["token-env"]) {
+      die("Remote setup requires --gateway-url, --orchestrator-url, and --token-env.");
+    }
+    projectEntry = await discoverRemote({ project: name,
+      gatewayUrl: values["gateway-url"], orchestratorUrl: values["orchestrator-url"],
+      token: process.env[values["token-env"]] });
+    projectEntry.httpMcpBridge = join(flowRoot, "bin", "harness", "flow-mcp-http.mjs");
+    repoName = values.repo || basename(repoDir);
+  } else {
+    const project = readProject(name); // throws with a helpful message if unknown
+    const index = listProjectNames().indexOf(name);
+    const ports = portsForIndex(index);
+    const env = parseEnvFile(join(projectDir(name), ".env"));
+    const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
+    const graph = project.graph ?? name;
 
-  const { name: repoName, registered } = resolveRepoName(name, repoDir);
-
+    ({ name: repoName, registered } = resolveRepoName(name, repoDir));
+    projectEntry = {
+        remote: "local",
+        orchestratorUrl: `http://localhost:${ports.orchestrator}`,
+        gatewayUrl: `http://localhost:${ports.gateway}`,
+        graphName: graph,
+        token,
+        falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
+        falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
+        tsxBin: nodeBin(gatewayDir(), "tsx"),
+        gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
+      };
+  }
+  const { token, orchestratorUrl } = projectEntry;
   materializeMachine({
     flowRoot,
     projectName: name,
     shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
-    projectEntry: {
-      remote: "local",
-      orchestratorUrl: `http://localhost:${ports.orchestrator}`,
-      gatewayUrl: `http://localhost:${ports.gateway}`,
-      graphName: graph,
-      token,
-      falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
-      falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
-      tsxBin: nodeBin(gatewayDir(), "tsx"),
-      gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
-    },
+    projectEntry,
   });
 
   // Default: only the tools this machine actually has. `--all` pre-wires
@@ -1348,7 +1369,10 @@ async function cmdSetup(rest) {
   // is complete without it; this makes the folder appear in the dashboard.
   let workFolderOk = false;
   try {
-    const res = await fetch(`http://localhost:${ports.orchestrator}/v1/work-folders`, {
+    // A laptop path is not a server-side work folder. Remote execution/device
+    // registration is deliberately separate from the knowledge connector.
+    if (isRemote) throw new Error("Local work-folder registration is not applicable to a remote brain");
+    const res = await fetch(`${orchestratorUrl}/v1/work-folders`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ path: repoDir, repo: registered ? repoName : undefined }),
@@ -1365,7 +1389,7 @@ async function cmdSetup(rest) {
   try {
     const props = { shared: values.share === true, detected_count: detected.length };
     for (const h of ALL_HARNESSES) props[`harness_${h}`] = harnesses.includes(h);
-    await fetch(`http://localhost:${ports.orchestrator}/v1/telemetry/track`, {
+    await fetch(`${orchestratorUrl}/v1/telemetry/track`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ event: "flow_setup_run", properties: props }),
@@ -1377,11 +1401,11 @@ async function cmdSetup(rest) {
 
   console.log(`
   ${OK} ${c.bold(repoDir)}
-    → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    → project ${c.bold(name)} (${isRemote ? "remote" : "local"}), repo ${c.bold(repoName)}${registered || isRemote ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
     tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
-    work folder: ${workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
+    work folder: ${isRemote ? "local checkout connected to remote knowledge" : workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
 
   ${c.bold("One-time approvals some tools will ask for:")}
     Claude Code  → first prompt asks to use this repo's .mcp.json — approve.

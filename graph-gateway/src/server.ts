@@ -88,6 +88,10 @@ const server = createServer(async (req, res) => {
         return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token (project token or a personal access token with a grant on this project)." });
       }
     }
+    if (req.method === "GET" && url.pathname === "/v1/connection") {
+      if (!TOKEN) return json(res, 503, { error: "Connection setup requires configured authentication" });
+      return json(res, 200, { project: process.env.FLOW_PROJECT_NAME, graph: DEFAULT_GRAPH });
+    }
     if (req.method === "GET" && url.pathname === "/v1/journal") {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return json(res, 200, { entries: await tail(limit) });
