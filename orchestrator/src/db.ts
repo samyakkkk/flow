@@ -167,6 +167,22 @@ db.exec(`
     last_activity INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  -- Cloud conversations can originate in any adapter. Worktrees are allocated
+  -- independently per repo, only when an edit is requested.
+  CREATE TABLE IF NOT EXISTS cloud_conversations (
+    conversation_key TEXT PRIMARY KEY,
+    session_id TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE TABLE IF NOT EXISTS cloud_worktrees (
+    conversation_key TEXT NOT NULL REFERENCES cloud_conversations(conversation_key),
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
+    base_commit TEXT NOT NULL,
+    PRIMARY KEY (conversation_key, repo)
+  );
+
   -- ------------------------------------------------------------------
   -- Poll cursors: one row per (source, resource) pair.
   -- Project isolation is via the per-project DB file (each project =

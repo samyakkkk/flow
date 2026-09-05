@@ -8,6 +8,7 @@ import db from "./db.js";
 import { classify, taxonomyKey } from "./classify.js";
 import { policyFor } from "./policy.js";
 import { executeAction } from "./actions/index.js";
+import { cloudMode, hasConversation, slackConversation } from "./agents/cloud-workspaces.js";
 
 // Contract shape from system.md
 export interface NormalizedEvent {
@@ -72,7 +73,7 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
   }
 
   // 1. Persist event (idempotent: OR IGNORE on duplicate id)
-  insertEvent.run({
+  const inserted = insertEvent.run({
     id: event.id,
     source: event.source,
     type: event.type,
@@ -80,6 +81,7 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
     payload: JSON.stringify(event.payload),
     workspace: event.workspace ?? null,
   });
+  if (inserted.changes === 0 && cloudMode() && event.source === "slack") return;
 
   // ------------------------------------------------------------------
   // G10: Session-per-chat routing.
@@ -102,17 +104,20 @@ export async function processEvent(event: NormalizedEvent): Promise<void> {
       | { thread_key: string; session_id: string; job_id: string; status: string }
       | undefined;
 
-    if (sessionRow?.session_id) {
+    const conversation = slackConversation(event.workspace ?? "", channel, thread_ts);
+    if (sessionRow?.session_id || (cloudMode() && hasConversation(conversation))) {
       // Touch last_activity
       touchThreadSession.run(thread_key);
 
       // Enqueue continuation into the existing opencode session
       const { enqueueJob } = await import("./opencode.js");
       const job = await enqueueJob({
-        type: "continue",
+        type: sessionRow?.session_id ? "continue" : "answer",
         input: {
           message: p.text ?? "",
-          session_id: sessionRow.session_id,
+          question: p.text ?? "",
+          session_id: sessionRow?.session_id,
+          ...(cloudMode() ? { conversation } : {}),
           reply_to: { channel, thread_ts },
           workspace: event.workspace ?? "",
           event_id: event.id,
