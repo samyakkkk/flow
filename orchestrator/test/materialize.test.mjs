@@ -196,3 +196,14 @@ test("OpenCode setup isolates plugin installs and removes only its own manifest"
   invoke("m.removeRepo(ctx.repoDir);");
   assert.equal(readFileSync(file, "utf8"), original);
 }));
+
+
+test("Antigravity lifecycle hooks use flat handlers and explicit event identity", () => fixture(({ repoDir, invoke }) => {
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['antigravity'] });");
+  const hooks = JSON.parse(readFileSync(join(repoDir, ".agents/hooks.json"), "utf8"))["flow-capture"];
+  for (const name of ["PostInvocation", "Stop"]) {
+    assert.equal(hooks[name][0].type, "command");
+    assert.equal(hooks[name][0].hooks, undefined);
+    assert.ok(hooks[name][0].command.endsWith(`--event ${name}`));
+  }
+}));

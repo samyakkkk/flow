@@ -198,3 +198,28 @@ describe("flow-hook shim", () => {
     );
   });
 });
+
+test("Antigravity Stop reads only the latest visible turn and redacts before upload", async () => {
+  const transcript = join(home, "antigravity-transcript.jsonl");
+  writeFileSync(transcript, [
+    { type: "USER_INPUT", source: "USER_EXPLICIT", content: "old prompt" },
+    { type: "PLANNER_RESPONSE", source: "MODEL", status: "DONE", content: "old answer" },
+    { type: "USER_INPUT", source: "USER_EXPLICIT", content: "<USER_REQUEST>New durable rule</USER_REQUEST><ADDITIONAL_METADATA>private metadata</ADDITIONAL_METADATA>" },
+    { type: "RUN_COMMAND", source: "MODEL", content: "private tool output" },
+    { type: "PLANNER_RESPONSE", source: "MODEL", status: "DONE", tool_calls: [{ name: "read" }], content: "intermediate reasoning" },
+    { type: "PLANNER_RESPONSE", source: "MODEL", status: "DONE", content: "Final rule with sk-or-v1-abcdef1234567890abcdef" },
+  ].map(x => JSON.stringify(x)).join("\n"));
+  const result = await runShim(["--harness", "antigravity", "--event", "Stop"], JSON.stringify({
+    conversationId: "antigravity-test", transcriptPath: transcript, workspacePaths: ["/fixture"], fullyIdle: true,
+  }));
+  assert.equal(result.code, 0);
+  const event = received.at(-1)!.body.event as Record<string, unknown>;
+  assert.equal(event.hook_event_name, "Stop");
+  assert.equal(event.prompt, "New durable rule");
+  const { normalizeHook } = await import("../src/ingest/adapters.js");
+  assert.deepEqual(normalizeHook("antigravity", event, "fixture").events.map(e => e.kind), ["user_prompt", "update"]);
+  assert.match(String(event.last_assistant_message), /Final rule/);
+  for (const text of ["old answer", "private metadata", "private tool output", "intermediate reasoning", "sk-or-v1-"]) {
+    assert.ok(!JSON.stringify(event).includes(text));
+  }
+});

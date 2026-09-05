@@ -117,7 +117,7 @@ export function normalizeHook(
     // UserPromptSubmit event (Gemini has none).
     const prompt = extractPrompt(payload);
     const answer = extractAssistant(payload);
-    if (prompt && eventName === "AfterAgent") {
+    if (prompt && (eventName === "AfterAgent" || harness === "antigravity")) {
       events.push(userPrompt(prompt));
       title = prompt.slice(0, 80);
     }

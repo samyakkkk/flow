@@ -688,8 +688,9 @@ function renderAntigravity(ctx) {
   // We own the "flow-capture" group and never touch others.
   const hooksPath = join(repoDir, ".agents", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
+  // Lifecycle events use flat handlers; only tool events use matcher/groups.
   const entry = (name) => [
-    { hooks: [{ type: "command", command: hookCmdGui("antigravity", project, repo), timeout: 5 }] },
+    { type: "command", command: `${hookCmdGui("antigravity", project, repo)} --event ${name}`, timeout: 5 },
   ];
   hooksFile["flow-capture"] = { PostInvocation: entry("PostInvocation"), Stop: entry("Stop") };
   writeJson(hooksPath, hooksFile);
