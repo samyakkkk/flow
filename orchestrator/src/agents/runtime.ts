@@ -673,10 +673,7 @@ export function getSession(id: string): LiveSession | undefined {
   return liveSession(id);
 }
 
-export function listSessions(): Array<Record<string, unknown>> {
-  const rows = db
-    .prepare(`
-      SELECT
+const SESSION_COLUMNS = `
         id,
         backend,
         repo,
@@ -690,7 +687,19 @@ export function listSessions(): Array<Record<string, unknown>> {
         start_untracked,
         worktree_id,
         created_at,
-        updated_at
+        updated_at`;
+
+export function readSessionMetadata(id: string): Record<string, unknown> | undefined {
+  const row = db.prepare(`SELECT ${SESSION_COLUMNS} FROM agent_sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+  if (!row) return undefined;
+  const live = sessions.get(id);
+  return { ...row, live: Boolean(live), status: live?.status ?? row.status };
+}
+
+export function listSessions(): Array<Record<string, unknown>> {
+  const rows = db
+    .prepare(`
+      SELECT ${SESSION_COLUMNS}
       FROM agent_sessions
       ORDER BY created_at DESC
       LIMIT 100

@@ -16,6 +16,7 @@ process.env.FLOW_ADMIN_TOKEN = "test-token-ingest";
 process.env.FLOW_FAKE_OPENCODE = "1";
 process.env.FLOW_DRAIN_DISABLE = "1";
 process.env.FLOW_DISTILLER = "0"; // no LLM in unit tests; trigger wiring asserted via status
+process.env.FLOW_SESSION_SEARCH = "0";
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -31,6 +32,8 @@ before(async () => {
   ({ readTranscript } = await import("../src/agents/runtime.js"));
   app = Fastify();
   routes.registerIngestRoutes(app);
+  const { registerAgentRoutes } = await import("../src/agents/routes.js");
+  registerAgentRoutes(app);
   await app.ready();
 });
 
@@ -41,6 +44,37 @@ after(async () => {
 
 const SID = "e3948326-fe79-4a81-95d9-89cd63f1318b";
 const TP = `/Users/u/.claude/projects/-Users-u-spike/${SID}.jsonl`;
+
+test("archived session details replay beyond the newest 100 sessions", async (t) => {
+  const { db } = await import("../src/db.js");
+  const { appendTranscriptEvents } = await import("../src/agents/runtime.js");
+  const insert = db.prepare(`INSERT INTO agent_sessions
+    (id, backend, repo, cwd, title, status, created_at, updated_at)
+    VALUES (?, 'ext:claude', 'spike-repo', '/tmp', 'Archive replay', 'closed', ?, ?)`);
+  const id = "archive-replay-oldest";
+  t.after(() => db.prepare("DELETE FROM agent_sessions WHERE id LIKE 'archive-replay-%'").run());
+  for (let i = 0; i <= 100; i++) {
+    insert.run(i === 0 ? id : `archive-replay-${i}`, i, i);
+  }
+  appendTranscriptEvents(id, [
+    { kind: "user_prompt", data: { text: "Saved prompt" } },
+    { kind: "update", data: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Saved response" } } },
+  ]);
+
+  const list = await app.inject({ method: "GET", url: "/v1/agents/sessions" });
+  assert.equal(list.json().sessions.length, 100);
+  assert.ok(!list.json().sessions.some((s: { id: string }) => s.id === id));
+
+  const detail = await app.inject({ method: "GET", url: `/v1/agents/sessions/${id}` });
+  assert.equal(detail.statusCode, 200, detail.body);
+  assert.equal(detail.json().id, id);
+  assert.equal(detail.json().live, false);
+  assert.deepEqual(detail.json().events.map((e: { kind: string }) => e.kind), ["user_prompt", "update"]);
+  assert.equal(detail.json().events[1].data.content.text, "Saved response");
+
+  const missing = await app.inject({ method: "GET", url: "/v1/agents/sessions/archive-replay-missing" });
+  assert.equal(missing.statusCode, 404);
+});
 
 const claudeEvents = [
   { session_id: SID, transcript_path: TP, cwd: "/Users/u/spike", hook_event_name: "SessionStart", source: "startup" },
