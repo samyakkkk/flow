@@ -27,7 +27,7 @@ import {
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { parse as parseJsonc, modify, applyEdits } from "jsonc-parser";
+import { parse as parseJsonc, modify, applyEdits, createScanner, SyntaxKind, ScanError } from "jsonc-parser";
 
 export const FLOW_DIR = join(homedir(), ".flow");
 export const SHIM_PATH = join(FLOW_DIR, "bin", "flow-hook");
@@ -62,13 +62,43 @@ function writeJson(p, obj) {
 
 // Copilot's VS Code config accepts comments and trailing commas. Preserve
 // those and unrelated settings; malformed config must never be overwritten.
-function editCopilotJson(file, edit) {
-  let text = existsSync(file) ? readFileSync(file, "utf-8") : "{}\n";
+function isJsoncTriviaOnly(text) {
+  const scanner = createScanner(text, false);
+  for (;;) {
+    const token = scanner.scan();
+    if (scanner.getTokenError() !== ScanError.None) return false;
+    if (token === SyntaxKind.EOF) return true;
+    if (
+      token !== SyntaxKind.LineCommentTrivia &&
+      token !== SyntaxKind.BlockCommentTrivia &&
+      token !== SyntaxKind.LineBreakTrivia &&
+      token !== SyntaxKind.Trivia
+    ) return false;
+  }
+}
+
+function parseCopilotJson(file, text) {
   const errors = [];
   const value = parseJsonc(text, errors, { allowTrailingComma: true });
+  if ((errors.length || value == null) && isJsoncTriviaOnly(text)) return {};
   if (errors.length || !value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid Copilot configuration: ${file}`);
   }
+  return value;
+}
+
+function tryParseCopilotJson(file, text) {
+  try {
+    return parseCopilotJson(file, text);
+  } catch {
+    return undefined;
+  }
+}
+
+function editCopilotJson(file, edit) {
+  let text = existsSync(file) ? readFileSync(file, "utf-8") : "{}\n";
+  if (isJsoncTriviaOnly(text)) text = text.trim() ? `{}\n${text}` : "{}\n";
+  const value = parseCopilotJson(file, text);
   for (const [path, next] of edit(value)) {
     text = applyEdits(text, modify(text, path, next, {
       formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
@@ -874,7 +904,7 @@ export function removeRepo(repoDir) {
     const p = join(repoDir, rel);
     if (!existsSync(p)) continue;
     const original = originals[rel]?.data
-      ? parseJsonc(Buffer.from(originals[rel].data, "base64").toString("utf8"), [], { allowTrailingComma: true }) : {};
+      ? parseCopilotJson(`${p} (original)`, Buffer.from(originals[rel].data, "base64").toString("utf8")) : {};
     editCopilotJson(p, (file) => {
       if (rel.endsWith("hooks/flow.json")) {
         const hooks = removeFlowHooks(file.hooks);
@@ -961,10 +991,10 @@ export function removeRepo(repoDir) {
       if ((j !== undefined && isEmptyShell(j)) || text.trim() === "") rmSync(p, { force: true });
     } else if (orig.data != null) {
       const originalBuf = Buffer.from(orig.data, "base64");
-      const now = COPILOT_JSON_FILES.includes(rel) ? parseJsonc(readFileSync(p, "utf-8"), [], { allowTrailingComma: true }) : readJson(p, undefined);
+      const now = COPILOT_JSON_FILES.includes(rel) ? tryParseCopilotJson(p, readFileSync(p, "utf-8")) : readJson(p, undefined);
       const then = (() => {
         try {
-          return COPILOT_JSON_FILES.includes(rel) ? parseJsonc(originalBuf.toString("utf-8"), [], { allowTrailingComma: true }) : JSON.parse(originalBuf.toString("utf-8"));
+          return COPILOT_JSON_FILES.includes(rel) ? tryParseCopilotJson(`${p} (original)`, originalBuf.toString("utf-8")) : JSON.parse(originalBuf.toString("utf-8"));
         } catch {
           return undefined;
         }
