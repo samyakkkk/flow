@@ -11,7 +11,7 @@ export default async function AgentSessionPage({
   const { id } = await params;
   return (
     <Shell>
-      <AgentSession id={id} />
+      <AgentSession key={id} id={id} />
     </Shell>
   );
 }
