@@ -23,6 +23,7 @@
     "npm": ">=9"
   },
   "dependencies": {
-    "falkordb": "^6.2.0"
+    "falkordb": "^6.2.0",
+    "jsonc-parser": "^3.3.1"
   }
 }

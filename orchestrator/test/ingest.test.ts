@@ -121,6 +121,33 @@ describe("gemini dialect", () => {
   });
 });
 
+// Copilot PascalCase hooks use the documented VS Code-compatible dialect.
+// The client shim adds last_assistant_message from the Stop transcript path.
+describe("Copilot capture", () => {
+  test("two turns are captured once and SessionEnd closes the session", async () => {
+    const session_id = "copilot-session";
+    const events = [
+      { hook_event_name: "SessionStart" },
+      { hook_event_name: "UserPromptSubmit", prompt: "Fix the Copilot integration" },
+      { hook_event_name: "Stop", last_assistant_message: "Installed Flow", timestamp: "2026-09-05T10:00:00Z" },
+      { hook_event_name: "UserPromptSubmit", prompt: "Check it" },
+      { hook_event_name: "Stop", last_assistant_message: "Checks passed", timestamp: "2026-09-05T10:01:00Z" },
+      { hook_event_name: "SessionEnd" },
+    ];
+    for (const event of events) {
+      const payload = { ...event, session_id, cwd: "/work/copilot" };
+      const first = await postHook("copilot", payload);
+      assert.equal(first.statusCode, 200);
+      assert.equal((await postHook("copilot", payload)).json().appended, 0);
+    }
+    const transcript = readTranscript(extRowId("copilot", session_id));
+    assert.deepEqual(transcript.map((e) => e.kind), ["created", "user_prompt", "update", "user_prompt", "update"]);
+    assert.match(JSON.stringify(transcript), /Checks passed/);
+    const result = await app.inject({ method: "GET", url: "/v1/ingest/sessions?harness=copilot" });
+    assert.equal(result.json().sessions[0].status, "closed");
+  });
+});
+
 describe("version tolerance", () => {
   test("unknown event names are acknowledged, never errors", async () => {
     const res = await postHook("claude", {
