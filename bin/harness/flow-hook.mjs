@@ -14,7 +14,7 @@
 //
 // Zero dependencies; stock Node 22.
 
-import { readFileSync, appendFileSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync, statSync, writeFileSync, openSync, readSync, fstatSync, closeSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -86,6 +86,45 @@ function redactDeep(v) {
   return v;
 }
 
+// Copilot CLI and VS Code Stop hooks carry a path, not the final answer.
+// Read only a bounded tail of that supplied JSONL file; never scan session
+// directories or upload tool output/reasoning. Unknown formats degrade quietly.
+function copilotTranscriptLines(payload, tail = true) {
+  const path = payload.transcript_path ?? payload.transcriptPath;
+  if (typeof path !== "string" || !path) return [];
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return [];
+    const length = Math.min(stat.size, tail ? 256 * 1024 : 8192);
+    const offset = tail ? stat.size - length : 0;
+    const buf = Buffer.alloc(length);
+    const count = readSync(fd, buf, 0, length, offset);
+    const lines = buf.subarray(0, count).toString("utf8").split("\n");
+    if (offset) lines.shift(); // first line may start mid-record
+    return lines.flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function copilotAnswer(payload) {
+  let answer = null;
+  for (const entry of copilotTranscriptLines(payload)) {
+    if (!entry || entry.agentId || entry.data?.parentToolCallId) continue;
+    if (entry.type === "user.message") answer = null;
+    if (entry.type === "assistant.message" && typeof entry.data?.content === "string") {
+      answer = entry.data.content.trim() ? entry.data.content.slice(-16000) : null;
+    }
+  }
+  return answer;
+}
+
 // ---------------------------------------------------------------------------
 async function main() {
   // Sessions Flow itself runs are already captured by the ACP runtime —
@@ -101,6 +140,12 @@ async function main() {
     return;
   }
 
+  // Copilot also executes .claude/settings.json hooks. Its session.start
+  // transcript header distinguishes these from actual Claude sessions.
+  if (args.harness === "claude" && copilotTranscriptLines(payload, false).some(
+    (entry) => entry?.type === "session.start" && typeof entry.data?.sessionId === "string"
+  )) return;
+
   // The binding (--project) resolves to a machine-level config entry written
   // by `flow setup` — never resolved from the payload at capture time.
   const remoteName = args.remote ?? "local";
@@ -113,6 +158,13 @@ async function main() {
   if (!remote?.url) {
     logLine(`no binding for project "${args.project}" / remote "${remoteName}" in ~/.flow/config.json, dropped`);
     return;
+  }
+
+  if (args.harness === "copilot" && ["Stop", "agentStop"].includes(payload?.hook_event_name ?? payload?.hookEventName)) {
+    if (!payload.last_assistant_message) {
+      const answer = copilotAnswer(payload);
+      if (answer) payload.last_assistant_message = answer;
+    }
   }
 
   const body = JSON.stringify({

@@ -22,10 +22,12 @@ import {
   copyFileSync,
   rmSync,
   rmdirSync,
+  readdirSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
+import { parse as parseJsonc, modify, applyEdits } from "jsonc-parser";
 
 export const FLOW_DIR = join(homedir(), ".flow");
 export const SHIM_PATH = join(FLOW_DIR, "bin", "flow-hook");
@@ -56,6 +58,24 @@ function readJson(p, fallback) {
 function writeJson(p, obj) {
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(obj, null, 2) + "\n", "utf-8");
+}
+
+// Copilot's VS Code config accepts comments and trailing commas. Preserve
+// those and unrelated settings; malformed config must never be overwritten.
+function editCopilotJson(file, edit) {
+  let text = existsSync(file) ? readFileSync(file, "utf-8") : "{}\n";
+  const errors = [];
+  const value = parseJsonc(text, errors, { allowTrailingComma: true });
+  if (errors.length || !value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid Copilot configuration: ${file}`);
+  }
+  for (const [path, next] of edit(value)) {
+    text = applyEdits(text, modify(text, path, next, {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+    }));
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text, "utf-8");
 }
 
 // Splice a marker-delimited block into a text file: replace ours if present,
@@ -91,7 +111,7 @@ function unspliceBlock(file, begin = BLOCK_BEGIN, end = BLOCK_END) {
 
 // Our entries are recognizable forever by the shim path inside the command.
 function isFlowHook(entry) {
-  return JSON.stringify(entry).includes(".flow/bin/flow-hook");
+  return JSON.stringify(entry).replace(/\\+/g, "/").includes(".flow/bin/flow-hook");
 }
 
 // events: [{name, extra?}] — extra merges into the hook object (e.g. Gemini's
@@ -618,6 +638,44 @@ function renderAntigravity(ctx) {
   return { owned: [], merged: [".agents/hooks.json", ".agents/mcp_config.json"] };
 }
 
+const COPILOT_JSON_FILES = [".github/hooks/flow.json", ".github/mcp.json", ".vscode/mcp.json"];
+
+function renderCopilot(ctx) {
+  const { repoDir, project, repo } = ctx;
+  const argv = [NODE_BIN, SHIM_PATH, "--harness", "copilot", "--project", project, "--repo", repo, "--remote", "local"];
+  const command = process.platform === "win32"
+    ? "& " + argv.map((arg) => `'${arg.replaceAll("'", "''")}'`).join(" ")
+    : argv.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
+  // PascalCase selects the VS Code-compatible payload dialect in Copilot CLI.
+  // SessionEnd is CLI-only; VS Code sessions are distilled by the idle sweep.
+  editCopilotJson(join(repoDir, COPILOT_JSON_FILES[0]), (file) => [
+    [["version"], 1],
+    ...HOOK_EVENTS.map(({ name }) => [["hooks", name], [
+      ...(file.hooks?.[name] ?? []).filter((entry) => !isFlowHook(entry)),
+      { type: "command", command, timeout: 5 },
+    ]]),
+  ]);
+
+  for (const rel of COPILOT_JSON_FILES.slice(1)) {
+    editCopilotJson(join(repoDir, rel), (file) => {
+      const key = rel.startsWith(".vscode") ? "servers" : "mcpServers";
+      // CLI also accepts a bare map of server names.
+      const path = key === "mcpServers" && !file.mcpServers && Object.keys(file).some((k) => k !== "$schema")
+        ? ["flow-graph"] : [key, "flow-graph"];
+      return [[path, { type: "stdio", command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] }]];
+    });
+  }
+
+  const skillPath = join(repoDir, ".github/skills/flow/SKILL.md");
+  mkdirSync(dirname(skillPath), { recursive: true });
+  writeFileSync(skillPath, skillMd(project), "utf-8");
+  spliceBlock(join(repoDir, ".github/copilot-instructions.md"), instructionBlock(project));
+  return {
+    owned: [".github/skills/flow/SKILL.md"],
+    merged: [...COPILOT_JSON_FILES, ".github/copilot-instructions.md"],
+  };
+}
+
 const RENDERERS = {
   claude: renderClaude,
   codex: renderCodex,
@@ -625,6 +683,7 @@ const RENDERERS = {
   gemini: renderGemini,
   cursor: renderCursor,
   antigravity: renderAntigravity,
+  copilot: renderCopilot,
 };
 
 export const ALL_HARNESSES = Object.keys(RENDERERS);
@@ -655,6 +714,12 @@ export function detectHarnesses() {
       existsSync("/Applications/Antigravity.app") ||
       existsSync("/Applications/Antigravity IDE.app") ||
       existsSync(join(home, ".gemini", "antigravity")),
+    copilot: () => onPath("copilot") || existsSync(process.env.COPILOT_HOME || join(home, ".copilot")) ||
+      [".vscode", ".vscode-insiders", ".vscode-server"].some((dir) => {
+        try {
+          return readdirSync(join(home, dir, "extensions")).some((name) => /^github\.copilot(?:-chat)?-/i.test(name));
+        } catch { return false; }
+      }),
   };
   return ALL_HARNESSES.filter((h) => {
     try {
@@ -715,6 +780,9 @@ const CANDIDATE_FILES = [
   ".cursor/hooks.json",
   ".cursor/mcp.json",
   ".cursor/rules/flow.mdc",
+  ...COPILOT_JSON_FILES,
+  ".github/skills/flow/SKILL.md",
+  ".github/copilot-instructions.md",
 ];
 const ORIGINAL_CAP = 256 * 1024;
 
@@ -793,8 +861,37 @@ export function removeRepo(repoDir) {
     ".agents/skills/flow/SKILL.md",
     ".opencode/plugins/flow.ts",
     ".cursor/rules/flow.mdc",
+    ".github/skills/flow/SKILL.md",
   ];
-  for (const rel of owned) rmSync(join(repoDir, rel), { force: true });
+  for (const rel of owned) {
+    if (rel === ".github/skills/flow/SKILL.md" && originals[rel]?.data) {
+      writeFileSync(join(repoDir, rel), Buffer.from(originals[rel].data, "base64"));
+    } else rmSync(join(repoDir, rel), { force: true });
+  }
+
+  for (const rel of COPILOT_JSON_FILES) {
+    if (entry && !entry.merged?.includes(rel)) continue;
+    const p = join(repoDir, rel);
+    if (!existsSync(p)) continue;
+    const original = originals[rel]?.data
+      ? parseJsonc(Buffer.from(originals[rel].data, "base64").toString("utf8"), [], { allowTrailingComma: true }) : {};
+    editCopilotJson(p, (file) => {
+      if (rel.endsWith("hooks/flow.json")) {
+        const hooks = removeFlowHooks(file.hooks);
+        return hooks ? [
+          [["hooks"], Object.keys(hooks).length || original.hooks ? hooks : undefined],
+          [["version"], original.version ?? (originals[rel]?.existed ? undefined : file.version)],
+        ] : [];
+      }
+      const key = rel.startsWith(".vscode") ? "servers" : "mcpServers";
+      if (file[key]?.["flow-graph"]) {
+        const servers = { ...file[key] };
+        delete servers["flow-graph"];
+        return Object.keys(servers).length || original[key] ? [[[key, "flow-graph"], undefined]] : [[[key], undefined]];
+      }
+      return file["flow-graph"] ? [[["flow-graph"], undefined]] : [];
+    });
+  }
 
   // Merged JSON files: strip our entries; marked text files: unsplice.
   for (const rel of [".claude/settings.json", ".gemini/settings.json"]) {
@@ -848,7 +945,7 @@ export function removeRepo(repoDir) {
     delete agHooks["flow-capture"];
     writeJson(agHooksPath, agHooks);
   }
-  for (const f of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) unspliceBlock(join(repoDir, f));
+  for (const f of ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".github/copilot-instructions.md"]) unspliceBlock(join(repoDir, f));
   unspliceBlock(join(repoDir, ".codex", "config.toml"), TOML_BEGIN, TOML_END);
   setGitExclude(repoDir, [], true);
 
@@ -864,10 +961,10 @@ export function removeRepo(repoDir) {
       if ((j !== undefined && isEmptyShell(j)) || text.trim() === "") rmSync(p, { force: true });
     } else if (orig.data != null) {
       const originalBuf = Buffer.from(orig.data, "base64");
-      const now = readJson(p, undefined);
+      const now = COPILOT_JSON_FILES.includes(rel) ? parseJsonc(readFileSync(p, "utf-8"), [], { allowTrailingComma: true }) : readJson(p, undefined);
       const then = (() => {
         try {
-          return JSON.parse(originalBuf.toString("utf-8"));
+          return COPILOT_JSON_FILES.includes(rel) ? parseJsonc(originalBuf.toString("utf-8"), [], { allowTrailingComma: true }) : JSON.parse(originalBuf.toString("utf-8"));
         } catch {
           return undefined;
         }
@@ -878,7 +975,7 @@ export function removeRepo(repoDir) {
     }
   }
   // Empty scaffolding dirs left behind are noise — prune best-effort.
-  for (const dir of [".claude/skills/flow", ".claude/skills", ".claude", ".codex", ".agents/skills/flow", ".agents/skills", ".agents", ".opencode/plugins", ".opencode", ".gemini", ".cursor/rules", ".cursor"]) {
+  for (const dir of [".claude/skills/flow", ".claude/skills", ".claude", ".codex", ".agents/skills/flow", ".agents/skills", ".agents", ".opencode/plugins", ".opencode", ".gemini", ".cursor/rules", ".cursor", ".github/skills/flow", ".github/skills", ".github/hooks", ".github", ".vscode"]) {
     try {
       rmdirSync(join(repoDir, dir)); // only succeeds when empty
     } catch {
