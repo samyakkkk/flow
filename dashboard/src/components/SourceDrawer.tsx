@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, FormEvent, useMemo } from "react";
+import React, { useState, FormEvent } from "react";
 import { useProject } from "@/lib/useProject";
 import { FlowMode } from "@/lib/useMode";
 import { BrandIcon } from "@/components/BrandIcon";
@@ -8,6 +8,8 @@ import { AddFolder } from "@/components/AddFolder";
 import { AddRepoUrl } from "@/components/AddRepoUrl";
 import { RepoPicker } from "@/components/RepoPicker";
 import { Button, Kicker, StatusPill } from "@/components/ui";
+
+export type RepoIndexStatus = "never_indexed" | "queued" | "indexing" | "indexed" | "failed";
 
 export interface RepoEntry {
   name: string;
@@ -18,12 +20,43 @@ export interface RepoEntry {
   addedAt?: string;
   localPath?: string | null;
   kind?: string;
+  indexStatus?: RepoIndexStatus;
+  lastError?: string | null;
 }
 
 export interface SettingItem {
   key: string;
   set: boolean;
   value?: string | null;
+}
+
+function repoIndexStatus(repo: RepoEntry): RepoIndexStatus {
+  return repo.indexStatus ?? (repo.lastIndexedCommit || repo.lastIndexedAt ? "indexed" : "never_indexed");
+}
+
+function repoStatusLabel(status: RepoIndexStatus): string {
+  const labels: Record<RepoIndexStatus, string> = {
+    never_indexed: "Not indexed",
+    queued: "Queued",
+    indexing: "Indexing",
+    indexed: "Indexed",
+    failed: "Failed",
+  };
+  return labels[status];
+}
+
+function repoStatusKind(status: RepoIndexStatus): "live" | "ok" | "warn" | "idle" {
+  if (status === "indexing") return "live";
+  if (status === "indexed") return "ok";
+  if (status === "failed") return "warn";
+  return "idle";
+}
+
+function repoStatusColor(status: RepoIndexStatus): string {
+  if (status === "indexed") return "var(--ok)";
+  if (status === "failed") return "var(--warn)";
+  if (status === "indexing") return "var(--accent)";
+  return "var(--text-muted)";
 }
 
 interface SourcesPillStripProps {
@@ -33,7 +66,7 @@ interface SourcesPillStripProps {
   onOpenDrawer: () => void;
 }
 
-export function SourcesPillStrip({ repos, settings, mode, onOpenDrawer }: SourcesPillStripProps) {
+export function SourcesPillStrip({ repos, settings, onOpenDrawer }: SourcesPillStripProps) {
   const linearSet = settings.some((s) => s.key === "LINEAR_API_KEY" && s.set);
   const firefliesSet = settings.some((s) => s.key === "FIREFLIES_API_KEY" && s.set);
   const [showSlackPopover, setShowSlackPopover] = useState(false);
@@ -52,21 +85,24 @@ export function SourcesPillStrip({ repos, settings, mode, onOpenDrawer }: Source
         </span>
 
         {/* Repos pills */}
-        {repos.map((r) => (
-          <div
-            key={r.name}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sand border border-line text-[12px] text-ink flex-shrink-0"
-          >
-            <BrandIcon name="opencode" size={14} className="text-ink opacity-70" />
-            <span className="font-medium truncate max-w-[140px]">{r.name}</span>
-            <span className="text-[10px] text-text-muted font-mono">({r.branch})</span>
-            {r.lastIndexedCommit ? (
-              <span className="w-1.5 h-1.5 rounded-full bg-ok" title="Indexed" />
-            ) : (
-              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" title="Indexing" />
-            )}
-          </div>
-        ))}
+        {repos.map((r) => {
+          const status = repoIndexStatus(r);
+          return (
+            <div
+              key={r.name}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sand border border-line text-[12px] text-ink flex-shrink-0"
+            >
+              <BrandIcon name="opencode" size={14} className="text-ink opacity-70" />
+              <span className="font-medium truncate max-w-[140px]">{r.name}</span>
+              <span className="text-[10px] text-text-muted font-mono">({r.branch})</span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${status === "indexing" ? "animate-pulse" : ""}`}
+                style={{ background: repoStatusColor(status) }}
+                title={repoStatusLabel(status)}
+              />
+            </div>
+          );
+        })}
 
         {/* Linear pill */}
         {linearSet && (
@@ -318,22 +354,25 @@ export function SourceDrawer({
                 <div>
                   <Kicker>Connected Codebases ({repos.length})</Kicker>
                   <div className="mt-2 space-y-2">
-                    {repos.map((r) => (
-                      <div
-                        key={r.name}
-                        className="p-3 rounded-lg border border-line bg-sand flex items-center justify-between gap-3 text-[13px]"
-                      >
-                        <div>
-                          <div className="font-medium text-ink">{r.name}</div>
-                          <div className="text-[11px] font-mono text-text-muted">
-                            Branch: {r.branch} {r.localPath ? `· ${r.localPath}` : ""}
+                    {repos.map((r) => {
+                      const status = repoIndexStatus(r);
+                      return (
+                        <div
+                          key={r.name}
+                          className="p-3 rounded-lg border border-line bg-sand flex items-center justify-between gap-3 text-[13px]"
+                        >
+                          <div>
+                            <div className="font-medium text-ink">{r.name}</div>
+                            <div className="text-[11px] font-mono text-text-muted">
+                              Branch: {r.branch} {r.localPath ? `· ${r.localPath}` : ""}
+                            </div>
                           </div>
+                          <StatusPill kind={repoStatusKind(status)}>
+                            {repoStatusLabel(status)}
+                          </StatusPill>
                         </div>
-                        <StatusPill kind={r.lastIndexedCommit ? "ok" : "live"}>
-                          {r.lastIndexedCommit ? "Indexed" : "Indexing"}
-                        </StatusPill>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
