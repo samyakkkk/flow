@@ -460,3 +460,29 @@ deployments).
 - Competitive: GitHub Copilot "chronicle" already cloud-syncs sessions and answers questions
   over them. Flow's moat: cross-tool coverage + distilled durable memory + self-hosted brain,
   not raw recall.
+
+
+## Headless validation notes (2026-09-06)
+
+In Gemini CLI 0.54.0, headless runs may omit tools that require interactive
+approval even when `gemini mcp list` says connected and `gemini skills list`
+says enabled. The following limited permission test activates the Flow skill
+and calls native MCP against both local and remote project bindings:
+
+```sh
+gemini --skip-trust --allowed-tools 'activate_skill,mcp_flow-graph_orient' \
+  --output-format stream-json \
+  -p 'Activate the Flow skill, then call Flow orient. Do not edit files or delegate.'
+```
+
+`--skip-trust` applies only to the known test fixture for this invocation.
+Gemini marks `--allowed-tools` deprecated in favor of its Policy Engine;
+interactive users can approve tools normally. Do not globally disable file
+ignore filtering to work around a direct read of a personally installed skill:
+`activate_skill` loads the ignored skill correctly once permitted.
+
+Codex may defer MCP tools. Generated instructions now require discovery before
+falling back to the shell CLI, whose network access may be sandboxed. Native
+MCP orientation has passed against the HTTPS test deployment with an ordinary
+orientation prompt. CLI 0.153.4 required an explicitly compatible gpt-5.5 model
+in this test environment; the user's global model was unchanged.

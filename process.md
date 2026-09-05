@@ -36,7 +36,7 @@ Load credentials directly into required process environment/config. Never echo t
 - Fixtures: `data/harness-fixture` (local), `data/cloud-fixture` (cloud client), each independent Git repo.
 - Integration backup: `~/.flow/backups/cloud-harness-validation`.
 - Hetzner server 164708090, `flow-harness-validation`, IPv4 5.223.65.87, cpx32 4 CPU/8 GB Singapore, approximately EUR 0.0929/hour plus IPv4. Existing `flow-test` untouched. SSH restricted to developer IP; public 80/443.
-- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Last verified cloud commit c1f99a7; sync newer changes.
+- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Cloud synchronized through 7d26843; OpenCode 1.17.20 installed.
 - HTTPS https://5-223-65-87.sslip.io; connector prefixes `/harness-cloud/gateway` and `/harness-cloud/orchestrator`. Caddy exposes limited connector routes; ordinary dashboard routes use prod auth.
 - Private provisioning/bootstrap scripts and git bundle in `~/.config/flow-validation/`. Remote `/root/flow-up.log` can contain secrets.
 - Heartbeat `flow-cloud-setup-overnight` continues every 30 minutes. Notify meaningful changes or required user actions; pause on completion.
@@ -59,7 +59,7 @@ Load credentials directly into required process environment/config. Never echo t
 | --- | --- | --- |
 | Claude | Native MCP passes after auth; `data/claude-local-authenticated.jsonl` | `data/claude-cloud.jsonl` confirms skill activation, ToolSearch and native MCP orient |
 | Codex | Native MCP passes with explicit gpt-5.5; `data/codex-local-compatible.jsonl` | Native MCP now passes; ordinary prompt retest in `data/codex-cloud-instructions.jsonl` passes after discovery instruction fix |
-| Gemini | CLI fallback passes; ignored skill file read refused; native MCP absent | Same partial outcome in `data/gemini-cloud.jsonl`; full support not passed |
+| Gemini | Skill activation and native orient pass with explicit headless tool permission; `data/gemini-local-skill.jsonl` | Same passes in `data/gemini-cloud-skill.jsonl`; normal interactive permission flow still to verify |
 | Antigravity | Desktop reads skill and native orient succeeds; conversation “Repository Flow Orientation Guide” | Cloud desktop and capture pending |
 | VS Code Copilot | Desktop skill and native orient pass, about 17 seconds | Cloud desktop and capture pending |
 | Cursor | Launched into existing chat; fixture prompt not submitted | Local/cloud tests pending |
@@ -74,3 +74,5 @@ Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Clau
 - 2026-09-06: Consolidated all task instructions and current evidence here, replacing the stale checkpoint. Added hook-to-memory verification as the final task, with extraction and subsequent retrieval required. Stored supplied OpenRouter key privately. Main integrations, remote source access and automation work remain in progress.
 
 - 2026-09-06: Codex cloud transport confirmed healthy; original failure was premature CLI fallback. Generated skill and instructions now require deferred MCP discovery before fallback. Ordinary-prompt retest passes; 12 setup/materializer tests pass. Claude cloud native skill/MCP evidence confirmed. OpenCode 1.17.20 with OpenRouter Claude Sonnet 4.6 activated Flow skill and called cloud native orient. Key placed in isolated local/cloud project .env (0600); cloud OpenCode installation underway. Gemini lists Flow connected and skill enabled, but headless tools remain missing; explicit-tool-permission test pending. No hook-to-memory completion claimed.
+
+- 2026-09-06: Gemini headless omission traced to tool permissions; explicitly permitting activate_skill and mcp_flow-graph_orient succeeds, including loading the personally installed ignored skill. Documented invocation in docs/harness-integrations.md; no ignore-filter weakening. Hetzner synchronized through 7d26843, OpenCode 1.17.20 installed, fresh server-fixture configured with flow setup; /root/opencode-server.jsonl shows native orient completed. Cursor workspace picker interactions are flaky via AX; continue with fresh UI observations.
