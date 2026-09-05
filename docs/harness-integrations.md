@@ -229,6 +229,10 @@ Headline findings:
   schema) in BOTH `.agents/` and `~/.gemini/config/` was never executed while agent sessions
   ran fine — hooks appear version/flag-gated. MCP serve works (live orient). Capture fallback:
   brain-dir ingestion.
+- 2026-09-06: Fixed lifecycle handler format: `PreInvocation`, `PostInvocation`
+  and `Stop` use flat handlers; only tool events use matcher/groups. Real
+  Antigravity cloud prompt/answer capture now passes. The older gap below
+  must not be taken as evidence that current hooks are unsupported.
 - Hooks: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`. Payload:
   `conversationId`, `workspacePaths`, **`transcriptPath`**
   (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`),
