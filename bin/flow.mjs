@@ -48,6 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import {
+  FLOW_DIR,
   materializeMachine,
   materializeRepo,
   removeRepo,
@@ -56,7 +57,7 @@ import {
 } from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
-import { discoverRemote } from "./lib/remote-setup.mjs";
+import { discoverRemote, savedRemoteBinding } from "./lib/remote-setup.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1308,19 +1309,21 @@ async function cmdSetup(rest) {
         (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
     );
   }
-  const isRemote = Boolean(values["gateway-url"] || values["orchestrator-url"] || values["token-env"]);
+  const explicitRemote = Boolean(values["gateway-url"] || values["orchestrator-url"] || values["token-env"]);
+  const saved = explicitRemote ? null : savedRemoteBinding(FLOW_DIR, name, repoDir);
+  const isRemote = explicitRemote || Boolean(saved);
   let projectEntry;
   let repoName;
   let registered = false;
   if (isRemote) {
-    if (!values["gateway-url"] || !values["orchestrator-url"] || !values["token-env"]) {
+    if (explicitRemote && (!values["gateway-url"] || !values["orchestrator-url"] || !values["token-env"])) {
       die("Remote setup requires --gateway-url, --orchestrator-url, and --token-env.");
     }
     projectEntry = await discoverRemote({ project: name,
-      gatewayUrl: values["gateway-url"], orchestratorUrl: values["orchestrator-url"],
-      token: process.env[values["token-env"]] });
+      gatewayUrl: saved?.gatewayUrl ?? values["gateway-url"], orchestratorUrl: saved?.orchestratorUrl ?? values["orchestrator-url"],
+      token: saved?.token ?? process.env[values["token-env"]] });
     projectEntry.httpMcpBridge = join(flowRoot, "bin", "harness", "flow-mcp-http.mjs");
-    repoName = values.repo || basename(repoDir);
+    repoName = values.repo || saved?.repo || basename(repoDir);
   } else {
     const project = readProject(name); // throws with a helpful message if unknown
     const index = listProjectNames().indexOf(name);

@@ -86,3 +86,8 @@ a separate one-time command approval. MCP approval alone did not permit the CLI.
 After one-time command approval, Antigravity cloud CLI fallback returned the
 correct harness-cloud project/cloud-fixture repository. Native cloud MCP remains
 unverified; a fresh conversation alone did not resolve the stale response.
+
+Remote reconnect: after the initial authenticated setup, `flow setup <project>`
+can reuse that named remote's private connection details. It revalidates both
+endpoints and preserves a previously registered repository name before updating
+integrations. Explicit remote flags are still required to change endpoints.
