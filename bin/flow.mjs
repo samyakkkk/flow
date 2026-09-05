@@ -464,7 +464,7 @@ function nodeBin(subdir, name) {
 // cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
 // the exact fix, instead.
 function preflightNativeDeps() {
-  const probe = spawnSync(process.execPath, ["-e", "require('better-sqlite3')"], {
+  const probe = spawnSync(process.execPath, ["-e", "const db = require('better-sqlite3')(':memory:'); db.close()"], {
     cwd: orchestratorDir(),
     encoding: "utf8",
   });
