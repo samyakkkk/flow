@@ -76,3 +76,9 @@ Update this document alongside process.md as remaining tests establish facts.
 Orientation now explicitly labels CONNECTED PROJECT separately from the repository.
 A repository name can differ from its Flow project name; compare project identity
 when checking the binding. Older gateways without this field require CLI verification.
+
+Antigravity cloud retest: even a fresh conversation used an old orientation
+response without CONNECTED PROJECT. The on-disk workspace MCP command points
+to harness-cloud, so connection refresh/precedence remains unresolved. Its CLI
+fallback was blocked by sandbox EPERM reading ~/.flow/bin/flow and requested
+a separate one-time command approval. MCP approval alone did not permit the CLI.
