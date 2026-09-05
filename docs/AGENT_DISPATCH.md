@@ -1,5 +1,9 @@
 # Agent Dispatch — Flow ↔ coding agents ↔ Shellular
 
+Production cloud execution now uses the OpenCode conversation/worktree runtime
+described in [Cloud Tasks](CLOUD_TASKS.md). The discussion below records the
+earlier ACP/Shellular design; it is not the cloud task implementation contract.
+
 How Flow triggers tasks on coding agents (Claude Code, Codex, OpenCode, Copilot,
 Cursor), listens to their progress, and exposes the knowledge graph to them —
 and where Shellular fits. Decided 2026-07-06 after reading the shellular,

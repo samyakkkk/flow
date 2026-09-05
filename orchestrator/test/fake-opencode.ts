@@ -15,11 +15,14 @@ export async function run(
   opts: JobInput,
   jobId: string
 ): Promise<{ result: unknown; sessionId: string }> {
-  const sessionId = `fake-ses-${jobId}`;
+  const sessionId = opts.type === "continue" && typeof opts.input.session_id === "string"
+    ? opts.input.session_id : `fake-ses-${jobId}`;
 
   switch (opts.type) {
     case "answer":
     case "continue": {
+      const delay = Number(opts.input.simulate_delay_ms ?? 0);
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       // simulate_notify: fire N notify calls before returning (test hook for G10 budget)
       const simulateNotify = opts.input.simulate_notify as number | undefined;
       if (simulateNotify && simulateNotify > 0) {

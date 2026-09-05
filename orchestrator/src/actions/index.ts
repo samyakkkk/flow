@@ -175,7 +175,7 @@ async function handleSlackAuto(event: NormalizedEvent, cls: ClassificationResult
       { actor: `slack:${p.user_id ?? "unknown"}`, evidence: p.permalink ?? `slack:${event.id}`, confidence: confidenceLabel(cls.confidence) }
     );
     audit(event.id, c, cls.confidence, "graphwrite", "Concept", "ok");
-  } else if (c === "question") {
+  } else if (c === "question" || (process.env.FLOW_MODE === "prod" && event.type === "mention" && (c === "command" || c === "feedback"))) {
     // @mention/DM: answer and reply in the thread when the job completes.
     // workspace is passed through so the session binder in opencode.ts can
     // compute the correct thread_key for session-per-chat continuity (G10).

@@ -11,5 +11,7 @@ from the repositories cloned under `repos/` (prod branches, read-only).
   instead of working around it. Do not probe gateway ports with curl — the
   tools talk to the graph directly and ports differ per project.
 - Use the `graph-builder` agent for indexing work.
-- Repositories are evidence, not workspace: do not modify them, do not read
-  `.env` or credentials, do not query live services.
+- Shared clones under `repos/` are evidence: never modify them or change their
+  branches. Cloud conversations use `flow_workspace` to create a worktree only
+  when changes are requested; all edits and commands then target that worktree.
+- Do not read `.env` or credentials, or query live services.

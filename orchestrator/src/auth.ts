@@ -50,6 +50,11 @@ export function requireAuth(
     return;
   }
 
+  if (req.method === "POST" && /^\/v1\/agents\/tasks\/[^/]+\/workspace$/.test(url)) {
+    done(); // Exact job-scoped authentication is enforced inside cloud-routes.
+    return;
+  }
+
   const header = req.headers.authorization ?? "";
   const match = header.match(/^Bearer (.+)$/i);
 

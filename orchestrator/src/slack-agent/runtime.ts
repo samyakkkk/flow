@@ -6,7 +6,9 @@
 // FlowRuntime is the default: it feeds the question to the orchestrator's own
 // answer-job pipeline (opencode answerer over the knowledge graph + memory).
 
-import { enqueueJob, getJob } from "../opencode.js";
+import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
+import { cloudMode, slackConversation } from "../agents/cloud-workspaces.js";
+import { containsSecret } from "../events.js";
 import type { TranscriptTurn as Turn } from "./types.js";
 export type { TranscriptTurn, Surface, RuntimeQuery, RuntimeAnswer, AgentRuntime } from "./types.js";
 import type { AgentRuntime, RuntimeAnswer, RuntimeQuery } from "./types.js";
@@ -23,33 +25,49 @@ const POLL_MS = 1000;
 export class FlowRuntime implements AgentRuntime {
   readonly name = "flow";
 
-  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? 300_000)) {}
+  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? 900_000 : 300_000))) {}
 
   async ask(query: RuntimeQuery): Promise<RuntimeAnswer> {
+    if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
     const question = buildQuestion(query);
+    const cloud = cloudMode();
+    if (cloud && containsSecret(question)) throw new Error("Message contains credentials");
 
     query.onStatus?.("Searching the knowledge graph…");
-    const { id } = await enqueueJob({ type: "answer", input: { question } });
+    const { id } = await enqueueJob({ type: "answer", input: {
+      question,
+      ...(cloud ? { conversation: slackConversation(
+        query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
+      ) } : {}),
+    } });
+    const onAbort = () => { if (cloud) cancelCloudJob(id); };
+    query.signal?.addEventListener("abort", onAbort, { once: true });
+    if (query.signal?.aborted) onAbort();
 
-    const deadline = Date.now() + this.answerTimeoutMs;
-    while (Date.now() < deadline) {
-      if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
-      await sleep(POLL_MS, query.signal);
-      const job = getJob(id);
-      if (!job) throw new Error(`answer job ${id} disappeared`);
-      if (job.status === "done") {
-        const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
-        return {
-          markdown: renderAnswer(result),
-          citations: result.citations ?? [],
-          confidence: result.confidence,
-        };
+    try {
+      const deadline = Date.now() + this.answerTimeoutMs;
+      while (Date.now() < deadline) {
+        if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
+        await sleep(POLL_MS, query.signal);
+        const job = getJob(id);
+        if (!job) throw new Error(`answer job ${id} disappeared`);
+        if (job.status === "done") {
+          const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
+          return {
+            markdown: renderAnswer(result),
+            citations: result.citations ?? [],
+            confidence: result.confidence,
+          };
+        }
+        if (job.status === "failed") {
+          throw new Error(`answer job failed: ${(job.result_json ?? "").slice(0, 300)}`);
+        }
       }
-      if (job.status === "failed") {
-        throw new Error(`answer job failed: ${(job.result_json ?? "").slice(0, 300)}`);
-      }
+      throw new Error(`answer job ${id} timed out after ${Math.round(this.answerTimeoutMs / 1000)}s`);
+    } finally {
+      query.signal?.removeEventListener("abort", onAbort);
+      if (cloud) cancelCloudJob(id); // No-op after completion; also cancels on timeout.
     }
-    throw new Error(`answer job ${id} timed out after ${Math.round(this.answerTimeoutMs / 1000)}s`);
   }
 }
 

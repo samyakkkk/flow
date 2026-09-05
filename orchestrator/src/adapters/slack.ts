@@ -18,7 +18,6 @@
 //          message (ambient) → normalized slack ambient event (skips bot's own messages)
 // Drainer (see drainer.ts) uses WebClient for sending messages.
 
-import { randomUUID } from "node:crypto";
 import { processEvent } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
 import { getSetting } from "../settings.js";
@@ -78,7 +77,7 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
   // ------------------------------------------------------------------
   // app_mention → slack.mention event
   // ------------------------------------------------------------------
-  app.event("app_mention", async ({ event: ev }) => {
+  app.event("app_mention", async ({ event: ev, body }) => {
     const text = (ev.text as string | undefined) ?? "";
     const userId = (ev.user as string | undefined) ?? "";
     const channel = (ev.channel as string | undefined) ?? "";
@@ -86,8 +85,9 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
     const threadTs = (ev.thread_ts as string | undefined) ?? undefined;
 
     const normalized: NormalizedEvent = {
-      id: randomUUID(),
+      id: `slack:${body.team_id ?? ""}:${channel}:${ts}`,
       source: "slack",
+      workspace: body.team_id,
       type: "mention",
       ts: Math.round(parseFloat(ts) * 1000) || Date.now(),
       payload: {
@@ -109,7 +109,7 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
   // ------------------------------------------------------------------
   // message → slack.ambient event (skip bot's own messages)
   // ------------------------------------------------------------------
-  app.message(async ({ message }) => {
+  app.message(async ({ message, body }) => {
     // Only process user messages in channels
     const msg = message as unknown as Record<string, unknown>;
     const subtype = msg.subtype as string | undefined;
@@ -121,13 +121,17 @@ export async function bootSlackAdapter(): Promise<SlackAppHandle | null> {
     if (slackBotUserId && userId === slackBotUserId) return;
 
     const text = (msg.text as string | undefined) ?? "";
+    // Slack sends both a message and app_mention for the same mention. The
+    // mention adapter owns it, including when a conversation already exists.
+    if (slackBotUserId && text.includes(`<@${slackBotUserId}>`)) return;
     const channel = (msg.channel as string | undefined) ?? "";
     const ts = (msg.ts as string | undefined) ?? "";
     const threadTs = (msg.thread_ts as string | undefined) ?? undefined;
 
     const normalized: NormalizedEvent = {
-      id: randomUUID(),
+      id: `slack:${body.team_id ?? ""}:${channel}:${ts}`,
       source: "slack",
+      workspace: body.team_id,
       type: "ambient",
       ts: Math.round(parseFloat(ts) * 1000) || Date.now(),
       payload: {
