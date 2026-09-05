@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sourceRead, sourceSearch } from "./source.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
 import { record } from "./journal.js";
 import { EDGE_TYPES, NODE_TYPES, isEdgeType, isNodeType } from "./schema.js";
@@ -921,6 +922,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(
     "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
       "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract might govern — contracts hang off nodes, not files. Traverse with read_query. " +
+      "If a referenced repository is not cloned locally, verify it with source_read or source_search using the registered repo name; results include the exact commit and default to the indexed revision. " +
       "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
       "Store back as you work: remember (when the user says 'remember this', states a durable rule, or a hard-won discovery surfaces — send the text, the distiller files it), correct_graph (when the graph contradicts the code).",
   );
@@ -938,6 +940,16 @@ async function listSchema() {
 // ---------------------------------------------------------------------------
 
 export const verbs = {
+  source_read: {
+    description: "Verify actual committed source when a graph reference points to a repository not cloned locally. Reads a registered project repository at its indexed commit by default; returns commit SHA and line bounds. Never accepts a server filesystem path. An explicit revision must be a full commit SHA.",
+    shape: { repo: z.string().min(1), path: z.string().min(1), revision: z.string().optional(), start_line: z.number().int().min(1).optional(), end_line: z.number().int().min(1).optional() },
+    handler: sourceRead,
+  },
+  source_search: {
+    description: "Search literal text in committed source of a registered project repository, including repositories absent locally. Defaults to the indexed commit and returns revision-labelled file/line matches. No working tree files or arbitrary remote clones are read.",
+    shape: { repo: z.string().min(1), query: z.string().min(1).max(500), revision: z.string().optional(), limit: z.number().int().min(1).max(50).optional() },
+    handler: sourceSearch,
+  },
   orient: {
     description:
       "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: what this repo is, how it works (distilled from real sessions), a map of the knowledge graph, and what memory holds. Pass {repo, branch} explicitly when Flow doesn't run your session.",

@@ -62,8 +62,8 @@ Load credentials directly into required process environment/config. Never echo t
 | Gemini | Skill activation and native orient pass with explicit headless tool permission; `data/gemini-local-skill.jsonl` | Same passes in `data/gemini-cloud-skill.jsonl`; normal interactive permission flow still to verify |
 | Antigravity | Desktop reads skill and native orient succeeds; conversation “Repository Flow Orientation Guide” | Cloud desktop and capture pending |
 | VS Code Copilot | Desktop skill and native orient pass, about 17 seconds | Cloud desktop and capture pending |
-| Cursor | Launched into existing chat; fixture prompt not submitted | Local/cloud tests pending |
-| OpenCode | Local test pending | OpenRouter-backed session activates skill and calls native MCP; `data/opencode-cloud.jsonl` |
+| Cursor | Skill and native orient passed after enabling workspace MCP; “Installed FlowSkill orientation,” about 13 seconds | Cloud test pending |
+| OpenCode | Skill and native orient passed; `data/opencode-local.jsonl` | OpenRouter-backed session activates skill and calls native MCP; `data/opencode-cloud.jsonl` |
 
 Installed Codex CLI 0.153.4 rejected configured gpt-6-astra; explicit gpt-5.5 worked. Do not globally change user model. `--ignore-user-config` suppressed project MCP, so that mode is not representative. Direct cloud bridge smoke passes despite Codex cloud session failing to use it.
 
@@ -80,3 +80,7 @@ Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Clau
 - 2026-09-06: User confirmed intended split: only Flow/OpenCode on server, external coding clients on Mac. Fresh OpenCode-only setup revealed missing shared skill/AGENTS instructions (also Gemini/Antigravity-only). Fixed renderers to install independently of Codex; removal now restores pre-existing owned files for all harnesses, not only Copilot. All 15 materializer/remote-setup tests pass. Cursor desktop read the skill but native MCP was absent; one-time CLI orient permitted, result pending.
 
 - 2026-09-06: User requested a future info option beside each coding agent explaining required permissions/setup quirks. Capture confirmed behavior, recovery steps and unresolved items in docs/coding-agent-setup-notes.md. Implementing that UI is a follow-up requirement; keep this document current as tests finish. Cursor server was Disabled in Customize; enabling the fixture source changed it to Connected/eight tools. Native retest pending. OpenCode local and server skill/native-MCP retests passed.
+
+- 2026-09-06: Cursor native MCP retest passed in desktop conversation “Installed FlowSkill orientation,” about 13 seconds, after enabling its installed workspace server. Updated per-agent setup notes. Antigravity cloud project creation underway (native folder picker).
+
+- 2026-09-06: Mac locked; automatic unlock failed, so remaining desktop interactions deferred. Started priority 2 while blocked on UI. Implemented project-scoped source_read/source_search over registered Git repositories, indexed SHA default with revision labels, bounded output, no dirty/untracked reads or symlink following. sourceRead:false excludes a repo; no per-user intra-project ACL is claimed. All 25 gateway tests and 15 setup tests pass; gateway tsc passes. docs/remote-source-access.md details behavior. Live Hetzner-only source verification is next.

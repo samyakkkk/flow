@@ -863,6 +863,7 @@ async function upProject(name, { rebuilt = false } = {}) {
     // store, checking the minting user's grant on THIS project.
     FLOW_AUTH_PATH: authJsonPath(),
     FLOW_PROJECT_NAME: name,
+    FLOW_SOURCE_REGISTRY: reposJsonPath,
     // Lets the gateway's HTTP-served orient reach the memory tiers (orient
     // docs, stats) — MCP spawns inject this per-process, the long-running
     // server needs it in its own env for CLI/remote verb callers.
@@ -898,6 +899,7 @@ async function upProject(name, { rebuilt = false } = {}) {
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
+    FLOW_SOURCE_REGISTRY: reposJsonPath,
     // Inherited down to gateway MCP subprocesses spawned by indexer jobs.
     // Graph operations still use FalkorDB directly; embeddings borrow this
     // project's long-lived gateway model through GATEWAY_URL.
@@ -1338,6 +1340,7 @@ async function cmdSetup(rest) {
         falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
         tsxBin: nodeBin(gatewayDir(), "tsx"),
         gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
+        sourceRegistry: join(projectDir(name), "workspace", "repos.json"),
       };
   }
   const { token, orchestratorUrl } = projectEntry;

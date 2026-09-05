@@ -207,6 +207,10 @@ This repo is documented as connected to Flow project **${project}**.
   (distilled from real sessions), what memory holds. Re-orient after context loss.
 - **Search on surprise.** Before deep-diving a failure or unfamiliar area,
   search the symptom — answers come with file:line anchors.
+- **Verify remote references.** If an anchored repository is not cloned here,
+  use \`source_read\` or \`source_search\` with its registered repo name and
+  relative path/query. Results identify the commit; the default is the indexed
+  revision. Never assume a server path exists on this machine.
 - **Remember conclusions.** When non-trivial work concludes or the user states a
   durable rule, remember it — verbatim quotes plus enough context to stand
   alone. The distiller files it; you never classify.
@@ -317,6 +321,7 @@ const env = {
   GRAPH_NAME: p.graphName,
   FLOW_REPO: args.repo ?? "",
   FLOW_BRANCH: branch,
+  FLOW_SOURCE_REGISTRY: p.sourceRegistry ?? "",
   FLOW_MEMORY_URL: p.orchestratorUrl + "/v1/memory/search",
   FLOW_ACTIVITY_URL: p.orchestratorUrl + "/v1/agents/graph-activity",
   FLOW_ACTIVITY_TOKEN: p.token ?? "",
@@ -493,7 +498,7 @@ function renderClaude(ctx) {
   settings.enableAllProjectMcpServers = true;
   // Read-only graph tools are frictionless; writes (remember, correct_graph)
   // keep the harness's own permission prompt.
-  const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge"].map(
+  const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"].map(
     (t) => `mcp__flow-graph__${t}`
   );
   // The CLI fallback path gets the same frictionless treatment as MCP reads.
