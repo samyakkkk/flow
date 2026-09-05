@@ -96,6 +96,29 @@ test("malformed Copilot config is reported without overwriting it", () => fixtur
   assert.equal(readFileSync(path, "utf8"), "{ broken");
 }));
 
+test("comment-only Copilot MCP config is treated as empty and restored on removal", () => fixture(({ repoDir, invoke }) => {
+  mkdirSync(join(repoDir, ".vscode"));
+  const path = join(repoDir, ".vscode/mcp.json");
+  const original = `// {
+// \t"servers": {
+// \t\t"landinghero-library": {
+// \t\t\t"type": "http",
+// \t\t\t"url": "http://localhost:8080/library-mcp"
+// \t\t}
+// \t},
+// \t"inputs": []
+// }
+`;
+  writeFileSync(path, original);
+  invoke("m.materializeRepo(ctx)");
+  const installed = readFileSync(path, "utf8");
+  const parsed = parse(installed);
+  assert.equal(parsed.servers["flow-graph"].type, "stdio");
+  assert.ok(installed.includes("landinghero-library"));
+  invoke("m.removeRepo(ctx.repoDir)");
+  assert.equal(readFileSync(path, "utf8"), original);
+}));
+
 test("Copilot detection recognizes an installed VS Code extension", () => fixture(({ home, invoke }) => {
   mkdirSync(join(home, ".vscode/extensions/github.copilot-chat-1.0.0"), { recursive: true });
   assert.ok(JSON.parse(invoke("console.log(JSON.stringify(m.detectHarnesses()))")).includes("copilot"));
