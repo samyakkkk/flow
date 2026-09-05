@@ -99,6 +99,7 @@ export function patchPaths(patch: string): string[] {
 
 const GRAPH_TOOLS = new Set([
   "orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge",
+  "source_read", "source_search",
   "remember", "correct_graph", "notify",
 ].map((name) => `graph_${name}`));
 

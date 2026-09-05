@@ -484,5 +484,5 @@ ignore filtering to work around a direct read of a personally installed skill:
 Codex may defer MCP tools. Generated instructions now require discovery before
 falling back to the shell CLI, whose network access may be sandboxed. Native
 MCP orientation has passed against the HTTPS test deployment with an ordinary
-orientation prompt. CLI 0.153.4 required an explicitly compatible gpt-5.5 model
+orientation prompt. PATH CLI 0.136.0 required an explicitly compatible gpt-5.5 model
 in this test environment; the user's global model was unchanged.

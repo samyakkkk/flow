@@ -11,12 +11,38 @@ Do not claim hook capture or extracted memory works based only on MCP success.
 | Agent | What the user needs to know | Symptom / recovery | Evidence |
 | --- | --- | --- | --- |
 | Claude Code | Authenticate Claude and allow the project's Flow MCP tools. Flow setup registers the server and read-tool permissions. | Revoked OAuth stops the session before Flow can run; reauthenticate and retry. | Claude 2.1.170 passed skill activation and native MCP locally and against HTTPS cloud after user reauthentication. |
-| Codex CLI | Trust the project so its `.codex/config.toml` loads. Discover deferred Flow MCP tools before using CLI fallback. Hooks have a separate trust/enablement flow. | A sandboxed shell can fail `flow orient` networking while native MCP works. `--ignore-user-config` suppressed project MCP in the test. Use normal project configuration. | Codex 0.153.4 native local/cloud MCP passed. Configured gpt-6-astra was incompatible with this installed CLI; explicit gpt-5.5 worked without changing the user's global model. |
+| Codex CLI | Trust the project so its `.codex/config.toml` loads. Discover deferred Flow MCP tools before using CLI fallback. Hooks have a separate trust/enablement flow. | A sandboxed shell can fail `flow orient` networking while native MCP works. `--ignore-user-config` suppressed project MCP in the test. Use normal project configuration. | PATH Codex 0.136.0 native local/cloud MCP passed. Configured gpt-6-astra was incompatible with that older CLI; explicit gpt-5.5 worked without changing the user's global model. |
 | Gemini CLI | Headless runs need explicit permission for skill activation and the MCP tools being tested. Interactive users can approve prompts normally; that interactive path still needs validation. | `mcp list` can show Connected and `skills list` Enabled while a headless session omits the tools. Allowing `activate_skill,mcp_flow-graph_orient` passed. Direct `read_file` on a personally installed skill may be rejected because it is Git-ignored; skill activation works. | Gemini 0.54.0 skill activation/native MCP passed locally and against cloud with limited per-invocation permission. `--allowed-tools` is deprecated in favor of Policy Engine; document a validated policy equivalent before recommending it as the long-term UX. |
 | Cursor desktop | Enable the configured Flow MCP server for the workspace if Cursor marks it Disabled. | Observed path: Customize → Configure flow-graph → enable the fixture source. Status then changed to Connected with eight tools. CLI fallback requested a one-time Run approval; Always Run was not required. | Cursor read Flow skill and completed local CLI orientation; after enabling the workspace server, fresh native MCP orientation passed in about 13 seconds. |
-| Antigravity desktop | Approve Flow MCP calls when prompted. A one-time approval was enough for the orientation test. | Local test displayed a tool approval prompt; selected “Yes, allow this time.” | Desktop read the installed skill and called native orient successfully. Cloud desktop/capture tests pending. |
-| VS Code Copilot | Trust the workspace and approve/enable the Flow MCP server as required by VS Code. Hook permissions are separate from MCP. | The test showed a “Claude Code hooks available… Enable” banner; its relationship to Copilot's own hooks still needs verification. Do not imply enabling MCP enables all capture hooks. | Local desktop skill/native orient passed. Cloud desktop and capture pending. |
+| Antigravity desktop | Approve Flow MCP calls when prompted. A one-time approval was enough for the orientation test. | Local test displayed a tool approval prompt; selected “Yes, allow this time.” | Desktop read the installed skill and called native orient successfully. Cloud tool approval was accepted; final desktop result and capture remain unverified. |
+| VS Code Copilot | Trust the workspace and approve/enable the Flow MCP server as required by VS Code. Hook permissions are separate from MCP. | The test showed a “Claude Code hooks available… Enable” banner; its relationship to Copilot's own hooks still needs verification. Do not imply enabling MCP enables all capture hooks. | Local desktop skill/native orient passed. Cloud desktop completion remains unverified; a cloud capture session exists, which alone does not prove skill/MCP success. |
 | OpenCode | Configure an authenticated model provider. For Flow's server-side OpenCode, the supplied OpenRouter key is stored in private project configuration. | Single-agent setup formerly omitted the shared skill/instructions unless Codex was also installed; fixed in 9c2d3c1. Rerun setup after updating older installs. | Skill activation/native orient passed on Mac with local/cloud Flow and directly on Hetzner after standalone setup fix. |
+
+## Codex executable and hook version quirk
+
+Two installed versions were selected by different launch paths: shell `codex`
+resolved to `/opt/homebrew/bin/codex` (0.136.0), while the Node 22 installation
+and desktop app bundle provided 0.153.4. Show the **selected executable path
+and its actual version**, not only the newest installed version.
+
+The older headless `exec` produced no hook events even with the one-run hook
+trust bypass. Its interactive session produced start/prompt/stop events. The
+explicit 0.153.4 headless run produced a closed captured session, including
+SessionEnd, and worked with the user's configured default model. This is an
+observed version difference, not an established minimum supported version.
+Recommend checking the selected binary before changing models or permissions.
+Hook trust remains separate from workspace and MCP trust; the diagnostic
+bypass is not a recommendation to permanently allow all hooks.
+
+## Memory status evidence
+
+Gemini cloud hooks completed the full pipeline: transcript capture, extraction,
+stored memory, then retrieval by a fresh Claude session. Claude and current
+Codex tests also captured transcripts, but the extractor returned no memories
+for those particular prompts. That is not the same as a capture failure.
+Agents without a session-end event may wait for the idle sweep (45-minute idle
+threshold, checked every five minutes). Surface pending extraction separately
+from a failed hook or an empty extraction result.
 
 ## Shared guidance for the UI
 
@@ -39,7 +65,8 @@ Do not claim hook capture or extracted memory works based only on MCP success.
 
 - All desktop cloud runs.
 - Actual hook permissions and ingestion for every supported integration.
-- Hook → transcript → extraction → stored memory → fresh-session retrieval.
+- Repeat the verified Gemini hook → stored memory → fresh-session retrieval
+  pipeline across the remaining integrations.
 - Gemini Policy Engine equivalent for the limited headless permissions.
 - Minimum compatible Codex version/model behavior; avoid an unconditional
   recommendation to change the user's model based on one environment.
