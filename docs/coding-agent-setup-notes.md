@@ -91,3 +91,11 @@ Remote reconnect: after the initial authenticated setup, `flow setup <project>`
 can reuse that named remote's private connection details. It revalidates both
 endpoints and preserves a previously registered repository name before updating
 integrations. Explicit remote flags are still required to change endpoints.
+
+OpenCode startup quirk: in the test deployment, `.opencode` had no package.json,
+`npm prefix` resolved the Flow parent checkout, and background dependency install
+failed with Unsupported engine on every task. Setup now creates a separate
+pinned plugin manifest when absent and preserves existing user manifests.
+The cloud template includes the same manifest. After installing its dependencies,
+the measured follow-up fell from36.4s to8.6s; a fresh source question took13.7s.
+These are individual observations, not a latency guarantee.

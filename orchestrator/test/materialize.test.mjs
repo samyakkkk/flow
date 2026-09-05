@@ -180,3 +180,19 @@ test("removing another tool's integration leaves unrelated Copilot config alone"
   invoke('m.materializeRepo({ ...ctx, harnesses: ["gemini"] }); m.removeRepo(ctx.repoDir)');
   assert.equal(readFileSync(path, "utf8"), "{ unfinished user config");
 }));
+
+
+test("OpenCode setup isolates plugin installs and removes only its own manifest", () => fixture(({ repoDir, invoke }) => {
+  const file = join(repoDir, ".opencode/package.json");
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] });");
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).dependencies["@opencode-ai/plugin"], "1.17.20");
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] }); m.removeRepo(ctx.repoDir);");
+  assert.ok(!existsSync(file));
+  mkdirSync(join(repoDir, ".opencode"), { recursive: true });
+  const original = '{"private":true,"dependencies":{"user-plugin":"1.0.0"}}\n';
+  writeFileSync(file, original);
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] });");
+  assert.equal(readFileSync(file, "utf8"), original);
+  invoke("m.removeRepo(ctx.repoDir);");
+  assert.equal(readFileSync(file, "utf8"), original);
+}));

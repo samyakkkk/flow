@@ -592,6 +592,15 @@ function renderSharedKnowledge({ repoDir, project }) {
 
 function renderOpencode(ctx) {
   const { repoDir, project, repo } = ctx;
+  // Keep OpenCode's dependency installer from walking into the parent repo.
+  // Existing user manifests belong to the user and are never rewritten here.
+  const packageRel = ".opencode/package.json";
+  const packagePath = join(repoDir, packageRel);
+  const ownPackage = !existsSync(packagePath) ||
+    (readJson(MANIFEST_PATH, {}).repos?.[repoDir]?.owned ?? []).includes(packageRel);
+  if (!existsSync(packagePath)) writeJson(packagePath, {
+    private: true, dependencies: { "@opencode-ai/plugin": "1.17.20" },
+  });
   const pluginPath = join(repoDir, ".opencode", "plugins", "flow.ts");
   mkdirSync(dirname(pluginPath), { recursive: true });
   writeFileSync(pluginPath, opencodePlugin(project, repo), "utf-8");
@@ -604,7 +613,7 @@ function renderOpencode(ctx) {
   };
   writeJson(ocPath, oc);
   const knowledge = renderSharedKnowledge(ctx);
-  return { owned: [".opencode/plugins/flow.ts", ...knowledge.owned], merged: ["opencode.json", ...knowledge.merged] };
+  return { owned: [".opencode/plugins/flow.ts", ...(ownPackage ? [packageRel] : []), ...knowledge.owned], merged: ["opencode.json", ...knowledge.merged] };
 }
 
 function renderGemini(ctx) {
@@ -833,6 +842,7 @@ const CANDIDATE_FILES = [
   "AGENTS.md",
   ".opencode/plugins/flow.ts",
   "opencode.json",
+  ".opencode/package.json",
   ".gemini/settings.json",
   "GEMINI.md",
   ".cursor/hooks.json",
