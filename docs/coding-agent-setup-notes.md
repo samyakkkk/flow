@@ -82,3 +82,7 @@ response without CONNECTED PROJECT. The on-disk workspace MCP command points
 to harness-cloud, so connection refresh/precedence remains unresolved. Its CLI
 fallback was blocked by sandbox EPERM reading ~/.flow/bin/flow and requested
 a separate one-time command approval. MCP approval alone did not permit the CLI.
+
+After one-time command approval, Antigravity cloud CLI fallback returned the
+correct harness-cloud project/cloud-fixture repository. Native cloud MCP remains
+unverified; a fresh conversation alone did not resolve the stale response.
