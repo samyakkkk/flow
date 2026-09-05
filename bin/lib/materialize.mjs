@@ -573,6 +573,14 @@ export function ensureCodexMachineConfig(repoDir, codexHome = join(homedir(), ".
   writeFileSync(cfgPath, text, "utf-8");
 }
 
+function renderSharedKnowledge({ repoDir, project }) {
+  const skillPath = join(repoDir, ".agents", "skills", "flow", "SKILL.md");
+  mkdirSync(dirname(skillPath), { recursive: true });
+  writeFileSync(skillPath, skillMd(project), "utf-8");
+  spliceBlock(join(repoDir, "AGENTS.md"), instructionBlock(project));
+  return { owned: [".agents/skills/flow/SKILL.md"], merged: ["AGENTS.md"] };
+}
+
 function renderOpencode(ctx) {
   const { repoDir, project, repo } = ctx;
   const pluginPath = join(repoDir, ".opencode", "plugins", "flow.ts");
@@ -586,8 +594,8 @@ function renderOpencode(ctx) {
     "flow-graph": { type: "local", command: [NODE_BIN, MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(ocPath, oc);
-  // AGENTS.md block shared with Codex — rendered there.
-  return { owned: [".opencode/plugins/flow.ts"], merged: ["opencode.json"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: [".opencode/plugins/flow.ts", ...knowledge.owned], merged: ["opencode.json", ...knowledge.merged] };
 }
 
 function renderGemini(ctx) {
@@ -610,7 +618,8 @@ function renderGemini(ctx) {
   writeJson(settingsPath, settings);
 
   spliceBlock(join(repoDir, "GEMINI.md"), instructionBlock(project));
-  return { owned: [], merged: [".gemini/settings.json", "GEMINI.md"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: knowledge.owned, merged: [".gemini/settings.json", "GEMINI.md", ...knowledge.merged] };
 }
 
 // Cursor hook config dialect differs from the Claude-family shape: flat
@@ -674,8 +683,8 @@ function renderAntigravity(ctx) {
     "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(mcpPath, mcp);
-  // Skill dir + AGENTS.md are shared with Codex — rendered there.
-  return { owned: [], merged: [".agents/hooks.json", ".agents/mcp_config.json"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: knowledge.owned, merged: [".agents/hooks.json", ".agents/mcp_config.json", ...knowledge.merged] };
 }
 
 const COPILOT_JSON_FILES = [".github/hooks/flow.json", ".github/mcp.json", ".vscode/mcp.json"];
@@ -908,7 +917,7 @@ export function removeRepo(repoDir) {
     ".github/skills/flow/SKILL.md",
   ];
   for (const rel of owned) {
-    if (rel === ".github/skills/flow/SKILL.md" && originals[rel]?.data) {
+    if (originals[rel]?.existed && originals[rel].data != null) {
       writeFileSync(join(repoDir, rel), Buffer.from(originals[rel].data, "base64"));
     } else rmSync(join(repoDir, rel), { force: true });
   }

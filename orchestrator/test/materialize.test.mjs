@@ -8,6 +8,22 @@ import { parse } from "jsonc-parser";
 
 const materializer = new URL("../../bin/lib/materialize.mjs", import.meta.url).href;
 
+for (const harness of ["opencode", "gemini", "antigravity"]) {
+  test(`${harness}-only setup installs and restores shared knowledge without Codex`, () => fixture(({ repoDir, invoke }) => {
+    const skill = join(repoDir, ".agents/skills/flow/SKILL.md");
+    mkdirSync(join(repoDir, ".agents/skills/flow"), { recursive: true });
+    writeFileSync(skill, "Existing skill\n");
+    writeFileSync(join(repoDir, "AGENTS.md"), "Existing instructions\n");
+    invoke(`m.materializeRepo({ ...ctx, harnesses: [${JSON.stringify(harness)}] });`);
+    assert.match(readFileSync(skill, "utf8"), /test-project/);
+    assert.match(readFileSync(join(repoDir, "AGENTS.md"), "utf8"), /flow setup test-project/);
+    assert.ok(!existsSync(join(repoDir, ".codex")));
+    invoke("m.removeRepo(ctx.repoDir)");
+    assert.equal(readFileSync(skill, "utf8"), "Existing skill\n");
+    assert.equal(readFileSync(join(repoDir, "AGENTS.md"), "utf8"), "Existing instructions\n");
+  }));
+}
+
 test("adding a harness retains earlier exclusions and removes both integrations", () => fixture(({ repoDir, invoke }) => {
   invoke("m.materializeRepo(ctx); m.materializeRepo({ ...ctx, harnesses: ['codex'] });");
   const ignored = spawnSync("git", ["check-ignore", ".github/mcp.json", ".codex/config.toml"], { cwd: repoDir, encoding: "utf8" });
