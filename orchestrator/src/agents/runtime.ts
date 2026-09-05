@@ -675,7 +675,26 @@ export function getSession(id: string): LiveSession | undefined {
 
 export function listSessions(): Array<Record<string, unknown>> {
   const rows = db
-    .prepare(`SELECT * FROM agent_sessions ORDER BY created_at DESC LIMIT 100`)
+    .prepare(`
+      SELECT
+        id,
+        backend,
+        repo,
+        cwd,
+        title,
+        status,
+        acp_session_id,
+        stop_reason,
+        error,
+        start_sha,
+        start_untracked,
+        worktree_id,
+        created_at,
+        updated_at
+      FROM agent_sessions
+      ORDER BY created_at DESC
+      LIMIT 100
+    `)
     .all() as Array<Record<string, unknown>>;
   return rows.map((r) => {
     const live = sessions.get(String(r.id));

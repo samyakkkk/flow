@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Shell } from "@/components/Shell";
 import { KeyGate } from "@/components/KeyGate";
 import { BrainCanvas } from "@/components/BrainCanvas";
 import { AgentPanel } from "@/components/AgentPanel";
 import { IntegrationCatalog } from "@/components/IntegrationCatalog";
 import { CodingToolsPanel } from "@/components/CodingToolsPanel";
-import { SourcesPillStrip, SourceDrawer, type RepoEntry, type SettingItem } from "@/components/SourceDrawer";
+import { SourceDrawer, type RepoEntry, type SettingItem } from "@/components/SourceDrawer";
 import { RecentActivity, type AuditRow } from "@/components/RecentActivity";
 import { Kicker, Heading, StatusPill } from "@/components/ui";
 import { useMode } from "@/lib/useMode";
@@ -22,13 +22,40 @@ interface IngestSource {
   status: string;
 }
 
+type RepoIndexStatus = "never_indexed" | "queued" | "indexing" | "indexed" | "failed";
+
+interface RepoStatusEntry {
+  name: string;
+  branch: string;
+  status: RepoIndexStatus;
+  lastIndexedCommit: string | null;
+  lastIndexedAt: string | null;
+  lastError: string | null;
+  runningJobId: string | null;
+  queuedJobId: string | null;
+}
+
 type HomeState = "loading" | "engine-down" | "no-brain" | "ready";
+
+function hasBrainSettings(settings: SettingItem[]): boolean {
+  return settings.some(
+    (s) => (s.key === "OPENROUTER_API_KEY" || s.key === "LLM_API_KEY" || s.key === "BRAIN_MODE") && s.set
+  );
+}
+
+function statusMap(rows: RepoStatusEntry[]): Record<string, RepoStatusEntry> {
+  const map: Record<string, RepoStatusEntry> = {};
+  for (const row of rows) map[row.name] = row;
+  return map;
+}
 
 export default function HomePage() {
   const [state, setState] = useState<HomeState>("loading");
   const [settings, setSettings] = useState<SettingItem[]>([]);
   const [sources, setSources] = useState<IngestSource[]>([]);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
+  const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoStatusEntry>>({});
+  const [operationalLoaded, setOperationalLoaded] = useState(false);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [graphNodeCount, setGraphNodeCount] = useState(0);
   const [graphEdgeCount, setGraphEdgeCount] = useState(0);
@@ -42,51 +69,67 @@ export default function HomePage() {
   const { mode } = useMode();
   const { prefix } = useProject();
 
-  const hasBrain = settings.some(
-    (s) => (s.key === "OPENROUTER_API_KEY" || s.key === "LLM_API_KEY" || s.key === "BRAIN_MODE") && s.set
+  const hasBrain = hasBrainSettings(settings);
+
+  const reposWithStatus = useMemo<RepoEntry[]>(
+    () =>
+      repos.map((repo) => {
+        const status = repoStatuses[repo.name];
+        if (!status) return repo;
+        return {
+          ...repo,
+          indexStatus: status.status,
+          lastIndexedCommit: status.lastIndexedCommit ?? repo.lastIndexedCommit,
+          lastIndexedAt: status.lastIndexedAt ?? repo.lastIndexedAt,
+          lastError: status.lastError,
+        };
+      }),
+    [repoStatuses, repos]
   );
 
-  const hasSources = repos.length > 0;
-  const isAnyRepoIndexing = repos.some((r) => !r.lastIndexedCommit);
-  const isIndexing = sources.some((s) => s.catching_up) || isAnyRepoIndexing;
+  const hasSources = !operationalLoaded || reposWithStatus.length > 0;
+  const isRepoIndexing = Object.values(repoStatuses).some((r) => r.status === "indexing" || r.status === "queued");
+  const isIndexing = sources.some((s) => s.catching_up || s.status === "catching_up") || isRepoIndexing;
 
-  const loadAll = useCallback(async () => {
+  const refreshOperationalData = useCallback(async () => {
+    const [ingestRes, reposRes, repoStatusRes, auditRes] = await Promise.allSettled([
+      fetch(prefix("/api/ingest/status")).then((r) => (r.ok ? r.json() : { sources: [] })) as Promise<{ sources: IngestSource[] }>,
+      fetch(prefix("/api/repos")).then((r) => (r.ok ? r.json() : { repos: [] })) as Promise<{ repos: RepoEntry[] }>,
+      fetch(prefix("/api/repos/status")).then((r) => (r.ok ? r.json() : { repos: [] })) as Promise<{ repos: RepoStatusEntry[] }>,
+      fetch(prefix("/api/audit?limit=20")).then((r) => (r.ok ? r.json() : { rows: [] })) as Promise<{ rows: AuditRow[] }>,
+    ]);
+
+    if (ingestRes.status === "fulfilled") setSources(ingestRes.value.sources ?? []);
+    if (reposRes.status === "fulfilled") setRepos(reposRes.value.repos ?? []);
+    if (repoStatusRes.status === "fulfilled") setRepoStatuses(statusMap(repoStatusRes.value.repos ?? []));
+    if (auditRes.status === "fulfilled") setAuditRows(auditRes.value.rows ?? []);
+    setOperationalLoaded(true);
+  }, [prefix]);
+
+  const refreshSettings = useCallback(async () => {
     try {
       const settingsResp = await fetch(prefix("/api/settings"));
       if (settingsResp.status === 401) {
         window.location.href = "/login?from=%2F";
         return;
       }
-      if (settingsResp.status >= 500) {
+      if (!settingsResp.ok) {
         setState("engine-down");
         return;
       }
 
-      const [settingsRes, ingestRes, reposRes, auditRes, graphRes] = await Promise.allSettled([
-        settingsResp.json() as Promise<SettingItem[]>,
-        fetch(prefix("/api/ingest/status")).then((r) => r.json()) as Promise<{ sources: IngestSource[] }>,
-        fetch(prefix("/api/repos")).then((r) => r.json()) as Promise<{ repos: RepoEntry[] }>,
-        fetch(prefix("/api/audit?limit=20")).then((r) => r.json()) as Promise<{ rows: AuditRow[] }>,
-        fetch(prefix("/api/graph/overview")).then((r) => r.json()) as Promise<{ nodes: unknown[]; edges: unknown[] }>,
-      ]);
-
-      const s = settingsRes.status === "fulfilled" ? (Array.isArray(settingsRes.value) ? settingsRes.value : []) : [];
-      const ingest = ingestRes.status === "fulfilled" ? (ingestRes.value.sources ?? []) : [];
-      const rps = reposRes.status === "fulfilled" ? (reposRes.value.repos ?? []) : [];
-      const audit = auditRes.status === "fulfilled" ? (auditRes.value.rows ?? []) : [];
-      const graph = graphRes.status === "fulfilled" ? graphRes.value : { nodes: [], edges: [] };
-
+      const s: unknown = await settingsResp.json();
+      if (!Array.isArray(s) || !s.every(
+        (item) => item !== null && typeof item === "object"
+          && typeof item.key === "string" && typeof item.set === "boolean"
+          && (item.value === undefined || item.value === null || typeof item.value === "string")
+      )) {
+        setState("engine-down");
+        return;
+      }
       setSettings(s);
-      setSources(ingest);
-      setRepos(rps);
-      setAuditRows(audit);
-      setGraphNodeCount((graph.nodes ?? []).length);
-      setGraphEdgeCount((graph.edges ?? []).length);
 
-      const brainSet = s.some(
-        (item) => (item.key === "OPENROUTER_API_KEY" || item.key === "LLM_API_KEY" || item.key === "BRAIN_MODE") && item.set
-      );
-      if (!brainSet) {
+      if (!hasBrainSettings(s)) {
         setState("no-brain");
         return;
       }
@@ -97,15 +140,24 @@ export default function HomePage() {
     }
   }, [prefix]);
 
+  const loadAll = useCallback(async () => {
+    const operational = refreshOperationalData();
+    await refreshSettings();
+    await operational;
+  }, [refreshOperationalData, refreshSettings]);
+
   useEffect(() => {
-    loadAll();
+    const timer = setTimeout(() => {
+      void loadAll();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [loadAll]);
 
   // Engine down retry
   useEffect(() => {
     if (state !== "engine-down") return;
     const iv = setInterval(() => {
-      loadAll();
+      void loadAll();
     }, 3000);
     return () => clearInterval(iv);
   }, [state, loadAll]);
@@ -113,22 +165,12 @@ export default function HomePage() {
   // Background refresh poll
   useEffect(() => {
     if (state !== "ready") return;
-    const interval = isIndexing ? 3000 : 10000;
+    const interval = isIndexing ? 5000 : 30000;
     const iv = setInterval(() => {
-      fetch(prefix("/api/graph/overview"))
-        .then((r) => r.json())
-        .then((d: { nodes: unknown[]; edges: unknown[] }) => {
-          setGraphNodeCount((d.nodes ?? []).length);
-          setGraphEdgeCount((d.edges ?? []).length);
-        })
-        .catch(() => {});
-      fetch(prefix("/api/repos"))
-        .then((r) => r.json())
-        .then((d: { repos: RepoEntry[] }) => setRepos(d.repos ?? []))
-        .catch(() => {});
+      void refreshOperationalData();
     }, interval);
     return () => clearInterval(iv);
-  }, [state, isIndexing, prefix]);
+  }, [state, isIndexing, refreshOperationalData]);
 
   const scrollToSources = useCallback(() => {
     const el = document.getElementById("sources-section");
@@ -145,6 +187,11 @@ export default function HomePage() {
     if (agentEl) {
       agentEl.scrollIntoView({ behavior: "smooth" });
     }
+  }, []);
+
+  const handleGraphStats = useCallback(({ nodeCount, edgeCount }: { nodeCount: number; edgeCount: number }) => {
+    setGraphNodeCount(nodeCount);
+    setGraphEdgeCount(edgeCount);
   }, []);
 
   if (state === "loading") {
@@ -172,7 +219,7 @@ export default function HomePage() {
   }
 
   if (state === "no-brain" || !hasBrain) {
-    return <KeyGate onReady={() => loadAll()} />;
+    return <KeyGate onReady={() => void loadAll()} />;
   }
 
   return (
@@ -201,21 +248,23 @@ export default function HomePage() {
             nodeCount={graphNodeCount}
             edgeCount={graphEdgeCount}
             isIndexing={isIndexing}
+            pollInterval={isIndexing ? 15000 : 60000}
             height={hasSources ? 480 : 360}
             onConnectFirstSource={scrollToSources}
             onNodeClick={handleNodeClick}
+            onGraphStats={handleGraphStats}
             sources={sources}
-            repos={repos}
+            repos={reposWithStatus}
           />
         </div>
 
         {/* 2. MIDDLE SECTION: CONNECT SOURCES & INTEGRATIONS */}
         <div id="sources-section" className="w-full">
           <IntegrationCatalog
-            repos={repos}
+            repos={reposWithStatus}
             settings={settings}
             mode={mode}
-            onChanged={() => loadAll()}
+            onChanged={() => void loadAll()}
           />
         </div>
 
@@ -253,10 +302,10 @@ export default function HomePage() {
       <SourceDrawer
         isOpen={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
-        repos={repos}
+        repos={reposWithStatus}
         settings={settings}
         mode={mode}
-        onChanged={() => loadAll()}
+        onChanged={() => void loadAll()}
       />
     </Shell>
   );

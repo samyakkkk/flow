@@ -19,7 +19,7 @@
 import type { FastifyInstance } from "fastify";
 import { createHmac } from "node:crypto";
 import { randomUUID } from "node:crypto";
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { processEvent } from "../events.js";
 import type { NormalizedEvent } from "../events.js";
@@ -234,6 +234,90 @@ export function lsRemoteHead(url: string, branch: string, pat?: string): string 
   return line.split("\t")[0].trim();
 }
 
+function redactPat(text: string, pat?: string): string {
+  return pat ? text.replaceAll(pat, "<redacted>") : text;
+}
+
+function githubPollConcurrency(): number {
+  const raw = process.env.FLOW_GITHUB_POLL_CONCURRENCY ?? "6";
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 6;
+}
+
+export function lsRemoteHeadAsync(
+  url: string,
+  branch: string,
+  pat?: string,
+  timeoutMs = 30_000
+): Promise<string> {
+  let cloneUrl = url;
+  if (pat && url.startsWith("https://")) {
+    cloneUrl = url.replace("https://", `https://x-access-token:${pat}@`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["ls-remote", cloneUrl, `refs/heads/${branch}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    const append = (current: string, chunk: Buffer): string =>
+      (current + chunk.toString("utf-8")).slice(-64_000);
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = append(stdout, chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = append(stderr, chunk);
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`git ls-remote timed out after ${timeoutMs}ms for ${url}`));
+        return;
+      }
+      if (code !== 0) {
+        const detail = redactPat(stderr.trim() || `exit ${code}${signal ? ` signal ${signal}` : ""}`, pat);
+        reject(new Error(`git ls-remote failed for ${url}: ${detail}`));
+        return;
+      }
+      const line = stdout.trim().split("\n")[0];
+      if (!line) {
+        reject(new Error(`Branch ${branch} not found on ${url}`));
+        return;
+      }
+      resolve(line.split("\t")[0].trim());
+    });
+  });
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+}
+
 // ------------------------------------------------------------------
 // Webhook signature validation
 // ------------------------------------------------------------------
@@ -293,9 +377,10 @@ export async function githubFetchSince(cursor: string): Promise<FetchResult> {
 
   const isFirstBoot = !cursor;
 
-  for (const [repo, branch] of registeredRepos) {
+  const repos = Array.from(registeredRepos);
+  await mapWithConcurrency(repos, githubPollConcurrency(), async ([repo, branch]) => {
     try {
-      const sha = lsRemoteHead(repoUrl(repo), branch, pat || undefined);
+      const sha = await lsRemoteHeadAsync(repoUrl(repo), branch, pat || undefined);
       const prev = knownHeads[repo];
 
       if (!isFirstBoot && prev !== undefined && prev !== sha) {
@@ -314,7 +399,7 @@ export async function githubFetchSince(cursor: string): Promise<FetchResult> {
       // Log but don't fail the whole fetch — one repo error should not block others
       console.error(`[github-poller] Error checking ${repo}: ${err}`);
     }
-  }
+  });
 
   return {
     events,
