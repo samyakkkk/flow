@@ -857,7 +857,11 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
 
   const proc = spawn(attempt.command, attempt.args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: attempt.env,
+    // codex-acp otherwise drops session MCPs whose names exist in repo/user
+    // config, losing Flow's project/session context (or using a stale wrapper).
+    env: backend === "codex"
+      ? { ...attempt.env, DISABLE_MCP_CONFIG_FILTERING: "true" }
+      : attempt.env,
   });
   proc.stderr.on("data", (chunk: Buffer) => {
     try {
