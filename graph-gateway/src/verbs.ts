@@ -871,6 +871,7 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   );
 
   const out: string[] = [];
+  out.push(`CONNECTED PROJECT: ${process.env.FLOW_PROJECT_NAME ? JSON.stringify(process.env.FLOW_PROJECT_NAME) : "(identity unavailable)"}`);
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
   if (repoRow) {

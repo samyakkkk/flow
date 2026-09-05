@@ -36,7 +36,7 @@ Load credentials directly into required process environment/config. Never echo t
 - Fixtures: `data/harness-fixture` (local), `data/cloud-fixture` (cloud client), each independent Git repo.
 - Integration backup: `~/.flow/backups/cloud-harness-validation`.
 - Hetzner server 164708090, `flow-harness-validation`, IPv4 5.223.65.87, cpx32 4 CPU/8 GB Singapore, approximately EUR 0.0929/hour plus IPv4. Existing `flow-test` untouched. SSH restricted to developer IP; public 80/443.
-- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Cloud synchronized through 7d26843; OpenCode 1.17.20 installed.
+- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Cloud synchronized through 5f494d0; OpenCode 1.17.20 installed.
 - HTTPS https://5-223-65-87.sslip.io; connector prefixes `/harness-cloud/gateway` and `/harness-cloud/orchestrator`. Caddy exposes limited connector routes; ordinary dashboard routes use prod auth.
 - Private provisioning/bootstrap scripts and git bundle in `~/.config/flow-validation/`. Remote `/root/flow-up.log` can contain secrets.
 - Heartbeat `flow-cloud-setup-overnight` continues every 30 minutes. Notify meaningful changes or required user actions; pause on completion.
@@ -67,7 +67,7 @@ Load credentials directly into required process environment/config. Never echo t
 
 The PATH-selected Codex CLI 0.136.0 rejected configured gpt-6-astra; explicit gpt-5.5 worked. Do not globally change user model. `--ignore-user-config` suppressed project MCP, so that mode is not representative. Direct cloud bridge smoke passes despite Codex cloud session failing to use it.
 
-Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Claude and two Gemini external sessions, no Codex. Antigravity/Copilot capture unverified. No complete hook-to-extracted-memory verification has passed yet.
+Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Claude and two Gemini external sessions, no Codex. Antigravity/Copilot capture unverified. Gemini cloud → stored memory → fresh Claude retrieval has since passed; see the dated log below. Other integrations remain partially verified.
 
 ## Update log
 
@@ -95,3 +95,5 @@ Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Clau
 - 2026-09-06: Updated future per-agent info notes with selected Codex executable/version, independently trusted hooks, confirmed Gemini-to-Claude memory round trip, and idle extraction timing. Current Codex0.153.4 default-model test completed with closed capture; extractor returned[] (capture pass, no retained-memory claim). Added remote source read/search to cloud job tool allowlist; project gateway authorization still governs source access.
 
 - 2026-09-06: Hetzner test deployment synchronized through5f494d0 and restarted successfully using /usr/local/bin/flow-cloud-test. Post-restart HTTPS source and authenticated MCP boundary smoke checks passed. Cloud policy19 tests passed. Flow remember dispatch returned401; the requested setup quirks remain durably committed in docs/coding-agent-setup-notes.md and this log.
+
+- 2026-09-06 heartbeat: Antigravity remains readable through the existing CDP session even while native desktop interaction is unavailable. Saved data/antigravity-cloud-result.txt: cloud conversation completed but named harness-fixture and stopped on presumed mismatch. On-disk cloud MCP config correctly passes harness-cloud/cloud-fixture; actual cached connection still needs verification. Gateway orient previously labelled repo only, so added explicit server-owned CONNECTED PROJECT and local shim project env plus skill guidance separating repo/project. Regression rejects caller identity spoofing and labels missing server identity unavailable; gateway26 tests pass. Cloud task log breakdown: initial question15.088s, edit19.151s, follow-up36.418s; follow-up first tool event only ~2.9s before completion, so most latency precedes first tool rather than worktree creation.

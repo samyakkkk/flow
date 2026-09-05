@@ -197,6 +197,9 @@ This repo is documented as connected to Flow project **${project}**.
   project than **${project}**, or says NOT CONNECTED: **stop using Flow**, tell
   the user to run \`flow setup ${project}\` in this repo, and continue the task
   without memory. Never pass a project name yourself; never guess.
+- The MCP orientation labels CONNECTED PROJECT separately from repo. Repository
+  names may differ from project names; never treat a repo label as project identity.
+  If CONNECTED PROJECT is unavailable, verify the binding with the CLI.
 - This skill file alone does not connect a repo. Each person must run
   \`flow setup\` once per repo per machine — that's what installs capture hooks,
   MCP, and the binding.
@@ -319,6 +322,7 @@ const env = {
   ...process.env,
   GATEWAY_MCP_READONLY: "1",
   GRAPH_NAME: p.graphName,
+  FLOW_PROJECT_NAME: args.project,
   FLOW_REPO: args.repo ?? "",
   FLOW_BRANCH: branch,
   FLOW_SOURCE_REGISTRY: p.sourceRegistry ?? "",

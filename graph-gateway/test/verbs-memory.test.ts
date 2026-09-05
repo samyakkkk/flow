@@ -219,3 +219,20 @@ describe("find_entity — unified memory hits (Section D)", () => {
     assert.equal(res.memory_hits.length, 3);
   });
 });
+
+
+test("orient distinguishes server project identity from caller repository labels", async () => {
+  const previous = process.env.FLOW_PROJECT_NAME;
+  try {
+    process.env.FLOW_PROJECT_NAME = "team-cloud";
+    const result = await callVerb("orient", { repo: "different-repository", project: "spoofed" });
+    assert.match(result, /^CONNECTED PROJECT: "team-cloud"/);
+    assert.match(result, /repo "different-repository"/);
+    assert.ok(!result.includes("spoofed"));
+    delete process.env.FLOW_PROJECT_NAME;
+    assert.match(await callVerb("orient", { repo: "different-repository" }), /^CONNECTED PROJECT: \(identity unavailable\)/);
+  } finally {
+    if (previous === undefined) delete process.env.FLOW_PROJECT_NAME;
+    else process.env.FLOW_PROJECT_NAME = previous;
+  }
+});
