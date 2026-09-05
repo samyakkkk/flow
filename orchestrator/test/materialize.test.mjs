@@ -8,6 +8,15 @@ import { parse } from "jsonc-parser";
 
 const materializer = new URL("../../bin/lib/materialize.mjs", import.meta.url).href;
 
+test("adding a harness retains earlier exclusions and removes both integrations", () => fixture(({ repoDir, invoke }) => {
+  invoke("m.materializeRepo(ctx); m.materializeRepo({ ...ctx, harnesses: ['codex'] });");
+  const ignored = spawnSync("git", ["check-ignore", ".github/mcp.json", ".codex/config.toml"], { cwd: repoDir, encoding: "utf8" });
+  assert.equal(ignored.stdout.trim().split("\n").length, 2);
+  invoke("m.removeRepo(ctx.repoDir)");
+  assert.ok(!existsSync(join(repoDir, ".github/mcp.json")));
+  assert.ok(!existsSync(join(repoDir, ".codex/config.toml")));
+}));
+
 function fixture(run) {
   const home = mkdtempSync(join(tmpdir(), "flow-materialize-"));
   const repoDir = join(home, "repo with spaces");

@@ -856,7 +856,11 @@ function isEmptyShell(v) {
 }
 
 export function materializeRepo(ctx) {
-  const harnesses = ctx.harnesses ?? ALL_HARNESSES;
+  // Setup is additive. A later --harness codex must not expose previously
+  // hidden Copilot files or forget how to remove them. Re-render prior tools
+  // too so changing the binding never leaves stale project credentials in use.
+  const previous = readJson(MANIFEST_PATH, {}).repos?.[ctx.repoDir];
+  const harnesses = [...new Set([...(previous?.harnesses ?? []), ...(ctx.harnesses ?? ALL_HARNESSES)])];
   const originals = snapshotOriginals(ctx.repoDir);
   const owned = [];
   const merged = [];
