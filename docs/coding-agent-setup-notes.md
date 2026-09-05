@@ -105,3 +105,8 @@ from flat lifecycle hooks. Flow corrected PostInvocation/Stop to flat handlers
 and verified a real cloud prompt/answer capture. Earlier no-capture observations
 were affected by this format bug; memory extraction/retrieval is still pending
 for this new session. Rerun setup after updating Flow to repair hook definitions.
+
+Claude local automatic capture, extraction, storage and fresh-session retrieval
+now pass end to end. A fresh session retrieved the 43-minute Willow constraint
+with its exact memory ID using only Flow search. An earlier empty extraction
+was not proof that the Claude hook integration was broken.
