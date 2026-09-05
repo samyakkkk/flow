@@ -118,7 +118,7 @@ export function SourceIconGrid({
           <Kicker>Step 1 · Connect Context</Kicker>
           <h2
             style={{ fontFamily: "var(--font-display)" }}
-            className="text-xl font-semibold text-ink mt-0.5"
+            className="text-xl font-medium text-ink mt-0.5"
           >
             Connect your sources to build the Knowledge Graph
           </h2>
@@ -163,7 +163,7 @@ export function SourceIconGrid({
             </div>
 
             <div>
-              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-semibold text-ink">
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-medium text-ink">
                 Codebase
               </h3>
               <p className="text-text-muted text-[11px] mt-0.5 leading-relaxed">
@@ -226,7 +226,7 @@ export function SourceIconGrid({
             </div>
 
             <div>
-              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-semibold text-ink">
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-medium text-ink">
                 Linear
               </h3>
               <p className="text-text-muted text-[11px] mt-0.5 leading-relaxed">
@@ -273,7 +273,7 @@ export function SourceIconGrid({
             </div>
 
             <div>
-              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-semibold text-ink">
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-medium text-ink">
                 Meeting Notes
               </h3>
               <p className="text-text-muted text-[11px] mt-0.5 leading-relaxed">
@@ -318,7 +318,7 @@ export function SourceIconGrid({
             </div>
 
             <div>
-              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-semibold text-ink">
+              <h3 style={{ fontFamily: "var(--font-display)" }} className="text-sm font-medium text-ink">
                 Slack Bot
               </h3>
               <p className="text-text-muted text-[11px] mt-0.5 leading-relaxed">
@@ -338,7 +338,7 @@ export function SourceIconGrid({
 
           {slackPopover && (
             <div className="absolute bottom-full mb-2 right-0 left-0 p-3 rounded-lg border border-line bg-paper shadow-xl text-[11px] text-ink z-50 rise-in">
-              <div className="font-semibold mb-1">Slack Integration Locked</div>
+              <div className="font-medium mb-1">Slack Integration Locked</div>
               <p className="text-text-muted text-[10px] leading-relaxed mb-2">
                 Slack requires persistent socket connections in production mode (<code className="font-mono text-ink">flow up --mode prod</code>).
               </p>

@@ -34,13 +34,13 @@ with `--paper`/`--cream` text and the accent for emphasis.
 
 ## Type
 
-- **Display / headings** — **Lora** (serif). Tracking-tight, leading ~1.1–1.2. This carries the editorial feel. Sizes: hero 48/37, section 37, card 24, sub 20.
+- **Display / headings** — **Lora** (serif), weight **500** for all page, section, card, and dialog titles. Tracking-tight, leading ~1.1–1.2. This carries the editorial feel. Sizes: hero 48/37, section 37, card 24, sub 20.
 - **Body** — **Inter**. 17px lead, 15px default, relaxed leading. Calm and readable.
 - **Labels / meta / code** — **Space Mono**. UPPERCASE, tracking-widest, ~12–13px, `--text-muted`. Use kickers only when they add context, not to repeat a section heading.
 
 The dashboard home page uses `Heading` variants for a compact, consistent scale:
-`section` is regular 20px Lora with 30px line height; `card` is regular 16px Lora
-with 24px line height. Both use normal letter spacing. `BodyText` is regular
+`section` is 20px Lora with 30px line height; `card` is 16px Lora
+with 24px line height. Both use weight 500 and normal letter spacing. `BodyText` is regular
 12px Inter with relaxed line height and muted color. The main "Flow builds your
 brain" heading keeps its display treatment. Do not add redundant eyebrow labels
 above home section titles (such as "Your AI interfaces" or "Integrations & Sources").

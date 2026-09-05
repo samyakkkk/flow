@@ -203,7 +203,7 @@ export default function HomePage() {
       <div className="min-h-screen flex items-center justify-center px-6 bg-cream">
         <div className="w-full max-w-lg rise-in text-center">
           <div className="inline-block w-2.5 h-2.5 rounded-full bg-accent animate-pulse mb-6" />
-          <h1 className="font-display text-[32px] leading-tight mb-3">
+          <h1 className="font-display font-medium text-[32px] leading-tight mb-3">
             Flow&apos;s engine isn&apos;t reachable.
           </h1>
           <p className="text-text-muted text-[15px] leading-relaxed mb-6">

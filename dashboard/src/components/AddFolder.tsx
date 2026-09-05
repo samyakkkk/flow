@@ -265,7 +265,7 @@ function SourceConfigModal({
 
         {own.length > 0 && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>Your repos</div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)", marginBottom: 2 }}>Your repos</div>
             {own.map(repoRow)}
           </div>
         )}
@@ -338,7 +338,7 @@ function SourceConfigModal({
       >
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink)" }}>
             Configure sources
           </span>
           <button

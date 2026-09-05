@@ -29,7 +29,7 @@ const panel: React.CSSProperties = {
   marginBottom: 20,
 };
 
-const h2: React.CSSProperties = { margin: "0 0 4px", fontSize: 15, fontWeight: 600, color: "var(--text-primary)" };
+const h2: React.CSSProperties = { margin: "0 0 4px", fontSize: 15, fontWeight: 500, color: "var(--text-primary)" };
 const sub: React.CSSProperties = { margin: "0 0 16px", fontSize: 12.5, color: "var(--text-secondary)" };
 const inputStyle: React.CSSProperties = {
   padding: "8px 10px",

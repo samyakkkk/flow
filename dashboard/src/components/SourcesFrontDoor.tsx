@@ -581,7 +581,7 @@ function TwoDoors({
       >
         <div
           style={{ fontFamily: "var(--font-mono)" }}
-          className="text-[13px] font-semibold text-ink mb-1"
+          className="text-[13px] font-medium text-ink mb-1"
         >
           GitHub repos
         </div>

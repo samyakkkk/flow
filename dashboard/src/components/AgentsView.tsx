@@ -152,7 +152,7 @@ export function AgentsView() {
           <div className="mt-2 mb-4">
             <h2
               style={{ fontFamily: "var(--font-display)" }}
-              className="text-base font-semibold text-ink"
+              className="text-base font-medium text-ink"
             >
               Start a new coding task
             </h2>

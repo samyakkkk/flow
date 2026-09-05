@@ -548,7 +548,7 @@ export function BrainGraph({
               </div>
               <p
                 style={{ fontFamily: "var(--font-display)" }}
-                className="text-white/50 text-sm mb-1"
+                className="text-white/50 text-sm font-medium mb-1"
               >
                 {graphUnavailable
                   ? "Brain gateway unavailable."

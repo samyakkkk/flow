@@ -19,14 +19,14 @@ export function Heading({
 }) {
   const typography = {
     display: "tracking-tight leading-[1.15]",
-    section: "text-[20px] font-normal leading-normal tracking-normal",
-    card: "text-[16px] font-normal leading-normal tracking-normal",
+    section: "text-[20px] leading-normal tracking-normal",
+    card: "text-[16px] leading-normal tracking-normal",
   };
 
   return (
     <Tag
       style={{ fontFamily: "var(--font-display)" }}
-      className={`text-ink ${typography[variant]} ${className}`}
+      className={`text-ink font-medium ${typography[variant]} ${className}`}
     >
       {children}
     </Tag>

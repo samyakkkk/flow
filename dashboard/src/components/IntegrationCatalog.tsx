@@ -278,7 +278,7 @@ export function IntegrationCatalog({
             <div className="p-4 border-b border-line flex items-center justify-between bg-sand">
               <div className="flex items-center gap-2">
                 <BrandIcon name="opencode" size={20} />
-                <span className="font-semibold text-ink text-sm">Connect GitHub Repositories</span>
+                <span className="font-medium text-ink text-sm">Connect GitHub Repositories</span>
               </div>
               <button onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
             </div>
@@ -298,7 +298,7 @@ export function IntegrationCatalog({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
           <div className="bg-paper border border-line rounded-2xl w-full max-w-lg p-5 shadow-2xl rise-in flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-line pb-3">
-              <span className="font-semibold text-ink text-sm">Connect Local Folder</span>
+              <span className="font-medium text-ink text-sm">Connect Local Folder</span>
               <button onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
             </div>
             <AddFolder mode={mode} onAdded={() => { setActiveModal("none"); onChanged(); }} />
@@ -314,7 +314,7 @@ export function IntegrationCatalog({
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div className="flex items-center gap-2">
                 <BrandIcon name="slack" size={20} />
-                <span className="font-semibold text-ink text-sm">Slack bot</span>
+                <span className="font-medium text-ink text-sm">Slack bot</span>
               </div>
               <button
                 onClick={() => {
@@ -337,7 +337,7 @@ export function IntegrationCatalog({
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div className="flex items-center gap-2">
                 <BrandIcon name="linear" size={20} />
-                <span className="font-semibold text-ink text-sm">Connect Linear</span>
+                <span className="font-medium text-ink text-sm">Connect Linear</span>
               </div>
               <button onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
             </div>
@@ -371,7 +371,7 @@ export function IntegrationCatalog({
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div className="flex items-center gap-2">
                 <BrandIcon name="fireflies" size={20} />
-                <span className="font-semibold text-ink text-sm">Connect Fireflies.ai</span>
+                <span className="font-medium text-ink text-sm">Connect Fireflies.ai</span>
               </div>
               <button onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
             </div>
@@ -403,7 +403,7 @@ export function IntegrationCatalog({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
           <form onSubmit={handleIngestNotes} className="bg-paper border border-line rounded-2xl w-full max-w-lg p-5 shadow-2xl rise-in flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-line pb-3">
-              <span className="font-semibold text-ink text-sm">Upload Meeting Notes</span>
+              <span className="font-medium text-ink text-sm">Upload Meeting Notes</span>
               <button type="button" onClick={() => setActiveModal("none")} className="text-text-muted hover:text-ink text-lg">✕</button>
             </div>
             <input

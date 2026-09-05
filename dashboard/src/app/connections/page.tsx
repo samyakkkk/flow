@@ -63,7 +63,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         style={{
           margin: "0 0 16px",
           fontSize: 14,
-          fontWeight: 600,
+          fontWeight: 500,
           color: "var(--text-primary)",
           borderBottom: "1px solid var(--border)",
           paddingBottom: 12,
@@ -325,7 +325,7 @@ export default function ConnectionsPage() {
   return (
     <Shell>
       <div style={{ marginBottom: 28 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500, color: "var(--text-primary)" }}>
           Connections
         </h1>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
@@ -422,7 +422,7 @@ export default function ConnectionsPage() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Linear</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>Linear</span>
               <StatusBadge on={!!status?.linear_key} />
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
@@ -440,7 +440,7 @@ export default function ConnectionsPage() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>GitHub</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>GitHub</span>
               <span
                 style={{
                   fontSize: 11,
@@ -470,7 +470,7 @@ export default function ConnectionsPage() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Fireflies</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>Fireflies</span>
               <StatusBadge on={!!status?.fireflies_key} />
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)" }}>

@@ -149,7 +149,7 @@ export function SlackBotCard() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Slack bot</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>Slack bot</span>
         <span
           style={{
             fontSize: 11,
