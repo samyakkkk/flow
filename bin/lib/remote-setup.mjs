@@ -23,8 +23,14 @@ export async function discoverRemote({ project, gatewayUrl, orchestratorUrl, tok
   }
   // Verify the capture endpoint independently before saving a binding. The
   // caller explicitly supplies both URLs; no server-selected credential hop.
-  const health = await fetch(`${orchestrator}/health`, { redirect: "error", signal: AbortSignal.timeout(15000) });
-  if (!health.ok) throw new Error(`Flow capture service is unavailable (HTTP ${health.status}).`);
+  const capture = await fetch(`${orchestrator}/v1/connection`, {
+    headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(15000),
+  });
+  if (!capture.ok) throw new Error(`Flow capture connection failed (HTTP ${capture.status}).`);
+  const captureInfo = await capture.json();
+  if (captureInfo.project !== project || captureInfo.graph !== info.graph) {
+    throw new Error("Knowledge and capture endpoints must belong to the same Flow project.");
+  }
   return { remote: "http", gatewayUrl: gateway, orchestratorUrl: orchestrator,
     mcpUrl: `${gateway}/mcp`, graphName: info.graph, token };
 }

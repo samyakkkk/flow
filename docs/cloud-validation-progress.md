@@ -49,6 +49,45 @@ and PR creation. An async question is pending for the existing PR number.
 
 ## Next
 
+### Update after first live tests
+
+- Draft PR: https://github.com/samyakkkk/flow/pull/79. Commits 1a50d80,
+  af77335, 6b595bd pushed. Remote setup and bridge implemented; fresh-home
+  `scripts/check-remote-setup.mjs harness-lab` passes. Eleven setup tests pass.
+- Codex native MCP passes with compatible explicit `-m gpt-5.5` and normal
+  user/project config: `data/codex-local-compatible.jsonl`. Using
+  `--ignore-user-config` suppresses project MCP even with trust overrides;
+  don't mistake that test mode for a product failure. Capture still missing.
+- Claude reauthentication was confirmed by user; authenticated live test passes.
+- Antigravity desktop was launched with loopback CDP port 19222; agent-browser
+  session `flow-antigravity`. Native folder picker needed CUA. Created project
+  `harness-fixture` for the isolated fixture. Conversation
+  `f9cdfaa6-b35f-4a4c-9405-62061ca37b69`, titled Repository Flow Orientation Guide,
+  read `flow/SKILL.md`, called native Flow MCP orient (allowed once), completed.
+  Project ID `fc4bb566-f6f8-4604-875e-6985061fb8ac`. App remains open. Capture
+  for Antigravity has not yet appeared in ingestion DB.
+- Ingestion DB confirms 3 Claude and 2 Gemini external sessions; Codex absent.
+- Codex SessionEnd timeout changed from 5 to documented maximum 3; live retest
+  `data/codex-hooks-timeout.jsonl` still needs interpretation.
+- Hetzner server CREATED: ID 164708090, name `flow-harness-validation`,
+  IP 5.223.65.87, cpx32 (4 CPU/8 GB) in Singapore. Approximately EUR 0.0929/hour
+  plus IPv4. Labels purpose=flow-harness-validation, managed-by=codex. Firewall
+  permits SSH from developer public IP only and public 80/443. Existing unrelated
+  `flow-test` server untouched. Credential/key/known_hosts/resource metadata and
+  bootstrap script live privately in `~/.config/flow-validation/`.
+- Cloud bootstrap done: Ubuntu 24.04, checksum-verified Node 22.22.3, Docker,
+  Caddy, build tools, 4 GB swap. Bundle transferred; clone/setup currently running
+  in /opt/flow with alias flow-cloud-test offset 1000, own FalkorDB. Installation
+  log /root/flow-setup.log. Git bundle presently through 6b595bd; sync later commits.
+- Pending uncommitted security work: shared PAT verifier, restricted orchestrator
+  PAT routes, authenticated capture discovery, gateway legacy HTTP PAT scope
+  enforcement, Codex timeout. Gateway typecheck and connector-auth test passed;
+  orchestrator tsc still running. Must restart test services and rerun remote
+  setup after commit. New metadata verifies both services name the same project.
+
+The older next-step list below describes the original checkpoint; use this
+update to avoid redoing completed implementation.
+
 1. Finish local CLI evidence, verify capture ingestion (not just hooks fired).
    Investigate Gemini skill/MCP discovery and Codex compatibility. Desktop apps
    installed: Cursor, Antigravity, VS Code. Use agent-browser skill for UI tests.

@@ -9,6 +9,7 @@ import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js"
 import { isPat, verifyPatForProject } from "./patAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createSessionMcp } from "./session-mcp.js";
+import { SESSION_VERBS } from "./session-verbs.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
@@ -47,6 +48,7 @@ function json(res: import("node:http").ServerResponse, code: number, body: unkno
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+  const personalToken = isPat(String(req.headers.authorization ?? "").replace(/^Bearer /, ""));
   try {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, verbs: Object.keys(verbs) });
@@ -82,7 +84,7 @@ const server = createServer(async (req, res) => {
       await transport.handleRequest(req, res, body);
       return;
     }
-    if (TOKEN) {
+    if (TOKEN || personalToken) {
       const auth = String(req.headers.authorization ?? "");
       if (!authorized(auth)) {
         return json(res, 401, { status: "error", error: "Unauthorized — this gateway requires a bearer token (project token or a personal access token with a grant on this project)." });
@@ -91,6 +93,9 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/v1/connection") {
       if (!TOKEN) return json(res, 503, { error: "Connection setup requires configured authentication" });
       return json(res, 200, { project: process.env.FLOW_PROJECT_NAME, graph: DEFAULT_GRAPH });
+    }
+    if (personalToken && !(req.method === "POST" && /^\/v1\/verbs\/[a-z_]+$/.test(url.pathname))) {
+      return json(res, 403, { error: "This credential cannot access that operation" });
     }
     if (req.method === "GET" && url.pathname === "/v1/journal") {
       const limit = Number(url.searchParams.get("limit") ?? 50);
@@ -163,6 +168,7 @@ const server = createServer(async (req, res) => {
     }
     const verbMatch = url.pathname.match(/^\/v1\/verbs\/([a-z_]+)$/);
     if (req.method === "POST" && verbMatch) {
+      if (personalToken && !SESSION_VERBS.has(verbMatch[1])) return json(res, 403, { error: "This credential cannot access that operation" });
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
       const raw = Buffer.concat(chunks).toString("utf8");
@@ -173,6 +179,12 @@ const server = createServer(async (req, res) => {
         } catch {
           return json(res, 400, { status: "error", error: "Body must be valid JSON" });
         }
+      }
+      if (personalToken) {
+        if (!input || typeof input !== "object" || Array.isArray(input)) return json(res, 400, { error: "Expected an object" });
+        const scoped = input as Record<string, unknown>;
+        if (scoped.graph !== undefined && scoped.graph !== DEFAULT_GRAPH) return json(res, 403, { error: "Project scope mismatch" });
+        scoped.graph = DEFAULT_GRAPH;
       }
       const result = await callVerb(verbMatch[1], input);
       const isError = typeof result === "object" && result !== null && (result as { status?: string }).status === "error";

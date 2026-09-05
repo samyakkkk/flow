@@ -890,6 +890,8 @@ async function upProject(name, { rebuilt = false } = {}) {
   const orchLogFile = join(logsDir, "orchestrator.log");
   const orchEnv = {
     ...projectEnv,
+    FLOW_AUTH_PATH: authJsonPath(),
+    FLOW_PROJECT_NAME: name,
     DB_PATH: dbPath,
     ORCHESTRATOR_PORT: String(ports.orchestrator),
     GATEWAY_URL: `http://localhost:${ports.gateway}`,

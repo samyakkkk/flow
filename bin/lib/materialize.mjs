@@ -522,7 +522,7 @@ function renderCodex(ctx) {
   const { repoDir, project, repo } = ctx;
   const hooksPath = join(repoDir, ".codex", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
-  hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: 5 } })), () =>
+  hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: e.name === "SessionEnd" ? 3 : 5 } })), () =>
     hookCmd("codex", project, repo)
   );
   writeJson(hooksPath, hooksFile);
