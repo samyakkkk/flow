@@ -99,3 +99,9 @@ pinned plugin manifest when absent and preserves existing user manifests.
 The cloud template includes the same manifest. After installing its dependencies,
 the measured follow-up fell from36.4s to8.6s; a fresh source question took13.7s.
 These are individual observations, not a latency guarantee.
+
+Antigravity hooks: bundled documentation distinguishes grouped tool-event hooks
+from flat lifecycle hooks. Flow corrected PostInvocation/Stop to flat handlers
+and verified a real cloud prompt/answer capture. Earlier no-capture observations
+were affected by this format bug; memory extraction/retrieval is still pending
+for this new session. Rerun setup after updating Flow to repair hook definitions.
