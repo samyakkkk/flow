@@ -688,6 +688,19 @@ describe("distiller trigger: idle sweep", () => {
     const ran = await trigger.idleSweep();
     assert.equal(ran, 0);
   });
+
+  test("retries a provider failure without advancing the transcript watermark", async () => {
+    const staleMs = Date.now() - trigger.IDLE_MS - 60_000;
+    db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
+      .run("sweep-retry", "acme", "closed", staleMs, staleMs);
+    llm.setLlmTransport(async () => { throw new Error("temporary provider outage"); });
+    assert.equal(await trigger.idleSweep(), 0);
+    assert.equal((db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'sweep-retry'").get() as any).last_distilled_seq, null);
+    llm.setLlmTransport(async () => "[]");
+    assert.equal(await trigger.idleSweep(), 1);
+    assert.equal((db.prepare("SELECT last_distilled_seq FROM agent_sessions WHERE id = 'sweep-retry'").get() as any).last_distilled_seq, 2);
+    assert.equal(await trigger.idleSweep(), 0, "successful empty extraction is consumed once");
+  });
 });
 
 // ---------------------------------------------------------------------------
