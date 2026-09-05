@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { callVerb, verbs } from "./verbs.js";
+import { SESSION_VERBS } from "./session-verbs.js";
 
 // MCP face of the gateway (stdio). Same verbs, same validation, same journal —
 // MCP is just a protocol adapter over the single write path.
@@ -27,21 +28,6 @@ const MODE: "session" | "builder" | "full" =
     : process.env.GATEWAY_MCP_MODE === "builder"
       ? "builder"
       : "full";
-const SESSION_VERBS = new Set([
-  "orient",
-  "find_entity",
-  "get_entity",
-  "read_query",
-  "list_schema",
-  // Advisory flag — the indexer verifies it against the base branch; agents
-  // never mutate existing knowledge directly.
-  "correct_graph",
-  // Active capture: "remember this" → distiller intake (extraction and
-  // placement happen server-side; the model never classifies).
-  "remember",
-  // Retrieve-only cross-session memory (distilled decisions/gotchas + corpus).
-  "search_knowledge",
-]);
 // The graph-builder surface: exactly what the old .opencode/tools/graph.ts
 // plugin exposed, now served over MCP so workspaces need no npm install.
 const BUILDER_VERBS = new Set([

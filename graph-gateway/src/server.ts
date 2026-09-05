@@ -7,6 +7,8 @@ import { startLocalModel } from "./local-embed.js";
 import { embedText, embeddingsEnabled } from "./embed.js";
 import { activeEmbeddingDim, activeEmbeddingModel } from "./embedding-models.js";
 import { isPat, verifyPatForProject } from "./patAuth.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createSessionMcp } from "./session-mcp.js";
 
 // HTTP face of the gateway — bind to localhost only.
 //   POST /v1/verbs/<name>   body: verb input JSON   (bearer-authed)
@@ -48,6 +50,37 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, verbs: Object.keys(verbs) });
+    }
+    if (url.pathname === "/mcp") {
+      // Remote access never inherits the legacy unauthenticated dev fallback.
+      if (!TOKEN) return json(res, 503, { error: "MCP requires configured authentication" });
+      const bearer = String(req.headers.authorization ?? "");
+      if (!authorized(bearer)) return json(res, 401, { error: "Unauthorized" });
+      const origin = req.headers.origin;
+      const allowedOrigins = (process.env.FLOW_MCP_ORIGINS ?? "").split(",").map(s => s.trim()).filter(Boolean);
+      if (origin && !allowedOrigins.includes(origin)) return json(res, 403, { error: "Origin not allowed" });
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        return json(res, 405, { error: "Only POST is supported" });
+      }
+      let size = 0;
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        size += Buffer.byteLength(chunk);
+        if (size > 1024 * 1024) return json(res, 413, { error: "Request too large" });
+        chunks.push(Buffer.from(chunk));
+      }
+      let body: unknown;
+      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+      catch { return json(res, 400, { error: "Body must be valid JSON" }); }
+      const token = bearer.slice("Bearer ".length);
+      const actor = isPat(token) ? `user:${verifyPatForProject(token)}` : "project-service";
+      const mcp = createSessionMcp({ graph: DEFAULT_GRAPH, actor });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+      res.on("close", () => { void mcp.close(); });
+      await mcp.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
     }
     if (TOKEN) {
       const auth = String(req.headers.authorization ?? "");
