@@ -474,14 +474,15 @@ says enabled. The following limited permission test activates the Flow skill
 and calls native MCP against both local and remote project bindings:
 
 ```sh
-gemini --skip-trust --allowed-tools 'activate_skill,mcp_flow-graph_orient' \
+gemini --skip-trust --policy /path/to/flow/docs/examples/gemini-flow-orient-policy.toml \
   --output-format stream-json \
   -p 'Activate the Flow skill, then call Flow orient. Do not edit files or delegate.'
 ```
 
 `--skip-trust` applies only to the known test fixture for this invocation.
-Gemini marks `--allowed-tools` deprecated in favor of its Policy Engine;
-interactive users can approve tools normally. Do not globally disable file
+The supplied Policy Engine file permits skill activation and only Flow orient
+among MCP tools; this replacement for deprecated `--allowed-tools` passed a
+real cloud session. Interactive users can approve tools normally. Do not globally disable file
 ignore filtering to work around a direct read of a personally installed skill:
 `activate_skill` loads the ignored skill correctly once permitted.
 

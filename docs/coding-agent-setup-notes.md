@@ -12,7 +12,7 @@ Do not claim hook capture or extracted memory works based only on MCP success.
 | --- | --- | --- | --- |
 | Claude Code | Authenticate Claude and allow the project's Flow MCP tools. Flow setup registers the server and read-tool permissions. | Revoked OAuth stops the session before Flow can run; reauthenticate and retry. | Claude 2.1.170 passed skill activation and native MCP locally and against HTTPS cloud after user reauthentication. |
 | Codex CLI | Trust the project so its `.codex/config.toml` loads. Discover deferred Flow MCP tools before using CLI fallback. Hooks have a separate trust/enablement flow. | A sandboxed shell can fail `flow orient` networking while native MCP works. `--ignore-user-config` suppressed project MCP in the test. Use normal project configuration. | PATH Codex 0.136.0 native local/cloud MCP passed. Configured gpt-6-astra was incompatible with that older CLI; explicit gpt-5.5 worked without changing the user's global model. |
-| Gemini CLI | Headless runs need explicit permission for skill activation and the MCP tools being tested. Interactive users can approve prompts normally; that interactive path still needs validation. | `mcp list` can show Connected and `skills list` Enabled while a headless session omits the tools. Allowing `activate_skill,mcp_flow-graph_orient` passed. Direct `read_file` on a personally installed skill may be rejected because it is Git-ignored; skill activation works. | Gemini 0.54.0 skill activation/native MCP passed locally and against cloud with limited per-invocation permission. `--allowed-tools` is deprecated in favor of Policy Engine; document a validated policy equivalent before recommending it as the long-term UX. |
+| Gemini CLI | Headless runs need explicit permission for skill activation and the MCP tools being tested. Interactive users can approve prompts normally; that interactive path still needs validation. | `mcp list` can show Connected and `skills list` Enabled while a headless session omits the tools. Allowing `activate_skill,mcp_flow-graph_orient` passed. Direct `read_file` on a personally installed skill may be rejected because it is Git-ignored; skill activation works. | Gemini 0.54.0 skill activation/native MCP passed locally and against cloud with limited per-invocation permission. The Policy Engine alternative is now validated: pass docs/examples/gemini-flow-orient-policy.toml with --policy. It permits skill activation and Flow orient without globally allowing other MCP tools. |
 | Cursor desktop | Enable the configured Flow MCP server for the workspace if Cursor marks it Disabled. | Observed path: Customize → Configure flow-graph → enable the fixture source. Status then changed to Connected with eight tools. CLI fallback requested a one-time Run approval; Always Run was not required. | Cursor read Flow skill and completed local CLI orientation; after enabling the workspace server, fresh native MCP orientation passed in about 13 seconds. |
 | Antigravity desktop | Approve Flow MCP calls when prompted. A one-time approval was enough for the orientation test. | Local test displayed a tool approval prompt; selected “Yes, allow this time.” | Desktop read the installed skill and called native orient successfully. Cloud tool approval was accepted, but its result named the earlier harness-fixture repo and the agent stopped on a presumed project mismatch. Binding/reload verification is pending; this is not a cloud pass. |
 | VS Code Copilot | Trust the workspace and approve/enable the Flow MCP server as required by VS Code. Hook permissions are separate from MCP. | The test showed a “Claude Code hooks available… Enable” banner; its relationship to Copilot's own hooks still needs verification. Do not imply enabling MCP enables all capture hooks. | Local desktop skill/native orient passed. Cloud desktop completion remains unverified; a cloud capture session exists, which alone does not prove skill/MCP success. |
@@ -67,7 +67,7 @@ from a failed hook or an empty extraction result.
 - Actual hook permissions and ingestion for every supported integration.
 - Repeat the verified Gemini hook → stored memory → fresh-session retrieval
   pipeline across the remaining integrations.
-- Gemini Policy Engine equivalent for the limited headless permissions.
+- Gemini interactive permission prompts (headless Policy Engine path now passes).
 - Minimum compatible Codex version/model behavior; avoid an unconditional
   recommendation to change the user's model based on one environment.
 
@@ -110,3 +110,15 @@ Claude local automatic capture, extraction, storage and fresh-session retrieval
 now pass end to end. A fresh session retrieved the 43-minute Willow constraint
 with its exact memory ID using only Flow search. An earlier empty extraction
 was not proof that the Claude hook integration was broken.
+
+Codex0.153.4 cloud now passes native orientation and the complete automatic
+memory round trip: a fresh Claude session retrieved the Maple47-minute rule
+and exact memory identifier. The test used a one-invocation hook-trust bypass;
+normal user hook trust must still be enabled separately.
+
+OpenCode1.17.20 headless: pass `--dir /absolute/project/path` explicitly. In this
+test, running from the fixture as cwd without --dir created a second instance
+without its MCP/plugin configuration: skill text appeared but native orient
+and capture were absent. With --dir, native cloud orient and capture both passed.
+Flow server jobs already pass --dir. Check connection and capture rather than
+treating successful skill loading as proof of either.
