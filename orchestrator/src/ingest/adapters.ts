@@ -87,7 +87,7 @@ function extractAssistant(p: Record<string, unknown>): string | null {
 const START_EVENTS = new Set(["SessionStart", "sessionStart"]);
 const END_EVENTS = new Set(["SessionEnd", "sessionEnd"]);
 // Turn-conclusion events that carry the assistant's final message.
-const STOP_EVENTS = new Set(["Stop", "stop", "afterAgentResponse", "AfterAgent"]);
+const STOP_EVENTS = new Set(["Stop", "stop", "agentStop", "afterAgentResponse", "AfterAgent"]);
 
 export function normalizeHook(
   harness: string,
@@ -105,7 +105,7 @@ export function normalizeHook(
     events.push(created(harness, repo, cwd));
   } else if (END_EVENTS.has(eventName)) {
     closed = true;
-  } else if (eventName === "UserPromptSubmit" || eventName === "beforeSubmitPrompt") {
+  } else if (eventName === "UserPromptSubmit" || eventName === "userPromptSubmitted" || eventName === "beforeSubmitPrompt") {
     const prompt = extractPrompt(payload);
     if (prompt) {
       events.push(userPrompt(prompt));

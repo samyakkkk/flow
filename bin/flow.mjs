@@ -1368,6 +1368,7 @@ async function cmdSetup(rest) {
     Codex        → run ${c.cyan("/hooks")} once in codex here and trust the flow hooks.
     Cursor       → Settings → MCP: approve "flow-graph" when prompted.
     Gemini CLI   → shows "hooks will be executed" notice on first run.
+    Copilot      → trust this folder and approve "flow-graph" in Copilot CLI / VS Code.
 `);
 }
 

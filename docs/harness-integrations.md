@@ -4,6 +4,59 @@ _Research + design doc, 2026-08-05. Findings verified against official vendor do
 by parallel research agents; sources linked per section. Decisions in this doc were settled in
 discussion with Samyak and are also filed in Flow memory._
 
+## Copilot installation (2026-09-05)
+
+The materializer supports GitHub Copilot CLI and VS Code Copilot as the
+`copilot` harness. This installs Flow into the external coding tool; it does
+not add an ACP backend or an agent-picker option in Flow.
+
+Run `flow setup <project> --harness copilot` inside a checkout, or rerun
+`flow setup <project>` for automatic detection. Detection checks `copilot` on
+PATH, `COPILOT_HOME` / `~/.copilot`, and installed GitHub Copilot extensions in
+standard VS Code extension directories. `--all` includes Copilot too.
+
+| Artifact | Purpose |
+|---|---|
+| `.github/hooks/flow.json` | SessionStart, UserPromptSubmit, Stop, SessionEnd capture hooks |
+| `.github/mcp.json` | Copilot CLI project MCP registration (`mcpServers`) |
+| `.vscode/mcp.json` | VS Code MCP registration (`servers`) |
+| `.github/skills/flow/SKILL.md` | Flow memory skill |
+| `.github/copilot-instructions.md` | Managed instruction block |
+
+The CLI and VS Code use separate MCP configurations. PascalCase hook names
+select Copilot CLI's VS Code-compatible payload dialect. Stop supplies a
+transcript path; the shim reads at most the last 256 KiB of that JSONL file,
+extracts the latest parent assistant message, and redacts it before upload.
+Missing files and unknown records are ignored. Recognized Copilot transcript
+headers suppress inherited Claude hooks to avoid duplicate session capture.
+VS Code has no SessionEnd hook, so the existing idle distiller handles closure.
+
+Setup preserves existing MCP servers, hooks, instructions, and JSONC comments.
+Personal mode excludes the generated artifacts from git; `--share` exposes
+them, and `flow setup --remove` removes Flow's entries. Credentials continue
+to live in the machine's Flow config. Trust the folder and approve the
+`flow-graph` MCP server in each client; organization policies may restrict
+MCP or hooks. Remote VS Code extension hosts need Flow installed on that host.
+
+Validation covers setup/removal, JSONC preservation, transcript redaction,
+duplicate capture, and ingestion on Node 22. A live authenticated Copilot
+session was not available for verification. Transcript formats are not a
+stable vendor API. GitHub's hosted Copilot cloud agent requires separate
+sandbox setup, credentials, MCP configuration, and firewall access; the local
+installer does not provision that environment.
+
+Primary sources checked on 2026-09-05:
+
+- [Copilot CLI MCP configuration and project discovery](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+- [Copilot hook configuration and payloads](https://docs.github.com/en/copilot/reference/hooks-reference)
+- [VS Code hooks](https://code.visualstudio.com/docs/agent-customization/hooks)
+- [VS Code transcript producer](https://github.com/microsoft/vscode-copilot-chat/blob/main/src/extension/chat/vscode-node/sessionTranscriptService.ts)
+- [Copilot CLI plugins](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
+
+Copilot also supports packaged plugins. Flow keeps its existing direct config
+installation approach, so no marketplace listing or plugin publication is
+required.
+
 ## 1. Goal & framing
 
 Flow today only captures transcripts of sessions **Flow itself runs** (ACP runtime →
@@ -52,7 +105,7 @@ Headline findings:
 | Codex (CLI/IDE/desktop app) | ✅ hooks **GA, on by default** (opt-out `[features] hooks=false`) + `transcript_path`; fire on all local surfaces incl. ChatGPT desktop app's Codex view; rollouts in `~/.codex/sessions/` | 🟡 hooks also run in Codex cloud ("wherever Codex runs") | ✅ MCP (stdio+HTTP+OAuth), skills (`.agents/skills`), AGENTS.md, MCP `instructions` field | ✅ `.codex/` (trust-gated) |
 | Cursor | ✅ hooks (`stop`/`afterAgentResponse`) + `transcript_path`, `workspace_roots`, `conversation_id`, `user_email` | 🟡 cloud agents run repo hooks in Cursor's cloud; v1 API streams transcripts | ✅ MCP (⚠️ ~40-tool cap), skills, rules, `sessionStart` `additional_context` injection | ✅ `.cursor/` (`hooks.json` needs `"version": 1`) |
 | VS Code Copilot | ✅ hooks (Preview) + `transcript_path`; also reads `.claude/settings.json` hooks | 🟡 Copilot coding agent runs repo `.github/hooks/` in cloud sandbox (egress unverified) | ✅ MCP (gallery+OAuth), copilot-instructions.md, AGENTS.md, skills, custom agents pinning `flow/*` | ✅ `.vscode/mcp.json`, `.github/hooks/` |
-| Copilot CLI | ✅ 14 hook events + `transcriptPath`; sessions in SQLite+JSONL under `~/.copilot/` | 🟡 "chronicle" syncs to GitHub cloud, no public read API | ✅ MCP via `~/.copilot/mcp-config.json` (shared with VS Code), skills | ✅ repo `.github/hooks/` |
+| Copilot CLI | ✅ lifecycle hooks + `transcriptPath`; sessions in SQLite+JSONL under `~/.copilot/` | 🟡 "chronicle" syncs to GitHub cloud, no public read API | ✅ MCP via `.github/mcp.json` or `~/.copilot/mcp-config.json`, skills; separate from VS Code config | ✅ repo `.github/hooks/` |
 | Gemini CLI | ✅ hooks (v0.26.0+, Jan 2026): every event has `transcript_path`+`cwd`; `AfterModel` carries full request/response; OTEL bonus channel | ❌ | ✅ MCP (OAuth), GEMINI.md/AGENTS.md, skills | ✅ `.gemini/settings.json` (trusted-folder gated) |
 | Antigravity | ✅ hooks (5 events) + `transcriptPath`+`workspacePaths`; brain dirs (`~/.gemini/antigravity*/brain/`) as fallback | ❌ | ✅ MCP (remote+OAuth), skills, AGENTS.md/rules | ✅ `.agents/` dir |
 | opencode | ✅ JS plugin: `session.idle` → `client.session.messages()` → POST; `worktree` provided | 🟡 `opencode serve` SSE `/event` streams everything (needs a running server) | ✅ remote MCP (OAuth+DCR), custom tools, skills (reads `.claude/skills`), AGENTS.md; `instructions` accepts remote URLs | ✅ `.opencode/` (weak trust model) |
@@ -144,8 +197,9 @@ Headline findings:
 - Coding agent (cloud): runs repo `.github/hooks/*.json` inside its sandbox (`transcriptPath`
   available; egress for POSTs unverified). MCP config lives in repo Settings (admin-only, no
   OAuth, `COPILOT_MCP_*` secrets). No public API for session logs.
-- Serve: MCP in VS Code (`.vscode/mcp.json` + user `~/.copilot/mcp-config.json` shared with
-  CLI; gallery; `code --add-mcp`; `vscode:mcp/install` deep links exist);
+- Serve: MCP in VS Code (`.vscode/mcp.json`, with a `servers` map; gallery;
+  `code --add-mcp`; `vscode:mcp/install` deep links exist). Copilot CLI separately
+  loads `.mcp.json`, `.github/mcp.json`, or user `~/.copilot/mcp-config.json`;
   `.github/copilot-instructions.md`; AGENTS.md; skills (`.github/skills`, also reads
   `.claude/skills` and `.agents/skills`); custom agents can pin `server/tool` in frontmatter.
 - Enterprise: MCP registry allowlists (VS Code enforces at runtime), `ChatMCP` device policy.
@@ -286,7 +340,7 @@ Per-tool rendering:
 | Tool | Files written | Atoms |
 |---|---|---|
 | Claude Code | `.claude/settings.json` hooks → shim; `.mcp.json`; `.claude/skills/flow/` | 1,2,3,4 |
-| VS Code + Copilot CLI | mostly inherited from Claude files; `~/.copilot/mcp-config.json`; instructions block | 2,4 (1,3 inherited) |
+| VS Code + Copilot CLI | `.github/hooks/flow.json`; separate `.github/mcp.json` and `.vscode/mcp.json`; `.github/skills/flow`; instructions block | 1,2,3,4 |
 | Codex | `.codex/hooks.json` + `[features] hooks`; `config.toml` MCP; `.agents/skills/flow/`; AGENTS.md block | 1,2,3,4 |
 | Cursor | `.cursor/hooks.json` (`"version":1`); `.cursor/mcp.json`; skill/rule | 1,2,3,4 |
 | Gemini CLI | `.gemini/settings.json` (hooks + mcpServers); GEMINI.md block; skills | 1,2,3,4 |

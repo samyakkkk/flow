@@ -116,6 +116,58 @@ describe("flow-hook shim", () => {
     assert.equal(received.length, count);
   });
 
+  test("Copilot Stop reads only the final parent response and redacts it before upload", async () => {
+    const transcript = join(home, "copilot-events.jsonl");
+    const entries = [
+      { type: "user.message", data: { content: "Fix the bug" } },
+      { type: "tool.execution_complete", data: { result: { content: "DO-NOT-UPLOAD-TOOL-OUTPUT" } } },
+      { type: "assistant.message", data: { content: "Fixed it. Token ghp_1234567890123456789012345", reasoningText: "DO-NOT-UPLOAD-REASONING" } },
+      { type: "assistant.message", agentId: "child", data: { content: "DO-NOT-UPLOAD-SUBAGENT" } },
+    ];
+    writeFileSync(transcript, entries.map((e) => JSON.stringify(e)).join("\n") + "\n{partial");
+    const payload = { session_id: "copilot-1", cwd: home, hook_event_name: "Stop", transcript_path: transcript };
+    const { code } = await runShim(["--harness", "copilot"], JSON.stringify(payload));
+    assert.equal(code, 0);
+    const event = received.at(-1)!.body.event as Record<string, string>;
+    assert.equal(event.last_assistant_message, "Fixed it. Token [redacted]");
+    assert.ok(!JSON.stringify(event).includes("DO-NOT-UPLOAD"));
+  });
+
+  test("Copilot's inherited Claude hook does not upload a second session", async () => {
+    const transcript = join(home, "copilot-inherited.jsonl");
+    writeFileSync(transcript, JSON.stringify({ type: "session.start", data: { sessionId: "copilot-shared" } }) + '\n');
+    const payload = { session_id: "copilot-shared", hook_event_name: "UserPromptSubmit", prompt: "Hello", transcript_path: transcript };
+    const count = received.length;
+    assert.equal((await runShim(["--harness", "claude"], JSON.stringify(payload))).code, 0);
+    assert.equal(received.length, count);
+    assert.equal((await runShim(["--harness", "copilot"], JSON.stringify(payload))).code, 0);
+    assert.equal(received.length, count + 1);
+  });
+
+  test("Copilot capture skips stale answers and tolerates missing or unknown transcripts", async () => {
+    const transcript = join(home, "copilot-stale.jsonl");
+    writeFileSync(transcript, [
+      { type: "assistant.message", data: { content: "Old answer" } },
+      { type: "user.message", data: { content: "New turn" } },
+    ].map((e) => JSON.stringify(e)).join("\n"));
+    for (const path of [transcript, join(home, "missing.jsonl"), home]) {
+      const payload = { sessionId: "copilot-2", hookEventName: "agentStop", transcriptPath: path };
+      assert.equal((await runShim(["--harness", "copilot"], JSON.stringify(payload))).code, 0);
+      assert.equal((received.at(-1)!.body.event as Record<string, unknown>).last_assistant_message, undefined);
+    }
+  });
+
+  test("Copilot reads a bounded transcript tail and preserves a supplied final answer", async () => {
+    const transcript = join(home, "copilot-large.jsonl");
+    writeFileSync(transcript, JSON.stringify({ type: "tool.execution_complete", data: "x".repeat(512 * 1024) }) +
+      '\n' + JSON.stringify({ type: "assistant.message", data: { content: "Latest answer" } }) + '\n');
+    const payload = { sessionId: "copilot-3", hookEventName: "agentStop", transcriptPath: transcript };
+    await runShim(["--harness", "copilot"], JSON.stringify(payload));
+    assert.equal((received.at(-1)!.body.event as Record<string, unknown>).last_assistant_message, "Latest answer");
+    await runShim(["--harness", "copilot"], JSON.stringify({ ...payload, last_assistant_message: "Direct answer" }));
+    assert.equal((received.at(-1)!.body.event as Record<string, unknown>).last_assistant_message, "Direct answer");
+  });
+
   test("missing remote config: silent success, nothing sent", async () => {
     const count = received.length;
     const { code } = await runShim(
