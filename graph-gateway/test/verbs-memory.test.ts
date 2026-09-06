@@ -219,3 +219,44 @@ describe("find_entity — unified memory hits (Section D)", () => {
     assert.equal(res.memory_hits.length, 3);
   });
 });
+
+
+test("orient distinguishes server project identity from caller repository labels", async () => {
+  const previous = process.env.FLOW_PROJECT_NAME;
+  try {
+    process.env.FLOW_PROJECT_NAME = "team-cloud";
+    const result = await callVerb("orient", { repo: "different-repository", project: "spoofed" });
+    assert.match(result, /^CONNECTED PROJECT: "team-cloud"/);
+    assert.match(result, /repo "different-repository"/);
+    assert.ok(!result.includes("spoofed"));
+    delete process.env.FLOW_PROJECT_NAME;
+    assert.match(await callVerb("orient", { repo: "different-repository" }), /^CONNECTED PROJECT: \(identity unavailable\)/);
+  } finally {
+    if (previous === undefined) delete process.env.FLOW_PROJECT_NAME;
+    else process.env.FLOW_PROJECT_NAME = previous;
+  }
+});
+
+
+test("orient distinguishes unreadable memory from a confirmed empty store", async () => {
+  const previous = process.env.FLOW_MEMORY_URL;
+  let authorized = false;
+  const fetchMock = mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    if (!authorized) return new Response("Unauthorized", { status: 401 });
+    return Response.json(String(url).includes("/stats")
+      ? { memories: 0, observations: 0, bySource: {} }
+      : { global: null, repo: null });
+  });
+  try {
+    process.env.FLOW_MEMORY_URL = "https://fixture.invalid/v1/memory/search";
+    const unreadable = await callVerb("orient", { repo: "fixture" });
+    assert.match(unreadable, /MEMORY: unavailable/);
+    assert.ok(!unreadable.includes("MEMORY: none yet"));
+    authorized = true;
+    assert.match(await callVerb("orient", { repo: "fixture" }), /MEMORY: none yet/);
+  } finally {
+    fetchMock.mock.restore();
+    if (previous === undefined) delete process.env.FLOW_MEMORY_URL;
+    else process.env.FLOW_MEMORY_URL = previous;
+  }
+});

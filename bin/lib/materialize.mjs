@@ -24,6 +24,7 @@ import {
   rmdirSync,
   readdirSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -183,7 +184,9 @@ This repo is documented as connected to Flow project **${project}**.
 
 1. If \`flow-graph\` MCP tools are in your tool list → use them:
    \`orient\`, \`search_knowledge\`, \`remember\`, \`find_entity\`.
-2. Otherwise → run the CLI (a stable per-machine path; works in any tool with a shell):
+   If tools are deferred, use your tool discovery/search facility to find
+   \`flow-graph orient\` before concluding MCP is unavailable.
+2. Only if MCP is unavailable → run the CLI (requires network access from your shell):
    - \`~/.flow/bin/flow orient\`
    - \`~/.flow/bin/flow search "<symptom, identifier, or file path>"\`
    - \`~/.flow/bin/flow remember "<verbatim conclusion + context>"\`
@@ -195,6 +198,9 @@ This repo is documented as connected to Flow project **${project}**.
   project than **${project}**, or says NOT CONNECTED: **stop using Flow**, tell
   the user to run \`flow setup ${project}\` in this repo, and continue the task
   without memory. Never pass a project name yourself; never guess.
+- The MCP orientation labels CONNECTED PROJECT separately from repo. Repository
+  names may differ from project names; never treat a repo label as project identity.
+  If CONNECTED PROJECT is unavailable, verify the binding with the CLI.
 - This skill file alone does not connect a repo. Each person must run
   \`flow setup\` once per repo per machine — that's what installs capture hooks,
   MCP, and the binding.
@@ -205,6 +211,10 @@ This repo is documented as connected to Flow project **${project}**.
   (distilled from real sessions), what memory holds. Re-orient after context loss.
 - **Search on surprise.** Before deep-diving a failure or unfamiliar area,
   search the symptom — answers come with file:line anchors.
+- **Verify remote references.** If an anchored repository is not cloned here,
+  use \`source_read\` or \`source_search\` with its registered repo name and
+  relative path/query. Results identify the commit; the default is the indexed
+  revision. Never assume a server path exists on this machine.
 - **Remember conclusions.** When non-trivial work concludes or the user states a
   durable rule, remember it — verbatim quotes plus enough context to stand
   alone. The distiller files it; you never classify.
@@ -214,7 +224,8 @@ This repo is documented as connected to Flow project **${project}**.
 
 function instructionBlock(project) {
   return `This repo is connected to Flow project "${project}" (knowledge graph + team
-memory). Use the \`flow-graph\` MCP tools if available, else the CLI:
+memory). Use the \`flow-graph\` MCP tools; discover/search deferred tools for
+\`flow-graph orient\` first if needed. Only if MCP is unavailable, use the CLI:
 \`~/.flow/bin/flow orient\` at session start, \`… search "<symptom>"\` when
 surprised, \`… remember "<conclusion>"\` when durable work concludes. If it
 reports a different project or NOT CONNECTED, stop and tell the user to run
@@ -299,6 +310,11 @@ if (!p) {
   console.error(\`flow-mcp: unknown project "\${args.project}" — re-run: flow setup \${args.project ?? "<name>"}\`);
   process.exit(1);
 }
+if (p.mcpUrl) {
+  const child = spawn(process.execPath, [p.httpMcpBridge, ...process.argv.slice(2)], { stdio: "inherit" });
+  child.on("error", () => { console.error("flow-mcp: remote connector could not start; rerun setup"); process.exit(1); });
+  child.on("exit", code => process.exit(code ?? 1));
+} else {
 let branch = "";
 try {
   branch = execFileSync("git", ["branch", "--show-current"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
@@ -307,8 +323,10 @@ const env = {
   ...process.env,
   GATEWAY_MCP_READONLY: "1",
   GRAPH_NAME: p.graphName,
+  FLOW_PROJECT_NAME: args.project,
   FLOW_REPO: args.repo ?? "",
   FLOW_BRANCH: branch,
+  FLOW_SOURCE_REGISTRY: p.sourceRegistry ?? "",
   FLOW_MEMORY_URL: p.orchestratorUrl + "/v1/memory/search",
   FLOW_ACTIVITY_URL: p.orchestratorUrl + "/v1/agents/graph-activity",
   FLOW_ACTIVITY_TOKEN: p.token ?? "",
@@ -323,6 +341,7 @@ const env = {
 env.PATH = dirname(process.execPath) + ":" + (env.PATH ?? "/usr/bin:/bin");
 const child = spawn(p.tsxBin, [p.gatewayMcp], { env, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));
+}
 `;
 }
 
@@ -448,6 +467,7 @@ export function materializeMachine({ flowRoot, projectName, projectEntry, shimSo
   cfg.remotes = { ...(cfg.remotes ?? {}), local: { kind: "local", flowRoot } };
   cfg.projects = { ...(cfg.projects ?? {}), [projectName]: projectEntry };
   writeJson(cfgPath, cfg);
+  chmodSync(cfgPath, 0o600);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +503,7 @@ function renderClaude(ctx) {
   settings.enableAllProjectMcpServers = true;
   // Read-only graph tools are frictionless; writes (remember, correct_graph)
   // keep the harness's own permission prompt.
-  const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge"].map(
+  const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"].map(
     (t) => `mcp__flow-graph__${t}`
   );
   // The CLI fallback path gets the same frictionless treatment as MCP reads.
@@ -515,7 +535,7 @@ function renderCodex(ctx) {
   const { repoDir, project, repo } = ctx;
   const hooksPath = join(repoDir, ".codex", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
-  hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: 5 } })), () =>
+  hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: e.name === "SessionEnd" ? 3 : 5 } })), () =>
     hookCmd("codex", project, repo)
   );
   writeJson(hooksPath, hooksFile);
@@ -563,8 +583,25 @@ export function ensureCodexMachineConfig(repoDir, codexHome = join(homedir(), ".
   writeFileSync(cfgPath, text, "utf-8");
 }
 
+function renderSharedKnowledge({ repoDir, project }) {
+  const skillPath = join(repoDir, ".agents", "skills", "flow", "SKILL.md");
+  mkdirSync(dirname(skillPath), { recursive: true });
+  writeFileSync(skillPath, skillMd(project), "utf-8");
+  spliceBlock(join(repoDir, "AGENTS.md"), instructionBlock(project));
+  return { owned: [".agents/skills/flow/SKILL.md"], merged: ["AGENTS.md"] };
+}
+
 function renderOpencode(ctx) {
   const { repoDir, project, repo } = ctx;
+  // Keep OpenCode's dependency installer from walking into the parent repo.
+  // Existing user manifests belong to the user and are never rewritten here.
+  const packageRel = ".opencode/package.json";
+  const packagePath = join(repoDir, packageRel);
+  const ownPackage = !existsSync(packagePath) ||
+    (readJson(MANIFEST_PATH, {}).repos?.[repoDir]?.owned ?? []).includes(packageRel);
+  if (!existsSync(packagePath)) writeJson(packagePath, {
+    private: true, dependencies: { "@opencode-ai/plugin": "1.17.20" },
+  });
   const pluginPath = join(repoDir, ".opencode", "plugins", "flow.ts");
   mkdirSync(dirname(pluginPath), { recursive: true });
   writeFileSync(pluginPath, opencodePlugin(project, repo), "utf-8");
@@ -576,8 +613,8 @@ function renderOpencode(ctx) {
     "flow-graph": { type: "local", command: [NODE_BIN, MCP_PATH, "--project", project, "--repo", repo] },
   };
   writeJson(ocPath, oc);
-  // AGENTS.md block shared with Codex — rendered there.
-  return { owned: [".opencode/plugins/flow.ts"], merged: ["opencode.json"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: [".opencode/plugins/flow.ts", ...(ownPackage ? [packageRel] : []), ...knowledge.owned], merged: ["opencode.json", ...knowledge.merged] };
 }
 
 function renderGemini(ctx) {
@@ -600,7 +637,8 @@ function renderGemini(ctx) {
   writeJson(settingsPath, settings);
 
   spliceBlock(join(repoDir, "GEMINI.md"), instructionBlock(project));
-  return { owned: [], merged: [".gemini/settings.json", "GEMINI.md"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: knowledge.owned, merged: [".gemini/settings.json", "GEMINI.md", ...knowledge.merged] };
 }
 
 // Cursor hook config dialect differs from the Claude-family shape: flat
@@ -645,27 +683,38 @@ function renderCursor(ctx) {
   };
 }
 
+function isAntigravityFlowServer(name, server) {
+  return (name === "flow-graph" || name.startsWith("flow-graph-")) &&
+    (server?.command === MCP_PATH || (Array.isArray(server?.args) && server.args.includes(MCP_PATH)));
+}
+
 function renderAntigravity(ctx) {
   const { repoDir, project, repo } = ctx;
   // Antigravity's dialect: hooks.json maps NAMED GROUPS → event → entries.
   // We own the "flow-capture" group and never touch others.
   const hooksPath = join(repoDir, ".agents", "hooks.json");
   const hooksFile = readJson(hooksPath, {});
+  // Lifecycle events use flat handlers; only tool events use matcher/groups.
   const entry = (name) => [
-    { hooks: [{ type: "command", command: hookCmdGui("antigravity", project, repo), timeout: 5 }] },
+    { type: "command", command: `${hookCmdGui("antigravity", project, repo)} --event ${name}`, timeout: 5 },
   ];
   hooksFile["flow-capture"] = { PostInvocation: entry("PostInvocation"), Stop: entry("Stop") };
   writeJson(hooksPath, hooksFile);
 
   const mcpPath = join(repoDir, ".agents", "mcp_config.json");
   const mcp = readJson(mcpPath, {});
-  mcp.mcpServers = {
-    ...(mcp.mcpServers ?? {}),
-    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
-  };
+  // Antigravity pools MCP connections by name across open projects. Reusing
+  // flow-graph can route a new workspace to an earlier project's process.
+  const name = `flow-graph-${createHash("sha256").update(JSON.stringify([project, repo])).digest("hex").slice(0, 12)}`;
+  const servers = { ...(mcp.mcpServers ?? {}) };
+  for (const [key, server] of Object.entries(servers)) {
+    if (isAntigravityFlowServer(key, server)) delete servers[key];
+  }
+  servers[name] = { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] };
+  mcp.mcpServers = servers;
   writeJson(mcpPath, mcp);
-  // Skill dir + AGENTS.md are shared with Codex — rendered there.
-  return { owned: [], merged: [".agents/hooks.json", ".agents/mcp_config.json"] };
+  const knowledge = renderSharedKnowledge(ctx);
+  return { owned: knowledge.owned, merged: [".agents/hooks.json", ".agents/mcp_config.json", ...knowledge.merged] };
 }
 
 const COPILOT_JSON_FILES = [".github/hooks/flow.json", ".github/mcp.json", ".vscode/mcp.json"];
@@ -805,6 +854,7 @@ const CANDIDATE_FILES = [
   "AGENTS.md",
   ".opencode/plugins/flow.ts",
   "opencode.json",
+  ".opencode/package.json",
   ".gemini/settings.json",
   "GEMINI.md",
   ".cursor/hooks.json",
@@ -849,7 +899,11 @@ function isEmptyShell(v) {
 }
 
 export function materializeRepo(ctx) {
-  const harnesses = ctx.harnesses ?? ALL_HARNESSES;
+  // Setup is additive. A later --harness codex must not expose previously
+  // hidden Copilot files or forget how to remove them. Re-render prior tools
+  // too so changing the binding never leaves stale project credentials in use.
+  const previous = readJson(MANIFEST_PATH, {}).repos?.[ctx.repoDir];
+  const harnesses = [...new Set([...(previous?.harnesses ?? []), ...(ctx.harnesses ?? ALL_HARNESSES)])];
   const originals = snapshotOriginals(ctx.repoDir);
   const owned = [];
   const merged = [];
@@ -894,7 +948,7 @@ export function removeRepo(repoDir) {
     ".github/skills/flow/SKILL.md",
   ];
   for (const rel of owned) {
-    if (rel === ".github/skills/flow/SKILL.md" && originals[rel]?.data) {
+    if (originals[rel]?.existed && originals[rel].data != null) {
       writeFileSync(join(repoDir, rel), Buffer.from(originals[rel].data, "base64"));
     } else rmSync(join(repoDir, rel), { force: true });
   }
@@ -959,7 +1013,12 @@ export function removeRepo(repoDir) {
   for (const rel of [".mcp.json", ".cursor/mcp.json", ".agents/mcp_config.json"]) {
     const p = join(repoDir, rel);
     const j = readJson(p, null);
-    if (j?.mcpServers?.["flow-graph"]) {
+    if (rel === ".agents/mcp_config.json" && j?.mcpServers) {
+      for (const [name, server] of Object.entries(j.mcpServers)) {
+        if (isAntigravityFlowServer(name, server)) delete j.mcpServers[name];
+      }
+      writeJson(p, j);
+    } else if (j?.mcpServers?.["flow-graph"]) {
       delete j.mcpServers["flow-graph"];
       writeJson(p, j);
     }

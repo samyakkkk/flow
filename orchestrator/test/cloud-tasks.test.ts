@@ -207,6 +207,8 @@ test("unknown tools, delegated agents and graph mutations fail closed", async ()
     await assert.rejects(policy(name, {}), /not enabled/);
   }
   await policy("graph_search_knowledge", {});
+  await policy("graph_source_read", { repo: "api", path: "file.txt" });
+  await policy("graph_source_search", { repo: "api", query: "base" });
   await policy("graph_correct_graph", {});
 });
 

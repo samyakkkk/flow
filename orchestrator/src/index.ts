@@ -68,6 +68,10 @@ app.get("/health", async () => ({
   port: PORT,
   ts: Date.now(),
 }));
+app.get("/v1/connection", async () => ({
+  project: process.env.FLOW_PROJECT_NAME,
+  graph: process.env.GRAPH_NAME,
+}));
 
 // ------------------------------------------------------------------
 // Core route groups

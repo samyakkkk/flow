@@ -123,6 +123,8 @@ export interface RepoEntry {
   branch: string;
   lastIndexedCommit?: string | null;
   lastIndexedAt?: string;
+  // Deployment administrators can exclude a registered repo from source MCP.
+  sourceRead?: boolean;
   addedAt?: string;
   // Sources front door. A source plays up to two roles: BRAIN (indexed) and
   // WORK (where coding-agent sessions run). `kind` distinguishes an indexed

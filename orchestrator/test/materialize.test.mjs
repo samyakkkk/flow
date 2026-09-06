@@ -8,6 +8,31 @@ import { parse } from "jsonc-parser";
 
 const materializer = new URL("../../bin/lib/materialize.mjs", import.meta.url).href;
 
+for (const harness of ["opencode", "gemini", "antigravity"]) {
+  test(`${harness}-only setup installs and restores shared knowledge without Codex`, () => fixture(({ repoDir, invoke }) => {
+    const skill = join(repoDir, ".agents/skills/flow/SKILL.md");
+    mkdirSync(join(repoDir, ".agents/skills/flow"), { recursive: true });
+    writeFileSync(skill, "Existing skill\n");
+    writeFileSync(join(repoDir, "AGENTS.md"), "Existing instructions\n");
+    invoke(`m.materializeRepo({ ...ctx, harnesses: [${JSON.stringify(harness)}] });`);
+    assert.match(readFileSync(skill, "utf8"), /test-project/);
+    assert.match(readFileSync(join(repoDir, "AGENTS.md"), "utf8"), /flow setup test-project/);
+    assert.ok(!existsSync(join(repoDir, ".codex")));
+    invoke("m.removeRepo(ctx.repoDir)");
+    assert.equal(readFileSync(skill, "utf8"), "Existing skill\n");
+    assert.equal(readFileSync(join(repoDir, "AGENTS.md"), "utf8"), "Existing instructions\n");
+  }));
+}
+
+test("adding a harness retains earlier exclusions and removes both integrations", () => fixture(({ repoDir, invoke }) => {
+  invoke("m.materializeRepo(ctx); m.materializeRepo({ ...ctx, harnesses: ['codex'] });");
+  const ignored = spawnSync("git", ["check-ignore", ".github/mcp.json", ".codex/config.toml"], { cwd: repoDir, encoding: "utf8" });
+  assert.equal(ignored.stdout.trim().split("\n").length, 2);
+  invoke("m.removeRepo(ctx.repoDir)");
+  assert.ok(!existsSync(join(repoDir, ".github/mcp.json")));
+  assert.ok(!existsSync(join(repoDir, ".codex/config.toml")));
+}));
+
 function fixture(run) {
   const home = mkdtempSync(join(tmpdir(), "flow-materialize-"));
   const repoDir = join(home, "repo with spaces");
@@ -154,4 +179,58 @@ test("removing another tool's integration leaves unrelated Copilot config alone"
   writeFileSync(path, "{ unfinished user config");
   invoke('m.materializeRepo({ ...ctx, harnesses: ["gemini"] }); m.removeRepo(ctx.repoDir)');
   assert.equal(readFileSync(path, "utf8"), "{ unfinished user config");
+}));
+
+
+test("OpenCode setup isolates plugin installs and removes only its own manifest", () => fixture(({ repoDir, invoke }) => {
+  const file = join(repoDir, ".opencode/package.json");
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] });");
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).dependencies["@opencode-ai/plugin"], "1.17.20");
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] }); m.removeRepo(ctx.repoDir);");
+  assert.ok(!existsSync(file));
+  mkdirSync(join(repoDir, ".opencode"), { recursive: true });
+  const original = '{"private":true,"dependencies":{"user-plugin":"1.0.0"}}\n';
+  writeFileSync(file, original);
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['opencode'] });");
+  assert.equal(readFileSync(file, "utf8"), original);
+  invoke("m.removeRepo(ctx.repoDir);");
+  assert.equal(readFileSync(file, "utf8"), original);
+}));
+
+
+test("Antigravity lifecycle hooks use flat handlers and explicit event identity", () => fixture(({ repoDir, invoke }) => {
+  invoke("m.materializeRepo({ ...ctx, harnesses: ['antigravity'] });");
+  const hooks = JSON.parse(readFileSync(join(repoDir, ".agents/hooks.json"), "utf8"))["flow-capture"];
+  for (const name of ["PostInvocation", "Stop"]) {
+    assert.equal(hooks[name][0].type, "command");
+    assert.equal(hooks[name][0].hooks, undefined);
+    assert.ok(hooks[name][0].command.endsWith(`--event ${name}`));
+  }
+}));
+
+
+test("Antigravity MCP identities are stable per binding and do not collide across projects", () => fixture(({ repoDir, invoke }) => {
+  const file = join(repoDir, ".agents/mcp_config.json");
+  mkdirSync(join(repoDir, ".agents"), { recursive: true });
+  const original = JSON.stringify({ mcpServers: { "flow-graph-unrelated": { command: "user-server" } } });
+  writeFileSync(file, original);
+  const render = (project = "test-project", repo = "test-repo") => {
+    invoke(`m.materializeRepo({ ...ctx, project: ${JSON.stringify(project)}, repo: ${JSON.stringify(repo)}, harnesses: ['antigravity'] });`);
+    const servers = JSON.parse(readFileSync(file, "utf8")).mcpServers;
+    assert.equal(servers["flow-graph-unrelated"].command, "user-server");
+    const keys = Object.keys(servers).filter(k => k !== "flow-graph-unrelated");
+    assert.equal(keys.length, 1);
+    assert.match(keys[0], /^flow-graph-[a-f0-9]{12}$/);
+    return keys[0];
+  };
+  const first = render();
+  const legacy = JSON.parse(readFileSync(file, "utf8"));
+  legacy.mcpServers["flow-graph"] = legacy.mcpServers[first];
+  delete legacy.mcpServers[first];
+  writeFileSync(file, JSON.stringify(legacy));
+  assert.equal(render(), first);
+  assert.notEqual(render("different-project"), first);
+  assert.notEqual(render("test-project", "different-repo"), first);
+  invoke("m.removeRepo(ctx.repoDir);");
+  assert.equal(readFileSync(file, "utf8"), original);
 }));
