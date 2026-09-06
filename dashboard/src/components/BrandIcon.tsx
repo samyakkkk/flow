@@ -126,13 +126,12 @@ export function GeminiIcon(props: IconProps) {
   );
 }
 
-// Cursor's mark is a dimensional cube; this is a clean monochrome prism that
-// reads as the logo at small sizes. TODO: replace with official mark.
-export function CursorIcon(props: IconProps) {
+// Official Cursor CUBE_2D_LIGHT.svg supplied by the user.
+export function CursorIcon({ size = 20, className }: IconProps) {
   return (
-    <Svg {...props}>
-      <path d="M12 1 22.5 7v10L12 23 1.5 17V7L12 1zm0 2.3L4.4 7.65 12 12l7.6-4.35L12 3.3zM3.5 9.05v6.8l7.5 4.3v-6.8l-7.5-4.3zm17 0-7.5 4.3v6.8l7.5-4.3v-6.8z" />
-    </Svg>
+    <svg width={size} height={size} viewBox="0 0 466.73 532.09" fill="currentColor" className={className} aria-hidden>
+      <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+    </svg>
   );
 }
 

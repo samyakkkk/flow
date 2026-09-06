@@ -198,3 +198,5 @@ is an extraction outcome, not a capture failure. No direct memory writes used.
 - Replaced invented Antigravity glyph with the official full-color PNG supplied by the user. Bundled as a static Next asset so project URL routing does not block it and browsers need no third-party image request.
 
 - Antigravity icon now uses the exact silhouette path from the user-supplied antigravity-color.svg with currentColor, matching the other monochrome marks. Removed the unused color PNG.
+
+- Replaced placeholder Cursor prism with exact path and viewBox from user-supplied CUBE_2D_LIGHT.svg; uses currentColor with preserved aspect ratio.
