@@ -717,3 +717,19 @@ test("cloud workers reject legacy agent starts and worktree mutations", async ()
     assert.match(response.json().error, /Use cloud tasks/);
   }
 });
+
+test("cloud Changes panel resolves only its own worktree and hides env diffs", async () => {
+  const headers = { authorization: "Bearer cloud-test-admin" };
+  const created = await app.inject({ method: "POST", url: "/v1/agents/tasks", headers, payload: { message: "diff view", conversation: { source: "dashboard", id: "diff-view-test" } } });
+  const job = await finished(created.json().id);
+  const tree = (await workspaces.ensureConversationWorktree(String(job.input.conversation_key), "api")).worktree!;
+  writeFileSync(path.join(tree.path, "visible-change.txt"), "visible change\n");
+  writeFileSync(path.join(tree.path, ".env.local"), "PRIVATE=never-display-this-value\n");
+  const response = await app.inject({ method: "GET", url: `/v1/agents/tasks/${job.id}/diff`, headers });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.ok(response.json().files.some((f: { path: string }) => f.path === "visible-change.txt"));
+  assert.ok(response.json().diff.includes("visible change"));
+  assert.ok(!response.body.includes("never-display-this-value"));
+  assert.ok(!response.body.includes(".env.local"));
+  assert.equal((await app.inject({ method: "GET", url: `/v1/agents/tasks/${job.id}/diff` })).statusCode, 401);
+});

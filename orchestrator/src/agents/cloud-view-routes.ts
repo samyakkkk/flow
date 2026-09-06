@@ -11,9 +11,11 @@ function summarize(id: string, includeEvents = true) {
   const job = getJob(id)!;
   const raw = job.result_json ? JSON.parse(job.result_json) : null;
   const result = raw ? { answer_md: redactCloudText(String(raw.answer_md ?? raw.error ?? "")), output: redactCloudText(String(raw.output ?? "")), exit_code: raw.exit_code } : null;
-  const message = job.input.display_message ?? (job.input.manual_command ? `Terminal: ${(job.input.manual_command as { command: string }).command}` : job.input.message ?? job.input.question ?? "Task");
+  let message = job.input.display_message ?? (job.input.manual_command ? `Terminal: ${(job.input.manual_command as { command: string }).command}` : job.input.message ?? job.input.question ?? "Task");
+  if (!job.input.display_message && typeof message === "string" && message.startsWith("Style:")) message = message.slice(message.lastIndexOf("\n\n") + 2);
   return { id, status: job.status, phase: ["running", "queued"].includes(job.status) ? codingSlotStatus(id) ?? job.status : job.status,
     message: redactCloudText(String(message)).slice(0, 8000), created_at: job.created_at, updated_at: job.updated_at,
+    repos: conversationRepos(String(job.input.conversation_key)),
     command: Boolean(job.input.manual_command), session_id: job.session_id, result, events: includeEvents ? cloudEvents(id) : [] };
 }
 export function registerCloudViewRoutes(app: FastifyInstance): void {
@@ -38,6 +40,26 @@ export function registerCloudViewRoutes(app: FastifyInstance): void {
       try { const [channel, ts] = JSON.parse(ref); if (/^[A-Z0-9]+$/.test(channel) && /^[0-9.]+$/.test(ts)) slackUrl = `https://app.slack.com/client/${encodeURIComponent(workspace)}/${channel}/thread/${channel}-${ts}`; } catch {}
     }
     return { turns: rows.reverse().map((r) => summarize(r.id)), repos: conversationRepos(key), slackUrl };
+  });
+  app.get<{ Params: { id: string }; Querystring: { repo?: string } }>("/v1/agents/tasks/:id/diff", async (req, reply) => {
+    const job = getJob(req.params.id);
+    const key = job?.input.conversation_key;
+    if (!cloudMode() || typeof key !== "string") return reply.code(404).send({ error: "Cloud task not found" });
+    const repo = conversationRepos(key).find(r => r.worktree && (!req.query.repo || r.name === req.query.repo));
+    if (!repo?.worktree || repo.worktree.archived_at) return { files: [], diff: "", truncated: false, scope: "base", base: null };
+    const { reconcileWorktree } = await import("./cloud-workspaces.js");
+    await reconcileWorktree(key, repo);
+    const { worktreeDiff } = await import("./runtime.js");
+    const result = await worktreeDiff(repo.worktree.path, repo.name);
+    if ("error" in result) return reply.code(409).send(result);
+    const sensitive = /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.npmrc|credentials|id_rsa|id_ed25519)$|\.(?:pem|key)$/i;
+    const files = result.files.filter(f => !sensitive.test(f.path));
+    const allowed = new Set(files.map(f => f.path));
+    const diff = result.diff.split(/(?=^diff --git )/m).filter(chunk => {
+      const name = chunk.split("\n")[0].match(/ b\/(.+)$/)?.[1];
+      return name && allowed.has(name);
+    }).map(chunk => chunk.split("\n").map(line => redactCloudText(line)).join("\n")).join("");
+    return { ...result, files, diff };
   });
   app.post<{ Params: { id: string; action: string }; Body: { message?: string; repo?: string; command?: string } }>("/v1/agents/tasks/:id/:action", async (req, reply) => {
     const job = getJob(req.params.id);

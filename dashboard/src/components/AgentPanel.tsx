@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import { useMode } from "@/lib/useMode";
+import { cloudSessionRow } from "@/lib/cloudAgentView";
+import Link from "next/link";
 import { useProject } from "@/lib/useProject";
 import { BodyText, Heading, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
@@ -42,6 +43,7 @@ function statusKind(status: string): "live" | "ok" | "warn" | "idle" {
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
+    queued: "Queued",
     starting: "Starting",
     running: "Working",
     waiting: "Needs approval",
@@ -60,33 +62,24 @@ function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function AgentPanel(props: AgentPanelProps) {
-  const { mode, loading } = useMode();
-  const { prefix } = useProject();
-  if (loading) return <p>Loading agents…</p>;
-  if (mode === "prod") return <div className="rounded-xl border border-line bg-paper p-5 space-y-4">
-    <Heading variant="section">Run tasks on this server</Heading>
-    <BodyText>Give Flow a task here or in Slack. Follow progress, send follow-ups, and run commands in the task’s worktree. Coding tasks share one queue.</BodyText>
-    <Link href={prefix("/agents")} className="inline-block rounded border border-line px-4 py-2 text-sm">Open cloud agents →</Link>
-  </div>;
-  return <LocalAgentPanel {...props} />;
-}
-
-function LocalAgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPanelProps) {
+export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPanelProps) {
+  const { mode, loading: modeLoading } = useMode();
+  const cloud = mode === "prod";
   const { prefix } = useProject();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
 
   const refreshSessions = useCallback(async () => {
+    if (modeLoading) return;
     try {
-      const res = await fetch(prefix("/api/agents/sessions"));
+      const res = await fetch(prefix(cloud ? "/api/cloud/tasks" : "/api/agents/sessions"));
       if (res.ok) {
         const data = await res.json();
-        setSessions(data.sessions ?? []);
+        setSessions(cloud ? data.tasks.map(cloudSessionRow) : data.sessions ?? []);
       }
     } catch {
       // swallow
     }
-  }, [prefix]);
+  }, [prefix, cloud, modeLoading]);
 
   useEffect(() => {
     refreshSessions();
@@ -105,8 +98,7 @@ function LocalAgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPa
             Or run agents right here
           </Heading>
           <BodyText className="mt-1">
-            Same brain, your own subscriptions — tasks run on the CLIs already installed on your
-            machine. The only difference is which interface you drive from.
+            {cloud ? "The same brain, with tasks running in separate worktrees on this server. Follow progress here or continue the conversation in Slack." : "Same brain, your own subscriptions — tasks run on the CLIs already installed on your machine. The only difference is which interface you drive from."}
           </BodyText>
         </div>
 

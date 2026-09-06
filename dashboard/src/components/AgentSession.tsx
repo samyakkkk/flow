@@ -3,6 +3,8 @@
 // plan), steering input, stop, permission prompts — and the brain graph
 // beside it, highlighting the exact nodes the agent queries as it works.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cloudTranscript, type CloudRun } from "@/lib/cloudAgentView";
+import { CloudCommandPanel } from "./CloudAgents";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
 import { BrainGraph } from "@/components/BrainGraph";
@@ -326,6 +328,9 @@ function agentName(backend?: string): string {
 }
 
 export function AgentSession({ id }: { id: string }) {
+  const cloud = id.startsWith("cloud-");
+  const cloudId = cloud ? id.slice(6) : "";
+  const [cloudRun, setCloudRun] = useState<CloudRun>();
   const router = useRouter();
   const { prefix } = useProject();
   const [events, setEvents] = useState<SessionEvent[]>([]);
@@ -375,8 +380,29 @@ export function AgentSession({ id }: { id: string }) {
   const stickToBottom = useRef(true);
   const asideRef = useRef<HTMLDivElement>(null);
 
+  // Translate cloud turns into the original transcript UI's event model.
+  useEffect(() => {
+    if (!cloud) return;
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await fetch(prefix(`/api/cloud/tasks/${cloudId}`));
+        if (!response.ok) throw new Error("Could not load this cloud task");
+        const run: CloudRun = await response.json();
+        if (!active) return;
+        setCloudRun(run); setEvents(cloudTranscript(run)); setConnected(true); setLoadError("");
+        const repo = run.repos.find(r => r.worktree) || run.repos[0];
+        const next = { backend: "opencode", repo: repo?.name, title: run.turns[0]?.message.slice(0, 160), cwd: repo?.worktree?.path, live: true, separateCopy: true, worktreePath: repo?.worktree?.path, worktreeGithub: false, worktreeBase: repo?.baseBranch };
+        setMeta(prev => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      } catch (e) { if (active) { setLoadError((e as Error).message); setConnected(false); } }
+    };
+    void load(); const timer = setInterval(load, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, [cloud, cloudId, prefix]);
+
   // Metadata once
   useEffect(() => {
+    if (cloud) return;
     const controller = new AbortController();
     fetch(prefix(`/api/agents/sessions/${id}`), { signal: controller.signal })
       .then((r) => {
@@ -408,12 +434,13 @@ export function AgentSession({ id }: { id: string }) {
         if (!controller.signal.aborted) setLoadError(err.message);
       });
     return () => controller.abort();
-  }, [id, prefix]);
+  }, [id, prefix, cloud]);
 
   // SSE stream (replay + live). Events are buffered and flushed at most every
   // ~90ms — replaying hundreds of chunk events one render at a time froze the
   // page on long sessions.
   useEffect(() => {
+    if (cloud) return;
     const es = new EventSource(prefix(`/api/agents/sessions/${id}/events`));
     const buffer: SessionEvent[] = [];
     const flush = () => {
@@ -444,7 +471,7 @@ export function AgentSession({ id }: { id: string }) {
       clearInterval(iv);
       es.close();
     };
-  }, [id, prefix]);
+  }, [id, prefix, cloud]);
 
   const view = useMemo(() => reduceEvents(events), [events]);
   const replayOnly = archived || meta?.live === false;
@@ -454,13 +481,14 @@ export function AgentSession({ id }: { id: string }) {
   // its ACP adapter actually executes (unknown commands are silently dropped),
   // so surface just that one. Skip if a future version starts advertising it.
   const commands = useMemo(() => {
+    if (cloud) return [];
     if (meta?.backend !== "opencode") return view.commands;
     if (view.commands.some((c) => c.name === "compact")) return view.commands;
     return [
       ...view.commands,
       { name: "compact", description: "Summarize the conversation to free up context" },
     ];
-  }, [view.commands, meta?.backend]);
+  }, [view.commands, meta?.backend, cloud]);
 
   // Recent graph highlights: last 45s of graph events light up the brain.
   const [now, setNow] = useState(0);
@@ -528,7 +556,7 @@ export function AgentSession({ id }: { id: string }) {
   useEffect(() => {
     if (!meta || replayOnly) return;
     let cancelled = false;
-    fetch(prefix(`/api/agents/sessions/${id}/diff?scope=base`))
+    fetch(prefix(cloud ? `/api/cloud/tasks/${cloudId}/diff` : `/api/agents/sessions/${id}/diff?scope=base`))
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
@@ -552,7 +580,7 @@ export function AgentSession({ id }: { id: string }) {
     if (!meta || replayOnly) return;
     let cancelled = false;
     const load = () => {
-      fetch(prefix(`/api/agents/sessions/${id}/diff?scope=${diffScope}`))
+      fetch(prefix(cloud ? `/api/cloud/tasks/${cloudId}/diff` : `/api/agents/sessions/${id}/diff?scope=${diffScope}`))
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (!cancelled && d && Array.isArray(d.files)) setDiff(d);
@@ -572,7 +600,8 @@ export function AgentSession({ id }: { id: string }) {
     async (action: string, body: unknown = {}) => {
       setBusy(true);
       try {
-        await fetch(prefix(`/api/agents/sessions/${id}/${action}`), {
+        const activeTurn = cloudRun?.turns.find(t => t.status === "running") || cloudRun?.turns.find(t => t.status === "queued");
+        await fetch(prefix(cloud ? `/api/cloud/tasks/${activeTurn?.id || cloudId}/${action}` : `/api/agents/sessions/${id}/${action}`), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -581,7 +610,7 @@ export function AgentSession({ id }: { id: string }) {
         setBusy(false);
       }
     },
-    [id, prefix]
+    [id, prefix, cloud, cloudId, cloudRun]
   );
 
   // Open the agent's repo checkout in Finder/Explorer or VS Code. Only works
@@ -609,7 +638,7 @@ export function AgentSession({ id }: { id: string }) {
 
   const fetchFiles = useCallback(
     (q: string) =>
-      fetch(prefix(`/api/agents/sessions/${id}/files?q=${encodeURIComponent(q)}`))
+      cloud ? Promise.resolve([]) : fetch(prefix(`/api/agents/sessions/${id}/files?q=${encodeURIComponent(q)}`))
         .then((r) => (r.ok ? r.json() : { entries: [] }))
         .then((d: { entries?: FileEntry[] }) => d.entries ?? []),
     [id, prefix]
@@ -637,10 +666,10 @@ export function AgentSession({ id }: { id: string }) {
     try {
       const body: { text: string; attachments?: Attachment[] } = { text };
       if (currentAttachments.length > 0) body.attachments = currentAttachments;
-      const res = await fetch(prefix(`/api/agents/sessions/${id}/prompt`), {
+      const res = await fetch(prefix(cloud ? `/api/cloud/tasks/${cloudId}/followup` : `/api/agents/sessions/${id}/prompt`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(cloud ? { message: text } : body),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -754,7 +783,7 @@ export function AgentSession({ id }: { id: string }) {
   // The banner appears once a separate-copy session has settled (idle), so the
   // user is prompted to bring the work home rather than leaving it stranded.
   const showExitBanner =
-    !replayOnly && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
+    !cloud && !replayOnly && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0); // dragenter/leave fire per child — count to know when we truly left
@@ -762,11 +791,12 @@ export function AgentSession({ id }: { id: string }) {
   // One path for every way a file arrives: picker, paste, or drop. Any file
   // type is accepted — the agent decides what to do with it.
   const addFiles = useCallback(async (files: File[]) => {
+    if (cloud) { setSendError("Cloud task attachments are not supported yet."); return; }
     if (replayOnly || files.length === 0) return;
     const read = await Promise.all(files.map((f) => readFileAsAttachment(f)));
     const valid = read.filter((a) => a.data.length > 0);
     if (valid.length > 0) setAttachments((prev) => [...prev, ...valid]);
-  }, [replayOnly]);
+  }, [replayOnly, cloud]);
 
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     // Pasted files (screenshots, copied files) arrive as clipboard items with a
@@ -831,8 +861,8 @@ export function AgentSession({ id }: { id: string }) {
     document.addEventListener("mouseup", onMouseUp);
   }, [brainPct]);
 
-  const pill = replayOnly ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
-  const running = !replayOnly && (view.status === "running" || view.status === "starting");
+  const pill = replayOnly ? { kind: "idle" as const, label: "Archived" } : view.status === "queued" ? { kind: "warn" as const, label: "Queued" } : statusPill(view.status);
+  const running = !replayOnly && (view.status === "running" || view.status === "starting" || view.status === "queued");
   const emptyTranscriptText = loadError || (replayOnly
     ? "No chat transcript was captured for this archived session."
     : "Waking the agent...");
@@ -843,6 +873,7 @@ export function AgentSession({ id }: { id: string }) {
   // a tool, consulting the graph, or writing the answer.
   const liveLabel = (() => {
     if (!running) return null;
+    if (view.status === "queued") return "Waiting for the coding slot…";
     if (view.status === "starting") return "Starting up…";
     const activeTool = [...view.blocks]
       .reverse()
@@ -886,7 +917,7 @@ export function AgentSession({ id }: { id: string }) {
           </p>
           {/* Where the agent is working — the cloned repo folder — with quick
               openers so you can inspect the changes it's making. */}
-          {meta?.cwd && (
+          {meta?.cwd && !cloud && (
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
               <button
                 onClick={() => openIn("finder")}
@@ -926,6 +957,7 @@ export function AgentSession({ id }: { id: string }) {
           onModeChange={(modeId) => act("mode", { modeId })}
           disabled={replayOnly || busy}
         />
+        {cloud && cloudRun?.slackUrl && <a href={cloudRun.slackUrl} target="_blank" rel="noreferrer" className="text-[11px] text-text-muted underline">Slack thread ↗</a>}
         <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
         {running && (
           <Button variant="secondary" onClick={() => act("cancel")} disabled={busy}>
@@ -1133,6 +1165,8 @@ export function AgentSession({ id }: { id: string }) {
           </div>
 
 
+          {cloud && <CloudCommandPanel id={cloudId} repos={cloudRun?.repos || []} />}
+
 	          {/* Exit banner — the changes live on a separate copy; open a PR from
 	              that branch instead of merging into the user's folder. */}
 	          {showExitBanner && (
@@ -1319,6 +1353,7 @@ export function AgentSession({ id }: { id: string }) {
                 placeholder={
                   replayOnly
                     ? "This session ended before the last restart — start a new one to continue."
+                    : cloud ? "Send a follow-up — keeps this conversation and worktrees…"
                     : running
                     ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, / for commands, drop or paste files)"
                     : "Send a follow-up… (@ to tag a file, / for commands, drop or paste files)"
@@ -1329,7 +1364,7 @@ export function AgentSession({ id }: { id: string }) {
                 className="block w-full min-h-9 rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] leading-5 text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
               />
               <Button onClick={send} disabled={replayOnly || (!input.trim() && attachments.length === 0) || busy}>
-                {running ? "Steer" : "Send"}
+                {running && !cloud ? "Steer" : "Send"}
               </Button>
             </div>
           </div>
