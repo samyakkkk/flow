@@ -24,6 +24,7 @@ import {
   rmdirSync,
   readdirSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -682,6 +683,11 @@ function renderCursor(ctx) {
   };
 }
 
+function isAntigravityFlowServer(name, server) {
+  return (name === "flow-graph" || name.startsWith("flow-graph-")) &&
+    (server?.command === MCP_PATH || (Array.isArray(server?.args) && server.args.includes(MCP_PATH)));
+}
+
 function renderAntigravity(ctx) {
   const { repoDir, project, repo } = ctx;
   // Antigravity's dialect: hooks.json maps NAMED GROUPS → event → entries.
@@ -697,10 +703,15 @@ function renderAntigravity(ctx) {
 
   const mcpPath = join(repoDir, ".agents", "mcp_config.json");
   const mcp = readJson(mcpPath, {});
-  mcp.mcpServers = {
-    ...(mcp.mcpServers ?? {}),
-    "flow-graph": { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] },
-  };
+  // Antigravity pools MCP connections by name across open projects. Reusing
+  // flow-graph can route a new workspace to an earlier project's process.
+  const name = `flow-graph-${createHash("sha256").update(JSON.stringify([project, repo])).digest("hex").slice(0, 12)}`;
+  const servers = { ...(mcp.mcpServers ?? {}) };
+  for (const [key, server] of Object.entries(servers)) {
+    if (isAntigravityFlowServer(key, server)) delete servers[key];
+  }
+  servers[name] = { command: NODE_BIN, args: [MCP_PATH, "--project", project, "--repo", repo] };
+  mcp.mcpServers = servers;
   writeJson(mcpPath, mcp);
   const knowledge = renderSharedKnowledge(ctx);
   return { owned: knowledge.owned, merged: [".agents/hooks.json", ".agents/mcp_config.json", ...knowledge.merged] };
@@ -1002,7 +1013,12 @@ export function removeRepo(repoDir) {
   for (const rel of [".mcp.json", ".cursor/mcp.json", ".agents/mcp_config.json"]) {
     const p = join(repoDir, rel);
     const j = readJson(p, null);
-    if (j?.mcpServers?.["flow-graph"]) {
+    if (rel === ".agents/mcp_config.json" && j?.mcpServers) {
+      for (const [name, server] of Object.entries(j.mcpServers)) {
+        if (isAntigravityFlowServer(name, server)) delete j.mcpServers[name];
+      }
+      writeJson(p, j);
+    } else if (j?.mcpServers?.["flow-graph"]) {
       delete j.mcpServers["flow-graph"];
       writeJson(p, j);
     }

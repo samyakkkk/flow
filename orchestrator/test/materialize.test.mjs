@@ -207,3 +207,30 @@ test("Antigravity lifecycle hooks use flat handlers and explicit event identity"
     assert.ok(hooks[name][0].command.endsWith(`--event ${name}`));
   }
 }));
+
+
+test("Antigravity MCP identities are stable per binding and do not collide across projects", () => fixture(({ repoDir, invoke }) => {
+  const file = join(repoDir, ".agents/mcp_config.json");
+  mkdirSync(join(repoDir, ".agents"), { recursive: true });
+  const original = JSON.stringify({ mcpServers: { "flow-graph-unrelated": { command: "user-server" } } });
+  writeFileSync(file, original);
+  const render = (project = "test-project", repo = "test-repo") => {
+    invoke(`m.materializeRepo({ ...ctx, project: ${JSON.stringify(project)}, repo: ${JSON.stringify(repo)}, harnesses: ['antigravity'] });`);
+    const servers = JSON.parse(readFileSync(file, "utf8")).mcpServers;
+    assert.equal(servers["flow-graph-unrelated"].command, "user-server");
+    const keys = Object.keys(servers).filter(k => k !== "flow-graph-unrelated");
+    assert.equal(keys.length, 1);
+    assert.match(keys[0], /^flow-graph-[a-f0-9]{12}$/);
+    return keys[0];
+  };
+  const first = render();
+  const legacy = JSON.parse(readFileSync(file, "utf8"));
+  legacy.mcpServers["flow-graph"] = legacy.mcpServers[first];
+  delete legacy.mcpServers[first];
+  writeFileSync(file, JSON.stringify(legacy));
+  assert.equal(render(), first);
+  assert.notEqual(render("different-project"), first);
+  assert.notEqual(render("test-project", "different-repo"), first);
+  invoke("m.removeRepo(ctx.repoDir);");
+  assert.equal(readFileSync(file, "utf8"), original);
+}));
