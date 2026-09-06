@@ -13,7 +13,7 @@ export async function GET(): Promise<NextResponse> {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!IS_LOCAL) {
     const user = await currentUser(), project = await requireProject();
-    const workspaces = (loadAuthStore()?.tokens ?? []).filter(t => t.userId === user?.id && t.projects?.includes(project.name) && t.workspace?.configuredAt).map(t => ({ id: t.id, ...t.workspace }));
+    const workspaces = (loadAuthStore()?.tokens ?? []).filter(t => t.userId === user?.id && t.projects?.includes(project.name)).flatMap(t => (t.workspaces ?? (t.workspace?.configuredAt ? [t.workspace] : [])).map((w, index) => ({ ...w, id: `${t.id}:${w.id ?? index}` })));
     return NextResponse.json({ project: project.name, mode: "prod", repos: [], detected: [], all: [], version: 1, workspaces });
   }
   try {

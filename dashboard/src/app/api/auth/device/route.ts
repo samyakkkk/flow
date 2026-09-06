@@ -38,8 +38,15 @@ export async function POST(req: NextRequest) {
       if (!user || !s || !record?.workspace || !record.projects?.length || !userCanAccess(user, record.projects[0], s)) return json({ error: "Unauthorized" }, 401);
       const all = ["claude", "codex", "cursor", "gemini", "opencode", "antigravity", "copilot"];
       if (!Array.isArray(b.harnesses) || b.harnesses.length > 7 || b.harnesses.some((h: unknown) => typeof h !== "string" || !all.includes(h))) return json({ error: "Invalid tools" }, 400);
-      record.workspace.harnesses = [...new Set<string>(b.harnesses)];
-      record.workspace.configuredAt = new Date().toISOString();
+      const workspace = b.workspace ?? record.workspace.repo;
+      const machine = b.machine ?? record.workspace.machine;
+      if (typeof workspace !== "string" || typeof machine !== "string" || !workspace || !machine || workspace.length > 100 || machine.length > 100 || /[\x00-\x1f\x7f]/.test(workspace + machine) || (b.workspaceId !== undefined && !/^[a-f0-9]{64}$/.test(b.workspaceId))) return json({ error: "Invalid workspace" }, 400);
+      const entries = record.workspaces ?? (record.workspace.configuredAt ? [record.workspace] : []);
+      const existing = entries.find(w => b.workspaceId && w.id ? w.id === b.workspaceId : w.repo === workspace && w.machine === machine);
+      const entry = { id: b.workspaceId, repo: workspace, machine, harnesses: [...new Set<string>(b.harnesses)], configuredAt: new Date().toISOString() };
+      if (existing) Object.assign(existing, entry);
+      else { if (entries.length >= 1000) return json({ error: "Workspace limit reached" }, 400); entries.push(entry); }
+      record.workspaces = entries;
       saveAuthStore(s);
       return json({ ok: true });
     }

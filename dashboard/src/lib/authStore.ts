@@ -26,12 +26,15 @@ export interface AuthUser {
   createdAt: string;
 }
 
+export interface WorkspaceConnection { id?: string; machine: string; repo: string; harnesses: string[]; configuredAt: string | null }
+
 export interface AuthToken {
   id: string;
   userId: string;
   label: string;
   projects?: string[]; // Absent only for legacy, user-wide PATs.
-  workspace?: { machine: string; repo: string; harnesses: string[]; configuredAt: string | null };
+  workspace?: WorkspaceConnection;
+  workspaces?: WorkspaceConnection[];
   hash: string; // sha256:<hex>
   createdAt: string;
 }

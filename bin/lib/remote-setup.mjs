@@ -36,7 +36,7 @@ export async function discoverRemote({ project, gatewayUrl, orchestratorUrl, tok
     headers: { authorization: `Bearer ${token}` },
     redirect: "error", signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Flow connection discovery failed (HTTP ${res.status}).`);
+  if (!res.ok) throw Object.assign(new Error(`Flow connection discovery failed (HTTP ${res.status}).`), { status: res.status });
   const info = await res.json();
   if (info.project !== project || typeof info.graph !== "string" || !info.graph) {
     throw new Error("The remote endpoint does not match the requested Flow project.");
@@ -46,7 +46,7 @@ export async function discoverRemote({ project, gatewayUrl, orchestratorUrl, tok
   const capture = await fetch(`${orchestrator}/v1/connection`, {
     headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(15000),
   });
-  if (!capture.ok) throw new Error(`Flow capture connection failed (HTTP ${capture.status}).`);
+  if (!capture.ok) throw Object.assign(new Error(`Flow capture connection failed (HTTP ${capture.status}).`), { status: capture.status });
   const captureInfo = await capture.json();
   if (captureInfo.project !== project || captureInfo.graph !== info.graph) {
     throw new Error("Knowledge and capture endpoints must belong to the same Flow project.");

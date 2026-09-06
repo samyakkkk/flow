@@ -603,6 +603,7 @@ async function cmdProjectCreate(args) {
   });
   let name = positionals[0];
   let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
   if (name && /^https?:\/\//.test(name)) {
     if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
     const target = new URL(name);
@@ -610,7 +611,7 @@ async function cmdProjectCreate(args) {
     const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
     if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
     const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
-    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
     name = browserConnection.project;
   }
   if (!name) die("Usage: flow project create <name> [--mode local|prod]");
@@ -1202,6 +1203,7 @@ async function cmdRm(args) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
   let name = positionals[0];
   let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
   if (name && /^https?:\/\//.test(name)) {
     if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
     const target = new URL(name);
@@ -1209,7 +1211,7 @@ async function cmdRm(args) {
     const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
     if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
     const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
-    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
     name = browserConnection.project;
   }
   if (!name) die("Usage: flow rm <name>");
@@ -1309,6 +1311,7 @@ async function cmdSetup(rest) {
       "gateway-url": { type: "string" },
       "orchestrator-url": { type: "string" },
       "token-env": { type: "string" },
+      login: { type: "boolean" },
       repo: { type: "string" },
     },
     allowPositionals: true,
@@ -1326,6 +1329,7 @@ async function cmdSetup(rest) {
 
   let name = positionals[0];
   let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
   if (name && /^https?:\/\//.test(name)) {
     if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
     const target = new URL(name);
@@ -1333,7 +1337,7 @@ async function cmdSetup(rest) {
     const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
     if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
     const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
-    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
     name = browserConnection.project;
   }
   if (!name) {

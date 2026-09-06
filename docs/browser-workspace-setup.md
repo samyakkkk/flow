@@ -9,7 +9,7 @@ flow setup https://flow.company.com/engineering
 
 The CLI requires an interactive terminal, lists detected tools, lets you change
 that selection, and asks before installing knowledge access and capture hooks.
-It opens a browser approval page. Sign in, verify that the displayed code matches
+It first checks the saved connection for that deployment and project. Valid credentials are reused without opening the browser; missing or rejected credentials open a browser approval page. Network errors fail without starting a new approval. Sign in, verify that the displayed code matches
 your terminal, and approve only a setup you initiated. The CLI verifies both
 project endpoints before writing integrations, then exits. No background helper,
 inbound port, command listener, or remote execution enrollment is installed.
@@ -20,7 +20,7 @@ Capture and extraction are explicitly unverified in this card; inspect real
 sessions and memories for those signals. No local absolute path is sent during
 pairing, and the dashboard cannot browse the connected laptop.
 
-A later `flow setup engineering` can reuse the personal remote binding. Use
+Both the full URL and a later `flow setup engineering` reuse the personal remote binding. Use `flow setup https://flow.company.com/engineering --login` to explicitly authorize again. URL setup still requires local consent for each repository. One credential can register multiple workspaces; revoking it stops cloud access for all workspaces using that credential. Use
 `flow setup --remove` in the repository to remove its local integrations. Revoke
 the named personal token in the dashboard's Access management to stop its cloud
 access. Revocation does not remotely remove files from your computer. Existing

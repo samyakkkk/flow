@@ -55,6 +55,11 @@ try:
     status, listing = call(member, f'/{project}/api/integrations')
     expect('own workspace displayed', len(listing['workspaces']), 1)
     expect('server tools not reported as local', listing['detected'], [])
+    second = {'action':'complete','harnesses':['codex'],'workspace':'second-fixture','machine':'Pairing security test','workspaceId':'a'*64}
+    expect('another workspace uses same credential', call(anon, '/api/auth/device', second, headers=auth)[0], 200)
+    expect('repeat workspace registration is idempotent', call(anon, '/api/auth/device', second, headers=auth)[0], 200)
+    _, listing = call(member, f'/{project}/api/integrations')
+    expect('both workspaces preserved without duplicates', len(listing['workspaces']), 2)
     expect('grant revoked', call(owner, '/api/access/users/'+uid, {'grants':[]}, method='PUT')[0], 200)
     expect('revoked grant blocks credential', call(anon, endpoint, headers=auth)[0], 401)
     expect('grant restored for token revocation test', call(owner, '/api/access/users/'+uid, {'grants':[project]}, method='PUT')[0], 200)
