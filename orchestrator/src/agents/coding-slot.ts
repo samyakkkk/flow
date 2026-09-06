@@ -29,7 +29,10 @@ function proc(pid: number) {
   } catch { return undefined; }
 }
 function identity(pid: number): string {
-  if (process.platform === "linux") return proc(pid)?.identity ?? "gone";
+  if (process.platform === "linux") {
+    const p = proc(pid);
+    return p && !p.zombie ? p.identity : "gone";
+  }
   try { process.kill(pid, 0); return "alive"; } catch { return "gone"; }
 }
 function groupAlive(pid: number): boolean {
