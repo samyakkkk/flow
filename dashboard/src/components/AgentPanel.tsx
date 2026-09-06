@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useProject } from "@/lib/useProject";
-import { Kicker, StatusPill } from "@/components/ui";
+import { BodyText, Heading, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
 import { AgentTaskComposer } from "@/components/AgentTaskComposer";
 
@@ -87,18 +87,14 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
       style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
     >
       <div className="flex flex-col gap-4">
-        {/* Header — typography mirrors the "your AI interfaces" card: the two
-            panels are one decision (which interface do you drive Flow from?),
-            so they must read as siblings. */}
         <div className="border-b border-line pb-3">
-          <div className="text-[11px] uppercase tracking-widest text-ink/50">Flow&apos;s interface</div>
-          <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+          <Heading variant="section">
             Or run agents right here
-          </h2>
-          <p className="text-[12px] text-ink/55 mt-1 leading-snug">
+          </Heading>
+          <BodyText className="mt-1">
             Same brain, your own subscriptions — tasks run on the CLIs already installed on your
             machine. The only difference is which interface you drive from.
-          </p>
+          </BodyText>
         </div>
 
         {/* Task Composer Box */}
@@ -112,8 +108,8 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
 
       {/* Recent Sessions */}
       <div className="flex flex-col gap-2.5 border-t border-line pt-4 mt-2">
-        <div className="flex items-center justify-between">
-          <Kicker>Recent Sessions</Kicker>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <Heading as="h3" variant="card">Recent Sessions</Heading>
           <Link
             href={prefix("/agents")}
             className="text-[10px] text-text-muted hover:text-ink font-mono uppercase tracking-wider transition-colors"
@@ -123,9 +119,9 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
         </div>
 
         {sessions.length === 0 ? (
-          <p className="text-[11px] text-text-muted italic py-1 text-center font-mono">
+          <BodyText className="py-1 text-center">
             No agent sessions run yet.
-          </p>
+          </BodyText>
         ) : (
           <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
             {sessions.slice(0, 4).map((s) => (
@@ -135,10 +131,10 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
                 className="flex items-center justify-between p-2.5 rounded-lg border border-line bg-cream hover:bg-sand transition-colors text-decoration-none group"
               >
                 <div className="min-w-0 flex-1 mr-2">
-                  <div className="text-[12.5px] font-medium text-ink truncate group-hover:underline">
+                  <div className="text-[12px] leading-relaxed font-medium text-ink truncate group-hover:underline">
                     {s.title || "Untitled task"}
                   </div>
-                  <div className="text-[10px] text-text-muted font-mono truncate flex items-center gap-1.5 mt-0.5">
+                  <div className="text-[11px] text-text-muted truncate flex items-center gap-1.5 mt-0.5">
                     <BrandIcon
                       name={AGENT_BRANDS[s.backend] || "opencode"}
                       size={12}

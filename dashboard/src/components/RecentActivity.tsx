@@ -3,7 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { useProject } from "@/lib/useProject";
-import { Kicker } from "@/components/ui";
+import { Heading } from "@/components/ui";
 
 export interface AuditRow {
   id: number;
@@ -113,8 +113,8 @@ export function RecentActivity({ rows }: { rows: AuditRow[] }) {
 
   return (
     <div className="flex flex-col gap-2 p-4 rounded-xl border border-line bg-paper">
-      <div className="flex items-center justify-between">
-        <Kicker>Domain Milestones</Kicker>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <Heading variant="section">Domain Milestones</Heading>
         <Link
           href={prefix("/activity")}
           className="text-[10px] text-text-muted hover:text-ink font-mono uppercase tracking-wider transition-colors"
@@ -125,12 +125,11 @@ export function RecentActivity({ rows }: { rows: AuditRow[] }) {
 
       <div className="space-y-2 mt-1">
         {visible.map((item) => (
-          <div key={item.id} className="flex items-baseline justify-between gap-4 text-[12px] border-b border-line/40 pb-1.5 last:border-0 last:pb-0">
-            <span className="text-ink font-medium">{item.human}</span>
+          <div key={item.id} className="flex items-baseline justify-between gap-4 text-[12px] leading-relaxed border-b border-line/40 pb-1.5 last:border-0 last:pb-0">
+            <span className="text-text">{item.human}</span>
             {item.ts && (
               <span
-                style={{ fontFamily: "var(--font-mono)" }}
-                className="text-[10px] text-text-muted flex-shrink-0"
+                className="text-[11px] text-text-muted flex-shrink-0"
               >
                 {timeAgo(item.ts)}
               </span>

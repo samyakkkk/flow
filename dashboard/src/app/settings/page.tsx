@@ -257,7 +257,7 @@ function Section({
         style={{
           margin: "0 0 18px",
           fontSize: 14,
-          fontWeight: 600,
+          fontWeight: 500,
           color: "var(--text-primary)",
           borderBottom: "1px solid var(--border)",
           paddingBottom: 12,
@@ -469,7 +469,7 @@ export default function SettingsPage() {
           style={{
             margin: 0,
             fontSize: 22,
-            fontWeight: 700,
+            fontWeight: 500,
             color: "var(--text-primary)",
           }}
         >

@@ -871,7 +871,7 @@ export function AgentSession({ id }: { id: string }) {
           ←
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-ink text-[15px] truncate" style={{ fontFamily: "var(--font-display)" }}>
+          <p className="text-ink text-[15px] font-medium truncate" style={{ fontFamily: "var(--font-display)" }}>
             {sessionTitle}
           </p>
           <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
