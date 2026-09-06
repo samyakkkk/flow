@@ -23,7 +23,7 @@ export interface RuntimeQuery {
   /** Optional progress callback — surfaced as the Slack "running" status. */
   onStatus?: (status: string) => void;
   /** Machine coding-slot transitions, independent of Slack status support. */
-  onCodingStatus?: (status: "waiting" | "coding") => void;
+  onCodingStatus?: (status: "waiting" | "coding", runUrl?: string) => void;
 }
 
 export interface RuntimeAnswer {

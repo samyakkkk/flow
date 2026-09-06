@@ -75,17 +75,19 @@ export async function respond(args: RespondArgs): Promise<void> {
 
   let queueMessageTs: string | undefined;
   let queueSeen = false;
+  let runUrl: string | undefined;
+  const withRunLink = (text: string) => runUrl ? `${text}\n<${runUrl}|View agent run>` : text;
   let progress = Promise.resolve();
   const queueNotice = (text: string, first = false) => {
     // Serialize delivery so a slow post cannot land after its start/completion update.
     progress = progress.then(async () => {
       if (first) {
-        const posted = await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text }) as { ts?: string };
+        const posted = await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) }) as { ts?: string };
         queueMessageTs = posted?.ts;
       } else if (queueMessageTs && client.chat.update) {
-        await client.chat.update({ channel: args.channelId, ts: queueMessageTs, text });
+        await client.chat.update({ channel: args.channelId, ts: queueMessageTs, text: withRunLink(text) });
       } else {
-        await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text });
+        await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) });
       }
     }).catch(err => logger.warn(`[respond] queue notification failed: ${trimError(err)}`));
   };
@@ -113,13 +115,17 @@ export async function respond(args: RespondArgs): Promise<void> {
       },
       signal: controller.signal,
       onStatus: (s) => void setStatusSafe(s),
-      onCodingStatus: (status) => {
+      onCodingStatus: (status, url) => {
+        runUrl = url ?? runUrl;
         if (controller.signal.aborted) return;
         if (status === "waiting" && !queueSeen) {
           queueSeen = true;
           queueNotice("Another coding task is running. Yours is queued and will start automatically.", true);
         } else if (status === "coding" && queueSeen) {
           queueNotice("Your coding task has started.");
+        } else if (status === "coding" && runUrl) {
+          queueSeen = true;
+          queueNotice("Your coding task has started.", true);
         }
       },
     });
@@ -133,10 +139,10 @@ export async function respond(args: RespondArgs): Promise<void> {
 
     if (args.sayStream) {
       const streamer = args.sayStream({ thread_ts: args.threadTs });
-      await streamer.append({ markdown_text: answer.markdown });
+      await streamer.append({ markdown_text: withRunLink(answer.markdown) });
       await streamer.stop({ blocks: FOOTER_BLOCKS });
     } else {
-      await client.chat.postMessage({ channel: args.channelId, text: answer.markdown, thread_ts: args.threadTs });
+      await client.chat.postMessage({ channel: args.channelId, text: withRunLink(answer.markdown), thread_ts: args.threadTs });
     }
   } catch (err) {
     if (isAbort(err) || controller.signal.aborted) {
@@ -147,8 +153,8 @@ export async function respond(args: RespondArgs): Promise<void> {
     logger.error(`[respond] failed for ${args.channelId}:${args.threadTs}: ${err}`);
     const text = `:warning: I couldn't answer that one. (${trimError(err)})`;
     try {
-      if (args.say) await args.say({ text, thread_ts: args.threadTs });
-      else await client.chat.postMessage({ channel: args.channelId, text, thread_ts: args.threadTs });
+      if (args.say) await args.say({ text: withRunLink(text), thread_ts: args.threadTs });
+      else await client.chat.postMessage({ channel: args.channelId, text: withRunLink(text), thread_ts: args.threadTs });
     } catch (sendErr) {
       logger.error(`[respond] could not deliver error message: ${sendErr}`);
     }

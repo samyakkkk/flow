@@ -145,3 +145,28 @@ test("queue notice is cleared on cancellation and failure; ordinary questions po
     if (mode === "notice-fails") assert.ok(messages.includes("answer"));
   }
 });
+
+test("cloud run links preserve the deployment path and reject invalid public URLs", async () => {
+  const { cloudRunUrl } = await import("../src/slack-agent/runtime.js");
+  assert.equal(cloudRunUrl("job-1", "https://flow.example/team/"), "https://flow.example/team/agents/cloud-job-1");
+  assert.equal(cloudRunUrl("job-1", "https://flow.example"), "https://flow.example/agents/cloud-job-1");
+  assert.equal(cloudRunUrl("job", "javascript:alert(1)"), undefined);
+  assert.equal(cloudRunUrl("job", "https://secret@flow.example"), undefined);
+});
+
+test("coding task start and final answer include the online run link without needing a queue", async () => {
+  const { respond } = await import("../src/slack-agent/respond.js");
+  const messages: string[] = [];
+  const url = "https://flow.example/team/agents/cloud-job";
+  await respond({ channelId: "LINK", threadTs: "1", messageTs: "1", userId: "U", botUserId: "B", surface: "channel", prompt: "edit",
+    logger: { info() {}, warn() {}, error() {} },
+    client: { conversations: { replies: async () => ({}) }, chat: {
+      postMessage: async ({ text }) => { messages.push(text); return { ts: "notice" }; },
+      update: async ({ text }) => { messages.push(text); },
+    } },
+    runtime: { name: "test", async ask(q) { q.onCodingStatus?.("coding", url); return { markdown: "Verified changes" }; } },
+  });
+  assert.equal(messages.length, 3);
+  for (const text of messages) assert.ok(text.includes(`<${url}|View agent run>`));
+  assert.ok(messages.some(text => text.includes("Verified changes")));
+});

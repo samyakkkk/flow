@@ -167,3 +167,9 @@ shared Git configuration. Existing `GIT_AUTHOR_*` / `GIT_COMMITTER_*` environmen
 values are respected; otherwise `FLOW_GIT_AUTHOR_NAME` and `FLOW_GIT_AUTHOR_EMAIL`
 configure the identity, defaulting to `Flow <flow@localhost>`. Configure a real bot
 identity when repository policy requires a recognized author.
+
+Set `FLOW_PUBLIC_URL` in the project's server `.env` to the full public dashboard
+URL (for example, `https://flow.example/team`). Coding start/queue replies and final
+answers include a “View agent run” link into the existing Agents UI. Authentication
+is still required by the dashboard; links contain no credentials. If the public
+URL is absent or invalid, Flow omits links instead of inventing an inaccessible URL.

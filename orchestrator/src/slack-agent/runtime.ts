@@ -21,6 +21,18 @@ interface AnswerPayload {
   gaps?: string[];
 }
 
+/** FLOW_PUBLIC_URL is this project's externally accessible dashboard URL, including its path. */
+export function cloudRunUrl(id: string, base = process.env.FLOW_PUBLIC_URL): string | undefined {
+  if (!base) return;
+  try {
+    const url = new URL(base);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return;
+    url.search = ""; url.hash = "";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/agents/cloud-${encodeURIComponent(id)}`;
+    return url.toString();
+  } catch { return; }
+}
+
 const POLL_MS = 1000;
 
 export class FlowRuntime implements AgentRuntime {
@@ -56,7 +68,7 @@ export class FlowRuntime implements AgentRuntime {
         const status = codingSlotStatus(id);
         if (status && status !== lastStatus) {
           query.onStatus?.(status === "waiting" ? "Waiting for the machine’s coding slot…" : "Working in this task’s workspace…");
-          query.onCodingStatus?.(status);
+          query.onCodingStatus?.(status, cloudRunUrl(id));
           lastStatus = status;
         }
         if (!job) throw new Error(`answer job ${id} disappeared`);
