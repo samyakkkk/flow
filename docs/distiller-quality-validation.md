@@ -30,5 +30,21 @@ unit/integration tests also passed. The checker enforces parseability, observati
 bounds, expected concepts and zero observations for negative controls. These
 coarse assertions and a small fixture set do not establish population-level
 precision. Initial replay claims were manually reviewed for relevance and final
-conclusions. A fresh native-client capture/extraction/retrieval run on the isolated
-cloud deployment is still required before calling the integration fixed.
+conclusions.
+
+On 2026-09-06 at 05:38 UTC, fresh native Cursor and Copilot sessions on the
+isolated cloud deployment each produced two stored observations through the
+normal `maybeDistill` pipeline, manually triggered at the user's request before
+the idle deadline. The originating sessions made no direct memory writes.
+Their observations consolidated into existing memory
+`e54bf0c7-c785-4af9-b792-25835de6dfe2`. A fresh Codex session retrieved that memory
+and its five linked evidence records using only Flow MCP orient, search_knowledge
+and get_entity, without local reads or shell commands. Search returned no 401.
+This validates capture, extraction, storage and retrieval with a manual trigger;
+it does not validate the idle timer in this run or create a new memory ID.
+
+The retrieved consolidated headline still omits the selected executable version
+present in the new observations, and its card reports two contradictions. Thus
+this check demonstrates requirement retention, not lossless consolidation or
+perfect memory quality. Evidence: ignored local log
+`data/codex-final-cursor-copilot-retrieval.jsonl`.
