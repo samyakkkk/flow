@@ -40,7 +40,7 @@ interface IntegrationsData {
 }
 
 const TOOLS: Array<{ id: string; label: string; icon: BrandName }> = [
-  { id: "claude", label: "Claude Code", icon: "anthropic" },
+  { id: "claude", label: "Claude Code & Cowork", icon: "anthropic" },
   { id: "codex", label: "Codex", icon: "openai" },
   { id: "cursor", label: "Cursor", icon: "cursor" },
   { id: "gemini", label: "Gemini CLI", icon: "gemini" },
@@ -338,24 +338,16 @@ export function CodingToolsPanel() {
         <BodyText className="py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</BodyText>
       ) : null}
 
-      {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
-      <div className="mt-auto pt-1 grid grid-cols-1 gap-1.5">
+      {/* Chat-mode connectors are separate from supported coding tools. */}
+      <div className="mt-auto pt-1">
         <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
+          <span className="flex gap-1.5 text-ink/50 mt-0.5">
+            <BrandIcon name="openai" size={13} />
+            <BrandIcon name="anthropic" size={13} />
+          </span>
           <div>
-            <Heading as="h3" variant="card">ChatGPT chats</Heading>
-            <BodyText>
-              Needs a public connector — coming with your team deployment. (The desktop app&apos;s Codex view is already covered above.)
-            </BodyText>
-          </div>
-        </div>
-        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
-          <div>
-            <Heading as="h3" variant="card">claude.ai &amp; Cowork</Heading>
-            <BodyText>
-              Needs a public connector + skill upload — coming with your team deployment. Works on every plan once live.
-            </BodyText>
+            <Heading as="h3" variant="card">ChatGPT &amp; Claude chat</Heading>
+            <BodyText>Chat connectors for desktop chat and web apps are coming soon.</BodyText>
           </div>
         </div>
       </div>
