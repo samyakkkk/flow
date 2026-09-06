@@ -11,6 +11,7 @@
 // locally — two quiet "later" cards, not silence.
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useProject } from "@/lib/useProject";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { BrandIcon, type BrandName } from "./BrandIcon";
@@ -324,7 +325,7 @@ export function CodingToolsPanel() {
         </div>
       </div>
 
-      {remoteSetupOpen && <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/45" onClick={() => setRemoteSetupOpen(false)}>
+      {remoteSetupOpen && createPortal(<div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/45" onClick={() => setRemoteSetupOpen(false)}>
         <div role="dialog" aria-modal="true" aria-label="Connect a workspace on your computer" className="bg-paper rounded-xl p-6 max-w-xl w-[92vw] space-y-4" onClick={e => e.stopPropagation()}>
           <Heading variant="section">Connect a workspace on your computer</Heading>
           <p>In your terminal, open the repository you want to connect and run:</p>
@@ -334,7 +335,7 @@ export function CodingToolsPanel() {
           <a className="text-sm underline block" href="https://github.com/samyakkkk/flow#install" target="_blank" rel="noreferrer">Need the Flow CLI? Installation instructions</a>
           <button className="border rounded px-3 py-2" onClick={() => setRemoteSetupOpen(false)}>Close</button>
         </div>
-      </div>}
+      </div>, document.body)}
       {pickerOpen && <FolderPickerDialog onSelect={openConfirm} onClose={() => setPickerOpen(false)} />}
 
       {/* Confirm: which tools to install into this workspace */}

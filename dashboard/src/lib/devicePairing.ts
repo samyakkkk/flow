@@ -26,7 +26,11 @@ export function approvePairing(ticket: string, user: AuthUser, denied = false) {
   const t = readTicket(ticket), s = store();
   if (!userCanAccess(user, t.project, s)) throw new Error("Project access denied");
   s.pairings = (s.pairings ?? []).filter(p => p.exp > Date.now());
-  if (s.pairings.some(p => p.id === t.id)) throw new Error("Setup request already answered");
+  const existing = s.pairings.find(p => p.id === t.id);
+  if (existing) {
+    if (existing.userId === user.id && Boolean(existing.denied) === denied) return;
+    throw new Error("Setup request already answered");
+  }
   if (s.pairings.length >= 1000) throw new Error("Too many setup requests; try later");
   s.pairings.push({ id: t.id, userId: user.id, exp: t.exp, denied });
   saveAuthStore(s);

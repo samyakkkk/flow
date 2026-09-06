@@ -22,7 +22,8 @@ test("browser pairing: possession, grants, expiry, denial, one-time redemption a
     assert.throws(() => readTicket(ticket + "x"));
     assert.throws(() => approvePairing(ticket, { ...member, id: "outsider" }));
     approvePairing(ticket, member);
-    assert.throws(() => approvePairing(ticket, member), /already/);
+    approvePairing(ticket, member); // Same browser retry is idempotent.
+    assert.equal(loadAuthStore()!.pairings!.length, 1);
     const redeemed = redeemPairing(ticket, secret);
     assert.equal(redeemed.status, "approved");
     assert.deepEqual(loadAuthStore()!.tokens[0].projects, ["engineering"]);
