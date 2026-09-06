@@ -64,10 +64,10 @@ are history; this checkpoint and subsequent entries supersede their statuses.
 | --- | --- | --- | --- |
 | Claude | Passed after authentication | Passed | Local passed |
 | Codex | Passed; selected binary/model matters | Passed | Cloud 0.153.4 passed with one-run hook trust bypass |
-| Gemini | Passed with scoped headless permission | Passed with Policy Engine | Cloud passed; interactive permissions pending |
+| Gemini | Passed with scoped headless permission | Passed with Policy Engine | Cloud passed; interactive permissions also passed |
 | Antigravity desktop | Passed | Passed after per-binding MCP name fix | Cloud passed |
 | VS Code Copilot desktop | Passed | Passed | Cloud capture passed; architecture decision awaiting idle extraction |
-| Cursor desktop | Passed after enabling workspace MCP | Pending native desktop interaction | Local capture observed; full memory round trip pending |
+| Cursor desktop | Passed after enabling workspace MCP | Passed after enabling cloud fixture source and one native-call approval | Cloud capture passed; idle extraction/retrieval pending |
 | OpenCode | Passed | Passed on Mac and Hetzner | Cloud passed with explicit --dir |
 
 Fresh retrieval used Flow search from a new Claude session with local file and
@@ -85,8 +85,8 @@ These are individual measurements. PR #74 was already merged and included.
 Latest regression evidence: 362 orchestrator tests, 27 gateway tests plus gateway
 typecheck, and final 16 materializer tests pass. Whole-orchestrator typecheck has
 pre-existing errors. PR #79 remains draft while remaining coverage is incomplete.
-Live Slack testing needs a designated channel; none has been sent. Mac was
-locked at the latest native UI attempt, blocking Cursor cloud interaction.
+User deferred live Slack testing on 2026-09-06; no Slack messages sent. Mac is
+now unlocked and Cursor cloud native validation has passed.
 
 Pending Copilot origin: ext-copilot-b1c32f3a-81d8-4d8f-8741-421db3dfe67e,
 completed 2026-09-06 02:08:59 UTC. Desktop returned prose only (no tool calls),
@@ -162,3 +162,5 @@ is an extraction outcome, not a capture failure. No direct memory writes used.
 - 2026-09-06 01:36 UTC heartbeat: Confirmed Copilot architecture decision completed in desktop transcript 8f16f408-bf67-47d6-80a3-56f9c0851c27, native orient successful, cloud session persisted idle with extraction watermark unset. Still below the natural idle threshold; check after 01:50 UTC. Refreshed the main checkpoint and PR description to remove superseded pending/pass claims.
 
 - 2026-09-06 02:09 UTC heartbeat: Copilot remote-source decision extraction returned valid [] with no observations (LLM log26), despite complete captured prompt/answer. Started a final prose-only deployment/trust-boundary requirement test, origin ext-copilot-b1c32f3a-81d8-4d8f-8741-421db3dfe67e; no tool calls, 1772-byte cloud capture, idle awaiting natural extraction after 03:00 UTC. PR79 remains open/draft/mergeable; GitHub reports no status checks.
+
+- 2026-09-06 02:36 UTC: User unlocked Mac and asked to finish; explicitly deferred Slack testing. Cursor cloud fixture source was Disabled, enabled only that source, then fresh chat Flow skill repository orientation read skill, discovered native orient, accepted one-time Run approval and returned harness-cloud/cloud-fixture@main (31s including approval). Origin ext-cursor-bf1a5229-ed44-4db6-a243-0f2b059813dd subsequently acknowledged info-option requirement with no tool calls, captured on cloud at 02:33:39 UTC. Archiving chat did not close captured session; natural idle extraction due by03:25 UTC. Superseded disabled-source chat 74b25fea had shell fallback skipped, not counted as native pass. Gemini interactive PTY passed separate Allow once skill and orient prompts, correct cloud identity; no headless allow flags. CLI announced automatic update for next run, so recheck binary version for future tests. Copilot deployment test still under45-minute threshold at02:32 UTC.

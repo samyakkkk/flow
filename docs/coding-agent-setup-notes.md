@@ -12,8 +12,8 @@ This document specifies the future info option; the UI is not implemented yet.
 | --- | --- | --- |
 | Claude Code 2.1.170 | Authenticate Claude and allow the project's Flow MCP tools. Hook capture is separate. | Revoked OAuth prevented startup; reauthentication restored local/cloud skill and native MCP. |
 | Codex CLI | Trust the project to load `.codex/config.toml`; enable/trust hooks separately. Discover deferred MCP tools before shell fallback. | `--ignore-user-config` suppressed project MCP. A sandboxed shell could fail networking while native MCP worked. Check the selected executable/version before changing permissions or models. |
-| Gemini CLI 0.54.0 | Headless runs require explicit skill/tool permission. Pass the scoped [Policy Engine example](examples/gemini-flow-orient-policy.toml) with `--policy`. | Connected MCP and an enabled skill did not mean tools were available to the headless session. The example allows only skill activation and Flow orient. Direct file reads of an ignored personal skill could fail while skill activation worked. Do not disable ignore filtering globally. Interactive prompts still need validation. |
-| Cursor desktop 3.14.27 | Enable the workspace Flow MCP source when shown as Disabled. Observed path: Customize → Configure flow-graph. | Enabling the source produced Connected/eight tools and successful native local orientation. Shell fallback separately requested one-time Run approval; Always Run was unnecessary. Cloud desktop validation remains pending. |
+| Gemini CLI 0.54.0 | Headless runs require explicit skill/tool permission. Pass the scoped [Policy Engine example](examples/gemini-flow-orient-policy.toml) with `--policy`. | Connected MCP and an enabled skill did not mean tools were available to the headless session. The example allows only skill activation and Flow orient. Direct file reads of an ignored personal skill could fail while skill activation worked. Do not disable ignore filtering globally. Interactive validation now passes with separate Allow once approvals for skill activation and native orient; no global allow setting was needed. |
+| Cursor desktop 3.14.27 | Enable the workspace Flow MCP source when shown as Disabled. Observed path: Customize → Configure flow-graph. | Enabling the source produced Connected/eight tools and successful native local orientation. Shell fallback separately requested one-time Run approval; Always Run was unnecessary. Cloud desktop also passes after enabling its separate fixture source and approving native orient once. A fresh chat was used after enablement. |
 | Antigravity desktop | Approve the Flow MCP call when prompted; one-time approval worked. Rerun setup after updating Flow. | Shared server names reused another workspace's connection. Setup now generates `flow-graph-<binding-hash>` per project/repository. A fresh conversation alone did not fix the old connection. Native cloud orientation now passes. Shell fallback required its own command approval. |
 | VS Code Copilot 1.134.0 | Trust the workspace and approve/enable its MCP server as required. Keep hook permissions distinct. | Local/cloud desktop skill and native MCP pass, and cloud capture is verified. A “Claude Code hooks available… Enable” banner appeared; its relationship to Copilot's own hooks is unresolved. Do not recommend that banner as a proven capture fix. |
 | OpenCode 1.17.20 | Authenticate the model provider. Pass `--dir /absolute/project/path` for the tested headless invocation. | Cwd-only execution loaded skill text but started an instance without project MCP/plugin capture. Explicit `--dir` fixed both; Flow server jobs already use it. Standalone setup now installs the shared skill without requiring Codex. |
@@ -62,7 +62,7 @@ zero memories; that alone is not a broken capture integration.
 | OpenCode cloud | Passed: Oak rule, memory `168b655e-38a5-41f8-9c67-23cdff33006e`. |
 | Antigravity cloud | Passed: this info-option requirement, memory `e54bf0c7-c785-4af9-b792-25835de6dfe2`. |
 | Copilot cloud | Capture passed; earlier extraction retained nothing. Follow-up decision test pending. |
-| Cursor | Local native MCP and capture observed; full memory round trip and cloud desktop validation pending. |
+| Cursor | Local/cloud skill and native MCP passed; cloud requirement captured, idle extraction/retrieval pending. |
 
 These are representative paths, not every agent/environment combination.
 Fresh retrieval tests used Claude with local file/command tools disabled and
@@ -87,6 +87,8 @@ must display unavailable, not an empty store; orient now distinguishes these.
   Explicit remote flags are required to change endpoints. Never silently pick
   another project when identity differs.
 
-Before publishing final help text, finish Cursor cloud validation, remaining
-hook permission and memory tests, and Gemini interactive prompts. Minimum
+Archiving the completed Cursor chat did not emit sessionEnd in this test;
+its captured turn remained idle and relies on the normal idle sweep.
+
+Before publishing final help text, finish the remaining memory tests. Minimum
 Codex compatibility remains unestablished. Evidence and updates: ../process.md.
