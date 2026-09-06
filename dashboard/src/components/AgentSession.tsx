@@ -299,6 +299,14 @@ function reduceEvents(events: SessionEvent[]): {
   };
 }
 
+function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEvent[] {
+  if (incoming.length === 0) return prev;
+  const seen = new Set(prev.map((e) => e.seq));
+  const fresh = incoming.filter((e) => !seen.has(e.seq));
+  if (fresh.length === 0) return prev;
+  return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+}
+
 // ---------------------------------------------------------------------------
 
 function statusPill(status: string): { kind: "live" | "ok" | "warn" | "idle"; label: string } {
@@ -311,6 +319,12 @@ function statusPill(status: string): { kind: "live" | "ok" | "warn" | "idle"; la
 
 const AGENT_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
 
+function agentName(backend?: string): string {
+  if (!backend) return "Agent";
+  const key = backend.startsWith("ext:") ? backend.slice(4) : backend;
+  return AGENT_NAMES[key] ?? backend;
+}
+
 export function AgentSession({ id }: { id: string }) {
   const router = useRouter();
   const { prefix } = useProject();
@@ -321,25 +335,27 @@ export function AgentSession({ id }: { id: string }) {
     repo?: string;
     title?: string;
     cwd?: string;
-	    separateCopy?: boolean;
-	    worktreePath?: string | null;
-	    worktreeGithub?: boolean;
-	    worktreeBase?: string;
-	  } | null>(null);
-	  // Exit banner state (separate-copy sessions). PR result/conflict/server
-	  // errors render inline; dismiss hides it for this pageview only.
-	  const [exitDismissed, setExitDismissed] = useState(false);
-	  const [exitBusy, setExitBusy] = useState(false);
-	  const [exitError, setExitError] = useState("");
-	  const [exitNotice, setExitNotice] = useState("");
-	  const [exitTargetBranch, setExitTargetBranch] = useState("");
-	  const [exitPrUrl, setExitPrUrl] = useState("");
-	  const [exitConflict, setExitConflict] = useState<{ targetBranch: string; files: string[] } | null>(null);
-	  const [openHint, setOpenHint] = useState("");
+    live?: boolean;
+    separateCopy?: boolean;
+    worktreePath?: string | null;
+    worktreeGithub?: boolean;
+    worktreeBase?: string;
+  } | null>(null);
+  // Exit banner state (separate-copy sessions). PR result/conflict/server
+  // errors render inline; dismiss hides it for this pageview only.
+  const [exitDismissed, setExitDismissed] = useState(false);
+  const [exitBusy, setExitBusy] = useState(false);
+  const [exitError, setExitError] = useState("");
+  const [exitNotice, setExitNotice] = useState("");
+  const [exitTargetBranch, setExitTargetBranch] = useState("");
+  const [exitPrUrl, setExitPrUrl] = useState("");
+  const [exitConflict, setExitConflict] = useState<{ targetBranch: string; files: string[] } | null>(null);
+  const [openHint, setOpenHint] = useState("");
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [sendError, setSendError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   // Optimistically-shown messages: rendered the instant you hit send, before
@@ -361,30 +377,38 @@ export function AgentSession({ id }: { id: string }) {
 
   // Metadata once
   useEffect(() => {
-    fetch(prefix(`/api/agents/sessions/${id}`))
+    const controller = new AbortController();
+    fetch(prefix(`/api/agents/sessions/${id}`), { signal: controller.signal })
       .then((r) => {
         if (r.status === 401) {
           window.location.href = `/login?from=${encodeURIComponent(`/agents/${id}`)}`;
           return null;
         }
+        if (!r.ok) throw new Error(r.status === 404 ? "This session could not be found." : "Could not load this session. Reload to try again.");
         return r.json();
       })
-	      .then((d) => {
-	        if (!d) return;
-	        setMeta({
-	          backend: d.backend,
-	          repo: d.repo,
-	          title: d.title,
-	          cwd: d.cwd,
-	          separateCopy: d.separateCopy,
-	          worktreePath: d.worktreePath ?? null,
-	          worktreeGithub: Boolean(d.worktreeGithub),
-	          worktreeBase: String(d.worktreeBase ?? "main"),
-	        });
-	        setExitTargetBranch((prev) => prev || String(d.worktreeBase ?? "main"));
-	      })
-      .catch(() => {});
-  }, [id]);
+      .then((d) => {
+        if (!d) return;
+        setMeta({
+          backend: d.backend,
+          repo: d.repo,
+          title: d.title,
+          cwd: d.cwd,
+          live: typeof d.live === "boolean" ? d.live : undefined,
+          separateCopy: d.separateCopy,
+          worktreePath: d.worktreePath ?? null,
+          worktreeGithub: Boolean(d.worktreeGithub),
+          worktreeBase: String(d.worktreeBase ?? "main"),
+        });
+        if (Array.isArray(d.events)) setEvents((prev) => mergeEvents(prev, d.events as SessionEvent[]));
+        if (d.live === false) setArchived(true);
+        setExitTargetBranch((prev) => prev || String(d.worktreeBase ?? "main"));
+      })
+      .catch((err: Error) => {
+        if (!controller.signal.aborted) setLoadError(err.message);
+      });
+    return () => controller.abort();
+  }, [id, prefix]);
 
   // SSE stream (replay + live). Events are buffered and flushed at most every
   // ~90ms — replaying hundreds of chunk events one render at a time froze the
@@ -395,11 +419,7 @@ export function AgentSession({ id }: { id: string }) {
     const flush = () => {
       if (buffer.length === 0) return;
       const batch = buffer.splice(0, buffer.length);
-      setEvents((prev) => {
-        const lastSeq = prev.length ? prev[prev.length - 1].seq : 0;
-        const fresh = batch.filter((e) => e.seq > lastSeq);
-        return fresh.length ? [...prev, ...fresh] : prev;
-      });
+      setEvents((prev) => mergeEvents(prev, batch));
     };
     const iv = setInterval(flush, 90);
     es.onopen = () => setConnected(true);
@@ -424,9 +444,10 @@ export function AgentSession({ id }: { id: string }) {
       clearInterval(iv);
       es.close();
     };
-  }, [id]);
+  }, [id, prefix]);
 
   const view = useMemo(() => reduceEvents(events), [events]);
+  const replayOnly = archived || meta?.live === false;
 
   // OpenCode only advertises custom commands + skills over ACP; its built-in
   // slash commands live in each of its UIs. Of those, /compact is the only one
@@ -505,6 +526,7 @@ export function AgentSession({ id }: { id: string }) {
   // meaningful after the agent commits — whereas the session diff goes empty
   // on a clean working tree, which would otherwise hide the whole panel.
   useEffect(() => {
+    if (!meta || replayOnly) return;
     let cancelled = false;
     fetch(prefix(`/api/agents/sessions/${id}/diff?scope=base`))
       .then((r) => (r.ok ? r.json() : null))
@@ -521,13 +543,13 @@ export function AgentSession({ id }: { id: string }) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, meta, prefix, replayOnly]);
 
   // Poll the session diff for the selected scope: promptly while the agent
   // works, lazily once idle, never when archived. Cheap for the small diffs
   // these sessions produce.
   useEffect(() => {
-    if (archived) return;
+    if (!meta || replayOnly) return;
     let cancelled = false;
     const load = () => {
       fetch(prefix(`/api/agents/sessions/${id}/diff?scope=${diffScope}`))
@@ -544,7 +566,7 @@ export function AgentSession({ id }: { id: string }) {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [id, archived, view.status, diffScope]);
+  }, [id, meta, prefix, replayOnly, view.status, diffScope]);
 
   const act = useCallback(
     async (action: string, body: unknown = {}) => {
@@ -732,7 +754,7 @@ export function AgentSession({ id }: { id: string }) {
   // The banner appears once a separate-copy session has settled (idle), so the
   // user is prompted to bring the work home rather than leaving it stranded.
   const showExitBanner =
-    !archived && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
+    !replayOnly && Boolean(meta?.separateCopy) && Boolean(meta?.worktreePath) && view.status === "idle" && !exitDismissed;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0); // dragenter/leave fire per child — count to know when we truly left
@@ -740,11 +762,11 @@ export function AgentSession({ id }: { id: string }) {
   // One path for every way a file arrives: picker, paste, or drop. Any file
   // type is accepted — the agent decides what to do with it.
   const addFiles = useCallback(async (files: File[]) => {
-    if (archived || files.length === 0) return;
+    if (replayOnly || files.length === 0) return;
     const read = await Promise.all(files.map((f) => readFileAsAttachment(f)));
     const valid = read.filter((a) => a.data.length > 0);
     if (valid.length > 0) setAttachments((prev) => [...prev, ...valid]);
-  }, [archived]);
+  }, [replayOnly]);
 
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     // Pasted files (screenshots, copied files) arrive as clipboard items with a
@@ -767,13 +789,13 @@ export function AgentSession({ id }: { id: string }) {
   // Drag-and-drop onto the composer. Track a depth counter so the highlight
   // doesn't flicker as the cursor moves between the textarea and its siblings.
   function handleDragEnter(e: React.DragEvent) {
-    if (archived || !Array.from(e.dataTransfer.types).includes("Files")) return;
+    if (replayOnly || !Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
     dragDepth.current += 1;
     setDragOver(true);
   }
   function handleDragOver(e: React.DragEvent) {
-    if (archived || !Array.from(e.dataTransfer.types).includes("Files")) return;
+    if (replayOnly || !Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
   }
@@ -809,8 +831,12 @@ export function AgentSession({ id }: { id: string }) {
     document.addEventListener("mouseup", onMouseUp);
   }, [brainPct]);
 
-  const pill = archived ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
-  const running = !archived && (view.status === "running" || view.status === "starting");
+  const pill = replayOnly ? { kind: "idle" as const, label: "Archived" } : statusPill(view.status);
+  const running = !replayOnly && (view.status === "running" || view.status === "starting");
+  const emptyTranscriptText = loadError || (replayOnly
+    ? "No chat transcript was captured for this archived session."
+    : "Waking the agent...");
+  const sessionTitle = meta?.title?.trim() || (meta?.backend ? `${meta.backend.toUpperCase()} session` : "Session");
 
   // Live "what's the agent doing right now" label, derived from the latest
   // activity — so you always know it's alive and whether it's thinking, running
@@ -845,18 +871,18 @@ export function AgentSession({ id }: { id: string }) {
           ←
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-ink text-[15px] truncate" style={{ fontFamily: "var(--font-display)" }}>
-            {meta?.title ?? "Session"}
+          <p className="text-ink text-[15px] font-medium truncate" style={{ fontFamily: "var(--font-display)" }}>
+            {sessionTitle}
           </p>
           <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted">
-            {AGENT_NAMES[meta?.backend ?? ""] ?? meta?.backend} · {meta?.repo}
+            {agentName(meta?.backend)} · {meta?.repo}
             {/* Runs on an isolated copy of the branch, not the user's checkout. */}
             {meta?.separateCopy && (
               <span className="ml-1.5 rounded border border-line bg-cream px-1.5 py-0.5 normal-case tracking-normal text-text-muted">
                 separate copy
               </span>
             )}
-            {!connected && !archived && " · reconnecting…"}
+            {!connected && !replayOnly && " · reconnecting…"}
           </p>
           {/* Where the agent is working — the cloned repo folder — with quick
               openers so you can inspect the changes it's making. */}
@@ -898,7 +924,7 @@ export function AgentSession({ id }: { id: string }) {
           modes={view.modes}
           onChange={(configId, value) => act("config", { configId, value })}
           onModeChange={(modeId) => act("mode", { modeId })}
-          disabled={archived || busy}
+          disabled={replayOnly || busy}
         />
         <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
         {running && (
@@ -921,7 +947,7 @@ export function AgentSession({ id }: { id: string }) {
           >
            <div ref={contentRef} className="flex flex-col gap-3">
             {view.blocks.length === 0 && (
-              <p className="text-text-muted text-[13px]">Waking the agent…</p>
+              <p className="text-text-muted text-[13px]">{emptyTranscriptText}</p>
             )}
             {view.blocks.map((b) => {
               switch (b.type) {
@@ -1266,7 +1292,7 @@ export function AgentSession({ id }: { id: string }) {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={archived}
+                disabled={replayOnly}
                 className="flex-shrink-0 h-9 w-9 flex items-center justify-center rounded-lg border border-line hover:bg-paper transition text-text-muted hover:text-ink disabled:opacity-50"
                 title="Attach files"
               >
@@ -1291,7 +1317,7 @@ export function AgentSession({ id }: { id: string }) {
                 fetchFiles={fetchFiles}
                 commands={commands}
                 placeholder={
-                  archived
+                  replayOnly
                     ? "This session ended before the last restart — start a new one to continue."
                     : running
                     ? "Steer the agent — this interrupts and redirects it… (@ to tag a file, / for commands, drop or paste files)"
@@ -1299,10 +1325,10 @@ export function AgentSession({ id }: { id: string }) {
                 }
                 rows={1}
                 autoGrow
-                disabled={archived}
+                disabled={replayOnly}
                 className="block w-full min-h-9 rounded-lg border border-line bg-paper px-3 py-2 text-[13.5px] leading-5 text-ink placeholder:text-text-muted/60 focus:outline-none resize-none disabled:opacity-50"
               />
-              <Button onClick={send} disabled={archived || (!input.trim() && attachments.length === 0) || busy}>
+              <Button onClick={send} disabled={replayOnly || (!input.trim() && attachments.length === 0) || busy}>
                 {running ? "Steer" : "Send"}
               </Button>
             </div>

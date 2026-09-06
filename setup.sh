@@ -167,6 +167,8 @@ if [[ "$NODE_MAJOR" -lt 22 ]]; then
   fail "Node.js v22+ required (found $(node --version)). Upgrade from https://nodejs.org"
 fi
 ok "$(node --version)"
+INSTALL_NODE="$(node -p 'process.execPath')"
+INSTALL_NODE_DIR="$(dirname "$INSTALL_NODE")"
 
 # ── 3. npm install ───────────────────────────────────────────────────────────
 # --include=dev ALWAYS: `flow up` runs services through tsx, a devDependency.
@@ -333,7 +335,10 @@ WRAPPER="$BIN_DIR/$ALIAS_NAME"
   if [[ ${#WRAPPER_ENV[@]} -gt 0 ]]; then
     for env_line in "${WRAPPER_ENV[@]}"; do echo "$env_line"; done
   fi
-  echo "exec node \"$FLOW_BIN\" \"\$@\""
+  # Keep native dependencies and env-node child shims on the installation ABI,
+  # even when a later terminal (or desktop app) has a different Node on PATH.
+  printf 'export PATH=%q:"$PATH"\n' "$INSTALL_NODE_DIR"
+  printf 'exec %q %q "$@"\n' "$INSTALL_NODE" "$FLOW_BIN"
 } > "$WRAPPER"
 chmod +x "$WRAPPER"
 ok "Registered '$ALIAS_NAME' → $FLOW_BIN"

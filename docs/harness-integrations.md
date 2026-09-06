@@ -229,6 +229,10 @@ Headline findings:
   schema) in BOTH `.agents/` and `~/.gemini/config/` was never executed while agent sessions
   ran fine — hooks appear version/flag-gated. MCP serve works (live orient). Capture fallback:
   brain-dir ingestion.
+- 2026-09-06: Fixed lifecycle handler format: `PreInvocation`, `PostInvocation`
+  and `Stop` use flat handlers; only tool events use matcher/groups. Real
+  Antigravity cloud prompt/answer capture now passes. The older gap below
+  must not be taken as evidence that current hooks are unsupported.
 - Hooks: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`. Payload:
   `conversationId`, `workspacePaths`, **`transcriptPath`**
   (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`),
@@ -460,3 +464,30 @@ deployments).
 - Competitive: GitHub Copilot "chronicle" already cloud-syncs sessions and answers questions
   over them. Flow's moat: cross-tool coverage + distilled durable memory + self-hosted brain,
   not raw recall.
+
+
+## Headless validation notes (2026-09-06)
+
+In Gemini CLI 0.54.0, headless runs may omit tools that require interactive
+approval even when `gemini mcp list` says connected and `gemini skills list`
+says enabled. The following limited permission test activates the Flow skill
+and calls native MCP against both local and remote project bindings:
+
+```sh
+gemini --skip-trust --policy /path/to/flow/docs/examples/gemini-flow-orient-policy.toml \
+  --output-format stream-json \
+  -p 'Activate the Flow skill, then call Flow orient. Do not edit files or delegate.'
+```
+
+`--skip-trust` applies only to the known test fixture for this invocation.
+The supplied Policy Engine file permits skill activation and only Flow orient
+among MCP tools; this replacement for deprecated `--allowed-tools` passed a
+real cloud session. Interactive users can approve tools normally. Do not globally disable file
+ignore filtering to work around a direct read of a personally installed skill:
+`activate_skill` loads the ignored skill correctly once permitted.
+
+Codex may defer MCP tools. Generated instructions now require discovery before
+falling back to the shell CLI, whose network access may be sandboxed. Native
+MCP orientation has passed against the HTTPS test deployment with an ordinary
+orientation prompt. PATH CLI 0.136.0 required an explicitly compatible gpt-5.5 model
+in this test environment; the user's global model was unchanged.

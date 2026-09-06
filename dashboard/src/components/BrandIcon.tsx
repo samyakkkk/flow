@@ -1,5 +1,5 @@
 "use client";
-// Inline single-color brand marks. Each renders a 24x24 viewBox SVG with
+// Brand marks (mostly inline single-color SVGs). Each renders a 24x24 viewBox SVG with
 // fill="currentColor" so it inherits the surrounding text color — keeping the
 // monochrome editorial look (no brand colors). Path data for github, linear,
 // slack, anthropic, openai and opencode is copied verbatim from Simple Icons
@@ -126,23 +126,20 @@ export function GeminiIcon(props: IconProps) {
   );
 }
 
-// Cursor's mark is a dimensional cube; this is a clean monochrome prism that
-// reads as the logo at small sizes. TODO: replace with official mark.
-export function CursorIcon(props: IconProps) {
+// Official Cursor CUBE_2D_LIGHT.svg supplied by the user.
+export function CursorIcon({ size = 20, className }: IconProps) {
   return (
-    <Svg {...props}>
-      <path d="M12 1 22.5 7v10L12 23 1.5 17V7L12 1zm0 2.3L4.4 7.65 12 12l7.6-4.35L12 3.3zM3.5 9.05v6.8l7.5 4.3v-6.8l-7.5-4.3zm17 0-7.5 4.3v6.8l7.5-4.3v-6.8z" />
-    </Svg>
+    <svg width={size} height={size} viewBox="0 0 466.73 532.09" fill="currentColor" className={className} aria-hidden>
+      <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+    </svg>
   );
 }
 
-// Antigravity has no Simple Icons entry; an upward mark with an orbit line
-// that reads as "anti-gravity". TODO: replace with official mark.
+// Silhouette from the user-supplied antigravity-color.svg; inherits UI color.
 export function AntigravityIcon(props: IconProps) {
   return (
     <Svg {...props}>
-      <path d="M12 2.5 18 13h-4v8h-4v-8H6L12 2.5z" />
-      <path d="M3 17.5c2 2.2 5.3 3.1 9 3.1s7-1 9-3.1v2.3c-2 2-5.3 3-9 3s-7-1-9-3v-2.3z" opacity=".5" />
+      <path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" />
     </Svg>
   );
 }

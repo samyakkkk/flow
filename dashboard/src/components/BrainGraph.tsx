@@ -28,6 +28,7 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_NODE_COLOR = "rgb(162, 163, 148)"; // --text-muted adapted
+const GRAPH_PAGE_LIMIT = 500;
 
 function getTypeColor(type: string): string {
   return TYPE_COLORS[type] ?? DEFAULT_NODE_COLOR;
@@ -71,6 +72,21 @@ interface GraphData {
   nodes: CyNode[];
   edges: CyEdge[];
   total?: number;
+  nodeTotal?: number;
+  edgeTotal?: number;
+  partial?: boolean;
+  error?: string;
+}
+
+interface GraphPage extends GraphData {
+  page?: {
+    nextOffset: number | null;
+  };
+}
+
+interface GraphStats {
+  nodeCount: number;
+  edgeCount: number;
   error?: string;
 }
 
@@ -145,59 +161,147 @@ interface BrainGraphProps {
   isIndexing?: boolean;
   // Callback when a node is clicked in the graph
   onNodeClick?: (nodeName: string) => void;
+  // Emits total graph counts as soon as the paged overview reports them.
+  onStats?: (stats: GraphStats) => void;
 }
 
 export function BrainGraph({
   citedNodeIds,
   pollInterval = 0,
   height = 420,
-  fillHeight = false,
   mode = "overview",
   externalData,
   isIndexing = false,
   onNodeClick,
+  onStats,
 }: BrainGraphProps) {
   const { prefix } = useProject();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<FalkorDBCanvas | null>(null);
+  const activeFetchRef = useRef<AbortController | null>(null);
+  const hasGraphDataRef = useRef(false);
   // Display id (string) → stable numeric id: @falkordb/canvas addresses nodes
   // by number, and keeping numbers stable across poll refreshes lets
   // setGraphData preserve simulation positions instead of re-randomizing.
   const numericIdsRef = useRef<Map<string, number>>(new Map());
   const dataSignatureRef = useRef<string>("");
+  const topologySignatureRef = useRef<string>("");
   const citedSetRef = useRef<Set<string>>(new Set());
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(mode === "overview");
   const [selectedNode, setSelectedNode] = useState<NodeCardData | null>(null);
 
   const fetchOverview = useCallback(async () => {
-    try {
-      const res = await fetch(prefix("/api/graph/overview"));
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      const data = (await res.json()) as GraphData;
+    activeFetchRef.current?.abort();
+    const controller = new AbortController();
+    activeFetchRef.current = controller;
+
+    if (!hasGraphDataRef.current) setLoading(true);
+
+    const fetchPart = async (part: "summary" | "nodes" | "edges", offset = 0): Promise<GraphPage> => {
+      const qs = new URLSearchParams({ part, limit: String(GRAPH_PAGE_LIMIT) });
+      if (part !== "summary") qs.set("offset", String(offset));
+      const res = await fetch(prefix(`/api/graph/overview?${qs.toString()}`), {
+        signal: controller.signal,
+      });
+      const data = (await res.json()) as GraphPage;
+      if (!res.ok) throw new Error(data.error ?? `status ${res.status}`);
+      return data;
+    };
+
+    const nodesById = new Map<string, CyNode>();
+    const edgesByKey = new Map<string, CyEdge>();
+    let nodeTotal = 0;
+    let edgeTotal = 0;
+
+    const publish = (partial: boolean) => {
+      const nodes = Array.from(nodesById.values());
+      const edges = Array.from(edgesByKey.values());
+      const data: GraphData = { nodes, edges, total: nodeTotal || nodes.length, nodeTotal, edgeTotal, partial };
+      hasGraphDataRef.current = true;
       setGraphData(data);
+      onStats?.({ nodeCount: nodeTotal || nodes.length, edgeCount: edgeTotal || edges.length });
+    };
+
+    const merge = (page: GraphData) => {
+      for (const n of page.nodes ?? []) nodesById.set(n.id, n);
+      for (const e of page.edges ?? []) edgesByKey.set(`${e.source}->${e.label}->${e.target}`, e);
+    };
+
+    try {
+      const summary = await fetchPart("summary");
+      nodeTotal = summary.nodeTotal ?? summary.total ?? 0;
+      edgeTotal = summary.edgeTotal ?? 0;
+      onStats?.({ nodeCount: nodeTotal, edgeCount: edgeTotal });
+
+      if (nodeTotal === 0) {
+        publish(false);
+        return;
+      }
+
+      let nodeOffset = 0;
+      for (;;) {
+        const page = await fetchPart("nodes", nodeOffset);
+        merge(page);
+        publish(true);
+        if (page.page?.nextOffset === null || page.page?.nextOffset === undefined) break;
+        nodeOffset = page.page.nextOffset;
+      }
+
+      let edgeOffset = 0;
+      for (;;) {
+        const page = await fetchPart("edges", edgeOffset);
+        merge(page);
+        if (page.page?.nextOffset === null || page.page?.nextOffset === undefined) break;
+        publish(true);
+        edgeOffset = page.page.nextOffset;
+      }
+
+      publish(false);
     } catch {
+      if (controller.signal.aborted) return;
+      hasGraphDataRef.current = true;
       setGraphData({ nodes: [], edges: [], error: "unavailable" });
+      onStats?.({ nodeCount: 0, edgeCount: 0, error: "unavailable" });
     } finally {
-      setLoading(false);
+      if (activeFetchRef.current === controller) {
+        activeFetchRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [prefix]);
+  }, [onStats, prefix]);
 
   // Load data
   useEffect(() => {
     if (mode === "neighborhood" && externalData !== undefined) {
-      setGraphData(externalData);
-      setLoading(false);
-      return;
+      activeFetchRef.current?.abort();
+      const timer = setTimeout(() => {
+        hasGraphDataRef.current = Boolean(externalData);
+        setGraphData(externalData);
+        setLoading(false);
+      }, 0);
+      return () => clearTimeout(timer);
     }
     if (mode === "overview") {
-      setLoading(true);
-      fetchOverview();
+      const timer = setTimeout(() => {
+        void fetchOverview();
+      }, 0);
       if (pollInterval > 0) {
         const iv = setInterval(fetchOverview, pollInterval);
-        return () => clearInterval(iv);
+        return () => {
+          clearTimeout(timer);
+          clearInterval(iv);
+          activeFetchRef.current?.abort();
+        };
       }
+      return () => {
+        clearTimeout(timer);
+        activeFetchRef.current?.abort();
+      };
     }
+    return () => {
+      activeFetchRef.current?.abort();
+    };
   }, [mode, externalData, pollInterval, fetchOverview]);
 
   // Build/update the graph via @falkordb/canvas — the same renderer FalkorDB's
@@ -206,7 +310,9 @@ export function BrainGraph({
   // charge -400, collision = node size + padding, weak centering, and
   // level-of-detail zoom (labels appear as you zoom in — semantic zoom).
   useEffect(() => {
-    if (!graphData || !containerRef.current) return;
+    // Node-only pages would settle and pin nodes before their edges arrive.
+    // Keep pagination progress separate from the complete graph's layout.
+    if (!graphData || graphData.partial || !containerRef.current) return;
 
     const nodes = graphData.nodes ?? [];
     const edges = graphData.edges ?? [];
@@ -219,10 +325,12 @@ export function BrainGraph({
       canvasRef.current?.remove();
       canvasRef.current = null;
       dataSignatureRef.current = "";
+      topologySignatureRef.current = "";
       return;
     }
 
     let cancelled = false;
+    let fitTimer: ReturnType<typeof setTimeout> | undefined;
     import("@falkordb/canvas").then(() => {
       if (cancelled || !containerRef.current) return;
 
@@ -315,14 +423,20 @@ export function BrainGraph({
       // setData re-runs layout + zoomToFit; setGraphData merges and preserves
       // positions. Poll refreshes with identical data are skipped entirely so
       // the constellation never jitters while we watch indexing progress.
-      const signature = `${nodes.map((n) => n.id).sort().join("|")}#${edges.length}#${citedNodeIds?.join(",") ?? ""}`;
+      const topologySignature = JSON.stringify([
+        nodes.map((n) => n.id).sort(),
+        edges.map((e) => JSON.stringify([e.source, e.target, e.label])).sort(),
+      ]);
+      const signature = JSON.stringify([topologySignature, citedNodeIds ?? []]);
       const changed = signature !== dataSignatureRef.current;
-      if (firstPaint) {
+      const topologyChanged = topologySignature !== topologySignatureRef.current;
+      if (firstPaint || topologyChanged) {
         canvas.setData(data);
       } else if (changed) {
         canvas.setGraphData(data);
       }
       dataSignatureRef.current = signature;
+      topologySignatureRef.current = topologySignature;
 
       // Fit the view to the connected constellation: isolated nodes drift to
       // the edges under charge and would otherwise shrink the main cluster to
@@ -335,7 +449,7 @@ export function BrainGraph({
           connected.add(l.target);
         }
         if (connected.size > 0) {
-          setTimeout(() => {
+          fitTimer = setTimeout(() => {
             if (canvasRef.current === canvas) {
               canvas.zoomToFit(1, (n: FalkorGraphNode) => connected.has(n.id as number));
             }
@@ -346,6 +460,7 @@ export function BrainGraph({
 
     return () => {
       cancelled = true;
+      clearTimeout(fitTimer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData, citedNodeIds?.join(",")]);
@@ -362,7 +477,14 @@ export function BrainGraph({
   const uniqueTypes = Array.from(new Set((graphData?.nodes ?? []).map((n) => n.data.type))).filter(Boolean);
   const nodeCount = graphData?.nodes?.length ?? 0;
   const edgeCount = graphData?.edges?.length ?? 0;
+  const nodeTotal = graphData?.nodeTotal ?? graphData?.total ?? nodeCount;
+  const edgeTotal = graphData?.edgeTotal ?? edgeCount;
   const isEmpty = !loading && nodeCount === 0;
+  const graphUnavailable = !loading && graphData?.error;
+  const countText =
+    graphData?.partial && nodeTotal > nodeCount
+      ? `${nodeCount}/${nodeTotal} nodes · ${edgeCount}/${edgeTotal} edges`
+      : `${nodeTotal || nodeCount} nodes · ${edgeTotal || edgeCount} edges`;
 
   const headerHeight = 36;
   const canvasHeight = height - headerHeight;
@@ -375,12 +497,12 @@ export function BrainGraph({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/8 flex-shrink-0" style={{ height: `${headerHeight}px` }}>
         <Kicker>The brain</Kicker>
-        {nodeCount > 0 && (
+        {(nodeCount > 0 || nodeTotal > 0) && (
           <span
             style={{ fontFamily: "var(--font-mono)" }}
             className="text-[10px] uppercase tracking-wider text-white/40"
           >
-            {nodeCount} nodes · {edgeCount} edges
+            {countText}
           </span>
         )}
       </div>
@@ -426,9 +548,11 @@ export function BrainGraph({
               </div>
               <p
                 style={{ fontFamily: "var(--font-display)" }}
-                className="text-white/50 text-sm mb-1"
+                className="text-white/50 text-sm font-medium mb-1"
               >
-                {mode === "neighborhood"
+                {graphUnavailable
+                  ? "Brain gateway unavailable."
+                  : mode === "neighborhood"
                   ? "No graph context for these citations."
                   : isIndexing
                   ? "The brain is being built…"
@@ -438,7 +562,9 @@ export function BrainGraph({
                 style={{ fontFamily: "var(--font-mono)" }}
                 className="text-[10px] uppercase tracking-wider text-white/25"
               >
-                {mode === "overview"
+                {graphUnavailable
+                  ? "Graph data could not be loaded."
+                  : mode === "overview"
                   ? isIndexing
                     ? "Nodes will appear as Flow reads your sources."
                     : "Connect a source to start building."

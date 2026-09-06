@@ -2,11 +2,20 @@
 // GET: connected repos + detected tools; POST: connect a folder; DELETE: remove.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionToken } from "@/lib/auth";
+import { IS_LOCAL } from "@/lib/config";
+import { currentUser } from "@/lib/auth";
+import { requireProject } from "@/lib/projectContext";
+import { loadAuthStore } from "@/lib/authStore";
 import { orcFetch } from "@/lib/orchestrator";
 
 export async function GET(): Promise<NextResponse> {
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!IS_LOCAL) {
+    const user = await currentUser(), project = await requireProject();
+    const workspaces = (loadAuthStore()?.tokens ?? []).filter(t => t.userId === user?.id && t.projects?.includes(project.name)).flatMap(t => (t.workspaces ?? (t.workspace?.configuredAt ? [t.workspace] : [])).map((w, index) => ({ ...w, id: `${t.id}:${w.id ?? index}` })));
+    return NextResponse.json({ project: project.name, mode: "prod", account: user?.email, repos: [], detected: [], all: [], version: 1, workspaces });
+  }
   try {
     const res = await orcFetch("/v1/integrations/status", token);
     const data = await res.json();
@@ -20,6 +29,7 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  if (!IS_LOCAL) return NextResponse.json({ error: "Run Flow setup on your computer" }, { status: 403 });
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   let body: { path?: string; harnesses?: string[]; share?: boolean };
@@ -44,6 +54,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(req: NextRequest): Promise<NextResponse> {
+  if (!IS_LOCAL) return NextResponse.json({ error: "Remove local integrations from your computer; revoke credentials in Access" }, { status: 403 });
   const token = await getSessionToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   let body: { path?: string };

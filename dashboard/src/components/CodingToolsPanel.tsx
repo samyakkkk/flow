@@ -7,13 +7,15 @@
 // a workspace is the action that makes those tools Flow-powered (installs
 // hooks + MCP + skills; sessions then teach the brain). Two equivalent ways
 // in, as an explicit either/or: native folder chooser, or `flow setup
-// <project>` in a terminal. ChatGPT chats and claude.ai/Cowork can't work
-// locally — two quiet "later" cards, not silence.
+// <project>` in a terminal. ChatGPT and Claude chat connectors have a
+// shared coming-soon card; Claude Code and Cowork share the supported label.
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useProject } from "@/lib/useProject";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { BrandIcon, type BrandName } from "./BrandIcon";
+import { BodyText, Heading } from "./ui";
 
 interface ConnectedRepo {
   path: string;
@@ -28,6 +30,9 @@ interface ConnectedRepo {
 
 interface IntegrationsData {
   project: string;
+  mode?: "prod" | "local";
+  account?: string;
+  workspaces?: { id: string; repo: string; machine: string; harnesses: string[]; configuredAt: string }[];
   repos: ConnectedRepo[];
   detected: string[];
   all: string[];
@@ -35,12 +40,13 @@ interface IntegrationsData {
 }
 
 const TOOLS: Array<{ id: string; label: string; icon: BrandName }> = [
-  { id: "claude", label: "Claude Code", icon: "anthropic" },
+  { id: "claude", label: "Claude Code & Cowork", icon: "anthropic" },
   { id: "codex", label: "Codex", icon: "openai" },
   { id: "cursor", label: "Cursor", icon: "cursor" },
   { id: "gemini", label: "Gemini CLI", icon: "gemini" },
   { id: "opencode", label: "opencode", icon: "opencode" },
   { id: "antigravity", label: "Antigravity", icon: "antigravity" },
+  { id: "copilot", label: "VS Code Copilot", icon: "github" },
 ];
 const toolMeta = (id: string) => TOOLS.find((t) => t.id === id);
 
@@ -53,11 +59,34 @@ function ago(ts: number | null): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+function SetupInstructions({ command }: { command: string }) {
+  const [feedback, setFeedback] = useState("");
+  const install = "curl -fsSL https://www.flow.engineer/install.sh | bash";
+  async function copy(value: string) {
+    try { await navigator.clipboard.writeText(value); setFeedback("Copied to clipboard."); }
+    catch { setFeedback("Select and copy the command below."); }
+  }
+  return <div className="space-y-4">
+    <div className="space-y-1.5">
+      <h3 className="text-sm font-medium">1. Install the Flow CLI</h3>
+      <BodyText>Already installed on this computer? Skip this step.</BodyText>
+      <button className="font-mono text-xs break-all border border-line rounded-lg p-3 w-full text-left bg-cream" title="Copy installation command" onClick={() => void copy(install)}>{install} ⧉</button>
+    </div>
+    <div className="space-y-1.5">
+      <h3 className="text-sm font-medium">2. Connect your repository</h3>
+      <BodyText>Run this inside the repository on your computer. Confirm your tools locally; browser approval is only needed for a new or expired connection.</BodyText>
+      <button className="font-mono text-xs break-all border border-line rounded-lg p-3 w-full text-left bg-cream" title="Copy setup command" onClick={() => void copy(command)}>{command} ⧉</button>
+    </div>
+    {feedback && <p role="status" className="text-xs">{feedback}</p>}
+  </div>;
+}
+
 export function CodingToolsPanel() {
   const { prefix } = useProject();
   const [data, setData] = useState<IntegrationsData | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -87,6 +116,8 @@ export function CodingToolsPanel() {
   // Native Finder chooser first (the server hosts it — browsers can't expose
   // real paths from their own pickers); in-page browser as the fallback.
   const pickFolder = async () => {
+    if (!data) return;
+    if (data.mode === "prod") { setRemoteSetupOpen(true); return; }
     setBusy(true);
     try {
       const res = await fetch(prefix("/api/fs/native-pick"), { method: "POST" });
@@ -146,31 +177,31 @@ export function CodingToolsPanel() {
     setBusy(false);
   };
 
-  const cliCommand = `flow setup ${data?.project ?? "<project>"}`;
+  const remote = data?.mode === "prod";
+  const cliCommand = `flow setup ${remote && typeof window !== "undefined" ? window.location.origin + "/" : ""}${data?.project ?? "<project>"}`;
   const detected = new Set(data?.detected ?? []);
 
   return (
     <div className="flex flex-col gap-3.5 p-5 rounded-2xl border border-line bg-paper shadow-xs rise-in h-full">
       {/* Header — value first: your tools, Flow-powered */}
       <div className="border-b border-line pb-3">
-        <div className="text-[11px] uppercase tracking-widest text-ink/50">Your AI interfaces</div>
-        <h2 className="text-[20px] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+        <Heading variant="section">
           Use Flow in your own AI tools
-        </h2>
-        <p className="text-[12px] text-ink/55 mt-1 leading-snug">
+        </Heading>
+        <BodyText className="mt-1">
           Keep working where you already work. Connect a workspace and your AI interfaces get this
           project&apos;s memory — and every session they run teaches it.
-        </p>
+        </BodyText>
       </div>
 
       {/* The user's tools, up top: "yes, mine are covered" */}
       <div className="flex items-start gap-2 flex-wrap">
         {TOOLS.map((t) => {
-          const on = detected.has(t.id);
+          const on = remote || detected.has(t.id);
           return (
             <div
               key={t.id}
-              title={`${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
+              title={remote ? `${t.label} — detected by the CLI on your computer during setup` : `${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
               className={`flex flex-col items-center gap-1 w-[52px] ${on ? "text-ink" : "text-ink/25"}`}
             >
               <BrandIcon name={t.icon} size={20} />
@@ -185,11 +216,11 @@ export function CodingToolsPanel() {
         <button
           onClick={() => void pickFolder()}
           className="w-full px-3 py-2 rounded-lg border border-ink/20 bg-cream text-sm hover:border-ink/40 transition-all font-medium"
-          disabled={busy}
+          disabled={busy || !data}
         >
-          {busy ? "Choosing…" : "+ Connect a workspace"}
+          {busy ? "Choosing…" : remote && data?.workspaces?.length ? "+ Connect another workspace" : "+ Connect a workspace"}
         </button>
-        <div className="flex items-center gap-2 text-[11px] text-ink/45">
+        {!remote && <><div className="flex items-center gap-2 text-[11px] text-ink/45">
           <span className="h-px bg-line flex-1" />
           or, in any terminal
           <span className="h-px bg-line flex-1" />
@@ -204,7 +235,7 @@ export function CodingToolsPanel() {
         >
           <span className="text-ink/35">$</span> {cliCommand}
           <span className="text-[10px] text-ink/35 group-hover:text-ink/60">⧉</span>
-        </button>
+        </button></>}
       </div>
 
       {msg && (
@@ -214,6 +245,28 @@ export function CodingToolsPanel() {
         </div>
       )}
 
+      {remote && <>
+        <section className="border-t border-line pt-4 space-y-2">
+          <h3 className="text-sm font-medium">Your connected workspaces</h3>
+          <BodyText>Account: {data?.account}</BodyText>
+          <BodyText>Workspaces linked to this account, across your computers.</BodyText>
+          <div className="rounded-xl border border-line divide-y divide-line overflow-hidden">
+            {(data?.workspaces ?? []).map(w => <details key={w.id} className="bg-cream/50">
+              <summary className="cursor-pointer p-3 text-xs hover:bg-cream">
+                <span className="font-medium">{w.repo}</span>
+                <span className="text-ink/60"> · {w.machine}</span>
+                <span className="block mt-1 ml-3.5 text-ink/60">{w.harnesses.map(h => toolMeta(h)?.label ?? h).join(", ")}</span>
+              </summary>
+              <div className="px-3 pb-3 text-xs space-y-2 text-ink/65">
+                <p>Knowledge access was verified at setup. This record does not indicate whether the computer is online.</p>
+                <p>Capture and memory extraction results are available in Sessions and Knowledge; they are not tracked in this list.</p>
+                <p>Remove integrations by running <code>flow setup --remove</code> in that repository. Revoke the personal token in Access to stop cloud access for workspaces using it.</p>
+              </div>
+            </details>)}
+          </div>
+          {!data?.workspaces?.length && <BodyText>No workspaces connected to this account yet.</BodyText>}
+        </section>
+      </>}
       {/* Connected workspaces */}
       {data && data.repos.length > 0 ? (
         <div className="max-h-52 overflow-y-auto rounded-xl border border-line divide-y divide-line bg-cream/50">
@@ -281,32 +334,32 @@ export function CodingToolsPanel() {
             );
           })}
         </div>
-      ) : (
-        <div className="text-[12px] text-ink/50 py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</div>
-      )}
+      ) : !remote ? (
+        <BodyText className="py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</BodyText>
+      ) : null}
 
-      {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
-      <div className="mt-auto pt-1 grid grid-cols-1 gap-1.5">
+      {/* Chat-mode connectors are separate from supported coding tools. */}
+      <div className="mt-auto pt-1">
         <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="openai" size={13} /></span>
+          <span className="flex gap-1.5 text-ink/50 mt-0.5">
+            <BrandIcon name="openai" size={13} />
+            <BrandIcon name="anthropic" size={13} />
+          </span>
           <div>
-            <div className="text-[11px] font-medium text-ink/70">ChatGPT chats</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
-              Needs a public connector — coming with your team deployment. (The desktop app&apos;s Codex view is already covered above.)
-            </div>
-          </div>
-        </div>
-        <div className="flex items-start gap-2 p-2.5 rounded-xl border border-dashed border-line bg-sand/40">
-          <span className="text-ink/50 mt-0.5"><BrandIcon name="anthropic" size={13} /></span>
-          <div>
-            <div className="text-[11px] font-medium text-ink/70">claude.ai &amp; Cowork</div>
-            <div className="text-[10px] text-ink/45 leading-snug">
-              Needs a public connector + skill upload — coming with your team deployment. Works on every plan once live.
-            </div>
+            <Heading as="h3" variant="card">ChatGPT &amp; Claude chat</Heading>
+            <BodyText>Chat connectors for desktop chat and web apps are coming soon.</BodyText>
           </div>
         </div>
       </div>
 
+      {remoteSetupOpen && createPortal(<div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/45" onClick={() => setRemoteSetupOpen(false)}>
+        <div role="dialog" aria-modal="true" aria-label="Connect a workspace on your computer" className="bg-paper rounded-xl p-6 max-w-xl w-[92vw] max-h-[90vh] overflow-y-auto space-y-4" onClick={e => e.stopPropagation()}>
+          <Heading variant="section">Connect a workspace on your computer</Heading>
+          <SetupInstructions command={cliCommand} />
+          <p className="text-sm text-ink/60">Connecting enables project knowledge and session capture. It does not enable remote access to your computer.</p>
+          <button className="border rounded px-3 py-2" onClick={() => setRemoteSetupOpen(false)}>Close</button>
+        </div>
+      </div>, document.body)}
       {pickerOpen && <FolderPickerDialog onSelect={openConfirm} onClose={() => setPickerOpen(false)} />}
 
       {/* Confirm: which tools to install into this workspace */}

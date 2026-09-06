@@ -48,6 +48,7 @@ import {
 } from "./lib/projects.mjs";
 import { probe, waitForHealth } from "./lib/health.mjs";
 import {
+  FLOW_DIR,
   materializeMachine,
   materializeRepo,
   removeRepo,
@@ -56,6 +57,8 @@ import {
 } from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
+import { browserSetup, completeBrowserSetup } from "./lib/browser-setup.mjs";
+import { discoverRemote, savedRemoteBinding } from "./lib/remote-setup.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -464,7 +467,7 @@ function nodeBin(subdir, name) {
 // cryptic NODE_MODULE_VERSION error buried in a log file. Fail up front, with
 // the exact fix, instead.
 function preflightNativeDeps() {
-  const probe = spawnSync(process.execPath, ["-e", "require('better-sqlite3')"], {
+  const probe = spawnSync(process.execPath, ["-e", "const db = require('better-sqlite3')(':memory:'); db.close()"], {
     cwd: orchestratorDir(),
     encoding: "utf8",
   });
@@ -526,7 +529,7 @@ function printTable(headers, rows) {
 // so callers (explicit create, or create-on-`up`) control their own output.
 // Names that collide with the dashboard's deployment-level URLs (/login,
 // /api/…) or the legacy /p/ prefix — a project can't live at those paths.
-const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+const RESERVED_PROJECT_NAMES = new Set(["connect", "login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
 
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
@@ -598,7 +601,19 @@ async function cmdProjectCreate(args) {
     allowPositionals: true,
     options: { graph: { type: "string" }, mode: { type: "string", default: "local" } },
   });
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
+    name = browserConnection.project;
+  }
   if (!name) die("Usage: flow project create <name> [--mode local|prod]");
   const p = createProject(name, { mode: values.mode === "prod" ? "prod" : "local", graph: values.graph });
   console.log(`\n${OK} created ${c.bold(name)}  ${c.dim(`(${p.mode} mode)`)}`);
@@ -862,6 +877,7 @@ async function upProject(name, { rebuilt = false } = {}) {
     // store, checking the minting user's grant on THIS project.
     FLOW_AUTH_PATH: authJsonPath(),
     FLOW_PROJECT_NAME: name,
+    FLOW_SOURCE_REGISTRY: reposJsonPath,
     // Lets the gateway's HTTP-served orient reach the memory tiers (orient
     // docs, stats) — MCP spawns inject this per-process, the long-running
     // server needs it in its own env for CLI/remote verb callers.
@@ -889,12 +905,15 @@ async function upProject(name, { rebuilt = false } = {}) {
   const orchLogFile = join(logsDir, "orchestrator.log");
   const orchEnv = {
     ...projectEnv,
+    FLOW_AUTH_PATH: authJsonPath(),
+    FLOW_PROJECT_NAME: name,
     DB_PATH: dbPath,
     ORCHESTRATOR_PORT: String(ports.orchestrator),
     GATEWAY_URL: `http://localhost:${ports.gateway}`,
     OPENCODE_WORKSPACE_DIR: workspaceDir,
     FLOW_MODE: mode,
     REPOS_JSON_PATH: reposJsonPath,
+    FLOW_SOURCE_REGISTRY: reposJsonPath,
     // Inherited down to gateway MCP subprocesses spawned by indexer jobs.
     // Graph operations still use FalkorDB directly; embeddings borrow this
     // project's long-lived gateway model through GATEWAY_URL.
@@ -1182,7 +1201,19 @@ async function cmdDoctor() {
 
 async function cmdRm(args) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
+    name = browserConnection.project;
+  }
   if (!name) die("Usage: flow rm <name>");
   if (!existsSync(projectJsonPath(name))) die(`No project "${name}".`);
   if (process.stdin.isTTY) {
@@ -1277,6 +1308,11 @@ async function cmdSetup(rest) {
       remove: { type: "boolean" },
       harness: { type: "string" },
       all: { type: "boolean" },
+      "gateway-url": { type: "string" },
+      "orchestrator-url": { type: "string" },
+      "token-env": { type: "string" },
+      login: { type: "boolean" },
+      repo: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -1291,7 +1327,19 @@ async function cmdSetup(rest) {
     return;
   }
 
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (values.login && !/^https?:\/\//.test(name ?? "")) die("Use --login with the full dashboard project URL.");
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES, values.login ? null : existing);
+    name = browserConnection.project;
+  }
   if (!name) {
     const names = listProjectNames();
     die(
@@ -1299,42 +1347,61 @@ async function cmdSetup(rest) {
         (names.length ? `  Projects here: ${names.join(", ")}` : `  No projects yet — run: flow up <name>`)
     );
   }
-  const project = readProject(name); // throws with a helpful message if unknown
-  const index = listProjectNames().indexOf(name);
-  const ports = portsForIndex(index);
-  const env = parseEnvFile(join(projectDir(name), ".env"));
-  const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
-  const graph = project.graph ?? name;
+  const explicitRemote = Boolean(values["gateway-url"] || values["orchestrator-url"] || values["token-env"]);
+  const saved = browserConnection ?? (explicitRemote ? null : savedRemoteBinding(FLOW_DIR, name, repoDir));
+  const isRemote = explicitRemote || Boolean(saved);
+  let projectEntry;
+  let repoName;
+  let registered = false;
+  if (isRemote) {
+    if (explicitRemote && (!values["gateway-url"] || !values["orchestrator-url"] || !values["token-env"])) {
+      die("Remote setup requires --gateway-url, --orchestrator-url, and --token-env.");
+    }
+    projectEntry = await discoverRemote({ project: name,
+      gatewayUrl: saved?.gatewayUrl ?? values["gateway-url"], orchestratorUrl: saved?.orchestratorUrl ?? values["orchestrator-url"],
+      token: saved?.token ?? process.env[values["token-env"]] });
+    projectEntry.httpMcpBridge = join(flowRoot, "bin", "harness", "flow-mcp-http.mjs");
+    repoName = values.repo || saved?.repo || basename(repoDir);
+  } else {
+    const project = readProject(name); // throws with a helpful message if unknown
+    const index = listProjectNames().indexOf(name);
+    const ports = portsForIndex(index);
+    const env = parseEnvFile(join(projectDir(name), ".env"));
+    const token = env.FLOW_ADMIN_TOKEN ?? "dev-token";
+    const graph = project.graph ?? name;
 
-  const { name: repoName, registered } = resolveRepoName(name, repoDir);
-
+    ({ name: repoName, registered } = resolveRepoName(name, repoDir));
+    projectEntry = {
+        remote: "local",
+        orchestratorUrl: `http://localhost:${ports.orchestrator}`,
+        gatewayUrl: `http://localhost:${ports.gateway}`,
+        graphName: graph,
+        token,
+        falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
+        falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
+        tsxBin: nodeBin(gatewayDir(), "tsx"),
+        gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
+        sourceRegistry: join(projectDir(name), "workspace", "repos.json"),
+      };
+  }
+  const { token, orchestratorUrl } = projectEntry;
   materializeMachine({
     flowRoot,
     projectName: name,
     shimSource: join(flowRoot, "bin", "harness", "flow-hook.mjs"),
-    projectEntry: {
-      remote: "local",
-      orchestratorUrl: `http://localhost:${ports.orchestrator}`,
-      gatewayUrl: `http://localhost:${ports.gateway}`,
-      graphName: graph,
-      token,
-      falkorHost: env.FALKOR_HOST ?? process.env.FALKOR_HOST ?? "localhost",
-      falkorPort: Number(env.FALKOR_PORT ?? process.env.FALKOR_PORT ?? 6379),
-      tsxBin: nodeBin(gatewayDir(), "tsx"),
-      gatewayMcp: join(gatewayDir(), "src", "mcp.ts"),
-    },
+    projectEntry,
   });
 
   // Default: only the tools this machine actually has. `--all` pre-wires
   // everything; `--harness a,b` picks explicitly.
   const detected = detectHarnesses();
-  const harnesses = values.harness
+  const harnesses = browserConnection?.harnesses ?? (values.harness
     ? values.harness.split(",").map((s) => s.trim()).filter((h) => ALL_HARNESSES.includes(h))
     : values.all
       ? ALL_HARNESSES
       : detected.length
         ? detected
-        : ALL_HARNESSES;
+        : ALL_HARNESSES);
   const skipped = ALL_HARNESSES.filter((h) => !harnesses.includes(h));
   const { owned, merged } = materializeRepo({
     repoDir,
@@ -1344,11 +1411,21 @@ async function cmdSetup(rest) {
     harnesses,
   });
 
+  if (browserConnection) {
+    try {
+      await completeBrowserSetup(browserConnection, harnesses);
+      console.log("Knowledge connected. Tools configured. Session capture and memory extraction: awaiting a real session.");
+    } catch { console.warn("Local setup succeeded, but dashboard status could not be saved. Run setup again to retry."); }
+  }
+
   // WORK-surface registration (work_folders): best-effort — the binding above
   // is complete without it; this makes the folder appear in the dashboard.
   let workFolderOk = false;
   try {
-    const res = await fetch(`http://localhost:${ports.orchestrator}/v1/work-folders`, {
+    // A laptop path is not a server-side work folder. Remote execution/device
+    // registration is deliberately separate from the knowledge connector.
+    if (isRemote) throw new Error("Local work-folder registration is not applicable to a remote brain");
+    const res = await fetch(`${orchestratorUrl}/v1/work-folders`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ path: repoDir, repo: registered ? repoName : undefined }),
@@ -1365,7 +1442,7 @@ async function cmdSetup(rest) {
   try {
     const props = { shared: values.share === true, detected_count: detected.length };
     for (const h of ALL_HARNESSES) props[`harness_${h}`] = harnesses.includes(h);
-    await fetch(`http://localhost:${ports.orchestrator}/v1/telemetry/track`, {
+    await fetch(`${orchestratorUrl}/v1/telemetry/track`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ event: "flow_setup_run", properties: props }),
@@ -1377,11 +1454,11 @@ async function cmdSetup(rest) {
 
   console.log(`
   ${OK} ${c.bold(repoDir)}
-    → project ${c.bold(name)} (local), repo ${c.bold(repoName)}${registered ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    → project ${c.bold(name)} (${isRemote ? "remote" : "local"}), repo ${c.bold(repoName)}${registered || isRemote ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
     tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
-    work folder: ${workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
+    work folder: ${isRemote ? "local checkout connected to remote knowledge" : workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
 
   ${c.bold("One-time approvals some tools will ask for:")}
     Claude Code  → first prompt asks to use this repo's .mcp.json — approve.

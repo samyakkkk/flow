@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import { BrainGraph } from "@/components/BrainGraph";
-import { Kicker } from "@/components/ui";
 import { useProject } from "@/lib/useProject";
 
 interface ActivityEvent {
@@ -30,18 +29,19 @@ interface BrainCanvasProps {
   height?: number;
   onConnectFirstSource?: () => void;
   onNodeClick?: (nodeName: string) => void;
+  onGraphStats?: (stats: { nodeCount: number; edgeCount: number; error?: string }) => void;
   sources?: Array<{ source: string; catching_up: boolean; last_poll_at: number }>;
   repos?: Array<{ name: string; lastIndexedCommit?: string; kind?: string }>;
 }
 
 export function BrainCanvas({
   nodeCount,
-  edgeCount,
   isIndexing,
-  pollInterval = 5000,
+  pollInterval = 0,
   height = 420,
   onConnectFirstSource,
   onNodeClick,
+  onGraphStats,
   sources = [],
   repos = [],
 }: BrainCanvasProps) {
@@ -96,7 +96,8 @@ export function BrainCanvas({
     return () => clearInterval(iv);
   }, [isIndexing, activeRepo, prefix]);
 
-  const stage = nodeCount === 0 && !isIndexing ? 0 : isIndexing ? 1 : 2;
+  const hasSources = repos.length > 0 || sources.length > 0;
+  const stage = !hasSources && nodeCount === 0 && !isIndexing ? 0 : isIndexing ? 1 : 2;
 
   function handleEmptyClick() {
     if (onConnectFirstSource) {
@@ -170,6 +171,7 @@ export function BrainCanvas({
           height={height}
           isIndexing={isIndexing}
           onNodeClick={onNodeClick}
+          onStats={onGraphStats}
         />
 
         {/* Embedded Ingestion Overlay directly inside Brain Container */}

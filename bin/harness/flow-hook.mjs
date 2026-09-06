@@ -125,6 +125,26 @@ function copilotAnswer(payload) {
   return answer;
 }
 
+// Antigravity supplies a transcript path rather than the prompt/final text.
+// Select only the latest explicit user turn and completed visible response;
+// tool output, history and reasoning never leave the machine through this path.
+function antigravityTurn(payload) {
+  let prompt = null;
+  let answer = null;
+  for (const entry of copilotTranscriptLines(payload)) {
+    if (entry?.type === "USER_INPUT" && entry.source === "USER_EXPLICIT") {
+      prompt = typeof entry.content === "string"
+        ? (entry.content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/)?.[1] ?? entry.content).slice(-16000)
+        : null;
+      answer = null;
+    } else if (entry?.type === "PLANNER_RESPONSE" && entry.source === "MODEL" &&
+      entry.status === "DONE" && !entry.tool_calls?.length && typeof entry.content === "string") {
+      answer = entry.content.slice(-16000);
+    }
+  }
+  return { prompt, answer };
+}
+
 // ---------------------------------------------------------------------------
 async function main() {
   // Sessions Flow itself runs are already captured by the ACP runtime —
@@ -167,6 +187,15 @@ async function main() {
     }
   }
 
+  if (args.harness === "antigravity") {
+    payload.hook_event_name = args.event ?? payload.hook_event_name ?? payload.hookEventName;
+    if (payload.hook_event_name === "Stop") {
+      const turn = antigravityTurn(payload);
+      if (turn.prompt) payload.prompt = turn.prompt;
+      if (turn.answer) payload.last_assistant_message = turn.answer;
+    }
+  }
+
   const body = JSON.stringify({
     harness: args.harness ?? "generic",
     project: args.project ?? null,
@@ -197,4 +226,7 @@ async function main() {
 
 main()
   .catch((e) => logLine(`fatal: ${e?.message ?? e}`))
-  .finally(() => process.exit(0));
+  .finally(() => {
+    if (args.harness === "antigravity") process.stdout.write("{}\n", () => process.exit(0));
+    else process.exit(0);
+  });

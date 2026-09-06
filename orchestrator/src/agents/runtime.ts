@@ -309,7 +309,8 @@ function execVersion(cmd: string): Promise<string | null> {
 }
 
 export async function detectAgents(): Promise<DetectedAgent[]> {
-  if (detectCache && Date.now() - detectCache.at < 60_000) return detectCache.agents;
+  const visible = (agents: DetectedAgent[]) => process.env.FLOW_MODE === "prod" ? agents.filter((a) => a.id === "opencode") : agents;
+  if (detectCache && Date.now() - detectCache.at < 60_000) return visible(detectCache.agents);
   const agents = await Promise.all(
     Object.values(BACKENDS).map(async (b) => {
       const explicitEnv = b.localCli?.mode === "env" ? process.env[b.localCli.envVar]?.trim() : undefined;
@@ -329,7 +330,7 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
     })
   );
   detectCache = { at: Date.now(), agents };
-  return agents;
+  return visible(agents);
 }
 
 // ---------------------------------------------------------------------------
@@ -672,9 +673,37 @@ export function getSession(id: string): LiveSession | undefined {
   return liveSession(id);
 }
 
+const SESSION_COLUMNS = `
+        id,
+        backend,
+        repo,
+        cwd,
+        title,
+        status,
+        acp_session_id,
+        stop_reason,
+        error,
+        start_sha,
+        start_untracked,
+        worktree_id,
+        created_at,
+        updated_at`;
+
+export function readSessionMetadata(id: string): Record<string, unknown> | undefined {
+  const row = db.prepare(`SELECT ${SESSION_COLUMNS} FROM agent_sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+  if (!row) return undefined;
+  const live = sessions.get(id);
+  return { ...row, live: Boolean(live), status: live?.status ?? row.status };
+}
+
 export function listSessions(): Array<Record<string, unknown>> {
   const rows = db
-    .prepare(`SELECT * FROM agent_sessions ORDER BY created_at DESC LIMIT 100`)
+    .prepare(`
+      SELECT ${SESSION_COLUMNS}
+      FROM agent_sessions
+      ORDER BY created_at DESC
+      LIMIT 100
+    `)
     .all() as Array<Record<string, unknown>>;
   return rows.map((r) => {
     const live = sessions.get(String(r.id));
@@ -944,6 +973,7 @@ async function startConnectionAttempt(backend: AgentBackend, attempt: SpawnAttem
 }
 
 async function ensureConnection(backend: AgentBackend): Promise<Connection> {
+  if (process.env.FLOW_MODE === "prod") throw new Error("Cloud coding uses the guarded OpenCode task runtime at /v1/agents/tasks");
   const existing = connections.get(backend);
   if (existing && existing.process.exitCode === null) return existing;
   connections.delete(backend);
@@ -1110,6 +1140,7 @@ export async function createSession(opts: {
   // same handling as steered prompts.
   attachments?: PromptAttachment[];
 }): Promise<CreateSessionResult> {
+  if (process.env.FLOW_MODE === "prod") return { error: "Cloud coding uses OpenCode conversations at /v1/agents/tasks; in-place ACP sessions are disabled" };
   const found = listRepoOptions().find((r) => r.name === opts.repo);
   if (!found) return { error: `Unknown repo "${opts.repo}" — connect it first` };
   // EXISTING COPY target: validate it up front. A managed copy bypasses the

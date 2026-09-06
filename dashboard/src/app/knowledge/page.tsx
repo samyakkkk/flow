@@ -233,7 +233,7 @@ export default function KnowledgePage() {
   return (
     <Shell>
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>Knowledge Base</h1>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500, color: "var(--text-primary)" }}>Knowledge Base</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
           Everything Flow has learned — distilled memories with who contributed them, plus raw knowledge from Slack,
           Linear and meetings. Delete anything that&apos;s wrong; agents stop recalling it immediately.
@@ -296,7 +296,7 @@ export default function KnowledgePage() {
         <>
           {/* Distilled memories */}
           <section style={{ marginBottom: 32 }}>
-            <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+            <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 500, color: "var(--text-primary)" }}>
               Memories {memories.length > 0 && <span style={{ color: "var(--text-muted)" }}>({memories.length})</span>}
             </h2>
             {memories.length === 0 ? (
@@ -387,7 +387,7 @@ export default function KnowledgePage() {
 
           {/* Raw corpus knowledge — slack / linear / meetings */}
           <section style={{ marginBottom: 32 }}>
-            <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 500, color: "var(--text-primary)" }}>
               From Slack, Linear &amp; meetings{" "}
               {corpusTotal > 0 && <span style={{ color: "var(--text-muted)" }}>({corpusTotal})</span>}
             </h2>
@@ -463,7 +463,7 @@ export default function KnowledgePage() {
                 padding: 0,
                 cursor: "pointer",
                 fontSize: 15,
-                fontWeight: 700,
+                fontWeight: 500,
                 color: "var(--text-primary)",
                 marginBottom: 12,
               }}

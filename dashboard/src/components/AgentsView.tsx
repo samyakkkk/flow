@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
 import { Kicker, Heading, Card, StatusPill } from "@/components/ui";
@@ -51,7 +52,7 @@ const AGENT_BRANDS: Record<string, BrandName> = {
 const ACTIVE_STATUSES = new Set(["starting", "running", "waiting"]);
 
 function AgentBrandIcon({ backend, className }: { backend: string; className?: string }) {
-  const name = AGENT_BRANDS[backend];
+  const name = AGENT_BRANDS[backend.startsWith("ext:") ? backend.slice(4) : backend];
   if (!name) return <span aria-hidden>○</span>;
   return <BrandIcon name={name} size={16} className={className} />;
 }
@@ -151,7 +152,7 @@ export function AgentsView() {
           <div className="mt-2 mb-4">
             <h2
               style={{ fontFamily: "var(--font-display)" }}
-              className="text-base font-semibold text-ink"
+              className="text-base font-medium text-ink"
             >
               Start a new coding task
             </h2>
@@ -176,7 +177,7 @@ export function AgentsView() {
           onNewSession={startInCopy}
           onChanged={refresh}
         />
-        <SessionsColumn sessions={sessions} loading={loading} onNavigate={navigate} />
+        <SessionsColumn sessions={sessions} loading={loading} />
       </div>
     </div>
   );
@@ -196,21 +197,22 @@ interface SessionSearchHit extends Omit<SessionRow, "live"> {
 function SessionCard({
   s,
   snippet,
-  onNavigate,
+  href,
 }: {
   s: Omit<SessionRow, "live">;
   snippet?: string | null;
-  onNavigate: (sid: string) => void;
+  href: string;
 }) {
+  const title = s.title?.trim() || `${s.backend.toUpperCase()} session`;
   return (
-    <button
-      onClick={() => onNavigate(s.id)}
+    <Link
+      href={href}
       className="text-left rounded-lg border border-line bg-paper px-3.5 py-2.5 hover:bg-cream transition flex items-center gap-3 cursor-pointer"
     >
       <AgentBrandIcon backend={s.backend} className="text-ink flex-shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-ink text-[13px] truncate font-medium" style={{ fontFamily: "var(--font-display)" }}>
-          {s.title}
+          {title}
         </p>
         <p style={{ fontFamily: "var(--font-mono)" }} className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5 truncate">
           {s.backend} · {timeAgo(s.updated_at)}
@@ -223,18 +225,16 @@ function SessionCard({
         {snippet ? <p className="text-text-muted text-[11.5px] mt-1 line-clamp-2">{snippet}</p> : null}
       </div>
       <StatusPill kind={statusKind(s.status)}>{statusLabel(s.status)}</StatusPill>
-    </button>
+    </Link>
   );
 }
 
 function SessionsColumn({
   sessions,
   loading,
-  onNavigate,
 }: {
   sessions: SessionRow[];
   loading: boolean;
-  onNavigate: (sid: string) => void;
 }) {
   const { prefix } = useProject();
   const [showAll, setShowAll] = useState(false);
@@ -298,7 +298,7 @@ function SessionsColumn({
               <p className="text-text-muted text-[13px]">No sessions match that.</p>
             )}
             {results.map((s) => (
-              <SessionCard key={s.id} s={s} snippet={s.snippet} onNavigate={onNavigate} />
+              <SessionCard key={s.id} s={s} snippet={s.snippet} href={prefix(`/agents/${s.id}`)} />
             ))}
           </>
         ) : (
@@ -307,7 +307,7 @@ function SessionsColumn({
               <p className="text-text-muted text-[13px]">No sessions yet — start one above.</p>
             )}
             {shown.map((s) => (
-              <SessionCard key={s.id} s={s} onNavigate={onNavigate} />
+              <SessionCard key={s.id} s={s} href={prefix(`/agents/${s.id}`)} />
             ))}
           </>
         )}

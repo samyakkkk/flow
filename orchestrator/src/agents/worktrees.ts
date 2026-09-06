@@ -145,6 +145,10 @@ export async function createSessionWorktree(opts: {
   srcCheckout: string;
   baseBranch: string;
   title: string;
+  workspaceDir?: string;
+  // Cloud tasks use an exact registered commit and prepare dependencies later.
+  baseCommit?: string;
+  copyNodeModules?: boolean;
 }): Promise<CreateWorktreeResult | { error: string }> {
   const { repoName, srcCheckout, baseBranch, title } = opts;
   try {
@@ -154,10 +158,10 @@ export async function createSessionWorktree(opts: {
     // listRepoOptions() uses to locate Flow's managed repos dir. Worktrees live
     // alongside under <workspaceDir>/worktrees/<repoName>/<slug>.
     const reposJson = process.env.REPOS_JSON_PATH;
-    if (!reposJson) return { error: "REPOS_JSON_PATH is not set — cannot place a worktree" };
-    const workspaceDir = path.dirname(reposJson);
+    if (!reposJson && !opts.workspaceDir) return { error: "REPOS_JSON_PATH is not set — cannot place a worktree" };
+    const workspaceDir = opts.workspaceDir ?? path.dirname(reposJson!);
 
-    const baseRef = await resolveBaseRef(srcCheckout, baseBranch);
+    const baseRef = opts.baseCommit ?? await resolveBaseRef(srcCheckout, baseBranch);
     const { branch, slug } = await uniqueBranch(srcCheckout, slugifyTitle(title));
 
     const parent = path.join(workspaceDir, "worktrees", repoName);
@@ -173,7 +177,7 @@ export async function createSessionWorktree(opts: {
     // Overlay pass: the gitignored files a working tree needs but the checkout
     // itself doesn't carry.
     await overlayEnvFiles(srcCheckout, dest);
-    await overlayNodeModules(srcCheckout, dest);
+    if (opts.copyNodeModules !== false) await overlayNodeModules(srcCheckout, dest);
 
     return { path: dest, branch };
   } catch (e) {

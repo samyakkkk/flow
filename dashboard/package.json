@@ -9,7 +9,8 @@
     "start": "next start --port 7600",
     "lint": "eslint",
     "smoke": "node scripts/smoke.mjs",
-    "verify": "next build && node scripts/smoke.mjs"
+    "verify": "next build && node scripts/smoke.mjs",
+    "test:pairing": "node --import tsx --test test/device-pairing.test.ts"
   },
   "dependencies": {
     "@falkordb/canvas": "^0.2.1",

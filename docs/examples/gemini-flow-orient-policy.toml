@@ -1,0 +1,10 @@
+[[rule]]
+toolName = "activate_skill"
+decision = "allow"
+priority = 200
+
+[[rule]]
+mcpName = "flow-graph"
+toolName = "orient"
+decision = "allow"
+priority = 200

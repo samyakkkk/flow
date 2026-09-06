@@ -160,14 +160,14 @@ function LoginForm() {
           >
             F
           </div>
-          <span style={{ fontWeight: 700, fontSize: 20, color: "var(--text-primary)" }}>Flow</span>
+          <span style={{ fontWeight: 500, fontSize: 20, color: "var(--text-primary)" }}>Flow</span>
         </div>
 
         <h1
           style={{
             margin: "0 0 6px",
             fontSize: 18,
-            fontWeight: 600,
+            fontWeight: 500,
             color: "var(--text-primary)",
           }}
         >

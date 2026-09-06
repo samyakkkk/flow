@@ -131,7 +131,7 @@ describe("cursor advances across polls", () => {
     });
 
     pollNow(sourceName, "_all");
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(() => getAllPollStatus().some((r) => r.source === sourceName && r.cursor === "tick-1"));
 
     const rows1 = getAllPollStatus();
     const row1 = rows1.find((r) => r.source === sourceName);
@@ -140,7 +140,7 @@ describe("cursor advances across polls", () => {
 
     // Second tick
     pollNow(sourceName, "_all");
-    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(() => getAllPollStatus().some((r) => r.source === sourceName && r.cursor === "tick-2"));
 
     const rows2 = getAllPollStatus();
     const row2 = rows2.find((r) => r.source === sourceName);

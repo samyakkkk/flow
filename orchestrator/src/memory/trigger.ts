@@ -63,7 +63,10 @@ export async function maybeDistill(id: string, branch: string | null = null): Pr
 
   const slimEvents: SlimEvent[] = events.map((e) => ({ kind: e.kind, data: e.data }));
   try {
-    await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents });
+    const outcome = await distillSession({ sessionId: id, repo: meta.repo, branch, events: slimEvents });
+    // Provider failures are returned as outcomes, not thrown. Do not mark the
+    // transcript consumed: the next idle sweep must be able to retry it.
+    if (!outcome.ran && outcome.reason !== "empty-transcript") return false;
   } catch (err) {
     console.warn(`[memory] distill failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);
     return false;

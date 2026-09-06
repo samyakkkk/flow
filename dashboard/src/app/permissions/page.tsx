@@ -166,7 +166,7 @@ export default function PermissionsPage() {
   return (
     <Shell>
       <div style={{ marginBottom: 28 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 500, color: "var(--text-primary)" }}>
           Permissions
         </h1>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
@@ -251,7 +251,7 @@ export default function PermissionsPage() {
                 padding: "12px 20px",
                 borderBottom: "1px solid var(--border)",
                 fontSize: 12,
-                fontWeight: 700,
+                fontWeight: 500,
                 color: "var(--text-secondary)",
                 textTransform: "uppercase",
                 letterSpacing: "0.06em",

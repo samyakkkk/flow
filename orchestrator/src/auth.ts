@@ -6,6 +6,7 @@
 
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { timingSafeEqual } from "node:crypto";
+import { isPat, verifyPatForProject } from "../../shared/pat-auth.js";
 
 const TOKEN = process.env.FLOW_ADMIN_TOKEN ?? "dev-token";
 
@@ -50,8 +51,33 @@ export function requireAuth(
     return;
   }
 
+  if (req.method === "POST" && /^\/v1\/agents\/tasks\/[^/]+\/workspace$/.test(url)) {
+    done(); // Exact job-scoped authentication is enforced inside cloud-routes.
+    return;
+  }
+
   const header = req.headers.authorization ?? "";
   const match = header.match(/^Bearer (.+)$/i);
+
+  // Machine credentials grant knowledge/capture access, never process control
+  // or administrative access. Revocation is checked against the shared store.
+  if (match && isPat(match[1])) {
+    if (!verifyPatForProject(match[1])) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+    const allowed = req.method === "GET" && url === "/v1/connection" ||
+      req.method === "POST" && new Set([
+        "/v1/ingest/hook", "/v1/ingest/opencode", "/v1/memory/search",
+        "/v1/memory/remember", "/v1/telemetry/track",
+      ]).has(url);
+    if (!allowed) {
+      reply.code(403).send({ error: "This credential cannot access that operation" });
+      return;
+    }
+    done();
+    return;
+  }
 
   if (!match || !tokenMatches(match[1])) {
     reply.code(401).send({ error: "Unauthorized" });

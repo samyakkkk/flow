@@ -62,7 +62,7 @@ export function FolderPickerDialog({
       >
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>Choose a folder</span>
+          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink)" }}>Choose a folder</span>
           <button
             onClick={onClose}
             style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)", lineHeight: 1, padding: "0 2px" }}

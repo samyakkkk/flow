@@ -8,12 +8,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/agent-runtime.test.ts test/worktrees.test.ts test/memory.test.ts test/llm.test.ts test/indexer-runtime.test.ts test/index-queue.test.ts test/change-branch.test.ts test/repo-removed.test.ts test/index-incremental.test.ts test/work-folders.test.ts test/ingest.test.ts test/flow-hook.test.ts test/materialize.test.mjs test/session-search.test.ts test/telemetry.test.ts test/slack-agent.test.ts",
+    "test": "node --import tsx/esm --test test/fake-opencode.ts test/orchestrator.test.ts test/adapters.test.ts test/outbox-approve.test.ts test/llmlog.test.ts test/smoke.ts test/notify.test.ts test/pollers.test.ts test/poller.test.ts test/settings.test.ts test/sources.test.ts test/agent-diff.test.ts test/agent-runtime.test.ts test/worktrees.test.ts test/cloud-tasks.test.ts test/cloud-opencode-smoke.test.ts test/memory.test.ts test/llm.test.ts test/indexer-runtime.test.ts test/index-queue.test.ts test/change-branch.test.ts test/repo-removed.test.ts test/index-incremental.test.ts test/work-folders.test.ts test/ingest.test.ts test/flow-hook.test.ts test/connector-auth.test.ts test/materialize.test.mjs test/remote-setup.test.mjs test/session-search.test.ts test/telemetry.test.ts test/slack-agent.test.ts",
     "verify": "npm test",
     "verify:real": "tsx test/real-integrations.ts",
     "verify:session": "tsx test/real-session.ts"
   },
   "dependencies": {
+    "@opencode-ai/plugin": "1.17.20",
     "@agentclientprotocol/claude-agent-acp": "^0.56.0",
     "@agentclientprotocol/sdk": "^1.2.0",
     "@fastify/sensible": "^5.6.0",
@@ -21,11 +22,13 @@
     "@slack/web-api": "^7.18.0",
     "@agentclientprotocol/codex-acp": "^1.1.0",
     "better-sqlite3": "^12.11.1",
+    "shell-quote": "^1.10.0",
     "fastify": "^4.28.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.0.0",
+    "@types/shell-quote": "^1.7.5",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   },

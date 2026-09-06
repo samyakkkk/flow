@@ -27,6 +27,7 @@ import { verifySession, userCanAccess, userProjectFilter, loadAuthStore } from "
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/",
+  "/api/connect/",
   "/_next",
   "/favicon.ico",
 ];
@@ -38,7 +39,7 @@ const DEPLOYMENT_API = ["/api/projects", "/api/access", "/api/tokens"];
 function toLogin(req: NextRequest, clearCookie: boolean) {
   const url = req.nextUrl.clone();
   url.pathname = "/login";
-  url.search = `?from=${encodeURIComponent(req.nextUrl.pathname)}`;
+  url.search = `?from=${encodeURIComponent(req.nextUrl.pathname + req.nextUrl.search)}`;
   const res = NextResponse.redirect(url);
   if (clearCookie) res.cookies.delete(SESSION_COOKIE);
   return res;
@@ -95,6 +96,11 @@ export async function proxy(req: NextRequest) {
     url.pathname = `/${target.name}/`;
     url.search = "";
     return NextResponse.redirect(url);
+  }
+
+  if (pathname === "/connect") {
+    if (IS_LOCAL) return notFound();
+    return user ? NextResponse.next() : toLogin(req, true);
   }
 
   // Project-scoped URLs: /<name>/<rest>

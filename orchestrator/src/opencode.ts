@@ -34,6 +34,11 @@ import { indexLog } from "./index-log.js";
 // only dereference inside function bodies, never at module init.
 import { track } from "./telemetry.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
+import {
+  bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
+  slackConversation, type ConversationRef,
+} from "./agents/cloud-workspaces.js";
+import { cloudOpencodeConfig } from "./agents/cloud-tool-policy.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -118,6 +123,8 @@ export interface RepoEntry {
   branch: string;
   lastIndexedCommit?: string | null;
   lastIndexedAt?: string;
+  // Deployment administrators can exclude a registered repo from source MCP.
+  sourceRead?: boolean;
   addedAt?: string;
   // Sources front door. A source plays up to two roles: BRAIN (indexed) and
   // WORK (where coding-agent sessions run). `kind` distinguishes an indexed
@@ -566,6 +573,11 @@ export async function refreshRepoCheckout(name: string, branch: string): Promise
 // Stall recovery (S103): on boot, any job left 'running' by a crash/restart is
 // marked failed. index_repo jobs are re-queued so indexing resumes.
 export function recoverStalledJobs(): void {
+  // Do not replay cloud edits after a crash: retain their worktrees/session and
+  // make the interrupted or parked turn visible as failed for explicit retry.
+  db.prepare(`UPDATE jobs SET status = 'failed', result_json = ?, updated_at = unixepoch()
+    WHERE status = 'queued' AND type IN ('answer', 'continue') AND json_extract(input, '$.conversation_key') IS NOT NULL`)
+    .run(JSON.stringify({ error: "stalled:process_restart" }));
   const stalled = db.prepare(`SELECT id, type, input, repo FROM jobs WHERE status = 'running'`).all() as
     { id: string; type: string; input: string; repo: string | null }[];
   for (const row of stalled) {
@@ -620,8 +632,8 @@ export function recoverStalledJobs(): void {
 
 // Enqueue a job and kick off execution in background (non-blocking enqueue)
 export async function enqueueJob(opts: JobInput): Promise<{ id: string }> {
-  const normalizedOpts = normalizeIndexJob(opts);
   const id = randomUUID();
+  const normalizedOpts = normalizeCloudJob(normalizeIndexJob(opts), id);
   insertJob.run({
     id,
     type: normalizedOpts.type,
@@ -635,9 +647,47 @@ export async function enqueueJob(opts: JobInput): Promise<{ id: string }> {
   }
 
   // Execute async — don't await; callers get the job id and can poll
-  setImmediate(() => void runJob(id, normalizedOpts));
+  setImmediate(() => scheduleJob(id, normalizedOpts));
 
   return { id };
+}
+
+function normalizeCloudJob(opts: JobInput, id: string): JobInput {
+  if (!cloudMode() || (opts.type !== "answer" && opts.type !== "continue")) return opts;
+  const reply = opts.input.reply_to as { channel?: string; thread_ts?: string } | undefined;
+  const ref = opts.input.conversation as ConversationRef | undefined ??
+    (reply?.channel
+      ? slackConversation(String(opts.input.workspace ?? ""), reply.channel, reply.thread_ts ?? "")
+      : { source: "api", id: String(opts.input.session_id || id) });
+  const key = conversationKey(ref);
+  ensureConversation(key);
+  return { ...opts, input: { ...opts.input, conversation: ref, conversation_key: key } };
+}
+
+// Serialize complete turns (not just process starts) within each conversation.
+// Other conversations continue independently. A failed turn releases the queue.
+const conversationTurns = new Map<string, Promise<void>>();
+function scheduleJob(id: string, opts: JobInput): void {
+  const key = opts.input.conversation_key;
+  if (!cloudMode() || typeof key !== "string" || !["answer", "continue"].includes(opts.type)) {
+    void runJob(id, opts);
+    return;
+  }
+  const previous = conversationTurns.get(key) ?? Promise.resolve();
+  const turn = previous.then(async () => {
+    if (getJob(id)?.status !== "queued") return;
+    // Resolve at execution time: the preceding turn may only just have created
+    // its session, or may have failed after emitting its first session event.
+    const session = conversationSession(key) ?? opts.input.session_id;
+    const next = session
+      ? { ...opts, type: "continue" as const, input: { ...opts.input, message: opts.input.message ?? opts.input.question, session_id: session } }
+      : opts;
+    await runJob(id, next);
+  }).catch((err) => {
+    updateJob.run({ id, status: "failed", result_json: JSON.stringify({ error: String(err) }) });
+  });
+  conversationTurns.set(key, turn);
+  void turn.then(() => { if (conversationTurns.get(key) === turn) conversationTurns.delete(key); });
 }
 
 // One normalization boundary for every index entry point. Explicit input wins;
@@ -758,6 +808,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     }
 
     const { result, sessionId } = runResult;
+    if (typeof opts.input.conversation_key === "string" && getJob(id)?.status !== "running") return;
 
     // Entity writes come from short-lived MCP processes. They normally embed
     // each node through the gateway immediately; this final pass catches any
@@ -769,6 +820,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
     // Persist session_id on the job row
     if (sessionId) {
       updateJobSession.run({ id, session_id: sessionId });
+      if (cloudMode() && typeof opts.input.conversation_key === "string" && ["answer", "continue"].includes(opts.type)) {
+        bindConversation(opts.input.conversation_key, sessionId);
+      }
     }
 
     updateJob.run({ id, status: "done", result_json: JSON.stringify(result) });
@@ -993,6 +1047,17 @@ interface SpawnResult { status: number | null; stdout: string; stderr: string; e
 // writing to the graph while the recovery pass re-queues a duplicate job.
 const jobChildren = new Map<string, ReturnType<typeof spawn>>();
 
+export function cancelCloudJob(id: string): boolean {
+  const job = getJob(id);
+  if (!job || typeof job.input.conversation_key !== "string" ||
+      !["answer", "continue"].includes(job.type) || !["queued", "running"].includes(job.status)) return false;
+  updateJob.run({ id, status: "failed", result_json: JSON.stringify({ error: "cancelled" }) });
+  finishActivity(id, "failed");
+  const child = jobChildren.get(id);
+  if (child) killTree(child);
+  return true;
+}
+
 // SIGKILL the whole process group when the child is a group leader (job
 // spawns are detached); fall back to killing just the child.
 function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = "SIGKILL"): void {
@@ -1184,7 +1249,10 @@ function jobLogDir(): string {
 // ------------------------------------------------------------------
 
 async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ result: unknown; sessionId: string }> {
-  const { agent, prompt, sessionId: resumeSessionId } = buildPrompt(opts);
+  const built = buildPrompt(opts);
+  const cloud = cloudMode() && (opts.type === "answer" || opts.type === "continue");
+  const agent = cloud ? "flow-cloud" : built.agent;
+  const { prompt, sessionId: resumeSessionId } = built;
   const model = indexerModel("opencode");
 
   const args: string[] = ["run", "--format", "json", "-m", model, "--dir", WORKSPACE_DIR];
@@ -1193,6 +1261,10 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   args.push(prompt);
 
   const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
+  if (cloud) {
+    const inherited = JSON.parse(env.OPENCODE_CONFIG_CONTENT || "{}") as Record<string, unknown>;
+    env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cloudOpencodeConfig(inherited));
+  }
   const timeoutMs = indexerTimeout(opts);
 
   // Stagger process starts: two opencode processes launched in the same
@@ -1203,10 +1275,21 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   await acquireSpawnSlot();
 
   const opencodeBin = await resolveOpencodeBin();
+  if (cloud && getJob(jobId)?.status !== "running") throw new Error("Cloud task cancelled before start");
   startActivity(jobId, opts.repo ?? "", "opencode");
   const t0 = Date.now();
-  const spawned = await spawnAsync(opencodeBin, args, env, timeoutMs, undefined, (line) =>
-    recordActivityLine(jobId, "opencode", line), jobId
+  const spawned = await spawnAsync(opencodeBin, args, env, timeoutMs, cloud ? WORKSPACE_DIR : undefined, (line) => {
+    recordActivityLine(jobId, "opencode", line);
+    if (cloud && typeof opts.input.conversation_key === "string") {
+      try {
+        const event = JSON.parse(line) as { sessionID?: string };
+        if (event.sessionID && getJob(jobId)?.status === "running") {
+          bindConversation(opts.input.conversation_key, event.sessionID);
+          updateJobSession.run({ id: jobId, session_id: event.sessionID });
+        }
+      } catch { /* non-JSON output is retained in the transcript */ }
+    }
+  }, jobId
   );
   const latencyMs = Date.now() - t0;
 
@@ -1524,7 +1607,8 @@ async function runFakeOpencode(
     return mod.run(opts, jobId);
   } catch {
     // Fallback canned responses if fake file doesn't exist yet
-    const sessionId = `fake-ses-${jobId}`;
+    const sessionId = opts.type === "continue" && typeof opts.input.session_id === "string"
+      ? opts.input.session_id : `fake-ses-${jobId}`;
     if (opts.type === "answer" || opts.type === "continue") {
       return {
         result: {

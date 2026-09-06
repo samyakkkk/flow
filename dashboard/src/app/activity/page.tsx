@@ -358,7 +358,7 @@ export default function ActivityPage() {
               <div className="text-center py-6">
                 <p
                   style={{ fontFamily: "var(--font-display)" }}
-                  className="text-ink text-[17px] mb-1"
+                  className="text-ink text-[17px] font-medium mb-1"
                 >
                   Nothing yet.
                 </p>

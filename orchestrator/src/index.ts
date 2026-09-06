@@ -21,6 +21,7 @@ import { registerNotifyRoute } from "./notify.js";
 import { registerModeRoute } from "./mode.js";
 import { registerLlmLogRoute } from "./llmlog.js";
 import { registerAgentRoutes } from "./agents/routes.js";
+import { registerCloudTaskRoutes } from "./agents/cloud-routes.js";
 import { registerIngestRoutes } from "./ingest/routes.js";
 import { registerIntegrationRoutes } from "./integrations.js";
 import { registerCorrectionRoutes } from "./corrections.js";
@@ -67,6 +68,10 @@ app.get("/health", async () => ({
   port: PORT,
   ts: Date.now(),
 }));
+app.get("/v1/connection", async () => ({
+  project: process.env.FLOW_PROJECT_NAME,
+  graph: process.env.GRAPH_NAME,
+}));
 
 // ------------------------------------------------------------------
 // Core route groups
@@ -80,6 +85,7 @@ registerModeRoute(app);
 registerSettingsRoutes(app);
 registerLlmLogRoute(app);
 registerAgentRoutes(app);
+registerCloudTaskRoutes(app);
 registerIngestRoutes(app);
 registerIntegrationRoutes(app);
 registerCorrectionRoutes(app);

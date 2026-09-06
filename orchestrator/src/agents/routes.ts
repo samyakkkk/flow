@@ -43,6 +43,7 @@ import {
   openWorktreeLocation,
   worktreeDiffAt,
   listSessions,
+  readSessionMetadata,
   readTranscript,
   recordGraphActivity,
   slimEvent,
@@ -203,9 +204,9 @@ export function registerAgentRoutes(app: FastifyInstance): void {
   app.get("/v1/agents/sessions/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const live = getSession(id);
-    const rows = listSessions().filter((s) => s.id === id);
-    if (!live && rows.length === 0) return reply.code(404).send({ error: "unknown session" });
-    const meta = rows[0] ?? {};
+    const row = readSessionMetadata(id);
+    if (!live && !row) return reply.code(404).send({ error: "unknown session" });
+    const meta = row ?? {};
     return {
       ...meta,
       // Runs in an isolated "separate copy" (worktree) rather than the user's
