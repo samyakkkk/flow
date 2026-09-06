@@ -246,7 +246,6 @@ export function CodingToolsPanel() {
       )}
 
       {remote && <>
-        <SetupInstructions command={cliCommand} />
         <section className="border-t border-line pt-4 space-y-2">
           <h3 className="text-sm font-medium">Your connected workspaces</h3>
           <BodyText>Account: {data?.account}</BodyText>
