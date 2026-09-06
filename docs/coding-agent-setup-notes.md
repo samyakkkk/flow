@@ -61,8 +61,8 @@ zero memories; that alone is not a broken capture integration.
 | Codex 0.153.4 cloud | Passed: Maple rule, memory `d6a20822-310a-4ea0-9a06-9cc8ed092837`. |
 | OpenCode cloud | Passed: Oak rule, memory `168b655e-38a5-41f8-9c67-23cdff33006e`. |
 | Antigravity cloud | Passed: this info-option requirement, memory `e54bf0c7-c785-4af9-b792-25835de6dfe2`. |
-| Copilot cloud | Capture passed; earlier extraction retained nothing. Follow-up decision test pending. |
-| Cursor | Local/cloud skill and native MCP passed; cloud requirement captured, idle extraction/retrieval pending. |
+| Copilot cloud | Capture passed; acknowledgement prompts retained nothing. A real fixture coding/test session awaits extraction. |
+| Cursor | Local/cloud skill and native MCP passed; cloud requirement captured, but extraction retained nothing. Full memory retrieval remains unproven. |
 
 These are representative paths, not every agent/environment combination.
 Fresh retrieval tests used Claude with local file/command tools disabled and
