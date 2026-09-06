@@ -140,3 +140,7 @@ profiles or cloud resources. Use task-specific ports and test databases, avoid
 production credentials, and do not run global setup or service management in
 tasks. Authenticated port previews and strong process/filesystem isolation need
 additional implementation; this release does not provide them.
+
+Production workers reject legacy local-agent starts/prompts and direct worktree
+mutation endpoints. The homepage links to cloud Agents instead of exposing the
+local ACP composer. Historical local sessions remain readable and cancellable.

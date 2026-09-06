@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useMode } from "@/lib/useMode";
 import { useProject } from "@/lib/useProject";
 import { BodyText, Heading, StatusPill } from "@/components/ui";
 import { BrandIcon, type BrandName } from "@/components/BrandIcon";
@@ -59,7 +60,19 @@ function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPanelProps) {
+export function AgentPanel(props: AgentPanelProps) {
+  const { mode, loading } = useMode();
+  const { prefix } = useProject();
+  if (loading) return <p>Loading agents…</p>;
+  if (mode === "prod") return <div className="rounded-xl border border-line bg-paper p-5 space-y-4">
+    <Heading variant="section">Run tasks on this server</Heading>
+    <BodyText>Give Flow a task here or in Slack. Follow progress, send follow-ups, and run commands in the task’s worktree. Coding tasks share one queue.</BodyText>
+    <Link href={prefix("/agents")} className="inline-block rounded border border-line px-4 py-2 text-sm">Open cloud agents →</Link>
+  </div>;
+  return <LocalAgentPanel {...props} />;
+}
+
+function LocalAgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPanelProps) {
   const { prefix } = useProject();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
 

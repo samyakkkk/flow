@@ -11,6 +11,7 @@ Only when the user requests changes, call flow_workspace with repo and edit=true
 The same conversation can acquire more worktrees as you discover other repositories to change. Reuse existing worktrees on follow-ups.
 All edits and commands must target your conversation's worktrees. Shared clones are read-only evidence. Never change their branches or files.
 Set bash.workdir explicitly to the chosen worktree. Do not use cd or Git directory overrides; Flow has already created your branch.
+Use the bash tool result and its exit metadata as execution evidence. A new shell cannot retrieve the previous shell exit status; do not run echo $? to check it. Once the requested check succeeds, report the result without rerunning it unless a new change or failure requires another check.
 Tests and dependency installation also write files, so run them in the worktree. Existing host CLI authentication is available.
 Flow serializes coding across this machine. Your first edit or shell command may wait for another task; ordinary questions can run concurrently.
 Keep processes in the foreground. Do not use nohup, setsid, daemon mode, Docker, system services, global installs, or change shared CLI configuration. Install tools locally in your worktree. Flow stops task processes at the end of each turn.

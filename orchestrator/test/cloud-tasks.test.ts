@@ -68,6 +68,7 @@ before(async () => {
   const { registerCloudTaskRoutes } = await import("../src/agents/cloud-routes.js");
   app.addHook("onRequest", requireAuth);
   registerCloudTaskRoutes(app);
+  (await import("../src/agents/routes.js")).registerAgentRoutes(app);
   (await import("../src/agents/repo-env-routes.js")).registerRepoEnvRoutes(app);
   (await import("../src/agents/cloud-view-routes.js")).registerCloudViewRoutes(app);
   await app.ready();
@@ -706,4 +707,13 @@ test("uploaded env secrets are redacted from real terminal results and activity"
   const detail = await app.inject({ method: "GET", url: `/v1/agents/tasks/${id}`, headers });
   assert.ok(!detail.body.includes("terminal-secret-8726929"));
   env.removeRepoEnv("web", ".env.local");
+});
+
+
+test("cloud workers reject legacy agent starts and worktree mutations", async () => {
+  for (const url of ["/v1/agents/sessions", "/v1/agents/sessions/old/prompt", "/v1/agents/worktrees/remove", "/v1/agents/worktrees/apply", "/v1/agents/worktrees/push"]) {
+    const response = await app.inject({ method: "POST", url, headers: { authorization: "Bearer cloud-test-admin" }, payload: {} });
+    assert.equal(response.statusCode, 409, url);
+    assert.match(response.json().error, /Use cloud tasks/);
+  }
 });

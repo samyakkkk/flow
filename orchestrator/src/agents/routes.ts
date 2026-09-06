@@ -55,9 +55,17 @@ import {
   steer,
   subscribe,
 } from "./runtime.js";
+import { cloudMode } from "./cloud-workspaces.js";
 import { searchSessions } from "./session-search.js";
 
 export function registerAgentRoutes(app: FastifyInstance): void {
+  app.addHook("onRequest", async (req, reply) => {
+    const pathname = req.url.split("?")[0];
+    if (cloudMode() && !["GET", "HEAD"].includes(req.method) &&
+      /^\/v1\/agents\/(?:sessions|worktrees)(?:\/|$)/.test(pathname) && !pathname.endsWith("/cancel")) {
+      return reply.code(409).send({ error: "Use cloud tasks on this server; local agent and worktree mutations are disabled" });
+    }
+  });
   app.get<{ Querystring: { owner?: string } }>("/v1/agents", async (req) => {
     const agents = await detectAgents();
     const owner = req.query.owner || "local";
