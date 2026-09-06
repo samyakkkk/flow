@@ -1,3 +1,4 @@
+import { validateImagePaths } from "./slack-agent/images.js";
 // opencode.ts — Job queue for opencode sessions: index_repo | enrich | answer | continue | correct_graph.
 //
 // Real runs spawn `opencode run --format json` so we can parse the sessionID from the
@@ -1305,7 +1306,9 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   const args: string[] = ["run", "--format", "json", "-m", model, "--dir", WORKSPACE_DIR];
   if (agent) args.push("--agent", agent);
   if (resumeSessionId) args.push("--session", resumeSessionId);
-  args.push(prompt);
+  const images = validateImagePaths(opts.input.slack_image_scope, opts.input.slack_images);
+  for (const image of images) args.push("--file", image);
+  args.push("--", prompt);
 
   const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
   if (cloud) {

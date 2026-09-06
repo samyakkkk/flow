@@ -176,3 +176,21 @@ URL is absent or invalid, Flow omits links instead of inventing an inaccessible 
 Read-only follow-ups to an existing coding conversation retain the run link without
 a new coding-start notice. Shell pipelines run with `pipefail` so output filtering
 cannot silently turn a failed verification command into a successful one.
+
+### Slack image input
+
+Slack messages and mentions can include PNG, JPEG, GIF or WebP images, including
+image-only messages. Enable the bot's `files:read` scope and reinstall existing
+Slack apps after upgrading; new manifests include it. Flow downloads files with
+the server's bot token, verifies the image signature, and passes private local
+attachments to OpenCode's multimodal input. The selected model must support vision.
+The Slack token and private download URLs are never included in model prompts.
+
+Files live outside repository worktrees in the project's workspace under
+`.flow-slack-images`, separated by workspace/channel/thread, with 0600 permissions.
+The most recent five images are attached again on follow-ups, including after a
+restart or worktree cleanup. Limits: five images per message, 5 MiB per image,
+and twenty stored images per thread. Start a new thread when that storage limit
+is reached. Stored images are retained with the conversation; no automatic image
+retention cleanup is implemented yet. Unsupported attachments and inaccessible
+files produce a visible error rather than a text-only answer pretending to see them.

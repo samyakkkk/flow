@@ -48,6 +48,7 @@ export function buildManifest(projectName: string): Record<string, unknown> {
           "app_mentions:read",
           "assistant:write",
           "chat:write",
+          "files:read",
           "channels:history",
           "channels:read",
           "groups:history",

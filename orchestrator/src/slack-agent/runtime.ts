@@ -53,6 +53,7 @@ export class FlowRuntime implements AgentRuntime {
     const { id } = await enqueueJob({ type: "answer", input: {
       question,
       display_message: query.prompt,
+      ...(query.images?.length ? { slack_images: query.images, slack_image_scope: query.imageScope } : {}),
       ...(conversation ? { conversation } : {}),
     } });
     const url = cloudRunUrl(id);
@@ -130,6 +131,7 @@ export function buildQuestion(query: RuntimeQuery): string {
       .join("\n");
     parts.push(`Conversation so far (Slack thread):\n${lines}\n`);
   }
+  if (query.images?.length) parts.push("Attached images are ordered oldest to newest from this Slack thread. Use the latest image for references such as this image; earlier images are retained for follow-ups.\n");
   parts.push(query.prompt);
   return parts.join("\n");
 }

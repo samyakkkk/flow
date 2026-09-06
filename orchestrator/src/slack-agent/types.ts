@@ -12,6 +12,8 @@ export interface RuntimeQuery {
   prompt: string;
   /** Prior turns in this thread, oldest first (excludes the current prompt). */
   transcript: TranscriptTurn[];
+  images?: string[];
+  imageScope?: string;
   context: {
     surface: Surface;
     channelId: string;

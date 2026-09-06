@@ -2,6 +2,8 @@
 // Slack Connect, threads). Sets the running status, gathers thread context,
 // asks the runtime, and streams the answer back with the agent-session UX.
 
+import { imageScope, savedImages, receiveImages, type SlackFile } from "./images.js";
+import { getSetting } from "../settings.js";
 import { beginRun, endRun } from "./cancel.js";
 import { markEngaged } from "./engagement.js";
 import type { AgentRuntime, Surface, TranscriptTurn } from "./types.js";
@@ -16,6 +18,7 @@ export type SetStatusFn = (args: Record<string, unknown>) => Promise<unknown>;
 export type SayFn = (args: { text: string; thread_ts?: string }) => Promise<unknown>;
 
 export interface SlackClientLike {
+  files?: { info(args: { file: string }): Promise<{ file?: SlackFile & { url_private?: string; url_private_download?: string } }> };
   conversations: {
     replies(args: { channel: string; ts: string; limit?: number }): Promise<{
       messages?: Array<{ user?: string; bot_id?: string; text?: string; subtype?: string; ts?: string }>;
@@ -39,6 +42,7 @@ export interface RespondArgs {
   userId: string;
   teamId?: string;
   prompt: string;
+  files?: SlackFile[];
   /** Extra context line (e.g. from assistant_thread_context) folded into the query. */
   viewingContext?: string;
   sayStream?: SayStreamFn;
@@ -103,9 +107,18 @@ export async function respond(args: RespondArgs): Promise<void> {
 
     const prompt = args.viewingContext ? `${args.prompt}\n\n(${args.viewingContext})` : args.prompt;
 
+    const scope = imageScope(args.teamId ?? "", args.channelId, args.threadTs);
+    const images = args.files?.length ? await receiveImages({
+      scope, files: args.files, token: getSetting("SLACK_BOT_TOKEN") ?? "", signal: controller.signal,
+      info: async id => {
+        if (!client.files) throw new Error("Slack files API unavailable");
+        return client.files.info({ file: id });
+      },
+    }) : savedImages(scope);
     const answer = await runtime.ask({
       prompt,
       transcript,
+      ...(images.length ? { images, imageScope: scope } : {}),
       context: {
         surface: args.surface,
         channelId: args.channelId,
@@ -179,7 +192,7 @@ async function fetchTranscript(
     const turns: TranscriptTurn[] = [];
     for (const msg of res.messages ?? []) {
       if (msg.ts === currentTs) continue;
-      if (msg.subtype) continue;
+      if (msg.subtype && msg.subtype !== "file_share") continue;
       const text = stripMentions(msg.text ?? "");
       if (!text) continue;
       const fromBot = Boolean(msg.bot_id) || (botUserId !== undefined && msg.user === botUserId);
