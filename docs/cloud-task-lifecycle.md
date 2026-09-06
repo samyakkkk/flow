@@ -173,3 +173,6 @@ URL (for example, `https://flow.example/team`). Coding start/queue replies and f
 answers include a “View agent run” link into the existing Agents UI. Authentication
 is still required by the dashboard; links contain no credentials. If the public
 URL is absent or invalid, Flow omits links instead of inventing an inaccessible URL.
+Read-only follow-ups to an existing coding conversation retain the run link without
+a new coding-start notice. Shell pipelines run with `pipefail` so output filtering
+cannot silently turn a failed verification command into a successful one.

@@ -10,6 +10,7 @@ import { createCloudToolPolicy, patchPaths, cloudShellVerificationFailed } from 
 const root = mkdtempSync(path.join(tmpdir(), "flow-cloud-test-"));
 process.env.DB_PATH = ":memory:";
 process.env.FLOW_MODE = "prod";
+process.env.FLOW_PUBLIC_URL = "https://flow.example/team";
 process.env.FLOW_ADMIN_TOKEN = "cloud-test-admin";
 process.env.FLOW_FAKE_OPENCODE = "1";
 process.env.FLOW_DRAIN_DISABLE = "1";
@@ -241,6 +242,7 @@ test("task endpoint is prod-only, authenticated and OpenCode-only", async () => 
   process.env.FLOW_MODE = "local";
   assert.equal((await post()).statusCode, 409);
   process.env.FLOW_MODE = "prod";
+process.env.FLOW_PUBLIC_URL = "https://flow.example/team";
   const reply = await post();
   assert.equal(reply.statusCode, 202);
   const job = await finished(reply.json().id);
@@ -292,13 +294,17 @@ test("active Slack runtime retains its session and worktree across messages", as
   const runtime = new FlowRuntime();
   const context = { surface: "channel" as const, teamId: "T-active", channelId: "C-active", threadTs: "123.0", userId: "U1" };
   const key = workspaces.conversationKey(workspaces.slackConversation(context.teamId, context.channelId, context.threadTs));
-  await runtime.ask({ prompt: "Explain retries", transcript: [], context });
+  const runLinks: string[] = [];
+  await runtime.ask({ prompt: "Explain retries", transcript: [], context, onRun: url => runLinks.push(url) });
+  assert.equal(runLinks.length, 0);
   const session = workspaces.conversationSession(key);
   assert.ok(session);
   assert.equal(workspaces.conversationRepos(key).filter((r) => r.worktree).length, 0);
   const repo = await workspaces.ensureConversationWorktree(key, "api");
   writeFileSync(path.join(repo.worktree!.path, "file.txt"), "retained Slack edit\n");
-  const followup = await runtime.ask({ prompt: "Now update tests", transcript: [], context });
+  const followup = await runtime.ask({ prompt: "Now update tests", transcript: [], context, onRun: url => runLinks.push(url) });
+  assert.equal(runLinks.length, 1);
+  assert.match(runLinks[0], /^https:\/\/flow.example\/team\/agents\/cloud-/);
   assert.match(followup.markdown, /Continued/);
   assert.equal(workspaces.conversationSession(key), session);
   assert.equal(readFileSync(path.join(workspaces.conversationRepos(key)[0].worktree!.path, "file.txt"), "utf8"), "retained Slack edit\n");
@@ -750,4 +756,12 @@ test("cloud identity commits without touching shared git configuration", async (
   assert.equal(cloudGitIdentity({ FLOW_GIT_AUTHOR_EMAIL: "bot@example.com" }).GIT_AUTHOR_EMAIL, "bot@example.com");
   assert.equal(cloudGitIdentity({ GIT_AUTHOR_NAME: "Existing" }).GIT_AUTHOR_NAME, "Existing");
   await assert.rejects(policy("bash", { command: "git config user.name Other", workdir: cwd }), /Git metadata/);
+});
+
+test("shell pipelines preserve failures hidden by output filters", async () => {
+  const { key, policy } = context();
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const args = { command: "node -e 'process.exit(7)' | tail -1", workdir: repo.worktree!.path };
+  await policy("bash", args);
+  assert.throws(() => execFileSync("/bin/bash", ["-c", args.command], { cwd: args.workdir, stdio: "pipe" }), (err: any) => err.status === 7);
 });

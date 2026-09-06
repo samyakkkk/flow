@@ -170,3 +170,16 @@ test("coding task start and final answer include the online run link without nee
   for (const text of messages) assert.ok(text.includes(`<${url}|View agent run>`));
   assert.ok(messages.some(text => text.includes("Verified changes")));
 });
+
+test("read-only follow-ups in coding conversations keep the run link without a start notice", async () => {
+  const { respond } = await import("../src/slack-agent/respond.js");
+  const messages: string[] = [];
+  await respond({ channelId: "READLINK", threadTs: "1", messageTs: "1", userId: "U", botUserId: "B", surface: "dm", prompt: "what changed?",
+    logger: { info() {}, warn() {}, error() {} },
+    client: { conversations: { replies: async () => ({}) }, chat: {
+      postMessage: async ({ text }) => { messages.push(text); return { ts: "answer" }; },
+    } },
+    runtime: { name: "test", async ask(q) { q.onRun?.("https://flow.example/agents/cloud-followup"); return { markdown: "One heading changed" }; } },
+  });
+  assert.deepEqual(messages, ["One heading changed\n<https://flow.example/agents/cloud-followup|View agent run>"]);
+});

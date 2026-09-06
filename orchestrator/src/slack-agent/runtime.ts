@@ -7,7 +7,7 @@
 // answer-job pipeline (opencode answerer over the knowledge graph + memory).
 
 import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
-import { cloudMode, cloudTaskTimeoutMs, slackConversation } from "../agents/cloud-workspaces.js";
+import { cloudMode, cloudTaskTimeoutMs, slackConversation, conversationKey, conversationRepos } from "../agents/cloud-workspaces.js";
 import { containsSecret } from "../events.js";
 import { codingSlotStatus } from "../agents/coding-slot.js";
 import type { TranscriptTurn as Turn } from "./types.js";
@@ -46,14 +46,19 @@ export class FlowRuntime implements AgentRuntime {
     const cloud = cloudMode();
     if (cloud && containsSecret(question)) throw new Error("Message contains credentials");
 
+    const conversation = cloud ? slackConversation(
+      query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
+    ) : undefined;
     query.onStatus?.("Searching the knowledge graph…");
     const { id } = await enqueueJob({ type: "answer", input: {
       question,
       display_message: query.prompt,
-      ...(cloud ? { conversation: slackConversation(
-        query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
-      ) } : {}),
+      ...(conversation ? { conversation } : {}),
     } });
+    const url = cloudRunUrl(id);
+    if (conversation && url && conversationRepos(conversationKey(conversation)).some(repo => repo.worktree)) {
+      query.onRun?.(url);
+    }
     const onAbort = () => { if (cloud) cancelCloudJob(id); };
     query.signal?.addEventListener("abort", onAbort, { once: true });
     if (query.signal?.aborted) onAbort();

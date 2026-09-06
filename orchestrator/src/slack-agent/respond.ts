@@ -115,6 +115,7 @@ export async function respond(args: RespondArgs): Promise<void> {
       },
       signal: controller.signal,
       onStatus: (s) => void setStatusSafe(s),
+      onRun: (url) => { runUrl = url; },
       onCodingStatus: (status, url) => {
         runUrl = url ?? runUrl;
         if (controller.signal.aborted) return;
