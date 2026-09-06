@@ -14,7 +14,7 @@ export async function GET(): Promise<NextResponse> {
   if (!IS_LOCAL) {
     const user = await currentUser(), project = await requireProject();
     const workspaces = (loadAuthStore()?.tokens ?? []).filter(t => t.userId === user?.id && t.projects?.includes(project.name)).flatMap(t => (t.workspaces ?? (t.workspace?.configuredAt ? [t.workspace] : [])).map((w, index) => ({ ...w, id: `${t.id}:${w.id ?? index}` })));
-    return NextResponse.json({ project: project.name, mode: "prod", repos: [], detected: [], all: [], version: 1, workspaces });
+    return NextResponse.json({ project: project.name, mode: "prod", account: user?.email, repos: [], detected: [], all: [], version: 1, workspaces });
   }
   try {
     const res = await orcFetch("/v1/integrations/status", token);
