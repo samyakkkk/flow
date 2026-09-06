@@ -42,6 +42,7 @@ const TOOLS: Array<{ id: string; label: string; icon: BrandName }> = [
   { id: "gemini", label: "Gemini CLI", icon: "gemini" },
   { id: "opencode", label: "opencode", icon: "opencode" },
   { id: "antigravity", label: "Antigravity", icon: "antigravity" },
+  { id: "copilot", label: "VS Code Copilot", icon: "github" },
 ];
 const toolMeta = (id: string) => TOOLS.find((t) => t.id === id);
 
