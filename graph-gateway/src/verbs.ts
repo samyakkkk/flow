@@ -138,16 +138,21 @@ async function findByVector(graph: string, q: string, type: string | undefined, 
   const { vec, error } = await embedQuery(q);
   if (!vec) return { rows: [], degraded: error ?? "query could not be embedded" };
   const typeFilter = type ? `AND labels(n)[0] = $type` : "";
-  const rows = await run(
-    graph,
-    `MATCH (n) WHERE n.embedding IS NOT NULL ${typeFilter}
+  let rows;
+  try {
+    rows = await run(
+      graph,
+      `MATCH (n) WHERE typeOf(n.embedding) = 'Vectorf32' ${typeFilter}
      WITH n, vec.cosineDistance(n.embedding, vecf32($vec)) AS d
      WHERE d <= $maxDistance
      RETURN labels(n)[0] AS type, n.id AS id, n.name AS name, n.description AS description, n.evidence AS anchor, d AS distance
      ORDER BY d ASC
      LIMIT ${clampLimit(limit)}`,
-    { vec, maxDistance: VECTOR_MAX_DISTANCE, ...(type ? { type } : {}) },
-  );
+      { vec, maxDistance: VECTOR_MAX_DISTANCE, ...(type ? { type } : {}) },
+    );
+  } catch (err) {
+    return { rows: [], degraded: `vector search failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
   const scored = (rows as unknown as ScoredRow[]).map((r) => ({
     ...r,
     via: "vector" as const,
@@ -570,10 +575,12 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
     }
   }
 
-  // Fill gaps in keep's props from remove; never overwrite what keep has.
+  // Embeddings are derived, typed data: never round-trip them through generic
+  // property maps (the driver decodes vectors as arrays). Re-embed merged text.
+  // Fill other gaps in keep's props from remove; never overwrite what keep has.
   const fill: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(removeProps)) {
-    if (!(k in keepProps) && !["id", "created_by", "created_at", "updated_by", "updated_at"].includes(k)) fill[k] = v;
+    if (!(k in keepProps) && !["id", "embedding", "created_by", "created_at", "updated_by", "updated_at"].includes(k)) fill[k] = v;
   }
   const mergedAliases = [
     ...String(keepProps.aliases ?? "").split(",").map((s) => s.trim()),
@@ -584,11 +591,12 @@ async function mergeEntities(input: z.infer<z.ZodObject<typeof mergeEntitiesInpu
 
   await run(
     input.graph,
-    `MATCH (n {id: $keep}) SET n += $fill, n.aliases = $aliases, n.merged_from = $remove, n.updated_by = $actor, n.updated_at = $ts`,
+    `MATCH (n {id: $keep}) SET n += $fill, n.embedding = NULL, n.aliases = $aliases, n.merged_from = $remove, n.updated_by = $actor, n.updated_at = $ts`,
     { keep: input.keep, fill, aliases: mergedAliases.join(", "), remove: input.remove, actor: input.provenance.actor, ts: new Date().toISOString() },
   );
   await run(input.graph, `MATCH (n {id: $id}) DETACH DELETE n`, { id: input.remove });
 
+  await embedNode(input.graph, input.keep);
   await record({ graph: input.graph, actor: input.provenance.actor, verb: "merge_entities", input: { keep: input.keep, remove: input.remove }, status: "merged" });
   return { status: "merged", keep: input.keep, removed: input.remove, rewired, skipped };
 }
@@ -849,8 +857,8 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   // whatever the graph holds (single-repo projects). Missing node ≠ error —
   // the graph may simply not be indexed yet.
   const repoRow =
-    (repoRows as Array<{ id: string; name: string; description: string }>).find((r) => r.name === repo) ??
-    (repoRows as Array<{ id: string; name: string; description: string }>)[0];
+    (repo ? (repoRows as Array<{ id: string; name: string; description: string }>).find((r) => r.name === repo || r.id === `repo:${repo}`) :
+    (repoRows as Array<{ id: string; name: string; description: string }>)[0]);
 
   const countMap = new Map((counts as Array<{ type: string; count: number }>).map((c) => [c.type, c.count]));
   const total = [...countMap.values()].reduce((a, b) => a + b, 0);

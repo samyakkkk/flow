@@ -82,7 +82,7 @@ export async function reconcileEmbeddings(
   opts: { force?: boolean; log?: (msg: string) => void } = {},
 ): Promise<{ total: number; embedded: number; failed: number }> {
   const log = opts.log ?? ((m: string) => console.log(m));
-  const filter = opts.force ? "" : "WHERE n.embedding IS NULL";
+  const filter = opts.force ? "" : "WHERE n.embedding IS NULL OR typeOf(n.embedding) <> 'Vectorf32'";
   const rows = await run(
     graph,
     `MATCH (n) ${filter}
