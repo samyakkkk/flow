@@ -491,3 +491,19 @@ falling back to the shell CLI, whose network access may be sandboxed. Native
 MCP orientation has passed against the HTTPS test deployment with an ordinary
 orientation prompt. PATH CLI 0.136.0 required an explicitly compatible gpt-5.5 model
 in this test environment; the user's global model was unchanged.
+
+### Executable discovery after updates
+
+Dashboard updates restart services without sourcing shell startup files. Setup
+and the agent runtime share executable discovery: use the current PATH first,
+then a previously discovered absolute path, then standard user/system installer
+locations (including `~/.opencode/bin`, `~/.local/bin`, Homebrew, Bun, and NVM).
+Setup and runtime discoveries are saved per OS user in
+`~/.flow/executables/<command>.json`; missing or non-executable saved paths are
+ignored and rediscovered. A custom location can be learned by running setup with
+that directory on PATH. Runtime selection still excludes Flow-managed bundled
+executables and retains its version ranking.
+
+After starting services, `flow up` probes the selected backend with `--version`
+and warns if the executable cannot run. This checks executable availability;
+authentication and model access are separate checks.
