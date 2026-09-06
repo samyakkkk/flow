@@ -151,7 +151,7 @@ The repo told people to run Flow **three** contradictory ways — a root `docker
 - Every live classifier call (full prompt, raw response, model, latency, per-attempt retries, errors) and every opencode job (summary row + complete JSONL transcript at `data/.../job-logs/<job>.jsonl`, stderr on failure) is recorded. Query via `GET /v1/llmlog?kind=&ref=`. Joined with the audit log, events table, gateway journal, and per-service logs, every decision is traceable end to end.
 
 ### Added — UX & design system
-- **Design system** (`docs/DESIGN.md`) — warm editorial language (cream paper, single yellow accent, Lora serif, Space Mono labels) with shared primitives; applied across the dashboard.
+- **Design system** (`docs/DESIGN.md`) — warm editorial language (cream paper, single blue accent, Lora serif, Space Mono labels) with shared primitives; applied across the dashboard.
 - **UX spec** (`docs/UX.md`, user-approved) — the dashboard as a guided state machine: key gate → connect sources → watch the brain build → alive; floating Ask bar; humanized activity.
 - **State 0 "Flow needs a brain"** — first-run OpenRouter key gate with live validation; nothing else is reachable until the brain works.
 

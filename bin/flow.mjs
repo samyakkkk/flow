@@ -76,7 +76,7 @@ const c = {
   dim: paint("2"),
   green: paint("32"),
   red: paint("31"),
-  yellow: paint("33"),
+  blue: paint("34"),
   cyan: paint("36"),
 };
 const OK = c.green("✓");
@@ -945,7 +945,7 @@ async function upProject(name, { rebuilt = false } = {}) {
     const executable = projectEnv[overrideName] || process.env[overrideName] || discoverExecutable(backend);
     const check = executable ? spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 5000 }) : null;
     if (!check || check.status !== 0) {
-      finish(`${OK} ${c.dim("services up")} — ${c.yellow(`${backend} unavailable; coding jobs are not ready. Install or repair ${backend}, then run flow up ${name}.`)}`);
+      finish(`${OK} ${c.dim("services up")} — ${c.blue(`${backend} unavailable; coding jobs are not ready. Install or repair ${backend}, then run flow up ${name}.`)}`);
     } else {
       finish(`${OK} ${c.dim("services up")} — ${backend} executable ready`);
     }
@@ -1464,11 +1464,11 @@ async function cmdSetup(rest) {
 
   console.log(`
   ${OK} ${c.bold(repoDir)}
-    → project ${c.bold(name)} (${isRemote ? "remote" : "local"}), repo ${c.bold(repoName)}${registered || isRemote ? "" : c.yellow(" (not a registered source — capture works; graph context limited)")}
+    → project ${c.bold(name)} (${isRemote ? "remote" : "local"}), repo ${c.bold(repoName)}${registered || isRemote ? "" : c.blue(" (not a registered source — capture works; graph context limited)")}
     tools: ${harnesses.join(", ")}${skipped.length ? c.dim(`  (not detected, skipped: ${skipped.join(", ")} — use --all to pre-wire)`) : ""}
     mode:  ${values.share ? "shared (files visible to git — commit them)" : "personal (hidden via .git/info/exclude; use --share for the team)"}
     files: ${[...owned, ...merged].join(", ")}
-    work folder: ${isRemote ? "local checkout connected to remote knowledge" : workFolderOk ? "registered" : c.yellow("not registered (orchestrator not running — will register on next flow up)")}
+    work folder: ${isRemote ? "local checkout connected to remote knowledge" : workFolderOk ? "registered" : c.blue("not registered (orchestrator not running — will register on next flow up)")}
 
   ${c.bold("One-time approvals some tools will ask for:")}
     Claude Code  → first prompt asks to use this repo's .mcp.json — approve.
