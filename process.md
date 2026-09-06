@@ -36,7 +36,7 @@ Load credentials directly into required process environment/config. Never echo t
 - Fixtures: `data/harness-fixture` (local), `data/cloud-fixture` (cloud client), each independent Git repo.
 - Integration backup: `~/.flow/backups/cloud-harness-validation`.
 - Hetzner server 164708090, `flow-harness-validation`, IPv4 5.223.65.87, cpx32 4 CPU/8 GB Singapore, approximately EUR 0.0929/hour plus IPv4. Existing `flow-test` untouched. SSH restricted to developer IP; public 80/443.
-- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Cloud synchronized through 5f494d0; OpenCode 1.17.20 installed.
+- Cloud `/opt/flow`, alias `flow-cloud-test`, offset 1000, project `harness-cloud`. Gateway 8433, orchestrator 8500, dashboard 8600, FalkorDB 7379. Ubuntu 24.04, Node 22.22.3, Docker, Caddy, 4 GB swap. Cloud synchronized through 3b6fc70; OpenCode 1.17.20 installed.
 - HTTPS https://5-223-65-87.sslip.io; connector prefixes `/harness-cloud/gateway` and `/harness-cloud/orchestrator`. Caddy exposes limited connector routes; ordinary dashboard routes use prod auth.
 - Private provisioning/bootstrap scripts and git bundle in `~/.config/flow-validation/`. Remote `/root/flow-up.log` can contain secrets.
 - Heartbeat `flow-cloud-setup-overnight` continues every 30 minutes. Notify meaningful changes or required user actions; pause on completion.
@@ -53,21 +53,47 @@ Load credentials directly into required process environment/config. Never echo t
 - Twelve materializer/remote-setup tests and connector auth tests passed. Gateway typecheck passed. Orchestrator whole-project tsc has errors: establish baseline before claiming unrelated; no typecheck npm script there.
 - `scripts/check-remote-mcp.mjs <project>` and `scripts/check-remote-setup.mjs <project>` pass for `harness-lab` and real HTTPS `harness-cloud`, including fresh HOME, private credentials, bridge orientation and rejected unauthorized/cross-project requests.
 
-## Integration evidence and remaining work
+## Current validation checkpoint
 
-| Client | Local | Cloud / gap |
-| --- | --- | --- |
-| Claude | Native MCP passes after auth; `data/claude-local-authenticated.jsonl` | `data/claude-cloud.jsonl` confirms skill activation, ToolSearch and native MCP orient |
-| Codex | Native MCP passes with explicit gpt-5.5; `data/codex-local-compatible.jsonl` | Native MCP now passes; ordinary prompt retest in `data/codex-cloud-instructions.jsonl` passes after discovery instruction fix |
-| Gemini | Skill activation and native orient pass with explicit headless tool permission; `data/gemini-local-skill.jsonl` | Same passes in `data/gemini-cloud-skill.jsonl`; normal interactive permission flow still to verify |
-| Antigravity | Desktop reads skill and native orient succeeds; conversation “Repository Flow Orientation Guide” | Cloud desktop and capture pending |
-| VS Code Copilot | Desktop skill and native orient pass, about 17 seconds | Cloud desktop and capture pending |
-| Cursor | Skill and native orient passed after enabling workspace MCP; “Installed FlowSkill orientation,” about 13 seconds | Cloud test pending |
-| OpenCode | Skill and native orient passed; `data/opencode-local.jsonl` | OpenRouter-backed session activates skill and calls native MCP; `data/opencode-cloud.jsonl` |
+Latest code milestone: 3b6fc70; latest permission/evidence documentation: 57257d1.
+Hetzner code was synchronized through 3b6fc70; running services last restarted
+at 2962f43 (later changes affected setup/docs). Earlier update entries below
+are history; this checkpoint and subsequent entries supersede their statuses.
 
-The PATH-selected Codex CLI 0.136.0 rejected configured gpt-6-astra; explicit gpt-5.5 worked. Do not globally change user model. `--ignore-user-config` suppressed project MCP, so that mode is not representative. Direct cloud bridge smoke passes despite Codex cloud session failing to use it.
+| Client | Local skill/native MCP | Cloud skill/native MCP | Complete automatic memory round trip |
+| --- | --- | --- | --- |
+| Claude | Passed after authentication | Passed | Local passed |
+| Codex | Passed; selected binary/model matters | Passed | Cloud 0.153.4 passed with one-run hook trust bypass |
+| Gemini | Passed with scoped headless permission | Passed with Policy Engine | Cloud passed; interactive permissions pending |
+| Antigravity desktop | Passed | Passed after per-binding MCP name fix | Cloud passed |
+| VS Code Copilot desktop | Passed | Passed | Cloud capture passed; architecture decision awaiting idle extraction |
+| Cursor desktop | Passed after enabling workspace MCP | Pending native desktop interaction | Local capture observed; full memory round trip pending |
+| OpenCode | Passed | Passed on Mac and Hetzner | Cloud passed with explicit --dir |
 
-Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Claude and two Gemini external sessions, no Codex. Antigravity/Copilot capture unverified. Gemini cloud → stored memory → fresh Claude retrieval has since passed; see the dated log below. Other integrations remain partially verified.
+Fresh retrieval used Flow search from a new Claude session with local file and
+command tools disabled. These are representative paths, not exhaustive testing
+of every client/environment combination. Permission and version details live
+in docs/coding-agent-setup-notes.md.
+
+Remote-only committed source read/search passes live HTTPS and real Codex
+verification, including indexed SHA/line evidence and rejection of unknown repos
+and unsafe paths. Cloud question/edit/follow-up tests pass zero/lazy/reused
+worktree behavior. Follow-up latency improved from 36.4 to 8.6 seconds after
+fixing repeated OpenCode dependency installation; fresh question was 13.7 seconds.
+These are individual measurements. PR #74 was already merged and included.
+
+Latest regression evidence: 362 orchestrator tests, 27 gateway tests plus gateway
+typecheck, and final 16 materializer tests pass. Whole-orchestrator typecheck has
+pre-existing errors. PR #79 remains draft while remaining coverage is incomplete.
+Live Slack testing needs a designated channel; none has been sent. Mac was
+locked at the latest native UI attempt, blocking Cursor cloud interaction.
+
+Pending Copilot origin: ext-copilot-8f16f408-bf67-47d6-80a3-56f9c0851c27,
+completed 2026-09-06 00:59:47 UTC. Desktop transcript acknowledges committed,
+project-authorized remote source reads with SHA/line evidence and no execution
+access. Cloud session is idle, extraction watermark unset at 01:36 UTC; normal
+45-minute idle threshold plus five-minute sweep means check after 01:50 UTC.
+No direct memory writes were used. Earlier Pine prompt extracted no memories.
 
 ## Update log
 
@@ -130,3 +156,5 @@ Local ingestion DB `data/projects/harness-lab/flow.db` previously had three Clau
 - 2026-09-06: Antigravity ordinary-prompt CLOUD SKILL/NATIVE MCP PASS after generated hashed name. Conversation Flow Skill Repository Orientation read installed skill, requested flow-graph-9341b0d097e7/orient, accepted one-time tool approval, returned harness-cloud/cloud-fixture and3stored memories. No shell fallback. Full orchestrator362 tests pass; final materializer16 tests pass after defensive malformed-args guard. Per-binding name fix is ready; native cloud blocker resolved. Cursor cloud still needs native UI, Slack live test still needs designated channel. New Copilot Pine and Antigravity info-option memory sessions remain under the45-minute idle threshold at this check.
 
 - 2026-09-06: Consolidated docs/coding-agent-setup-notes.md into current per-agent permission/recovery guidance and removed superseded Antigravity/Copilot status claims. Antigravity COMPLETE automatic memory round trip confirmed: origin ext-antigravity-0650f89e-1029-4455-b349-9fa91a761c34 stored info-option requirement e54bf0c7-c785-4af9-b792-25835de6dfe2; fresh Claude 3f00cdb9-ee82-458b-bda4-e0e8b00fb0b4 retrieved it using only ToolSearch and Flow search, evidence data/claude-antigravity-info-retrieval.jsonl. Info UI remains a follow-up requirement.
+
+- 2026-09-06 01:36 UTC heartbeat: Confirmed Copilot architecture decision completed in desktop transcript 8f16f408-bf67-47d6-80a3-56f9c0851c27, native orient successful, cloud session persisted idle with extraction watermark unset. Still below the natural idle threshold; check after 01:50 UTC. Refreshed the main checkpoint and PR description to remove superseded pending/pass claims.
