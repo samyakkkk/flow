@@ -1,11 +1,13 @@
 "use client";
-// Inline single-color brand marks. Each renders a 24x24 viewBox SVG with
+// Brand marks (mostly inline single-color SVGs). Each renders a 24x24 viewBox SVG with
 // fill="currentColor" so it inherits the surrounding text color — keeping the
 // monochrome editorial look (no brand colors). Path data for github, linear,
 // slack, anthropic, openai and opencode is copied verbatim from Simple Icons
 // (https://simpleicons.org). Fireflies is not in Simple Icons, so it uses a
 // clean spark mark drawn to read as a logo.
 import type { ReactNode } from "react";
+import Image from "next/image";
+import antigravityMark from "../assets/antigravity.png";
 
 interface IconProps {
   size?: number;
@@ -136,15 +138,9 @@ export function CursorIcon(props: IconProps) {
   );
 }
 
-// Antigravity has no Simple Icons entry; an upward mark with an orbit line
-// that reads as "anti-gravity". TODO: replace with official mark.
-export function AntigravityIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M12 2.5 18 13h-4v8h-4v-8H6L12 2.5z" />
-      <path d="M3 17.5c2 2.2 5.3 3.1 9 3.1s7-1 9-3.1v2.3c-2 2-5.3 3-9 3s-7-1-9-3v-2.3z" opacity=".5" />
-    </Svg>
-  );
+// Official asset: https://antigravity.google/assets/image/brand/antigravity-icon__full-color.png
+export function AntigravityIcon({ size = 20, className }: IconProps) {
+  return <Image src={antigravityMark} alt="" aria-hidden width={size} height={size} className={className} unoptimized />;
 }
 
 const ICONS = {

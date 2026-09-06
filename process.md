@@ -194,3 +194,5 @@ is an extraction outcome, not a capture failure. No direct memory writes used.
 - User requested removing duplicate inline installation/setup instructions. They now appear only in the Connect a workspace dialog; the account-labelled workspace list remains below the button. One-line rendering change, local flow untouched; committed6a8b2d9 and deployed to isolated Hetzner.
 
 - Per user clarification, supported tool label is now Claude Code & Cowork. Replaced separate ChatGPT and claude.ai/Cowork unsupported cards with one ChatGPT & Claude chat card: desktop chat/web connectors coming soon. This is a user-requested capability-label correction, not a new Cowork runtime validation.
+
+- Replaced invented Antigravity glyph with the official full-color PNG supplied by the user. Bundled as a static Next asset so project URL routing does not block it and browsers need no third-party image request.
