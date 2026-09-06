@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import db from "../db.js";
 import { createSessionWorktree, overlayEnvFiles } from "./worktrees.js";
+import { applyRepoEnv } from "./repo-env.js";
 
 const exec = promisify(execFile);
 
@@ -88,7 +89,7 @@ export function conversationRepos(key: string): CloudRepo[] {
 // cannot allocate two branches for the same conversation/repo.
 const creating = new Map<string, Promise<CloudRepo>>();
 
-export async function ensureConversationWorktree(key: string, name: string): Promise<CloudRepo> {
+export async function ensureConversationWorktree(key: string, name: string, refreshEnv = false): Promise<CloudRepo> {
   if (!cloudMode()) throw new Error("Cloud workspaces require FLOW_MODE=prod");
   const lock = JSON.stringify([key, name]);
   const existing = creating.get(lock);
@@ -105,6 +106,7 @@ export async function ensureConversationWorktree(key: string, name: string): Pro
     const repo = conversationRepos(key).find((r) => r.name === name);
     if (!repo) throw new Error(`Unknown code repo "${name}"; connect it first`);
     if (repo.worktree) {
+      let restored = false;
       if (repo.worktree.archived_at && !existsSync(repo.worktree.path)) {
         const tip = await cloudGit(repo.source, ["rev-parse", `refs/heads/${repo.worktree.branch}^{commit}`]);
         if (tip !== repo.worktree.checkpoint_commit) throw new Error("Retained branch changed; refusing to restore a different checkpoint");
@@ -115,8 +117,10 @@ export async function ensureConversationWorktree(key: string, name: string): Pro
         // git worktree add allocates a new metadata identity.
         repo.worktree.git_dir = null;
         db.prepare("UPDATE cloud_worktrees SET git_dir = NULL WHERE conversation_key = ? AND repo = ?").run(key, name);
+        restored = true;
       }
       await reconcileWorktree(key, repo);
+      if (restored || refreshEnv) applyRepoEnv(name, repo.source, repo.worktree.path, repo.worktree.git_dir!);
       return repo;
     }
     let commit: string | undefined;
@@ -138,6 +142,7 @@ export async function ensureConversationWorktree(key: string, name: string): Pro
     writeFileSync(path.join(gitDir, "flow-task-identity"), gitIdentity, { mode: 0o600 });
     db.prepare("INSERT INTO cloud_worktrees (conversation_key, repo, path, branch, base_commit, git_dir, git_identity) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(key, name, result.path, result.branch, commit, gitDir, gitIdentity);
+    applyRepoEnv(name, repo.source, result.path, gitDir);
     return { ...repo, worktree: { ...result, base_commit: commit, git_dir: gitDir, git_identity: gitIdentity } };
   }
 }
@@ -193,9 +198,9 @@ export function withConversationTurn<T>(key: string, run: () => Promise<T>): Pro
   return next;
 }
 
-export async function restoreConversationWorktrees(key: string): Promise<void> {
+export async function restoreConversationWorktrees(key: string, refreshEnv = false): Promise<void> {
   if (db.prepare("SELECT 1 FROM cloud_worktrees WHERE conversation_key = ?").get(key)) {
-    for (const repo of conversationRepos(key)) if (repo.worktree) await ensureConversationWorktree(key, repo.name);
+    for (const repo of conversationRepos(key)) if (repo.worktree) await ensureConversationWorktree(key, repo.name, refreshEnv);
   }
   db.prepare("UPDATE cloud_conversations SET updated_at = unixepoch() WHERE conversation_key = ?").run(key);
 }

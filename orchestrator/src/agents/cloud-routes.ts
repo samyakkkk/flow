@@ -22,7 +22,7 @@ export function registerCloudTaskRoutes(app: FastifyInstance): void {
     try { conversationKey(body.conversation!); }
     catch (err) { return reply.code(400).send({ error: (err as Error).message }); }
     if (containsSecret(body.message)) return reply.code(400).send({ error: "Message contains credentials" });
-    const job = await enqueueJob({ type: "answer", input: { question: body.message, conversation: body.conversation } });
+    const job = await enqueueJob({ type: "answer", input: { question: body.message, display_message: body.message, conversation: body.conversation } });
     return reply.code(202).send({ ...job, backend: "opencode" });
   });
 

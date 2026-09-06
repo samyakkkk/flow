@@ -37,6 +37,7 @@ export class FlowRuntime implements AgentRuntime {
     query.onStatus?.("Searching the knowledge graph…");
     const { id } = await enqueueJob({ type: "answer", input: {
       question,
+      display_message: query.prompt,
       ...(cloud ? { conversation: slackConversation(
         query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
       ) } : {}),

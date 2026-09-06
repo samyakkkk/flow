@@ -227,6 +227,8 @@ export function getSettingDef(key: string): SettingDef | undefined {
 
 const SCRYPT_SALT = "flow-orchestrator-settings-v1";
 
+let cachedEncryptionKey: { token: string; key: Buffer } | undefined;
+
 function derivedKey(): Buffer {
   const token = process.env.FLOW_ADMIN_TOKEN;
   if (!token) {
@@ -234,10 +236,11 @@ function derivedKey(): Buffer {
       "FLOW_ADMIN_TOKEN is not set — refusing to encrypt/decrypt settings without an encryption key."
     );
   }
-  return scryptSync(token, SCRYPT_SALT, 32);
+  if (cachedEncryptionKey?.token !== token) cachedEncryptionKey = { token, key: scryptSync(token, SCRYPT_SALT, 32) };
+  return cachedEncryptionKey.key;
 }
 
-function encrypt(plain: string): string {
+export function encrypt(plain: string): string {
   const iv = randomBytes(12);
   const key = derivedKey();
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -245,7 +248,7 @@ function encrypt(plain: string): string {
   return `v1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${enc.toString("base64")}`;
 }
 
-function decrypt(stored: string): string | null {
+export function decrypt(stored: string): string | null {
   const parts = stored.split(":");
   if (parts[0] !== "v1" || parts.length !== 4) return null;
   try {

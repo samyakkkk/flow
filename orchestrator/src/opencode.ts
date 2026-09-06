@@ -36,10 +36,12 @@ import { track } from "./telemetry.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
 import {
   bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
-  slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, type ConversationRef,
+  slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, ensureConversationWorktree, conversationRepos, type ConversationRef,
 } from "./agents/cloud-workspaces.js";
-import { cloudOpencodeConfig, cloudShellVerificationFailed } from "./agents/cloud-tool-policy.js";
-import { releaseCodingSlot } from "./agents/coding-slot.js";
+import { cloudOpencodeConfig, cloudShellVerificationFailed, createCloudToolPolicy } from "./agents/cloud-tool-policy.js";
+import { releaseCodingSlot, requestCodingSlot, attachCodingChild } from "./agents/coding-slot.js";
+import { redactCloudText } from "./agents/repo-env.js";
+import { recordCloudEvent } from "./agents/cloud-events.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -111,6 +113,8 @@ export interface Job {
   result_json?: string;
   repo?: string;
   notify_count: number;
+  created_at?: number;
+  updated_at?: number;
   session_id?: string;
 }
 
@@ -675,7 +679,7 @@ function scheduleJob(id: string, opts: JobInput): void {
   }
   void withConversationTurn(key, async () => {
     if (getJob(id)?.status !== "queued") return;
-    await restoreConversationWorktrees(key);
+    await restoreConversationWorktrees(key, true);
     if (getJob(id)?.status !== "queued") return;
     // Resolve at execution time: the preceding turn may only just have created
     // its session, or may have failed after emitting its first session event.
@@ -800,7 +804,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
 
     let runResult: { result: unknown; sessionId: string };
 
-    if (process.env.FLOW_FAKE_OPENCODE) {
+    if (cloudMode() && opts.input.manual_command) {
+      runResult = await runCloudCommand(opts, id);
+    } else if (process.env.FLOW_FAKE_OPENCODE) {
       runResult = await runFakeOpencode(opts, id);
     } else {
       runResult = await runRealOpencode(opts, id);
@@ -1103,7 +1109,7 @@ export function killJobsForRepo(repo: string): string[] {
   return killed;
 }
 
-function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string, onLine?: (line: string) => void, jobId?: string): Promise<SpawnResult> {
+function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string, onLine?: (line: string) => void, jobId?: string, commandInput?: string): Promise<SpawnResult> {
   return new Promise((resolve) => {
     // stdin MUST be 'ignore': with the default 'pipe', opencode sees an open
     // stdin and waits on it forever, producing zero output (the runs hang at
@@ -1113,7 +1119,7 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
     // kill reaches the CLI's own children (MCP subprocess, git, etc.).
     const child = spawn(cmd, args, {
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [commandInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       ...(cwd ? { cwd } : {}),
       ...(jobId ? { detached: true } : {}),
     });
@@ -1144,11 +1150,44 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
     // The leader may exit while a dev server still holds its pipes open.
     // Stop descendants before close, which is the boundary for slot release.
     child.on("exit", () => { if (jobId) killTree(child); });
-    child.stdout.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; feedLines(s); });
-    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    if (commandInput !== undefined) child.once("spawn", () => {
+      try {
+        attachCodingChild(jobId!, child.pid!);
+        child.stdin!.on("error", () => {});
+        child.stdin!.end(commandInput + "\n");
+      } catch (error) { timeoutError = error as Error; killTree(child); }
+    });
+    child.stdout!.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; if (commandInput !== undefined) stdout = stdout.slice(-256_000); feedLines(s); });
+    child.stderr!.on("data", (d: Buffer) => { const s = d.toString(); stderr += s; if (commandInput !== undefined) { stderr = stderr.slice(-256_000); feedLines(s); } });
     child.on("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status: null, stdout, stderr, error }); } });
     child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status, stdout, stderr, error: timeoutError }); } });
   });
+}
+
+async function runCloudCommand(opts: JobInput, id: string): Promise<{ result: unknown; sessionId: string }> {
+  const key = String(opts.input.conversation_key);
+  const input = opts.input.manual_command as { repo: string; command: string };
+  while (!requestCodingSlot(id).acquired) {
+    if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+  const repo = await ensureConversationWorktree(key, input.repo, true);
+  const args: Record<string, unknown> = { command: input.command, workdir: repo.worktree!.path };
+  await createCloudToolPolicy({ directory: WORKSPACE_DIR, repos: async () => conversationRepos(key), ensure: (name) => ensureConversationWorktree(key, name) })("bash", args);
+  const env = { ...process.env };
+  delete env.FLOW_ADMIN_TOKEN; delete env.BASH_ENV; delete env.ENV;
+  if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+  const result = await spawnAsync("/bin/bash", ["--noprofile", "--norc", "-s"], env, 120_000, String(args.workdir), (line) => {
+    recordCloudEvent(id, JSON.stringify({ type: "text", part: { text: line } }));
+  }, id, String(args.command));
+  const output = redactCloudText((result.stdout + result.stderr).slice(-64_000));
+  const error = result.error?.message;
+  persistJobTranscript(id, JSON.stringify({ type: "text", part: { text: output } }), "");
+  return { sessionId: String(opts.input.session_id ?? ""), result: {
+    answer_md: error ? `Command stopped: ${error}` : `Command exited with status ${result.status}.`,
+    output, exit_code: result.status, citations: [], confidence: 1, gaps: [],
+  } };
 }
 
 // ------------------------------------------------------------------
@@ -1288,6 +1327,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   const t0 = Date.now();
   const spawned = await spawnAsync(opencodeBin, args, env, timeoutMs, cloud ? WORKSPACE_DIR : undefined, (line) => {
     recordActivityLine(jobId, "opencode", line);
+    if (cloud) recordCloudEvent(jobId, line);
     if (cloud && typeof opts.input.conversation_key === "string") {
       try {
         const event = JSON.parse(line) as { sessionID?: string };
@@ -1301,7 +1341,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   );
   const latencyMs = Date.now() - t0;
 
-  persistJobTranscript(jobId, spawned.stdout ?? "", spawned.stderr ?? "");
+  persistJobTranscript(jobId, cloud ? redactCloudText(spawned.stdout ?? "") : spawned.stdout ?? "", cloud ? redactCloudText(spawned.stderr ?? "") : spawned.stderr ?? "");
 
   if (spawned.error || spawned.status !== 0) {
     logLLM({
@@ -1338,7 +1378,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
     }
   }
 
-  const answerMd = textParts.join("") || "(no answer)";
+  const answerMd = cloud ? redactCloudText(textParts.join("") || "(no answer)") : textParts.join("") || "(no answer)";
 
   logLLM({
     kind: "opencode_job", ref: jobId, model, ok: true, latencyMs,
@@ -1354,7 +1394,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
         citations: [], confidence: 0, gaps: ["Shell verification failed; tests are not confirmed to have passed."],
       }, sessionId };
     }
-    return { result: parseAnswerPayload(answerMd, textParts.at(-1)), sessionId };
+    return { result: parseAnswerPayload(answerMd, cloud && textParts.length ? redactCloudText(textParts.at(-1)!) : textParts.at(-1)), sessionId };
   }
 
   return { result: { status: "ok", raw: answerMd }, sessionId };

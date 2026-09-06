@@ -87,3 +87,9 @@ export function releaseCodingSlot(id: string): void {
     else connection!.prepare("UPDATE requests SET releasing = 1 WHERE id = ?").run(id);
   }).immediate();
 }
+
+export function attachCodingChild(id: string, child: number): void {
+  const result = state().prepare("UPDATE requests SET child = ?, child_identity = ? WHERE id = ? AND owner = ? AND releasing = 0")
+    .run(child, identity(child), id, process.pid);
+  if (result.changes !== 1) throw new Error("Coding slot was released before command startup");
+}

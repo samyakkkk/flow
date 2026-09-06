@@ -90,3 +90,53 @@ blindly force-cleaning. Local checkpoint branches are retained indefinitely.
 `npm test --workspace orchestrator` includes the lifecycle tests. Set
 `FLOW_TEST_OPENCODE_BIN` to an installed OpenCode binary to include the real
 plugin smoke test. Run on Linux to exercise orphan process-group recovery.
+
+## Repository environment files
+
+In the server dashboard, expand **Environment files** on a repository row.
+Upload `.env`, `.env.local`, or another `.env.*` file (256 KiB maximum).
+Files are scoped to that repository in that Flow project. The API lists names
+and update times, never values. Uploading the same filename replaces its saved
+version; Remove deletes the saved version. Store development/test credentials.
+
+Contents use the same AES-256-GCM encryption as Flow settings, keyed from
+`FLOW_ADMIN_TOKEN`. Back up that key alongside the DB; changing it without a
+migration makes existing encrypted settings and env files unreadable. This is
+protection for stored data, not isolation from administrators or task processes.
+Every authenticated administrator of the project can replace these files.
+
+At the start of a conversation turn, Flow writes uploads into the appropriate
+repo worktree with mode 0600. Uploads override source env copies. Applications
+must load the files as usual; Flow does not execute shell code from env files
+or globally export their contents. Changes during a run apply on a later turn.
+If an agent/user modifies or deletes a managed env file, refresh fails and keeps
+that state for inspection. Removing an upload restores the source version on
+next refresh, or removes the unchanged uploaded copy if no source file exists.
+
+Uploads are excluded from cleanup commits and restored from encrypted settings
+when a tree is recreated. Known secret values and credential patterns are
+redacted from the cloud run display and new transcript logs. Redaction is
+best-effort: transformed values, short values, and previously stored logs can
+still contain sensitive data. Never treat agent output as a secret boundary.
+
+## Dashboard runs and commands
+
+The server's Agents page shows Slack and dashboard conversations, their recent
+turns, live activity, results, worktrees and queue status. Follow-ups preserve
+the conversation; Cancel stops the selected queued/running turn. Follow-ups
+submitted from the dashboard show their results there; Slack messages continue
+to receive replies in Slack. The local-mode ACP Agents UI is unchanged.
+
+The command panel runs a noninteractive Bash command in a selected task
+worktree. It shares the coding queue, records output/exit status, and stops after
+120 seconds. Its stdin is closed after the supplied command; interactive CLIs,
+PTYs and persistent development servers are not supported in this first view.
+Installed server CLIs use the server OS user's existing credentials. Commands
+do not execute on a connected laptop. A local install inside a worktree remains
+specific to that tree; a server administrator provisions shared tools.
+
+Worktrees isolate source changes, not OS processes, ports, databases, browser
+profiles or cloud resources. Use task-specific ports and test databases, avoid
+production credentials, and do not run global setup or service management in
+tasks. Authenticated port previews and strong process/filesystem isolation need
+additional implementation; this release does not provide them.

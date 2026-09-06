@@ -9,6 +9,8 @@ import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
 import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses } from "./opencode.js";
+import { registerRepoEnvRoutes } from "./agents/repo-env-routes.js";
+import { registerCloudViewRoutes } from "./agents/cloud-view-routes.js";
 import { activityForRepo } from "./job-activity.js";
 import { readIndexLog } from "./index-log.js";
 import { registerLinearWebhook, registerLinearPoller } from "./adapters/linear.js";
@@ -95,6 +97,8 @@ registerMemoryRoutes(app);
 // repo-level. flow.db is primary — this is a read-only projection lookup.
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
+registerRepoEnvRoutes(app);
+registerCloudViewRoutes(app);
 registerSlackAgentRoutes(app);
 registerTelemetryRoutes(app);
 

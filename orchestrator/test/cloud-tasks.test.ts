@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
@@ -68,6 +68,8 @@ before(async () => {
   const { registerCloudTaskRoutes } = await import("../src/agents/cloud-routes.js");
   app.addHook("onRequest", requireAuth);
   registerCloudTaskRoutes(app);
+  (await import("../src/agents/repo-env-routes.js")).registerRepoEnvRoutes(app);
+  (await import("../src/agents/cloud-view-routes.js")).registerCloudViewRoutes(app);
   await app.ready();
 });
 
@@ -574,4 +576,134 @@ test("restart recovery fails pending edits but preserves the session and worktre
   assert.equal(jobs.getJob("restart-queued")!.status, "failed");
   assert.equal(workspaces.conversationSession(key), "retained-session");
   assert.equal(workspaces.conversationRepos(key)[0].worktree!.path, repo.worktree!.path);
+});
+
+test("repo env uploads are encrypted, scoped, refreshed between turns and excluded from checkpoints", async () => {
+  const env = await import("../src/agents/repo-env.js");
+  const headers = { authorization: "Bearer cloud-test-admin" };
+  const secret = "unique-environment-value-984329";
+  assert.equal((await app.inject({ method: "PUT", url: "/v1/agents/repos/api/env", payload: { filename: ".env.local", content: `APP_SECRET=${secret}\n` } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "PUT", url: "/v1/agents/repos/api/env", headers, payload: { filename: "../.env", content: "BAD=1" } })).statusCode, 400);
+  assert.equal((await app.inject({ method: "PUT", url: "/v1/agents/repos/api/env", headers, payload: { filename: ".env.local", content: `APP_SECRET=${secret}\n` } })).statusCode, 200);
+  const listed = await app.inject({ method: "GET", url: "/v1/agents/repos/api/env", headers });
+  assert.ok(!listed.body.includes(secret));
+  assert.ok(!(db.prepare("SELECT value FROM config WHERE key = ?").get("repo-env:api:.env.local") as { value: string }).value.includes(secret));
+  const { key } = context();
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const tree = repo.worktree!;
+  const file = path.join(tree.path, ".env.local");
+  assert.equal(readFileSync(file, "utf8"), `APP_SECRET=${secret}\n`);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(existsSync(path.join(source("api"), ".env.local")), false);
+  const web = await workspaces.ensureConversationWorktree(key, "web");
+  assert.equal(existsSync(path.join(web.worktree!.path, ".env.local")), false);
+  assert.equal(env.redactCloudText(`value ${secret}`), "value [redacted]");
+  env.saveRepoEnv("api", ".env.local", "APP_SECRET=second-secret-value\n");
+  await workspaces.ensureConversationWorktree(key, "api");
+  assert.ok(readFileSync(file, "utf8").includes(secret));
+  await workspaces.ensureConversationWorktree(key, "api", true);
+  assert.equal(readFileSync(file, "utf8"), "APP_SECRET=second-secret-value\n");
+  writeFileSync(path.join(tree.path, "persist.txt"), "keep code\n");
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  assert.deepEqual(await cleanupConversation(key), { archived: 2, retained: 0 });
+  const saved = workspaces.conversationRepos(key)[0].worktree!;
+  assert.ok(!git(source("api"), "ls-tree", "-r", "--name-only", saved.checkpoint_commit!).includes(".env.local"));
+  const restored = await workspaces.ensureConversationWorktree(key, "api", true);
+  const restoredFile = path.join(restored.worktree!.path, ".env.local");
+  assert.equal(readFileSync(path.join(restored.worktree!.path, "persist.txt"), "utf8"), "keep code\n");
+  assert.equal(readFileSync(restoredFile, "utf8"), "APP_SECRET=second-secret-value\n");
+  writeFileSync(restoredFile, "LOCAL=retain-me\n");
+  env.saveRepoEnv("api", ".env.local", "REPLACEMENT=no\n");
+  await assert.rejects(workspaces.ensureConversationWorktree(key, "api", true), /retained instead of overwritten/);
+  assert.equal(readFileSync(restoredFile, "utf8"), "LOCAL=retain-me\n");
+  assert.deepEqual(await cleanupConversation(key), { archived: 0, retained: 1 });
+  env.removeRepoEnv("api", ".env.local");
+});
+
+test("env replacement rejects symlinks; removal restores original source env", async () => {
+  const env = await import("../src/agents/repo-env.js");
+  writeFileSync(path.join(source("api"), ".env"), "SOURCE=original\n");
+  env.saveRepoEnv("api", ".env", "UPLOAD=replacement\n");
+  const { key } = context();
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const file = path.join(repo.worktree!.path, ".env");
+  env.removeRepoEnv("api", ".env");
+  await workspaces.ensureConversationWorktree(key, "api", true);
+  assert.equal(readFileSync(file, "utf8"), "SOURCE=original\n");
+  rmSync(file); symlinkSync(path.join(source("api"), ".env"), file);
+  env.saveRepoEnv("api", ".env", "UPLOAD=unsafe\n");
+  await assert.rejects(workspaces.ensureConversationWorktree(key, "api", true), /not a regular file/);
+  assert.equal(readFileSync(path.join(source("api"), ".env"), "utf8"), "SOURCE=original\n");
+  env.removeRepoEnv("api", ".env"); rmSync(path.join(source("api"), ".env"));
+});
+
+test("cloud run API executes real commands and followups in the same tree with redacted output", async () => {
+  const headers = { authorization: "Bearer cloud-test-admin" };
+  const initial = await app.inject({ method: "POST", url: "/v1/agents/tasks", headers, payload: { message: "hello", conversation: { source: "dashboard", id: "command-test" } } });
+  const id = initial.json().id;
+  const first = await finished(id);
+  const session = first.session_id;
+  const command = async (text: string) => {
+    const response = await app.inject({ method: "POST", url: `/v1/agents/tasks/${id}/command`, headers, payload: { repo: "api", command: text } });
+    assert.equal(response.statusCode, 202, response.body);
+    return finished(response.json().id);
+  };
+  const edited = await command(`node -e 'require("fs").writeFileSync("command-result.txt", "first"); console.log("actual-command-output")'`);
+  assert.equal(edited.status, "done", edited.result_json ?? "");
+  assert.equal(JSON.parse(edited.result_json!).exit_code, 0);
+  assert.ok(JSON.parse(edited.result_json!).output.includes("actual-command-output"));
+  assert.equal(edited.session_id, session);
+  const followed = await command(`node -e 'const fs=require("fs"); if(fs.readFileSync("command-result.txt","utf8")!=="first")process.exit(7); fs.appendFileSync("command-result.txt", "-second")'`);
+  assert.equal(JSON.parse(followed.result_json!).exit_code, 0);
+  assert.equal(existsSync(path.join(source("api"), "command-result.txt")), false);
+  const failed = await command("node -e 'process.exit(9)'");
+  assert.equal(JSON.parse(failed.result_json!).exit_code, 9);
+  const detail = await app.inject({ method: "GET", url: `/v1/agents/tasks/${id}`, headers });
+  assert.equal(detail.json().turns.length, 4);
+  assert.ok(detail.json().turns[1].events.length);
+  const list = await app.inject({ method: "GET", url: "/v1/agents/tasks", headers });
+  assert.ok(list.json().tasks.some((task: { id: string }) => task.id === failed.id));
+  assert.equal((await app.inject({ method: "GET", url: `/v1/agents/tasks/${id}` })).statusCode, 401);
+});
+
+test("manual commands queue across conversations while questions finish; cancellation stops execution", async () => {
+  const headers = { authorization: "Bearer cloud-test-admin" };
+  const { codingSlotStatus } = await import("../src/agents/coding-slot.js");
+  const create = async (name: string) => { const response = await app.inject({ method: "POST", url: "/v1/agents/tasks", headers, payload: { message: "hello", conversation: { source: "dashboard", id: name } } }); await finished(response.json().id); return response.json().id; };
+  const a = await create("queue-command-a"), b = await create("queue-command-b");
+  const start = async (id: string, command: string) => (await app.inject({ method: "POST", url: `/v1/agents/tasks/${id}/command`, headers, payload: { repo: "api", command } })).json().id as string;
+  const first = await start(a, "node -e 'setTimeout(()=>console.log(123),30000)'");
+  for (let i = 0; i < 100 && codingSlotStatus(first) !== "coding"; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(codingSlotStatus(first), "coding");
+  const second = await start(b, "node -e 'require(\"fs\").writeFileSync(\"queued-must-not-run.txt\",\"bad\")'");
+  for (let i = 0; i < 100 && codingSlotStatus(second) !== "waiting"; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(codingSlotStatus(second), "waiting");
+  await create("question-during-command");
+  assert.equal(jobs.getJob(first)!.status, "running");
+  assert.equal(jobs.getJob(second)!.status, "running");
+  await app.inject({ method: "POST", url: `/v1/agents/tasks/${second}/cancel`, headers, payload: {} });
+  await app.inject({ method: "POST", url: `/v1/agents/tasks/${first}/cancel`, headers, payload: {} });
+  await finished(first); await finished(second);
+  await new Promise(r => setTimeout(r, 600));
+  assert.equal(codingSlotStatus(first), undefined);
+  assert.equal(codingSlotStatus(second), undefined);
+  const detail = (await app.inject({ method: "GET", url: `/v1/agents/tasks/${b}`, headers })).json();
+  const tree = detail.repos.find((r: { name: string }) => r.name === "api").worktree;
+  assert.ok(!tree || !existsSync(path.join(tree.path, "queued-must-not-run.txt")));
+});
+
+test("uploaded env secrets are redacted from real terminal results and activity", async () => {
+  const env = await import("../src/agents/repo-env.js");
+  const headers = { authorization: "Bearer cloud-test-admin" };
+  env.saveRepoEnv("web", ".env.local", "PASSWORD=terminal-secret-8726929\n");
+  const initial = await app.inject({ method: "POST", url: "/v1/agents/tasks", headers, payload: { message: "hello", conversation: { source: "dashboard", id: "redact-command" } } });
+  const id = initial.json().id; await finished(id);
+  const response = await app.inject({ method: "POST", url: `/v1/agents/tasks/${id}/command`, headers, payload: { repo: "web", command: "node -e 'console.log(require(\"fs\").readFileSync(\".env.local\",\"utf8\"))'" } });
+  const done = await finished(response.json().id);
+  assert.equal(JSON.parse(done.result_json!).exit_code, 0);
+  assert.ok(!done.result_json!.includes("terminal-secret-8726929"));
+  assert.ok(done.result_json!.includes("[redacted]"));
+  const detail = await app.inject({ method: "GET", url: `/v1/agents/tasks/${id}`, headers });
+  assert.ok(!detail.body.includes("terminal-secret-8726929"));
+  env.removeRepoEnv("web", ".env.local");
 });

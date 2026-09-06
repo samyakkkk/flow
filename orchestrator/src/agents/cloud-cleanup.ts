@@ -5,6 +5,7 @@ import db from "../db.js";
 import { containsSecret } from "../events.js";
 import { cloudGit, cloudMode, conversationRepos, reconcileWorktree, withConversationTurn, type CloudRepo } from "./cloud-workspaces.js";
 import { requestCodingSlot, releaseCodingSlot } from "./coding-slot.js";
+import { managedEnvUnchanged, redactCloudText } from "./repo-env.js";
 
 const split = (s: string) => s.split("\0").filter(Boolean);
 const disposable = new Set(["node_modules", ".next", ".nuxt", ".turbo", "__pycache__", ".pytest_cache"]);
@@ -16,6 +17,7 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
   const cwd = tree.path;
   const metadata = tree.git_dir!;
   const unchangedEnv = (name: string) => {
+    if (managedEnvUnchanged(metadata, cwd, name)) return true;
     if (!/^\.env(?:\.[^/]+)?$/.test(name)) return false;
     const local = path.join(cwd, name), source = path.join(repo.source, name);
     return existsSync(local) && existsSync(source) && lstatSync(local).isFile() && lstatSync(source).isFile() && readFileSync(local).equals(readFileSync(source));
@@ -45,6 +47,7 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
     return existsSync(target) ? createHash("sha256").update(readFileSync(target)).digest("hex") : "deleted";
   }).join(":");
   for (const name of changed) {
+    if (managedEnvUnchanged(metadata, cwd, name)) continue;
     if (unchangedEnv(name) && !(await cloudGit(cwd, ["ls-files", "--", name]))) continue;
     if (sensitiveName(name)) throw new Error("Credential-related changes require manual preservation; retained workspace");
     const target = path.join(cwd, name);
@@ -54,7 +57,8 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
     // Ensure a path through a symlink cannot read outside the owned tree.
     const relative = path.relative(realpathSync(cwd), realpathSync(target));
     if (relative.startsWith("../") || path.isAbsolute(relative)) throw new Error("Changed path escapes workspace");
-    if (containsSecret(readFileSync(target, "utf8"))) throw new Error("Possible credential in changed file; retained workspace");
+    const content = readFileSync(target, "utf8");
+    if (containsSecret(content) || redactCloudText(content) !== content) throw new Error("Possible credential in changed file; retained workspace");
   }
 
   const head = await cloudGit(cwd, ["rev-parse", "HEAD"]);

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useMode } from "@/lib/useMode";
+import { CloudAgentsView } from "./CloudAgents";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
 import { Kicker, Heading, Card, StatusPill } from "@/components/ui";
@@ -96,6 +98,12 @@ function hasActiveSession(wt: Worktree): boolean {
 }
 
 export function AgentsView() {
+  const { mode, loading } = useMode();
+  if (loading) return <p>Loading agents…</p>;
+  return mode === "prod" ? <CloudAgentsView /> : <LocalAgentsView />;
+}
+
+function LocalAgentsView() {
   const router = useRouter();
   const { prefix } = useProject();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
