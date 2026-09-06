@@ -7,8 +7,8 @@
 // a workspace is the action that makes those tools Flow-powered (installs
 // hooks + MCP + skills; sessions then teach the brain). Two equivalent ways
 // in, as an explicit either/or: native folder chooser, or `flow setup
-// <project>` in a terminal. ChatGPT chats and claude.ai/Cowork can't work
-// locally — two quiet "later" cards, not silence.
+// <project>` in a terminal. ChatGPT and Claude chat connectors have a
+// shared coming-soon card; Claude Code and Cowork share the supported label.
 
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
