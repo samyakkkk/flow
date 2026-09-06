@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
       // Browser mutations need same-origin proof in addition to SameSite cookies.
       const origin = req.headers.get("origin");
       const host = req.headers.get("host");
-      if (!origin || new URL(origin).host !== host || req.headers.get("sec-fetch-site") === "cross-site") return json({ error: "Same-origin browser request required" }, 403);
+      const protocol = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
+      if (!origin || origin !== `${protocol}://${host}` || req.headers.get("sec-fetch-site") === "cross-site") return json({ error: "Same-origin browser request required" }, 403);
       const user = await currentUser();
       if (!user) return json({ error: "Sign in first" }, 401);
       const t = readTicket(b.ticket);

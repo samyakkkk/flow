@@ -8,6 +8,7 @@ export interface Pairing { id: string; userId: string; exp: number; consumed?: b
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 function store() { const s = loadAuthStore(); if (!s) throw new Error("Authentication unavailable"); return s; }
 export function startPairing(project: string, machine: string, workspace: string, challenge: string) {
+  if (typeof machine !== "string" || typeof workspace !== "string" || typeof challenge !== "string") throw new Error("Invalid setup request");
   if (!/^[a-f0-9]{64}$/.test(challenge) || !machine || !workspace || machine.length > 100 || workspace.length > 100 || /[\x00-\x1f\x7f]/.test(machine + workspace)) throw new Error("Invalid setup request");
   const t: Ticket = { id: randomBytes(16).toString("hex"), project, machine, workspace, challenge, exp: Date.now() + 10 * 60_000 };
   const payload = Buffer.from(JSON.stringify(t)).toString("base64url");

@@ -38,5 +38,6 @@ test("browser pairing: possession, grants, expiry, denial, one-time redemption a
     const now = Date.now; const exp = request();
     try { Date.now = () => now() + 11 * 60_000; assert.throws(() => readTicket(exp.ticket), /expired/); } finally { Date.now = now; }
     assert.throws(() => startPairing("engineering", "bad\nterminal", "payments", challenge));
+    assert.throws(() => startPairing("engineering", {} as string, "payments", challenge));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
