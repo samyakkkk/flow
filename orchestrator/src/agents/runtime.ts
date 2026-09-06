@@ -12,12 +12,13 @@
 // the same API in front of containers instead of local processes.
 
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
+import { executableCandidates, rememberExecutable } from "../../../bin/lib/executables.mjs";
 import { track } from "../telemetry.js";
 import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
 import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
@@ -132,40 +133,6 @@ function isUnder(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function isExecutable(file: string): boolean {
-  try {
-    if (!statSync(file).isFile()) return false;
-    accessSync(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function commandNames(command: string): string[] {
-  if (process.platform !== "win32" || path.extname(command)) return [command];
-  const exts = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
-  return [command, ...exts.map((ext) => `${command}${ext}`)];
-}
-
-function executableCandidates(command: string): string[] {
-  if (path.isAbsolute(command) || command.includes(path.sep) || command.includes(path.win32.sep)) {
-    return [command];
-  }
-  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const dir of dirs) {
-    for (const name of commandNames(command)) {
-      const candidate = path.join(dir, name);
-      if (seen.has(candidate)) continue;
-      seen.add(candidate);
-      out.push(candidate);
-    }
-  }
-  return out;
-}
-
 function isFlowManagedExecutable(file: string): boolean {
   let realFile: string;
   try {
@@ -184,13 +151,7 @@ function isFlowManagedExecutable(file: string): boolean {
 }
 
 function localExecutableCandidates(command: string): string[] {
-  const out: string[] = [];
-  for (const candidate of executableCandidates(command)) {
-    if (isExecutable(candidate) && !isFlowManagedExecutable(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
+  return executableCandidates(command, { accept: file => !isFlowManagedExecutable(file) });
 }
 
 function parseVersionText(version: string | null): number[] | null {
@@ -211,7 +172,10 @@ function compareVersionParts(a: number[] | null, b: number[] | null): number {
 
 export async function resolveLocalExecutable(command: string): Promise<string | null> {
   const candidates = localExecutableCandidates(command);
-  if (candidates.length <= 1) return candidates[0] ?? null;
+  if (candidates.length <= 1) {
+    if (candidates[0]) rememberExecutable(command, candidates[0]);
+    return candidates[0] ?? null;
+  }
 
   const scored = await Promise.all(
     candidates.map(async (candidate, index) => ({
@@ -221,7 +185,9 @@ export async function resolveLocalExecutable(command: string): Promise<string | 
     }))
   );
   scored.sort((a, b) => compareVersionParts(b.version, a.version) || a.index - b.index);
-  return scored[0]?.candidate ?? null;
+  const selected = scored[0]?.candidate ?? null;
+  if (selected) rememberExecutable(command, selected);
+  return selected;
 }
 
 function bundledSpawn(desc: BackendDescriptor): Omit<SpawnAttempt, "source" | "env"> | null {

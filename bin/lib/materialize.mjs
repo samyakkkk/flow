@@ -1,3 +1,4 @@
+import { discoverExecutable } from "./executables.mjs";
 // lib/materialize.mjs — the materializer: renders Flow's four atoms (hook
 // shim wiring, MCP registration, skill, instruction block) into each coding
 // tool's config dialect, per repo. See docs/harness-integrations.md §5.
@@ -772,12 +773,7 @@ export const ALL_HARNESSES = Object.keys(RENDERERS);
 // but does leave real cruft (a ~/.codex dir, trust entries). `--all`
 // force-renders everything (pre-wiring for tools installed later).
 function onPath(bin) {
-  try {
-    execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  return discoverExecutable(bin) !== null;
 }
 
 export function detectHarnesses() {

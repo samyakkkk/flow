@@ -26,6 +26,7 @@ import { join, relative, basename } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
+import { discoverExecutable } from "./lib/executables.mjs";
 import { portsForIndex, dashboardPort } from "./lib/ports.mjs";
 import {
   flowRoot,
@@ -938,7 +939,16 @@ async function upProject(name, { rebuilt = false } = {}) {
   ]);
 
   if (gwOk && orchOk) {
-    finish(`${OK} ${c.dim("services up")}`);
+    const configured = projectEnv.INDEXER_RUNTIME || process.env.INDEXER_RUNTIME;
+    const backend = mode === "prod" ? "opencode" : ["claude", "codex", "opencode"].includes(configured) ? configured : ["claude", "codex", "opencode"].find(command => discoverExecutable(command)) ?? "opencode";
+    const overrideName = { claude: "CLAUDE_CODE_EXECUTABLE", codex: "CODEX_PATH", opencode: "OPENCODE_BIN" }[backend];
+    const executable = projectEnv[overrideName] || process.env[overrideName] || discoverExecutable(backend);
+    const check = executable ? spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 5000 }) : null;
+    if (!check || check.status !== 0) {
+      finish(`${OK} ${c.dim("services up")} — ${c.yellow(`${backend} unavailable; coding jobs are not ready. Install or repair ${backend}, then run flow up ${name}.`)}`);
+    } else {
+      finish(`${OK} ${c.dim("services up")} — ${backend} executable ready`);
+    }
     return { name, ok: true, ports, mode };
   }
 
