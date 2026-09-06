@@ -88,12 +88,14 @@ pre-existing errors. PR #79 remains draft while remaining coverage is incomplete
 Live Slack testing needs a designated channel; none has been sent. Mac was
 locked at the latest native UI attempt, blocking Cursor cloud interaction.
 
-Pending Copilot origin: ext-copilot-8f16f408-bf67-47d6-80a3-56f9c0851c27,
-completed 2026-09-06 00:59:47 UTC. Desktop transcript acknowledges committed,
-project-authorized remote source reads with SHA/line evidence and no execution
-access. Cloud session is idle, extraction watermark unset at 01:36 UTC; normal
-45-minute idle threshold plus five-minute sweep means check after 01:50 UTC.
-No direct memory writes were used. Earlier Pine prompt extracted no memories.
+Pending Copilot origin: ext-copilot-b1c32f3a-81d8-4d8f-8741-421db3dfe67e,
+completed 2026-09-06 02:08:59 UTC. Desktop returned prose only (no tool calls),
+acknowledging the standing Flow/OpenCode-only cloud deployment and personal
+device trust boundary. Cloud captured 1772 bytes; idle extraction watermark
+unset. Check after 03:00 UTC for normal idle extraction. Previous architecture
+origin 8f16f408 reached watermark3 but extractor returned successful [] (LLM log
+26); no observation was stored. Its complete prompt/answer was captured, so this
+is an extraction outcome, not a capture failure. No direct memory writes used.
 
 ## Update log
 
@@ -158,3 +160,5 @@ No direct memory writes were used. Earlier Pine prompt extracted no memories.
 - 2026-09-06: Consolidated docs/coding-agent-setup-notes.md into current per-agent permission/recovery guidance and removed superseded Antigravity/Copilot status claims. Antigravity COMPLETE automatic memory round trip confirmed: origin ext-antigravity-0650f89e-1029-4455-b349-9fa91a761c34 stored info-option requirement e54bf0c7-c785-4af9-b792-25835de6dfe2; fresh Claude 3f00cdb9-ee82-458b-bda4-e0e8b00fb0b4 retrieved it using only ToolSearch and Flow search, evidence data/claude-antigravity-info-retrieval.jsonl. Info UI remains a follow-up requirement.
 
 - 2026-09-06 01:36 UTC heartbeat: Confirmed Copilot architecture decision completed in desktop transcript 8f16f408-bf67-47d6-80a3-56f9c0851c27, native orient successful, cloud session persisted idle with extraction watermark unset. Still below the natural idle threshold; check after 01:50 UTC. Refreshed the main checkpoint and PR description to remove superseded pending/pass claims.
+
+- 2026-09-06 02:09 UTC heartbeat: Copilot remote-source decision extraction returned valid [] with no observations (LLM log26), despite complete captured prompt/answer. Started a final prose-only deployment/trust-boundary requirement test, origin ext-copilot-b1c32f3a-81d8-4d8f-8741-421db3dfe67e; no tool calls, 1772-byte cloud capture, idle awaiting natural extraction after 03:00 UTC. PR79 remains open/draft/mergeable; GitHub reports no status checks.
