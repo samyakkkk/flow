@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
-import { createCloudToolPolicy, patchPaths } from "../src/agents/cloud-tool-policy.js";
+import { createCloudToolPolicy, patchPaths, cloudShellVerificationFailed } from "../src/agents/cloud-tool-policy.js";
 
 const root = mkdtempSync(path.join(tmpdir(), "flow-cloud-test-"));
 process.env.DB_PATH = ":memory:";
@@ -184,13 +184,19 @@ test("patch checks include deletions and move destinations before any edit execu
   assert.equal(readFileSync(target, "utf8"), "base\n");
 });
 
-test("shell requires an explicit owned worktree and refuses direct source/branch operations", async () => {
+test("shell selects an unambiguous owned worktree and refuses source/branch operations", async () => {
   const { key, policy } = context();
   await assert.rejects(policy("bash", { command: "git checkout other", workdir: source("api") }), /existing conversation worktree/);
   assert.equal(workspaces.conversationRepos(key).filter((r) => r.worktree).length, 0);
   const repo = await workspaces.ensureConversationWorktree(key, "api");
   const workdir = repo.worktree!.path;
-  await assert.rejects(policy("bash", { command: "npm test" }), /explicit repository path/);
+  const inferred: Record<string, unknown> = { command: "npm test" };
+  await policy("bash", inferred);
+  assert.equal(inferred.workdir, realpathSync(workdir));
+  const prefixed: Record<string, unknown> = { command: `cd '${workdir}' && node --version` };
+  await policy("bash", prefixed);
+  assert.equal(prefixed.command, "node --version");
+  assert.equal(prefixed.workdir, realpathSync(workdir));
   for (const command of [
     `git -C ${source("api")} checkout other`, "git switch main", "git worktree remove ../other",
     `cd ${source("api")} && npm test`, `echo x > ${source("api")}/file.txt`,
@@ -200,6 +206,16 @@ test("shell requires an explicit owned worktree and refuses direct source/branch
   await policy("bash", { command: "npm test", workdir });
   await policy("bash", { command: "git diff --stat", workdir });
   await policy("bash", { command: "git add . && git commit -m 'Fix behavior'", workdir });
+  await workspaces.ensureConversationWorktree(key, "web");
+  await assert.rejects(policy("bash", { command: "npm test" }), /explicit repository path/);
+});
+
+test("blocked shell attempts cannot establish a passing verification", () => {
+  const event = (status: string, exit?: number) => JSON.stringify({ type: "tool_use", part: { tool: "bash", state: { status, metadata: { exit } } } });
+  assert.equal(cloudShellVerificationFailed(event("error")), true);
+  assert.equal(cloudShellVerificationFailed(event("completed", 1)), true);
+  assert.equal(cloudShellVerificationFailed(event("error") + "\n" + event("completed", 0)), false);
+  assert.equal(cloudShellVerificationFailed("ordinary read-only answer"), false);
 });
 
 test("unknown tools, delegated agents and graph mutations fail closed", async () => {

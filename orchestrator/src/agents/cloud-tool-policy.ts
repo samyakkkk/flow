@@ -169,14 +169,31 @@ export function createCloudToolPolicy(options: {
     }
 
     if (tool === "bash") {
-      const cwd = absolute(args.workdir);
+      if (typeof args.command !== "string") throw new Error("command is required");
+      let command = args.command;
+      let workdir = args.workdir;
+      // Models often send `cd <tree> && command` even with a workdir field.
+      // Translate only this simple prefix into an owned cwd; never execute cd.
+      const prefix = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*&&\s*([\s\S]+)$/.exec(command);
+      if (prefix) {
+        const target = absolute(prefix[1] ?? prefix[2] ?? prefix[3]);
+        if (!repos.some((r) => r.worktree && within(r.worktree.path, target)) ||
+            (workdir !== undefined && canonicalPath(absolute(workdir)) !== canonicalPath(target))) {
+          throw new Error("Run commands in workdir without changing directories, branches, Git metadata, or targeting shared clones");
+        }
+        workdir = target;
+        command = prefix[4];
+      }
+      const owned = repos.filter((r) => r.worktree);
+      if (workdir === undefined && owned.length === 1) workdir = owned[0].worktree!.path;
+      const cwd = absolute(workdir);
       const repo = repos.find((r) => r.worktree && within(r.worktree.path, cwd));
       if (!repo) throw new Error("Shell commands require an existing conversation worktree in workdir; use flow_workspace(repo, edit=true)");
-      if (typeof args.command !== "string") throw new Error("command is required");
       // These catch direct attempts to leave the selected tree or mutate shared
       // Git administration. They do not inspect programs launched by a command:
       // worktree mode is an execution policy, not an OS sandbox.
-      checkShellCommand(args.command, repos);
+      checkShellCommand(command, repos);
+      args.command = command;
       args.workdir = canonicalPath(cwd);
       return;
     }
@@ -201,4 +218,18 @@ export function createCloudToolPolicy(options: {
       throw new Error(`Shared checkout edit blocked. Worktree ready. Re-read and retry using these paths:\n${redirects.join("\n")}`);
     }
   };
+}
+
+/** Tool evidence wins over a model's claim that a blocked test passed. */
+export function cloudShellVerificationFailed(transcript: string): boolean {
+  let attempted = false, succeeded = false;
+  for (const line of transcript.split("\n")) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type !== "tool_use" || event.part?.tool !== "bash") continue;
+      attempted = true;
+      if (event.part.state?.status === "completed" && event.part.state?.metadata?.exit === 0) succeeded = true;
+    } catch { /* malformed events do not establish success */ }
+  }
+  return attempted && !succeeded;
 }

@@ -11,6 +11,11 @@ slot. Before creating an edit workspace, editing a file, or running a shell
 command, the OpenCode plugin requests the machine's coding slot. Requests are
 FIFO; another conversation can still answer questions while a coding task runs.
 Slack displays when a task is waiting. Resumed direct edits also acquire the slot.
+With exactly one owned worktree, Flow can fill in an omitted shell working
+directory. A simple leading `cd <owned-tree> &&` is translated into that working
+directory, never executed as a directory change. Ambiguous or external paths
+are refused. If shell commands were attempted but none succeeded, Flow reports
+unverified results instead of forwarding a model's unsupported success claim.
 The default turn timeout is one hour, including time waiting for the slot;
 `FLOW_CLOUD_TASK_TIMEOUT_MS` changes it. `SLACK_AGENT_ANSWER_TIMEOUT_MS`, when
 set, provides a separate Slack-side timeout.

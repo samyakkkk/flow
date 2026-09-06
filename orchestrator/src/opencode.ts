@@ -38,7 +38,7 @@ import {
   bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
   slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, type ConversationRef,
 } from "./agents/cloud-workspaces.js";
-import { cloudOpencodeConfig } from "./agents/cloud-tool-policy.js";
+import { cloudOpencodeConfig, cloudShellVerificationFailed } from "./agents/cloud-tool-policy.js";
 import { releaseCodingSlot } from "./agents/coding-slot.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -1348,6 +1348,12 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
 
   // For answer/continue jobs, return a structured answer; for others return minimal ok
   if (opts.type === "answer" || opts.type === "continue") {
+    if (cloud && cloudShellVerificationFailed(spawned.stdout)) {
+      return { result: {
+        answer_md: "The task's shell commands did not complete successfully, so I could not verify the result. Any worktree changes are preserved. Please follow up in this thread to retry validation.",
+        citations: [], confidence: 0, gaps: ["Shell verification failed; tests are not confirmed to have passed."],
+      }, sessionId };
+    }
     return { result: parseAnswerPayload(answerMd, textParts.at(-1)), sessionId };
   }
 
