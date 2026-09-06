@@ -14,7 +14,7 @@ const PROJECT_NAME = process.env.FLOW_PROJECT_NAME ?? "";
 interface AuthStore {
   users?: { id: string; role?: string }[];
   grants?: Record<string, string[]>;
-  tokens?: { id: string; userId: string; hash: string }[];
+  tokens?: { id: string; userId: string; hash: string; projects?: string[] }[];
 }
 
 const CACHE_TTL_MS = 2000;
@@ -53,6 +53,7 @@ export function verifyPatForProject(bearer: string): string | null {
 
   const record = (store.tokens ?? []).find((t) => t.id === m[1]);
   if (!record) return null;
+  if (record.projects && (!PROJECT_NAME || !record.projects.includes(PROJECT_NAME))) return null;
   const expected = record.hash.replace(/^sha256:/, "");
   const actual = createHash("sha256").update(m[2]).digest("hex");
   try {
