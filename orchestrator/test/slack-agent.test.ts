@@ -88,3 +88,60 @@ test("manifest parameterizes app name and create URL embeds it", () => {
   assert.match(url, /^https:\/\/api\.slack\.com\/apps\?new_app=1&manifest_json=/);
   assert.match(decodeURIComponent(url), /Flow \(acme\)/);
 });
+
+test("queued coding tasks post once and update in order even without Slack status support", async () => {
+  const { respond } = await import("../src/slack-agent/respond.js");
+  const events: string[] = [];
+  await respond({
+    channelId: "QUEUE", threadTs: "1", messageTs: "1", userId: "U", botUserId: "B", surface: "channel", prompt: "edit",
+    logger: { info() {}, warn() {}, error() {} },
+    client: {
+      conversations: { replies: async () => ({ messages: [] }) },
+      chat: {
+        postMessage: async ({ text, thread_ts }) => {
+          assert.equal(thread_ts, "1");
+          await new Promise(resolve => setTimeout(resolve, 10));
+          events.push(`post:${text}`); return { ts: "notice" };
+        },
+        update: async ({ ts, text }) => { assert.equal(ts, "notice"); events.push(`update:${text}`); },
+      },
+    },
+    runtime: { name: "test", async ask(q) {
+      q.onCodingStatus?.("waiting"); q.onCodingStatus?.("waiting"); q.onCodingStatus?.("coding");
+      return { markdown: "PR and validation" };
+    } },
+  });
+  assert.equal(events.filter(e => e.includes("Yours is queued")).length, 1);
+  const updates = events.filter(e => !e.includes("PR and validation"));
+  assert.match(updates[0], /^post:Another coding task/);
+  assert.equal(updates[1], "update:Your coding task has started.");
+  assert.equal(updates[2], "update:Task finished. See the result in this thread.");
+});
+
+test("queue notice is cleared on cancellation and failure; ordinary questions post only an answer", async () => {
+  const { respond } = await import("../src/slack-agent/respond.js");
+  for (const mode of ["cancel", "fail", "question", "notice-fails"]) {
+    const messages: string[] = [];
+    await respond({
+      channelId: `QUEUE-${mode}`, threadTs: "1", messageTs: "1", userId: "U", botUserId: "B", surface: "dm", prompt: "hello",
+      logger: { info() {}, warn() {}, error() {} },
+      client: { conversations: { replies: async () => ({}) }, chat: {
+        postMessage: async ({ text }) => {
+          if (mode === "notice-fails" && text.includes("queued")) throw new Error("Slack unavailable");
+          messages.push(text); return { ts: "notice" };
+        },
+        update: async ({ text }) => { messages.push(text); },
+      } },
+      runtime: { name: "test", async ask(q) {
+        if (mode !== "question") q.onCodingStatus?.("waiting");
+        if (mode === "cancel") { cancelRun(`QUEUE-${mode}`, "1"); throw new DOMException("aborted", "AbortError"); }
+        if (mode === "fail") throw new Error("failed test");
+        return { markdown: "answer" };
+      } },
+    });
+    if (mode === "question") assert.deepEqual(messages, ["answer"]);
+    if (mode === "cancel") assert.match(messages.at(-1)!, /stopped.*no longer queued/);
+    if (mode === "fail") assert.match(messages.at(-1)!, /Task failed/);
+    if (mode === "notice-fails") assert.ok(messages.includes("answer"));
+  }
+});

@@ -17,9 +17,25 @@ Flow serializes coding across this machine. Your first edit or shell command may
 Keep processes in the foreground. Do not use nohup, setsid, daemon mode, Docker, system services, global installs, or change shared CLI configuration. Install tools locally in your worktree. Flow stops task processes at the end of each turn.
 Flow may checkpoint an inactive worktree locally and remove it to save disk. On a follow-up it restores your files; rediscover paths with flow_workspace. Branch names and paths can change; the Slack conversation is the task identity.
 Never read credentials or .env files. Never copy secrets into responses or commits. Do not claim that unmerged changes describe the base branch.
+For a requested code change, complete delivery unless the user explicitly asks for a local-only change or no PR: inspect the diff, run relevant checks, commit only the intended files, push the task branch, and create a pull request with gh. On follow-ups, update the existing PR for this task branch rather than creating duplicates. Never merge automatically or push directly to the base branch. Do not force-push or bypass hooks.
+Before publishing, inspect the staged diff and exclude credentials, env files, generated junk and unrelated changes. Use explicit file paths when staging.
+Flow supplies a process-local Git author and committer identity. Use git commit normally; do not run git config or ask for permission to change shared config. Use git status --short --branch to discover the current branch and the registered baseBranch from flow_workspace for the PR base. Push with an explicit task branch refspec. If authentication, permissions, a missing CLI or repository policy blocks delivery, report the exact failed command and a sanitized error, what remains saved, and the specific setup needed; do not claim a generic guardrail requires the user to do the work.
+The final answer for a coding task must include what changed and why, the actual PR URL (or a precise publishing blocker), checks run with pass/fail results, and material limitations. For visible UI changes, capture and inspect screenshots using available browser tooling when feasible, and share accessible evidence links. A server-local screenshot path is not a Slack attachment or a user-accessible link. If screenshot tooling or delivery is unavailable, say so; never invent evidence. Do not run tests or create PRs for ordinary informational questions.
 Graph tools are read-only except remember and correct_graph (advisory flags). Do not mutate graph entities directly.
 Return JSON: {"answer_md":"<answer or change summary, validation, and branch/PR when applicable>","citations":[{"kind":"file|node|slack|linear","ref":"<reference>"}],"confidence":0.9,"gaps":[]}.
 Do not claim tests passed or a PR was created unless the corresponding tool actually succeeded.`;
+
+/** Identity belongs to the subprocess, never the shared repository configuration. */
+export function cloudGitIdentity(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const name = env.FLOW_GIT_AUTHOR_NAME || "Flow";
+  const email = env.FLOW_GIT_AUTHOR_EMAIL || "flow@localhost";
+  return {
+    GIT_AUTHOR_NAME: env.GIT_AUTHOR_NAME || name,
+    GIT_AUTHOR_EMAIL: env.GIT_AUTHOR_EMAIL || email,
+    GIT_COMMITTER_NAME: env.GIT_COMMITTER_NAME || name,
+    GIT_COMMITTER_EMAIL: env.GIT_COMMITTER_EMAIL || email,
+  };
+}
 
 export const CLOUD_PERMISSIONS = {
   "*": "deny", read: "allow", glob: "allow", grep: "allow", edit: "allow", bash: "allow",

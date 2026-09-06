@@ -56,6 +56,7 @@ export class FlowRuntime implements AgentRuntime {
         const status = codingSlotStatus(id);
         if (status && status !== lastStatus) {
           query.onStatus?.(status === "waiting" ? "Waiting for the machine’s coding slot…" : "Working in this task’s workspace…");
+          query.onCodingStatus?.(status);
           lastStatus = status;
         }
         if (!job) throw new Error(`answer job ${id} disappeared`);
@@ -99,7 +100,9 @@ const SLACK_STYLE =
   "lead with the direct answer in a sentence or two, plain conversational tone. " +
   "Format for easy reading: short paragraphs mixed with bullet points where they " +
   "help (steps, lists, key facts) — no headers or heavy formatting. Keep it short " +
-  "by default and go deeper only when the question asks for detail.";
+  "by default and go deeper only when the question asks for detail. For coding tasks, include " +
+  "a complete handoff: changes, PR link, checks and their results, and available screenshot evidence. " +
+  "Do not shorten away verification or blockers, or describe unfinished delivery as done.";
 
 export function buildQuestion(query: RuntimeQuery): string {
   const parts: string[] = [SLACK_STYLE, ""];

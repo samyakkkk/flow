@@ -38,7 +38,7 @@ import {
   bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
   slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, ensureConversationWorktree, conversationRepos, type ConversationRef,
 } from "./agents/cloud-workspaces.js";
-import { cloudOpencodeConfig, cloudShellVerificationFailed, createCloudToolPolicy } from "./agents/cloud-tool-policy.js";
+import { cloudGitIdentity, cloudOpencodeConfig, cloudShellVerificationFailed, createCloudToolPolicy } from "./agents/cloud-tool-policy.js";
 import { releaseCodingSlot, requestCodingSlot, attachCodingChild } from "./agents/coding-slot.js";
 import { redactCloudText } from "./agents/repo-env.js";
 import { recordCloudEvent } from "./agents/cloud-events.js";
@@ -1309,6 +1309,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
 
   const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
   if (cloud) {
+    Object.assign(env, cloudGitIdentity(env));
     const inherited = JSON.parse(env.OPENCODE_CONFIG_CONTENT || "{}") as Record<string, unknown>;
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cloudOpencodeConfig(inherited));
   }

@@ -733,3 +733,21 @@ test("cloud Changes panel resolves only its own worktree and hides env diffs", a
   assert.ok(!response.body.includes(".env.local"));
   assert.equal((await app.inject({ method: "GET", url: `/v1/agents/tasks/${job.id}/diff` })).statusCode, 401);
 });
+
+test("cloud identity commits without touching shared git configuration", async () => {
+  const { cloudGitIdentity } = await import("../src/agents/cloud-tool-policy.js");
+  const { key, policy } = context();
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const cwd = repo.worktree!.path;
+  const configPath = path.join(source("api"), ".git", "config");
+  const beforeConfig = readFileSync(configPath, "utf8");
+  writeFileSync(path.join(cwd, "identity-test.txt"), "commit test\n");
+  await policy("bash", { command: "git add identity-test.txt && git commit -m 'Verify cloud identity'", workdir: cwd });
+  git(cwd, "add", "identity-test.txt");
+  execFileSync("git", ["commit", "-m", "Verify cloud identity"], { cwd, env: { ...process.env, ...cloudGitIdentity({}) }, stdio: "pipe" });
+  assert.equal(git(cwd, "log", "-1", "--format=%an <%ae>"), "Flow <flow@localhost>");
+  assert.equal(readFileSync(configPath, "utf8"), beforeConfig);
+  assert.equal(cloudGitIdentity({ FLOW_GIT_AUTHOR_EMAIL: "bot@example.com" }).GIT_AUTHOR_EMAIL, "bot@example.com");
+  assert.equal(cloudGitIdentity({ GIT_AUTHOR_NAME: "Existing" }).GIT_AUTHOR_NAME, "Existing");
+  await assert.rejects(policy("bash", { command: "git config user.name Other", workdir: cwd }), /Git metadata/);
+});

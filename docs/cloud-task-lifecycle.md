@@ -144,3 +144,26 @@ additional implementation; this release does not provide them.
 Production workers reject legacy local-agent starts/prompts and direct worktree
 mutation endpoints. The homepage links to cloud Agents instead of exposing the
 local ACP composer. Historical local sessions remain readable and cancellable.
+
+### Slack queue and coding delivery
+
+When a coding task waits for the machine slot, Flow posts a persistent reply in
+its Slack thread. It updates that reply when the slot is acquired and when the
+turn finishes, fails or is stopped. Notifications are serialized and independent
+of Slack's optional assistant-status support; a Slack API failure is logged and
+does not fail the coding task. Ordinary questions do not post queue notices.
+
+Coding agents are instructed to deliver requested changes with a reviewed diff,
+relevant checks, a commit, and a PR, unless the user requests otherwise. Follow-ups
+update the task's existing PR. PR publication requires GitHub CLI (`gh`) installed
+and authenticated on the server, with push and PR permissions. Missing credentials
+or tools must be reported as concrete blockers, not as completed delivery.
+UI tasks should include inspected screenshots when browser tooling and an
+accessible evidence-delivery mechanism are available; local paths alone are not
+Slack attachments. These are agent instructions, not proof that a PR or test exists.
+
+Cloud subprocesses receive a Git author/committer identity without modifying the
+shared Git configuration. Existing `GIT_AUTHOR_*` / `GIT_COMMITTER_*` environment
+values are respected; otherwise `FLOW_GIT_AUTHOR_NAME` and `FLOW_GIT_AUTHOR_EMAIL`
+configure the identity, defaulting to `Flow <flow@localhost>`. Configure a real bot
+identity when repository policy requires a recognized author.

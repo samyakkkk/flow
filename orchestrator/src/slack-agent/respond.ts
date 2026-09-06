@@ -22,6 +22,7 @@ export interface SlackClientLike {
     }>;
   };
   chat: {
+    update?(args: { channel: string; ts: string; text: string }): Promise<unknown>;
     postMessage(args: { channel: string; text: string; thread_ts?: string }): Promise<unknown>;
   };
 }
@@ -72,6 +73,24 @@ export async function respond(args: RespondArgs): Promise<void> {
     }
   };
 
+  let queueMessageTs: string | undefined;
+  let queueSeen = false;
+  let progress = Promise.resolve();
+  const queueNotice = (text: string, first = false) => {
+    // Serialize delivery so a slow post cannot land after its start/completion update.
+    progress = progress.then(async () => {
+      if (first) {
+        const posted = await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text }) as { ts?: string };
+        queueMessageTs = posted?.ts;
+      } else if (queueMessageTs && client.chat.update) {
+        await client.chat.update({ channel: args.channelId, ts: queueMessageTs, text });
+      } else {
+        await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text });
+      }
+    }).catch(err => logger.warn(`[respond] queue notification failed: ${trimError(err)}`));
+  };
+  let outcome = "Task stopped. It is no longer queued.";
+
   try {
     await setStatusSafe("Thinking…", true);
 
@@ -94,9 +113,20 @@ export async function respond(args: RespondArgs): Promise<void> {
       },
       signal: controller.signal,
       onStatus: (s) => void setStatusSafe(s),
+      onCodingStatus: (status) => {
+        if (controller.signal.aborted) return;
+        if (status === "waiting" && !queueSeen) {
+          queueSeen = true;
+          queueNotice("Another coding task is running. Yours is queued and will start automatically.", true);
+        } else if (status === "coding" && queueSeen) {
+          queueNotice("Your coding task has started.");
+        }
+      },
     });
 
     if (controller.signal.aborted) return;
+
+    outcome = "Task finished. See the result in this thread.";
 
     // Keep the thread engaged so plain follow-up replies reach us.
     markEngaged(args.channelId, args.threadTs);
@@ -113,6 +143,7 @@ export async function respond(args: RespondArgs): Promise<void> {
       logger.info(`[respond] run for ${args.channelId}:${args.threadTs} stopped`);
       return;
     }
+    outcome = "Task failed. See the error in this thread.";
     logger.error(`[respond] failed for ${args.channelId}:${args.threadTs}: ${err}`);
     const text = `:warning: I couldn't answer that one. (${trimError(err)})`;
     try {
@@ -122,6 +153,8 @@ export async function respond(args: RespondArgs): Promise<void> {
       logger.error(`[respond] could not deliver error message: ${sendErr}`);
     }
   } finally {
+    if (queueSeen) queueNotice(outcome);
+    await progress;
     endRun(args.channelId, args.threadTs, controller);
     await setStatusSafe(""); // clear "running" if the stream path didn't
   }

@@ -22,6 +22,8 @@ export interface RuntimeQuery {
   signal?: AbortSignal;
   /** Optional progress callback — surfaced as the Slack "running" status. */
   onStatus?: (status: string) => void;
+  /** Machine coding-slot transitions, independent of Slack status support. */
+  onCodingStatus?: (status: "waiting" | "coding") => void;
 }
 
 export interface RuntimeAnswer {
