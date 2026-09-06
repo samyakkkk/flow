@@ -29,6 +29,8 @@ interface ConnectedRepo {
 
 interface IntegrationsData {
   project: string;
+  mode?: "prod" | "local";
+  workspaces?: { id: string; repo: string; machine: string; harnesses: string[]; configuredAt: string }[];
   repos: ConnectedRepo[];
   detected: string[];
   all: string[];
@@ -60,6 +62,7 @@ export function CodingToolsPanel() {
   const [data, setData] = useState<IntegrationsData | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -89,6 +92,7 @@ export function CodingToolsPanel() {
   // Native Finder chooser first (the server hosts it — browsers can't expose
   // real paths from their own pickers); in-page browser as the fallback.
   const pickFolder = async () => {
+    if (data?.mode === "prod") { setRemoteSetupOpen(true); return; }
     setBusy(true);
     try {
       const res = await fetch(prefix("/api/fs/native-pick"), { method: "POST" });
@@ -148,7 +152,8 @@ export function CodingToolsPanel() {
     setBusy(false);
   };
 
-  const cliCommand = `flow setup ${data?.project ?? "<project>"}`;
+  const remote = data?.mode === "prod";
+  const cliCommand = `flow setup ${remote && typeof window !== "undefined" ? window.location.origin + "/" : ""}${data?.project ?? "<project>"}`;
   const detected = new Set(data?.detected ?? []);
 
   return (
@@ -167,11 +172,11 @@ export function CodingToolsPanel() {
       {/* The user's tools, up top: "yes, mine are covered" */}
       <div className="flex items-start gap-2 flex-wrap">
         {TOOLS.map((t) => {
-          const on = detected.has(t.id);
+          const on = remote || detected.has(t.id);
           return (
             <div
               key={t.id}
-              title={`${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
+              title={remote ? `${t.label} — detected by the CLI on your computer during setup` : `${t.label} — ${on ? "detected on this machine; works with Flow in connected workspaces" : "not installed on this machine (still works if you install it later)"}`}
               className={`flex flex-col items-center gap-1 w-[52px] ${on ? "text-ink" : "text-ink/25"}`}
             >
               <BrandIcon name={t.icon} size={20} />
@@ -215,6 +220,17 @@ export function CodingToolsPanel() {
         </div>
       )}
 
+      {remote && <>
+        <BodyText>Run the command inside your repository on your computer. The CLI detects your tools and opens browser approval. No remote access to your computer is enabled.</BodyText>
+        <a className="text-xs underline" href="https://github.com/samyakkkk/flow#readme" target="_blank" rel="noreferrer">Install the Flow CLI</a>
+        {(data?.workspaces ?? []).map(w => <div key={w.id} className="rounded-lg border border-line p-3 text-xs space-y-1">
+          <div className="font-medium">{w.repo} · {w.machine}</div>
+          <div>Configured: {w.harnesses.join(", ")}</div>
+          <div>Knowledge connection verified at setup · Device availability not monitored</div>
+          <div>Session capture: not verified here · Memory extraction: not verified here</div>
+          <div>To remove: run <code>flow setup --remove</code> locally. Revoke its personal token in Access to stop cloud access.</div>
+        </div>)}
+      </>}
       {/* Connected workspaces */}
       {data && data.repos.length > 0 ? (
         <div className="max-h-52 overflow-y-auto rounded-xl border border-line divide-y divide-line bg-cream/50">
@@ -282,9 +298,9 @@ export function CodingToolsPanel() {
             );
           })}
         </div>
-      ) : (
+      ) : !remote ? (
         <BodyText className="py-1">No workspaces connected yet — sessions there aren&apos;t reaching the brain.</BodyText>
-      )}
+      ) : null}
 
       {/* Surfaces Flow can't listen to locally — the honest "later" cards */}
       <div className="mt-auto pt-1 grid grid-cols-1 gap-1.5">
@@ -308,6 +324,17 @@ export function CodingToolsPanel() {
         </div>
       </div>
 
+      {remoteSetupOpen && <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/45" onClick={() => setRemoteSetupOpen(false)}>
+        <div role="dialog" aria-modal="true" aria-label="Connect a workspace on your computer" className="bg-paper rounded-xl p-6 max-w-xl w-[92vw] space-y-4" onClick={e => e.stopPropagation()}>
+          <Heading variant="section">Connect a workspace on your computer</Heading>
+          <p>In your terminal, open the repository you want to connect and run:</p>
+          <button className="font-mono text-xs break-all border rounded p-3 w-full text-left" onClick={() => { void navigator.clipboard?.writeText(cliCommand); setMsg("Setup command copied."); }}>{cliCommand} ⧉</button>
+          <p>The CLI detects your tools and asks you to confirm the workspace. It then opens this dashboard for approval. Check the matching code before approving.</p>
+          <p className="text-sm">This enables project knowledge and session capture. It does not enable remote access to your computer.</p>
+          <a className="text-sm underline block" href="https://github.com/samyakkkk/flow#install" target="_blank" rel="noreferrer">Need the Flow CLI? Installation instructions</a>
+          <button className="border rounded px-3 py-2" onClick={() => setRemoteSetupOpen(false)}>Close</button>
+        </div>
+      </div>}
       {pickerOpen && <FolderPickerDialog onSelect={openConfirm} onClose={() => setPickerOpen(false)} />}
 
       {/* Confirm: which tools to install into this workspace */}

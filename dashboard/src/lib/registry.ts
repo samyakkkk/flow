@@ -90,7 +90,7 @@ export function getRegistryProject(name: string): RegistryProject | null {
 // First URL segments that can never be project names (deployment-level
 // surfaces + the legacy /p/ prefix). The CLI refuses these at create time;
 // checking here too keeps a hand-made project dir from shadowing /login.
-export const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+export const RESERVED_PROJECT_NAMES = new Set(["connect", "login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
 
 /** Valid project-name shape (mirrors the CLI's create validation). */
 export function isValidProjectName(name: string): boolean {

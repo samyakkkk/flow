@@ -57,6 +57,7 @@ import {
 } from "./lib/materialize.mjs";
 import { ensureFalkordb } from "./lib/docker.mjs";
 import { clearGraphTombstone, deleteProjectGraph } from "./lib/falkordb.mjs";
+import { browserSetup, completeBrowserSetup } from "./lib/browser-setup.mjs";
 import { discoverRemote, savedRemoteBinding } from "./lib/remote-setup.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -528,7 +529,7 @@ function printTable(headers, rows) {
 // so callers (explicit create, or create-on-`up`) control their own output.
 // Names that collide with the dashboard's deployment-level URLs (/login,
 // /api/…) or the legacy /p/ prefix — a project can't live at those paths.
-const RESERVED_PROJECT_NAMES = new Set(["login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
+const RESERVED_PROJECT_NAMES = new Set(["connect", "login", "api", "p", "_next", "favicon.ico", "data", "logs"]);
 
 function createProject(name, { mode = "local", graph } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
@@ -600,7 +601,18 @@ async function cmdProjectCreate(args) {
     allowPositionals: true,
     options: { graph: { type: "string" }, mode: { type: "string", default: "local" } },
   });
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    name = browserConnection.project;
+  }
   if (!name) die("Usage: flow project create <name> [--mode local|prod]");
   const p = createProject(name, { mode: values.mode === "prod" ? "prod" : "local", graph: values.graph });
   console.log(`\n${OK} created ${c.bold(name)}  ${c.dim(`(${p.mode} mode)`)}`);
@@ -1188,7 +1200,18 @@ async function cmdDoctor() {
 
 async function cmdRm(args) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    name = browserConnection.project;
+  }
   if (!name) die("Usage: flow rm <name>");
   if (!existsSync(projectJsonPath(name))) die(`No project "${name}".`);
   if (process.stdin.isTTY) {
@@ -1301,7 +1324,18 @@ async function cmdSetup(rest) {
     return;
   }
 
-  const name = positionals[0];
+  let name = positionals[0];
+  let browserConnection;
+  if (name && /^https?:\/\//.test(name)) {
+    if (values["gateway-url"] || values["orchestrator-url"] || values["token-env"]) die("Do not combine a dashboard URL with manual endpoint flags.");
+    const target = new URL(name);
+    const targetProject = target.pathname.split("/").filter(Boolean)[0];
+    const existing = savedRemoteBinding(FLOW_DIR, targetProject, repoDir);
+    if (existing && new URL(existing.gatewayUrl).origin !== target.origin) die("A different deployment is already saved under this project name. Remove or rename that personal connection before replacing it.");
+    const defaults = values.harness ? values.harness.split(",").map(s => s.trim()) : values.all ? ALL_HARNESSES : detectHarnesses();
+    browserConnection = await browserSetup(name, repoDir, defaults, ALL_HARNESSES);
+    name = browserConnection.project;
+  }
   if (!name) {
     const names = listProjectNames();
     die(
@@ -1310,7 +1344,7 @@ async function cmdSetup(rest) {
     );
   }
   const explicitRemote = Boolean(values["gateway-url"] || values["orchestrator-url"] || values["token-env"]);
-  const saved = explicitRemote ? null : savedRemoteBinding(FLOW_DIR, name, repoDir);
+  const saved = browserConnection ?? (explicitRemote ? null : savedRemoteBinding(FLOW_DIR, name, repoDir));
   const isRemote = explicitRemote || Boolean(saved);
   let projectEntry;
   let repoName;
@@ -1357,13 +1391,13 @@ async function cmdSetup(rest) {
   // Default: only the tools this machine actually has. `--all` pre-wires
   // everything; `--harness a,b` picks explicitly.
   const detected = detectHarnesses();
-  const harnesses = values.harness
+  const harnesses = browserConnection?.harnesses ?? (values.harness
     ? values.harness.split(",").map((s) => s.trim()).filter((h) => ALL_HARNESSES.includes(h))
     : values.all
       ? ALL_HARNESSES
       : detected.length
         ? detected
-        : ALL_HARNESSES;
+        : ALL_HARNESSES);
   const skipped = ALL_HARNESSES.filter((h) => !harnesses.includes(h));
   const { owned, merged } = materializeRepo({
     repoDir,
@@ -1372,6 +1406,13 @@ async function cmdSetup(rest) {
     share: values.share === true,
     harnesses,
   });
+
+  if (browserConnection) {
+    try {
+      await completeBrowserSetup(browserConnection, harnesses);
+      console.log("Knowledge connected. Tools configured. Session capture and memory extraction: awaiting a real session.");
+    } catch { console.warn("Local setup succeeded, but dashboard status could not be saved. Run setup again to retry."); }
+  }
 
   // WORK-surface registration (work_folders): best-effort — the binding above
   // is complete without it; this makes the folder appear in the dashboard.

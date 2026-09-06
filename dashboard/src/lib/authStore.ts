@@ -30,6 +30,8 @@ export interface AuthToken {
   id: string;
   userId: string;
   label: string;
+  projects?: string[]; // Absent only for legacy, user-wide PATs.
+  workspace?: { machine: string; repo: string; harnesses: string[]; configuredAt: string | null };
   hash: string; // sha256:<hex>
   createdAt: string;
 }
@@ -41,6 +43,7 @@ export interface AuthStore {
   users: AuthUser[];
   grants: Record<string, string[]>; // userId -> project names, or ["*"]
   tokens: AuthToken[];
+  pairings?: import("./devicePairing").Pairing[];
 }
 
 const CACHE_TTL_MS = 2000;
