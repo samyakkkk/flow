@@ -7,8 +7,9 @@
 // answer-job pipeline (opencode answerer over the knowledge graph + memory).
 
 import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
-import { cloudMode, slackConversation } from "../agents/cloud-workspaces.js";
+import { cloudMode, cloudTaskTimeoutMs, slackConversation } from "../agents/cloud-workspaces.js";
 import { containsSecret } from "../events.js";
+import { codingSlotStatus } from "../agents/coding-slot.js";
 import type { TranscriptTurn as Turn } from "./types.js";
 export type { TranscriptTurn, Surface, RuntimeQuery, RuntimeAnswer, AgentRuntime } from "./types.js";
 import type { AgentRuntime, RuntimeAnswer, RuntimeQuery } from "./types.js";
@@ -25,7 +26,7 @@ const POLL_MS = 1000;
 export class FlowRuntime implements AgentRuntime {
   readonly name = "flow";
 
-  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? 900_000 : 300_000))) {}
+  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? cloudTaskTimeoutMs() : 300_000))) {}
 
   async ask(query: RuntimeQuery): Promise<RuntimeAnswer> {
     if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -46,10 +47,16 @@ export class FlowRuntime implements AgentRuntime {
 
     try {
       const deadline = Date.now() + this.answerTimeoutMs;
+      let lastStatus: string | undefined;
       while (Date.now() < deadline) {
         if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
         await sleep(POLL_MS, query.signal);
         const job = getJob(id);
+        const status = codingSlotStatus(id);
+        if (status && status !== lastStatus) {
+          query.onStatus?.(status === "waiting" ? "Waiting for the machine’s coding slot…" : "Working in this task’s workspace…");
+          lastStatus = status;
+        }
         if (!job) throw new Error(`answer job ${id} disappeared`);
         if (job.status === "done") {
           const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;

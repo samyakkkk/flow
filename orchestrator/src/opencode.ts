@@ -36,9 +36,10 @@ import { track } from "./telemetry.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
 import {
   bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
-  slackConversation, type ConversationRef,
+  slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, type ConversationRef,
 } from "./agents/cloud-workspaces.js";
 import { cloudOpencodeConfig } from "./agents/cloud-tool-policy.js";
+import { releaseCodingSlot } from "./agents/coding-slot.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -666,15 +667,15 @@ function normalizeCloudJob(opts: JobInput, id: string): JobInput {
 
 // Serialize complete turns (not just process starts) within each conversation.
 // Other conversations continue independently. A failed turn releases the queue.
-const conversationTurns = new Map<string, Promise<void>>();
 function scheduleJob(id: string, opts: JobInput): void {
   const key = opts.input.conversation_key;
   if (!cloudMode() || typeof key !== "string" || !["answer", "continue"].includes(opts.type)) {
     void runJob(id, opts);
     return;
   }
-  const previous = conversationTurns.get(key) ?? Promise.resolve();
-  const turn = previous.then(async () => {
+  void withConversationTurn(key, async () => {
+    if (getJob(id)?.status !== "queued") return;
+    await restoreConversationWorktrees(key);
     if (getJob(id)?.status !== "queued") return;
     // Resolve at execution time: the preceding turn may only just have created
     // its session, or may have failed after emitting its first session event.
@@ -686,8 +687,6 @@ function scheduleJob(id: string, opts: JobInput): void {
   }).catch((err) => {
     updateJob.run({ id, status: "failed", result_json: JSON.stringify({ error: String(err) }) });
   });
-  conversationTurns.set(key, turn);
-  void turn.then(() => { if (conversationTurns.get(key) === turn) conversationTurns.delete(key); });
 }
 
 // One normalization boundary for every index entry point. Explicit input wins;
@@ -903,6 +902,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       }
     }
   } finally {
+    try {
+      if (typeof opts.input.conversation_key === "string") await reconcileConversation(opts.input.conversation_key);
+    } finally { releaseCodingSlot(id); }
     if (opts.type === "index_repo" && repo) {
       runningRepos.delete(repo);
       // Release-then-run: hand the freed slot to the first waiting job whose
@@ -1046,6 +1048,7 @@ interface SpawnResult { status: number | null; stdout: string; stderr: string; e
 // dies with its parent) so a restart can never leave an orphaned indexer
 // writing to the graph while the recovery pass re-queues a duplicate job.
 const jobChildren = new Map<string, ReturnType<typeof spawn>>();
+export function codingChildPid(id: string): number | undefined { return jobChildren.get(id)?.pid; }
 
 export function cancelCloudJob(id: string): boolean {
   const job = getJob(id);
@@ -1118,6 +1121,7 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timeoutError: Error | undefined;
     // Incremental line splitter for the live activity feed — a failing
     // callback must never take the job down with it.
     let pending = "";
@@ -1135,12 +1139,15 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
       if (jobId) jobChildren.delete(jobId);
     };
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; killTree(child); cleanup(); resolve({ status: null, stdout, stderr, error: new Error(`opencode timed out after ${timeoutMs}ms`) }); }
+      if (!settled) { timeoutError = new Error(`opencode timed out after ${timeoutMs}ms`); killTree(child); }
     }, timeoutMs);
+    // The leader may exit while a dev server still holds its pipes open.
+    // Stop descendants before close, which is the boundary for slot release.
+    child.on("exit", () => { if (jobId) killTree(child); });
     child.stdout.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; feedLines(s); });
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
     child.on("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status: null, stdout, stderr, error }); } });
-    child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status, stdout, stderr }); } });
+    child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status, stdout, stderr, error: timeoutError }); } });
   });
 }
 
@@ -1172,6 +1179,7 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
 // Index/enrich runs read whole repos — give them real time. Conversational
 // jobs stay snappy.
 function indexerTimeout(opts: JobInput): number {
+  if (cloudMode() && ["answer", "continue"].includes(opts.type)) return cloudTaskTimeoutMs();
   return opts.type === "index_repo" || opts.type === "enrich" ? 45 * 60 * 1000 : 15 * 60 * 1000;
 }
 

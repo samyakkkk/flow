@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ process.env.FLOW_POLL_DISABLE = "1";
 process.env.GATEWAY_URL = "http://127.0.0.1:1";
 process.env.FLOW_EMBED_URL = "http://127.0.0.1:1";
 process.env.OPENCODE_WORKSPACE_DIR = root;
+process.env.FLOW_CODING_STATE_DIR = path.join(root, "coding-state");
 process.env.REPOS_JSON_PATH = path.join(root, "repos.json");
 
 let workspaces: typeof import("../src/agents/cloud-workspaces.js");
@@ -150,7 +151,7 @@ test("missing worktrees fail instead of replacing edits or falling back to the s
   const { key, policy } = context();
   const repo = await workspaces.ensureConversationWorktree(key, "api");
   git(source("api"), "worktree", "remove", repo.worktree!.path);
-  await assert.rejects(workspaces.ensureConversationWorktree(key, "api"), /ENOENT/);
+  await assert.rejects(workspaces.ensureConversationWorktree(key, "api"), /missing or replaced/);
   await assert.rejects(policy("write", { filePath: path.join(repo.worktree!.path, "new.txt") }), /worktree is missing/);
   assert.equal(workspaces.conversationRepos(key)[0].worktree!.path, repo.worktree!.path);
 });
@@ -326,7 +327,195 @@ test("workspace RPC accepts only its running job token and fixes the conversatio
   assert.equal(result.statusCode, 200);
   assert.ok(workspaces.conversationRepos(key)[0].worktree);
   db.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
+  (await import("../src/agents/coding-slot.js")).releaseCodingSlot(id);
   assert.equal((await request(jobs.jobScopedToken(id))).statusCode, 403);
+});
+
+test("checkpoint deletes the worktree, keeps local changes, and restores the same conversation", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  const { key } = context();
+  workspaces.bindConversation(key, "checkpoint-session");
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const tree = repo.worktree!.path;
+  writeFileSync(path.join(tree, "file.txt"), "checkpoint edit\n");
+  writeFileSync(path.join(tree, "new.txt"), "new file\n");
+  assert.deepEqual(await cleanupConversation(key), { archived: 1, retained: 0 });
+  assert.equal(existsSync(tree), false);
+  const saved = workspaces.conversationRepos(key)[0].worktree!;
+  assert.ok(saved.archived_at);
+  assert.equal(git(source("api"), "show", `${saved.branch}:file.txt`), "checkpoint edit");
+  assert.equal(readFileSync(path.join(source("api"), "file.txt"), "utf8"), "base\n");
+  await workspaces.restoreConversationWorktrees(key);
+  assert.equal(workspaces.conversationSession(key), "checkpoint-session");
+  assert.equal(readFileSync(path.join(tree, "new.txt"), "utf8"), "new file\n");
+  assert.equal(git(tree, "status", "--porcelain"), "");
+  // A second archive/recreate cycle must preserve the checkpoint branch too.
+  assert.deepEqual(await cleanupConversation(key), { archived: 1, retained: 0 });
+  await workspaces.restoreConversationWorktrees(key);
+  assert.equal(readFileSync(path.join(tree, "file.txt"), "utf8"), "checkpoint edit\n");
+});
+
+test("Git identity follows a moved tree and detached HEAD instead of trusting the old path", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  const { key } = context();
+  const repo = await workspaces.ensureConversationWorktree(key, "api");
+  const old = repo.worktree!.path;
+  const moved = old + "-moved";
+  git(source("api"), "worktree", "move", old, moved);
+  git(moved, "checkout", "--detach");
+  writeFileSync(path.join(moved, "file.txt"), "detached edit\n");
+  await workspaces.reconcileConversation(key);
+  assert.equal(workspaces.conversationRepos(key)[0].worktree!.path, realpathSync(moved));
+  assert.equal(workspaces.conversationRepos(key)[0].worktree!.branch, "");
+  assert.deepEqual(await cleanupConversation(key), { archived: 1, retained: 0 });
+  await workspaces.restoreConversationWorktrees(key);
+  assert.equal(readFileSync(path.join(moved, "file.txt"), "utf8"), "detached edit\n");
+});
+
+test("cleanup retains unknown ignored files, changed secrets, and partial staging", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  for (const kind of ["ignored", "secret", "staged"] as const) {
+    const { key } = context();
+    const tree = (await workspaces.ensureConversationWorktree(key, "api")).worktree!.path;
+    if (kind === "ignored") {
+      writeFileSync(path.join(tree, ".gitignore"), "database.sqlite\n");
+      writeFileSync(path.join(tree, "database.sqlite"), "important local state");
+    } else if (kind === "secret") writeFileSync(path.join(tree, ".env"), "PASSWORD=local-only\n");
+    else {
+      writeFileSync(path.join(tree, "file.txt"), "staged\n");
+      git(tree, "add", "file.txt");
+      writeFileSync(path.join(tree, "file.txt"), "unstaged\n");
+    }
+    assert.deepEqual(await cleanupConversation(key), { archived: 0, retained: 1 });
+    assert.ok(existsSync(tree));
+    assert.ok(workspaces.conversationRepos(key)[0].worktree!.cleanup_error);
+    if (kind === "staged") assert.equal(git(tree, "show", ":file.txt"), "staged");
+  }
+});
+
+test("known caches and unchanged copied env files can be removed and restored", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  const { key } = context();
+  writeFileSync(path.join(source("api"), ".env"), "EXAMPLE=local\n");
+  try {
+    const tree = (await workspaces.ensureConversationWorktree(key, "api")).worktree!.path;
+    writeFileSync(path.join(tree, ".gitignore"), ".env\nnode_modules/\n");
+    mkdirSync(path.join(tree, "node_modules"));
+    writeFileSync(path.join(tree, "node_modules", "cache"), "rebuildable");
+    assert.deepEqual(await cleanupConversation(key), { archived: 1, retained: 0 });
+    await workspaces.restoreConversationWorktrees(key);
+    assert.equal(readFileSync(path.join(tree, ".env"), "utf8"), "EXAMPLE=local\n");
+    assert.equal(existsSync(path.join(tree, "node_modules")), false);
+  } finally { rmSync(path.join(source("api"), ".env")); }
+});
+
+test("coding requests are FIFO while ordinary answer jobs still finish", async () => {
+  const { requestCodingSlot, releaseCodingSlot } = await import("../src/agents/coding-slot.js");
+  assert.equal(requestCodingSlot("coding-one").acquired, true);
+  assert.equal(requestCodingSlot("coding-two").acquired, false);
+  assert.equal(requestCodingSlot("coding-three").position, 2);
+  try {
+    const { id } = await jobs.enqueueJob({ type: "answer", input: { question: "plain question" } });
+    assert.equal((await finished(id)).status, "done");
+    releaseCodingSlot("coding-two"); // cancelled waiter doesn't block the next
+    assert.equal(requestCodingSlot("coding-three").position, 1);
+    releaseCodingSlot("coding-one");
+    assert.equal(requestCodingSlot("coding-three").acquired, true);
+  } finally { for (const id of ["coding-one", "coding-two", "coding-three"]) releaseCodingSlot(id); }
+});
+
+test("resumed direct edits and bash acquire the slot but reads do not", async () => {
+  const { key } = context();
+  const tree = (await workspaces.ensureConversationWorktree(key, "api")).worktree!.path;
+  let acquired = 0;
+  const guard = createCloudToolPolicy({ directory: root, repos: async () => workspaces.conversationRepos(key),
+    ensure: (name) => workspaces.ensureConversationWorktree(key, name), acquire: async () => { acquired++; } });
+  await guard("read", { filePath: path.join(tree, "file.txt") });
+  assert.equal(acquired, 0);
+  await guard("edit", { filePath: path.join(tree, "file.txt") });
+  await guard("bash", { workdir: tree, command: "npm test" });
+  assert.equal(acquired, 2);
+  await assert.rejects(guard("bash", { workdir: tree, command: "npm install -g example" }));
+});
+
+test("cleanup skips an active conversation and a busy machine", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  const { requestCodingSlot, releaseCodingSlot } = await import("../src/agents/coding-slot.js");
+  const { key } = context();
+  const tree = (await workspaces.ensureConversationWorktree(key, "api")).worktree!.path;
+  db.prepare("INSERT INTO jobs (id,type,input,status) VALUES ('active-cleanup-test','answer',?,'running')").run(JSON.stringify({ conversation_key: key }));
+  assert.deepEqual(await cleanupConversation(key), { archived: 0, retained: 0 });
+  db.prepare("UPDATE jobs SET status = 'done' WHERE id = 'active-cleanup-test'").run();
+  requestCodingSlot("busy-cleanup-test");
+  try { assert.deepEqual(await cleanupConversation(key), { archived: 0, retained: 0 }); }
+  finally { releaseCodingSlot("busy-cleanup-test"); }
+  assert.ok(existsSync(tree));
+});
+
+test("a different linked worktree at the same path is never adopted or deleted", async () => {
+  const { cleanupConversation } = await import("../src/agents/cloud-cleanup.js");
+  const { key } = context();
+  const tree = (await workspaces.ensureConversationWorktree(key, "api")).worktree!.path;
+  git(source("api"), "worktree", "remove", tree);
+  git(source("api"), "worktree", "add", "--detach", tree, "HEAD");
+  await assert.rejects(workspaces.ensureConversationWorktree(key, "api"), /missing or replaced/);
+  assert.deepEqual(await cleanupConversation(key), { archived: 0, retained: 1 });
+  assert.ok(existsSync(tree));
+});
+
+test("independent orchestrators share the slot and recover a dead owner", { timeout: 10_000 }, async () => {
+  const { requestCodingSlot, releaseCodingSlot } = await import("../src/agents/coding-slot.js");
+  const module = new URL("../src/agents/coding-slot.ts", import.meta.url).href;
+  const child = spawn(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", `
+    const { requestCodingSlot } = await import(${JSON.stringify(module)});
+    console.log(JSON.stringify(requestCodingSlot('external-owner')));
+    setInterval(() => {}, 1000);
+  `], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const first = await new Promise<string>((resolve, reject) => {
+      child.stdout.once("data", (d) => resolve(String(d)));
+      child.once("error", reject);
+      child.once("exit", () => reject(new Error("worker exited before admission")));
+    });
+    assert.equal(JSON.parse(first).acquired, true);
+    assert.equal(requestCodingSlot("other-project").acquired, false);
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGKILL"); await exited;
+    assert.equal(requestCodingSlot("other-project").acquired, true);
+  } finally { child.kill("SIGKILL"); releaseCodingSlot("other-project"); }
+});
+
+test("Linux crash recovery kills the orphan coding process group before admitting another task", { skip: process.platform !== "linux", timeout: 10_000 }, async () => {
+  const { requestCodingSlot, releaseCodingSlot } = await import("../src/agents/coding-slot.js");
+  const module = new URL("../src/agents/coding-slot.ts", import.meta.url).href;
+  const owner = spawn(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", `
+    import { spawn } from 'node:child_process';
+    const { requestCodingSlot } = await import(${JSON.stringify(module)});
+    const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    requestCodingSlot('orphan-owner', worker.pid);
+    console.log(worker.pid);
+    setInterval(() => {}, 1000);
+  `], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  let pid: number | undefined;
+  try {
+    pid = Number(await new Promise<string>((resolve, reject) => { owner.stdout.once("data", (d) => resolve(String(d))); owner.once("error", reject); }));
+    assert.ok(pid > 0);
+    const exited = new Promise((resolve) => owner.once("exit", resolve));
+    owner.kill("SIGKILL"); await exited;
+    let acquired = false;
+    for (let i = 0; i < 30 && !acquired; i++) {
+      acquired = requestCodingSlot("after-orphan").acquired;
+      if (!acquired) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(acquired, true);
+    let state = "gone";
+    try { const stat = readFileSync(`/proc/${pid}/stat`, "utf8"); state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]; } catch {}
+    assert.ok(state === "gone" || state === "Z");
+  } finally {
+    owner.kill("SIGKILL");
+    if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+    releaseCodingSlot("after-orphan");
+  }
 });
 
 test("Slack command mentions and duplicate delivery use one conversation", async () => {

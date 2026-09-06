@@ -12,6 +12,9 @@ The same conversation can acquire more worktrees as you discover other repositor
 All edits and commands must target your conversation's worktrees. Shared clones are read-only evidence. Never change their branches or files.
 Set bash.workdir explicitly to the chosen worktree. Do not use cd or Git directory overrides; Flow has already created your branch.
 Tests and dependency installation also write files, so run them in the worktree. Existing host CLI authentication is available.
+Flow serializes coding across this machine. Your first edit or shell command may wait for another task; ordinary questions can run concurrently.
+Keep processes in the foreground. Do not use nohup, setsid, daemon mode, Docker, system services, global installs, or change shared CLI configuration. Install tools locally in your worktree. Flow stops task processes at the end of each turn.
+Flow may checkpoint an inactive worktree locally and remove it to save disk. On a follow-up it restores your files; rediscover paths with flow_workspace. Branch names and paths can change; the Slack conversation is the task identity.
 Never read credentials or .env files. Never copy secrets into responses or commits. Do not claim that unmerged changes describe the base branch.
 Graph tools are read-only except remember and correct_graph (advisory flags). Do not mutate graph entities directly.
 Return JSON: {"answer_md":"<answer or change summary, validation, and branch/PR when applicable>","citations":[{"kind":"file|node|slack|linear","ref":"<reference>"}],"confidence":0.9,"gaps":[]}.
@@ -113,6 +116,8 @@ function checkShellCommand(command: string, repos: CloudRepo[]): void {
   if (command.includes("`") || command.includes("$(")) refused();
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
+    if (["nohup", "setsid", "disown", "docker", "podman", "systemctl", "service", "sudo"].includes(path.basename(word)) ||
+        ["--global", "--daemon", "--detach"].includes(word) || word === "-g") refused();
     if (["cd", "chdir", "pushd", "popd"].includes(word) || /\.\.[/\\]|^GIT_[A-Z_]+=|^--(?:git-dir|work-tree)|(?:^|[/\\])\.git(?:[/\\]|$)/.test(word)) refused();
     if (repos.some((r) => word.includes(r.source) || word.includes(canonicalPath(r.source)) ||
       word.includes(path.dirname(r.source) + path.sep))) refused();
@@ -129,6 +134,7 @@ export function createCloudToolPolicy(options: {
   directory: string;
   repos: () => Promise<CloudRepo[]>;
   ensure: (repo: string) => Promise<CloudRepo>;
+  acquire?: () => Promise<void>;
 }) {
   const absolute = (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) throw new Error("An explicit repository path is required");
@@ -140,6 +146,7 @@ export function createCloudToolPolicy(options: {
     if (!["read", "glob", "grep", "write", "edit", "apply_patch", "bash"].includes(tool)) {
       throw new Error(`Tool "${tool}" is not enabled for cloud tasks`);
     }
+    if (["write", "edit", "apply_patch", "bash"].includes(tool)) await options.acquire?.();
     const repos = await options.repos();
     for (const repo of repos) if (repo.worktree) assertWorktree(repo.worktree.path);
 

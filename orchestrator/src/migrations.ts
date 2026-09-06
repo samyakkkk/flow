@@ -255,6 +255,23 @@ export const MIGRATIONS: Migration[] = [
       db.exec("ALTER TABLE agent_sessions ADD COLUMN embedded_at INTEGER");
     },
   },
+  {
+    id: 16,
+    name: "cloud worktree identity and retained checkpoints",
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS cloud_conversations (
+        conversation_key TEXT PRIMARY KEY, session_id TEXT,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()));
+        CREATE TABLE IF NOT EXISTS cloud_worktrees (
+          conversation_key TEXT NOT NULL REFERENCES cloud_conversations(conversation_key),
+          repo TEXT NOT NULL, path TEXT NOT NULL UNIQUE, branch TEXT NOT NULL,
+          base_commit TEXT NOT NULL, PRIMARY KEY (conversation_key, repo));`);
+      const columns = new Set((db.prepare("PRAGMA table_info(cloud_worktrees)").all() as { name: string }[]).map((r) => r.name));
+      for (const [name, type] of [["git_dir", "TEXT"], ["git_identity", "TEXT"], ["archived_at", "INTEGER"], ["checkpoint_commit", "TEXT"], ["cleanup_error", "TEXT"]]) {
+        if (!columns.has(name)) db.exec(`ALTER TABLE cloud_worktrees ADD COLUMN ${name} ${type}`);
+      }
+    },
+  },
 ];
 
 // Orient docs — the AMBIENT memory tier. One rendered document per scope

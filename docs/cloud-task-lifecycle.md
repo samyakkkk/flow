@@ -1,0 +1,87 @@
+# Shared-machine cloud tasks
+
+In `FLOW_MODE=prod`, Flow runs OpenCode tasks on the existing Linux machine.
+It uses the installed CLIs and their existing OS-user authentication. Each
+Slack thread has a stable conversation identity and separate Git worktrees.
+
+## Execution
+
+Ordinary questions read shared source checkouts and do not acquire a coding
+slot. Before creating an edit workspace, editing a file, or running a shell
+command, the OpenCode plugin requests the machine's coding slot. Requests are
+FIFO; another conversation can still answer questions while a coding task runs.
+Slack displays when a task is waiting. Resumed direct edits also acquire the slot.
+The default turn timeout is one hour, including time waiting for the slot;
+`FLOW_CLOUD_TASK_TIMEOUT_MS` changes it. `SLACK_AGENT_ANSWER_TIMEOUT_MS`, when
+set, provides a separate Slack-side timeout.
+
+The queue lives in `~/.flow/coding/queue.db`, shared by all Flow projects run as
+the same OS user. `FLOW_CODING_STATE_DIR` overrides its directory. Multiple
+containers must mount the same queue directory **and share the PID namespace**
+to coordinate this way; independent containers/OS users are not one worker.
+Use a local disk, not a network filesystem, for the SQLite queue.
+
+The slot lasts until the turn finishes, fails, or is cancelled and its process
+group has stopped. Task descendants are stopped when the CLI exits, including
+background servers in that process group. Linux crash recovery checks process
+start identities before killing an orphan group and admitting a successor.
+Live tasks do not lose the slot through an arbitrary lease timeout.
+
+This is a trusted-team execution policy, not an OS security sandbox. Arbitrary
+programs can bypass path restrictions or detach processes. Agents are instructed
+to use foreground commands and local tool installs; direct daemon, Docker,
+service-management and global-install commands are refused. Do not use this
+mode for mutually untrusted tenants. Existing host authentication also means
+commands have the host user's permissions and can affect external services.
+
+## Conversation and Git state
+
+Turns in the same conversation run serially. Follow-ups use the saved OpenCode
+session. Git's per-worktree metadata directory and a Flow identity marker track
+the actual tree, even after branch switches, detached HEAD, or `git worktree
+move`. Paths/branches are reconciled on tool requests and at turn completion.
+A missing or replaced tree fails closed rather than falling back to shared
+source. Existing pre-upgrade worktrees adopt a marker on first reconciliation.
+
+After an orchestrator restart, interrupted and queued cloud turns are marked
+failed rather than silently replaying edits or external side effects. The next
+Slack message resumes the saved conversation and worktrees. This initial version
+does not promise automatic completion of a turn interrupted by a restart.
+
+## Disk cleanup
+
+An hourly sweep considers conversations inactive for 72 hours. Set
+`FLOW_WORKTREE_IDLE_HOURS` to another positive hour count, or `0` to disable.
+Active/queued conversations are skipped. Cleanup also requires the coding slot.
+
+Flow builds a local checkpoint commit using a temporary Git index, stores it on
+`flow/checkpoints/<conversation-hash>/<repo>`, records the checkpoint in SQLite,
+then removes the linked worktree. Nothing is pushed. Original branches remain.
+Conversations, jobs and session history are retained. On the next message Flow
+recreates the worktree at the saved commit; a modified checkpoint branch is
+rejected. Dependencies may need reinstalling.
+
+Root `.env` and `.env.*` files are copied from the source checkout when a tree
+is created/restored; they are not shared by symlink. Unchanged copied env files
+can be discarded during cleanup, including when they were never gitignored.
+They are excluded from new checkpoints. Already tracked files remain in Git's
+existing history. Host CLI auth is inherited; a CLI installed locally by one
+task does not automatically become available to other tasks.
+
+Cleanup retains the whole worktree when it finds changed credentials, detected
+tokens in changed files, conflicts, a Git operation in progress, partial staging,
+submodules, large/special changed files, or unrecognized ignored files. Only
+known dependency/build caches (`node_modules`, `.next`, `.nuxt`, `.turbo`,
+`__pycache__`, `.pytest_cache`) are disposable by default. Secret detection is
+best-effort, not a guarantee that arbitrary secrets can be recognized.
+
+The `cloud_worktrees` row records `path`, `branch`, `git_dir`, `git_identity`,
+`checkpoint_commit`, `archived_at`, and `cleanup_error`. Workspace tool responses
+include this state. A retained tree needs inspection; Flow never resolves it by
+blindly force-cleaning. Local checkpoint branches are retained indefinitely.
+
+## Verification
+
+`npm test --workspace orchestrator` includes the lifecycle tests. Set
+`FLOW_TEST_OPENCODE_BIN` to an installed OpenCode binary to include the real
+plugin smoke test. Run on Linux to exercise orphan process-group recovery.

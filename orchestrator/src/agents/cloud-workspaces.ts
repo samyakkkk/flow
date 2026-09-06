@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import db from "../db.js";
-import { createSessionWorktree } from "./worktrees.js";
+import { createSessionWorktree, overlayEnvFiles } from "./worktrees.js";
 
 const exec = promisify(execFile);
 
@@ -18,11 +19,16 @@ export interface CloudRepo {
   name: string;
   source: string;
   baseBranch: string;
-  worktree?: { path: string; branch: string; base_commit: string };
+  worktree?: { path: string; branch: string; base_commit: string; git_dir?: string | null; git_identity?: string | null; archived_at?: number | null; checkpoint_commit?: string | null; cleanup_error?: string | null };
 }
 
 export function cloudMode(): boolean {
   return process.env.FLOW_MODE === "prod";
+}
+
+export function cloudTaskTimeoutMs(): number {
+  const value = Number(process.env.FLOW_CLOUD_TASK_TIMEOUT_MS ?? 3_600_000);
+  return Number.isFinite(value) && value > 0 && value <= 2_147_483_647 ? value : 3_600_000;
 }
 
 export function conversationKey(ref: ConversationRef): string {
@@ -72,7 +78,7 @@ export function conversationRepos(key: string): CloudRepo[] {
       throw new Error(`Invalid registered repo name: ${repo.name}`);
     }
     const worktree = db.prepare(
-      "SELECT path, branch, base_commit FROM cloud_worktrees WHERE conversation_key = ? AND repo = ?",
+      "SELECT path, branch, base_commit, git_dir, git_identity, archived_at, checkpoint_commit, cleanup_error FROM cloud_worktrees WHERE conversation_key = ? AND repo = ?",
     ).get(key, repo.name) as CloudRepo["worktree"];
     return { name: repo.name, source: path.join(workspace, "repos", repo.name), baseBranch: repo.branch, worktree };
   });
@@ -99,10 +105,18 @@ export async function ensureConversationWorktree(key: string, name: string): Pro
     const repo = conversationRepos(key).find((r) => r.name === name);
     if (!repo) throw new Error(`Unknown code repo "${name}"; connect it first`);
     if (repo.worktree) {
-      // Never silently replace a missing tree or lose a conversation's edits.
-      const root = realpathSync(repo.worktree.path);
-      const { stdout } = await exec("git", ["-C", root, "rev-parse", "--show-toplevel"], { timeout: 10_000 });
-      if (realpathSync(stdout.trim()) !== root) throw new Error("Conversation worktree is no longer valid");
+      if (repo.worktree.archived_at && !existsSync(repo.worktree.path)) {
+        const tip = await cloudGit(repo.source, ["rev-parse", `refs/heads/${repo.worktree.branch}^{commit}`]);
+        if (tip !== repo.worktree.checkpoint_commit) throw new Error("Retained branch changed; refusing to restore a different checkpoint");
+        await cloudGit(repo.source, ["worktree", "add", repo.worktree.path, repo.worktree.branch]);
+        const restoredDir = await cloudGit(repo.worktree.path, ["rev-parse", "--absolute-git-dir"]);
+        if (repo.worktree.git_identity) writeFileSync(path.join(restoredDir, "flow-task-identity"), repo.worktree.git_identity, { mode: 0o600 });
+        await overlayEnvFiles(repo.source, repo.worktree.path);
+        // git worktree add allocates a new metadata identity.
+        repo.worktree.git_dir = null;
+        db.prepare("UPDATE cloud_worktrees SET git_dir = NULL WHERE conversation_key = ? AND repo = ?").run(key, name);
+      }
+      await reconcileWorktree(key, repo);
       return repo;
     }
     let commit: string | undefined;
@@ -119,8 +133,81 @@ export async function ensureConversationWorktree(key: string, name: string): Pro
       title: "cloud task", workspaceDir: cloudWorkspaceDir(), baseCommit: commit, copyNodeModules: false,
     });
     if ("error" in result) throw new Error(result.error);
-    db.prepare("INSERT INTO cloud_worktrees (conversation_key, repo, path, branch, base_commit) VALUES (?, ?, ?, ?, ?)")
-      .run(key, name, result.path, result.branch, commit);
-    return { ...repo, worktree: { ...result, base_commit: commit } };
+    const gitDir = realpathSync(await cloudGit(result.path, ["rev-parse", "--absolute-git-dir"]));
+    const gitIdentity = randomUUID();
+    writeFileSync(path.join(gitDir, "flow-task-identity"), gitIdentity, { mode: 0o600 });
+    db.prepare("INSERT INTO cloud_worktrees (conversation_key, repo, path, branch, base_commit, git_dir, git_identity) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(key, name, result.path, result.branch, commit, gitDir, gitIdentity);
+    return { ...repo, worktree: { ...result, base_commit: commit, git_dir: gitDir, git_identity: gitIdentity } };
+  }
+}
+
+export async function cloudGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  return (await exec("git", ["-C", cwd, ...args], { timeout: 60_000, maxBuffer: 16 * 1024 * 1024, env })).stdout.trimEnd();
+}
+
+// Git's per-worktree metadata directory survives branch changes and worktree
+// moves. Match that identity, never a branch name or a model-reported path.
+export async function reconcileWorktree(key: string, repo: CloudRepo): Promise<void> {
+  const tree = repo.worktree!;
+  const candidates = (await cloudGit(repo.source, ["worktree", "list", "--porcelain", "-z"]))
+    .split("\0").filter((s) => s.startsWith("worktree ")).map((s) => s.slice(9));
+  // Normal tool calls should inspect their own tree first, not spawn one Git
+  // process for every other retained conversation on this machine.
+  let preferred = tree.path;
+  if (tree.git_dir && existsSync(path.join(tree.git_dir, "gitdir"))) preferred = path.dirname(readFileSync(path.join(tree.git_dir, "gitdir"), "utf8").trim());
+  candidates.sort((a, b) => Number(path.resolve(b) === path.resolve(preferred)) - Number(path.resolve(a) === path.resolve(preferred)));
+  let found: string | undefined;
+  for (const candidate of candidates) {
+    if (!existsSync(path.join(candidate, ".git"))) continue;
+    const dir = realpathSync(await cloudGit(candidate, ["rev-parse", "--absolute-git-dir"]));
+    if (tree.git_dir ? dir === tree.git_dir : path.resolve(candidate) === path.resolve(tree.path)) {
+      const marker = path.join(dir, "flow-task-identity");
+      if (tree.git_identity && (!existsSync(marker) || readFileSync(marker, "utf8") !== tree.git_identity)) continue;
+      // A legacy row can adopt only a linked worktree, never the source root.
+      if (realpathSync(candidate) === realpathSync(repo.source)) throw new Error("Task points at the shared source checkout");
+      found = realpathSync(candidate);
+      tree.git_dir = dir;
+      if (!tree.git_identity) {
+        tree.git_identity = randomUUID();
+        writeFileSync(marker, tree.git_identity, { mode: 0o600 });
+      }
+      break;
+    }
+  }
+  if (!found) throw new Error("Conversation worktree is missing or replaced; its saved identity could not be found");
+  const branch = await cloudGit(found, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "");
+  tree.path = found;
+  tree.branch = branch; // empty = detached; checkpointing still preserves HEAD.
+  tree.archived_at = null;
+  db.prepare("UPDATE cloud_worktrees SET path = ?, branch = ?, git_dir = ?, git_identity = ?, archived_at = NULL WHERE conversation_key = ? AND repo = ?")
+    .run(found, branch, tree.git_dir, tree.git_identity, key, repo.name);
+}
+
+const turns = new Map<string, Promise<unknown>>();
+export function withConversationTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = turns.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(run);
+  turns.set(key, next);
+  void next.finally(() => { if (turns.get(key) === next) turns.delete(key); }).catch(() => {});
+  return next;
+}
+
+export async function restoreConversationWorktrees(key: string): Promise<void> {
+  if (db.prepare("SELECT 1 FROM cloud_worktrees WHERE conversation_key = ?").get(key)) {
+    for (const repo of conversationRepos(key)) if (repo.worktree) await ensureConversationWorktree(key, repo.name);
+  }
+  db.prepare("UPDATE cloud_conversations SET updated_at = unixepoch() WHERE conversation_key = ?").run(key);
+}
+
+export async function reconcileConversation(key: string): Promise<void> {
+  db.prepare("UPDATE cloud_conversations SET updated_at = unixepoch() WHERE conversation_key = ?").run(key);
+  if (!db.prepare("SELECT 1 FROM cloud_worktrees WHERE conversation_key = ?").get(key)) return;
+  for (const repo of conversationRepos(key)) if (repo.worktree && !repo.worktree.archived_at) {
+    try { await reconcileWorktree(key, repo); }
+    catch {
+      db.prepare("UPDATE cloud_worktrees SET cleanup_error = ? WHERE conversation_key = ? AND repo = ?")
+        .run("Worktree identity could not be reconciled; manual inspection required", key, repo.name);
+    }
   }
 }

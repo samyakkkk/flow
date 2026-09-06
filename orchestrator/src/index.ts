@@ -247,7 +247,9 @@ app.get<{ Querystring: { status?: string } }>(
 // ------------------------------------------------------------------
 // Graceful shutdown hook (registered before listen)
 // ------------------------------------------------------------------
+let stopWorkspaceCleanup: (() => void) | undefined;
 app.addHook("onClose", async () => {
+  stopWorkspaceCleanup?.();
   stopDrainer();
   stopAllPollers();
   stopTelemetryReporter();
@@ -277,6 +279,8 @@ const start = async (): Promise<void> => {
 
     // Recover jobs left 'running' by a crash/restart (S103)
     recoverStalledJobs();
+    const { startWorkspaceCleanup } = await import("./agents/cloud-cleanup.js");
+    stopWorkspaceCleanup = startWorkspaceCleanup();
 
     // Start outbox drainer (no-ops if FLOW_DRAIN_DISABLE=1 or already running)
     if (process.env.FLOW_DRAIN_DISABLE !== "1") {
