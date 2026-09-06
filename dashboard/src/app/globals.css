@@ -44,7 +44,7 @@
   --color-foreground: var(--text);
 
   --font-display: var(--font-lora), ui-serif, Georgia, serif;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-space-mono), ui-monospace, "Cascadia Code", monospace;
 
   --radius-sm: 4px;
@@ -60,7 +60,7 @@
 body {
   background: var(--cream);
   color: var(--text);
-  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
