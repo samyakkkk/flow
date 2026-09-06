@@ -11,8 +11,11 @@ import { requireProject } from "@/lib/projectContext";
 // By default the gateway uses its configured graph; callers may pass ?graph=
 // for explicit graph selection.
 
-const NODES_CYPHER = `MATCH (n) RETURN n`;
-const EDGES_CYPHER = `MATCH (a)-[r]->(b) RETURN a, r, b`;
+// Project before the database driver decodes results: whole nodes include
+// embedding vectors, repeated twice per edge, which can exhaust the gateway heap.
+const canvasNode = (alias: string) => `{id: id(${alias}), labels: labels(${alias}), properties: {id: ${alias}.id, name: ${alias}.name, title: ${alias}.title, description: ${alias}.description}}`;
+const NODES_CYPHER = `MATCH (n) RETURN ${canvasNode("n")} AS n`;
+const EDGES_CYPHER = `MATCH (a)-[r]->(b) RETURN ${canvasNode("a")} AS a, {sourceId: id(a), destinationId: id(b), relationshipType: type(r)} AS r, ${canvasNode("b")} AS b`;
 const NODE_COUNT_CYPHER = `MATCH (n) RETURN count(n) AS count`;
 const EDGE_COUNT_CYPHER = `MATCH ()-[r]->() RETURN count(r) AS count`;
 const DEFAULT_PAGE_LIMIT = 500;
@@ -165,7 +168,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (part === "nodes") {
-      const nodeRows = await runQuery(pageCypher("MATCH (n) RETURN n", offset, limit));
+      const nodeRows = await runQuery(pageCypher(NODES_CYPHER, offset, limit));
       const data = buildGraphRows(nodeRows, []);
       return NextResponse.json({
         ...data,
@@ -180,7 +183,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (part === "edges") {
-      const edgeRows = await runQuery(pageCypher("MATCH (a)-[r]->(b) RETURN a, r, b", offset, limit));
+      const edgeRows = await runQuery(pageCypher(EDGES_CYPHER, offset, limit));
       const data = buildGraphRows([], edgeRows);
       return NextResponse.json({
         ...data,
