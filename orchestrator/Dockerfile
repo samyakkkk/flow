@@ -1,8 +1,7 @@
 FROM node:22-slim
 
-# Fallback build tools only. better-sqlite3 (^12) and opencode-ai ship prebuilt
-# binaries for linux-x64/arm64, so a normal install compiles nothing — these are
-# kept purely as a safety net if a prebuild is ever unavailable for this arch.
+# Build tools for node-pty, plus fallback compilation when other native
+# dependencies do not have a prebuilt binary for this architecture.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
  && rm -rf /var/lib/apt/lists/*

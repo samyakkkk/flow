@@ -51,7 +51,7 @@ before(async () => {
       const args = JSON.parse(String(options?.body ?? "{}"));
       if (target.endsWith("conversations.open")) { assert.equal(args.users, "UORIGINAL"); return Response.json({ ok: true, channel: { id: "DTEST" } }); }
       if (target.endsWith("chat.postMessage")) { messages.push(args); return Response.json({ ok: true, ts: `${messages.length}.001` }); }
-      if (target.endsWith("files.info")) return Response.json({ ok: true, file: { size: fileContent.length, url_private: downloadUrl } });
+      if (target.includes("files.info?")) { assert.equal(options?.method, "GET"); assert.equal(new URL(target).searchParams.get("file"), "FTEST"); return Response.json({ ok: true, file: { size: fileContent.length, url_private: downloadUrl } }); }
     }
     if (target === "https://files.slack.com/test-config") { downloads++; assert.equal(options?.redirect, "error"); return new Response(fileContent); }
     return realFetch(url, options);
@@ -133,11 +133,41 @@ test("interactive terminal shares the coding queue, accepts interactive input, a
   queue.requestCodingSlot("other-coding"); assert.equal((await terminal.openSetupTerminal(request.id)).queued, true);
   queue.releaseCodingSlot("other-coding"); assert.equal((await terminal.openSetupTerminal(request.id)).queued, false);
   assert.equal(queue.requestCodingSlot("next-coding").acquired, false);
-  terminal.writeSetupTerminal(request.id, "printf 'SETUP_PTY_OK\\n'\r");
-  for (let i = 0; i < 100 && !terminal.readSetupTerminal(request.id).output.includes("SETUP_PTY_OK"); i++) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match(terminal.readSetupTerminal(request.id).output, /SETUP_PTY_OK/);
+  const marker = path.join(root, "terminal-input.txt");
+  terminal.writeSetupTerminal(request.id, `read -r reply; printf '%s' "$reply" > '${marker}'\r`);
+  terminal.writeSetupTerminal(request.id, "interactive-answer\r");
+  for (let i = 0; i < 100 && !existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(readFileSync(marker, "utf8"), "interactive-answer");
+  const foreground = path.join(root, "foreground.pid");
+  if (process.platform === "linux") {
+    terminal.writeSetupTerminal(request.id, `sh -c 'echo $$ > "${foreground}"; exec sleep 60'\r`);
+    for (let i = 0; i < 100 && !existsSync(foreground); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(existsSync(foreground));
+  }
   terminal.closeSetupTerminal(request.id, true);
   for (let i = 0; i < 100 && !queue.requestCodingSlot("next-coding").acquired; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(queue.requestCodingSlot("next-coding").acquired, true); queue.releaseCodingSlot("next-coding");
   assert.equal(requests.getSetupRequest(request.id)!.state, "ready");
+  if (process.platform === "linux") {
+    const pid = readFileSync(foreground, "utf8").trim();
+    const stat = `/proc/${pid}/stat`;
+    assert.ok(!existsSync(stat) || readFileSync(stat, "utf8").split(") ")[1].startsWith("Z"), "Foreground process survived terminal close");
+  }
+});
+
+test("setup pause stops a real coding subprocess and releases its slot without human input", async () => {
+  const { key } = await fresh("pause-real-child");
+  const [sourceType, workspace, id] = JSON.parse(key);
+  const parent = await jobs.enqueueJob({ type: "answer", input: { conversation: { source: sourceType, workspace, id }, question: "Wait for setup", slack_requester: "UORIGINAL", manual_command: { repo: "demo", command: "sleep 60" } } });
+  for (let i = 0; i < 200 && !jobs.codingChildPid(parent.id); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(jobs.codingChildPid(parent.id));
+  const response = await app.inject({ method: "POST", url: `/v1/agents/tasks/${parent.id}/setup`, headers: { authorization: `Bearer ${jobs.jobScopedToken(parent.id)}` }, payload: { action: "request", repo: "demo", environment: "staging", kind: "file", destination: "pause.cfg", reason: "Need a test configuration" } });
+  assert.equal(response.statusCode, 200, response.body);
+  for (let i = 0; i < 200 && jobs.codingChildPid(parent.id); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(jobs.codingChildPid(parent.id), undefined);
+  assert.equal(jobs.getJob(parent.id)!.status, "done");
+  assert.match(jobs.getJob(parent.id)!.result_json!, /setup_wait/);
+  for (let i = 0; i < 100 && !queue.requestCodingSlot("after-setup-pause").acquired; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(queue.requestCodingSlot("after-setup-pause").acquired, true);
+  queue.releaseCodingSlot("after-setup-pause");
 });
