@@ -59,7 +59,7 @@ function stubVec(text: string): Float32Array {
 const stubEmbedder = async (t: string) => stubVec(t);
 
 function clearMemory(): void {
-  db.exec("DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM orient_docs; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
+  db.exec("DELETE FROM memory_distill_jobs; DELETE FROM observations; DELETE FROM memories; DELETE FROM anchors; DELETE FROM orient_docs; DELETE FROM slack_messages; DELETE FROM linear_tickets;");
   store.invalidateVectorCache();
   headline?.invalidateHeadlineCache();
 }
@@ -552,6 +552,8 @@ describe("migration idempotency", () => {
     assert.ok(tables.includes("observations"));
     assert.ok(tables.includes("memories"));
     assert.ok(tables.includes("anchors"), "migration 9 creates the anchors table");
+    assert.ok(tables.includes("memory_distill_jobs"), "migration 16 creates durable jobs");
+    assert.ok(tables.includes("observation_events"), "migration 16 creates event evidence");
     mem.close();
   });
 });
@@ -668,7 +670,7 @@ describe("distiller trigger: idle sweep", () => {
   test("sweeps an idle session whose updated_at (ms) is older than IDLE_MS", async () => {
     llm.setLlmTransport(async () =>
       JSON.stringify([
-        { claim: "Auth uses JWT in httpOnly cookies", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["jwt", "cookie"] },
+        { claim: "Auth uses JWT in httpOnly cookies", kind: "decision", context: {}, source: "user_stated", retrieval_keys: ["jwt", "cookie"], evidence_seqs: [1] },
       ]),
     );
     const staleMs = Date.now() - trigger.IDLE_MS - 60_000; // ms, as runtime writes
@@ -682,11 +684,13 @@ describe("distiller trigger: idle sweep", () => {
     assert.equal(meta.last_distilled_seq, 2, "high-water mark advances to the max transcript seq");
   });
 
-  test("leaves recently-active sessions alone", async () => {
+  test("includes recently-active sessions with new content", async () => {
+    llm.setLlmTransport(async () => "[]");
     db.prepare("INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at) VALUES (?, 'claude', ?, '/tmp', 'test', ?, ?, ?)")
       .run("sweep-2", "acme", "idle", Date.now(), Date.now());
     const ran = await trigger.idleSweep();
-    assert.equal(ran, 0);
+    assert.equal(ran, 1);
+    assert.equal(await trigger.idleSweep(), 0, "unchanged content is not processed twice");
   });
 
   test("retries a provider failure without advancing the transcript watermark", async () => {
@@ -1359,5 +1363,157 @@ describe("knowledge base (list + delete)", () => {
     assert.deepEqual(second, { memory_deleted: true });
     assert.equal(store.getMemory(res.memoryId), undefined, "a claim with zero provenance is deleted outright");
     assert.equal(knowledge.deleteObservation("nope"), null);
+  });
+});
+
+// Durable full-context checkpoints: retries must not manufacture evidence.
+describe("incremental transcript checkpoints", () => {
+  let checkpoint: typeof import("../src/memory/checkpoint.js");
+  let trigger: typeof import("../src/memory/trigger.js");
+  const event = (seq: number, text = "Always use JWT in httpOnly cookies for authentication.") => ({ seq, kind: "user_prompt", data: { text } });
+  const claim = (seqs: number[], text = "Auth uses JWT in httpOnly cookies") => ({
+    claim: text, kind: "decision", source: "user_stated", evidence_seqs: seqs, context: {}, retrieval_keys: ["jwt"],
+  });
+  const session = (id: string, since = 0, created = Date.now() - 600_000) => {
+    db.prepare(`INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at, last_distilled_seq)
+      VALUES (?, 'claude', 'acme', '/tmp', 'test', 'running', ?, ?, ?)`).run(id, created, Date.now(), since);
+  };
+  const cursor = (id: string) => (db.prepare("SELECT last_distilled_seq AS seq FROM agent_sessions WHERE id = ?").get(id) as any).seq;
+  before(async () => {
+    checkpoint = await import("../src/memory/checkpoint.js");
+    trigger = await import("../src/memory/trigger.js");
+  });
+  beforeEach(() => {
+    db.exec("DELETE FROM agent_sessions");
+    store.setEmbedder(stubEmbedder);
+    llm.setLlmTransport(async () => "[]");
+  });
+
+  test("keeps full earlier context, marks the new range and counts only new evidence", async () => {
+    session("boundary", 120);
+    let prompt = "";
+    llm.setLlmTransport(async (p) => { prompt = p; return JSON.stringify([claim([1, 121])]); });
+    trigger.setTranscriptReader(() => [event(1, "Earlier context " + "x".repeat(25_000)), event(120), event(121)]);
+    assert.equal(await trigger.maybeDistill("boundary"), true);
+    assert.match(prompt, /Previously processed: event IDs <= 120/);
+    assert.match(prompt, /NEW material: event IDs > 120 and <= 121/);
+    assert.ok(prompt.includes("x".repeat(25_000)), "full context is not slimmed or silently truncated");
+    const evidence = db.prepare("SELECT event_seq FROM observation_events").all() as any[];
+    assert.deepEqual(evidence.map((e) => e.event_seq), [121]);
+    assert.equal(cursor("boundary"), 121);
+    assert.equal(await trigger.maybeDistill("boundary"), false);
+  });
+
+  test("rejects invalid output and old-only, unknown, fractional, or structural citations without advancing", async () => {
+    session("invalid", 10);
+    trigger.setTranscriptReader(() => [event(1), event(11), { seq: 12, kind: "created", data: {} }]);
+    for (const output of ["not JSON", JSON.stringify([claim([1])]), JSON.stringify([claim([99])]), JSON.stringify([claim([11.5])]), JSON.stringify([claim([12])]), JSON.stringify([{ ...claim([11]), evidence_seqs: undefined }])]) {
+      llm.setLlmTransport(async () => output);
+      assert.equal(await trigger.maybeDistill("invalid"), false);
+      assert.equal(cursor("invalid"), 10);
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations").get().n, 0);
+    }
+    llm.setLlmTransport(async () => "[]");
+    assert.equal(await trigger.maybeDistill("invalid"), true);
+    assert.equal(cursor("invalid"), 12);
+  });
+
+  test("an active session checkpoints after five minutes without waiting for inactivity", async () => {
+    session("active");
+    trigger.setTranscriptReader(() => [event(1)]);
+    assert.equal(await trigger.idleSweep(), 1);
+    assert.equal(cursor("active"), 1);
+    assert.equal(await trigger.idleSweep(), 0);
+  });
+
+  test("concurrent triggers share a frozen job; later arrivals remain for the next range", async () => {
+    session("concurrent");
+    let events = [event(1)];
+    trigger.setTranscriptReader(() => events);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let calls = 0;
+    llm.setLlmTransport(async () => { calls++; await gate; return JSON.stringify([claim([1])]); });
+    const first = trigger.maybeDistill("concurrent");
+    const second = trigger.maybeDistill("concurrent");
+    events = [...events, event(2, "The retry limit is now five.")];
+    release();
+    await Promise.all([first, second]);
+    assert.equal(calls, 1);
+    assert.equal(cursor("concurrent"), 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations").get().n, 1);
+    llm.setLlmTransport(async () => "[]");
+    assert.equal(await trigger.maybeDistill("concurrent"), true);
+    assert.equal(cursor("concurrent"), 2);
+  });
+
+  test("partial application resumes from saved output and does not reinforce the first item again", async () => {
+    session("partial");
+    let calls = 0;
+    llm.setLlmTransport(async () => { calls++; return JSON.stringify([claim([1]), claim([2])]); });
+    const job = checkpoint.createCheckpoint("partial", 0, { repo: "acme", branch: "main", events: [event(1), event(2)] })!;
+    assert.equal(await checkpoint.runCheckpoint(job, async () => { throw new Error("judge unavailable"); }), false);
+    assert.equal(cursor("partial"), 0);
+    let mem = db.prepare("SELECT * FROM memories").get() as any;
+    assert.equal(mem.evidence_count, 1);
+    const saved = checkpoint.pendingCheckpoint("partial")!;
+    assert.ok(saved.output_json);
+    llm.setLlmTransport(async () => { throw new Error("extraction must not repeat"); });
+    assert.equal(await checkpoint.runCheckpoint(saved, async () => ({ verdict: "same" })), true);
+    mem = db.prepare("SELECT * FROM memories").get() as any;
+    assert.equal(mem.evidence_count, 2);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM memories").get().n, 1);
+    assert.equal(calls, 1);
+    assert.equal(cursor("partial"), 2);
+    assert.equal(await checkpoint.runCheckpoint(saved), false);
+  });
+
+  test("overlapping citations in multiple observations count once per memory", async () => {
+    session("overlap");
+    llm.setLlmTransport(async () => JSON.stringify([claim([1]), claim([1])]));
+    const job = checkpoint.createCheckpoint("overlap", 0, { repo: "acme", branch: null, events: [event(1)] })!;
+    assert.equal(await checkpoint.runCheckpoint(job, async () => ({ verdict: "same" })), true);
+    assert.equal(db.prepare("SELECT evidence_count FROM memories").get().evidence_count, 1);
+  });
+
+  test("a failed SQL application rolls back attachment and is safe to retry", async () => {
+    session("rollback");
+    const original = await store.insertObservation({ source: "session", session_id: "older", claim: "Auth uses JWT in httpOnly cookies", kind: "decision", source_weight: "user_stated" });
+    await consolidate.consolidateObservation(original, async () => ({ verdict: "new" }));
+    llm.setLlmTransport(async () => JSON.stringify([claim([1])]));
+    const job = checkpoint.createCheckpoint("rollback", 0, { repo: "acme", branch: null, events: [event(1)] })!;
+    db.exec(`CREATE TRIGGER fail_memory_update BEFORE UPDATE ON memories BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;`);
+    try {
+      assert.equal(await checkpoint.runCheckpoint(job, async () => ({ verdict: "contradicts" })), false);
+      assert.equal(db.prepare("SELECT memory_id FROM observations WHERE session_id = 'rollback'").get().memory_id, null);
+      assert.equal(cursor("rollback"), 0);
+    } finally { db.exec("DROP TRIGGER fail_memory_update"); }
+    assert.equal(await checkpoint.runCheckpoint(job, async () => ({ verdict: "contradicts" })), true);
+    assert.equal(db.prepare("SELECT contradiction_count FROM memories").get().contradiction_count, 1);
+    assert.equal(await checkpoint.runCheckpoint(job), false);
+  });
+
+  test("a pending job recovers using its saved transcript when the reader is unavailable", async () => {
+    session("recover");
+    checkpoint.createCheckpoint("recover", 0, { repo: "acme", branch: "release", events: [event(1)] });
+    // Simulates startup with no in-memory transcript, before new capture arrives.
+    trigger.setTranscriptReader(() => []);
+    llm.setLlmTransport(async (prompt) => {
+      assert.match(prompt, /Always use JWT/);
+      return JSON.stringify([claim([1])]);
+    });
+    assert.equal(await trigger.idleSweep(), 1);
+    assert.equal(cursor("recover"), 1);
+    assert.equal(db.prepare("SELECT branch FROM observations WHERE session_id = 'recover'").get().branch, "release");
+  });
+
+  test("closure persists its job before the background callback", async () => {
+    session("closed");
+    trigger.setTranscriptReader(() => [event(1)]);
+    trigger.queueDistill("closed");
+    assert.ok(checkpoint.pendingCheckpoint("closed"), "job exists synchronously");
+    await trigger.maybeDistill("closed");
+    await new Promise((r) => setImmediate(r));
+    assert.equal(cursor("closed"), 1);
   });
 });

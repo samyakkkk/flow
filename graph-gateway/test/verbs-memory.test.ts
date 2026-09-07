@@ -260,3 +260,30 @@ test("orient distinguishes unreadable memory from a confirmed empty store", asyn
     else process.env.FLOW_MEMORY_URL = previous;
   }
 });
+
+test("job knowledge search authenticates through the gateway without an orchestrator admin token", async () => {
+  const saved = { ...process.env };
+  const originalFetch = globalThis.fetch;
+  try {
+    process.env.FLOW_JOB_ID = "test-job";
+    process.env.GRAPH_GATEWAY_URL = "http://127.0.0.1:7433";
+    process.env.GRAPH_GATEWAY_TOKEN = "test-gateway-token";
+    delete process.env.FLOW_ADMIN_TOKEN;
+    delete process.env.FLOW_ACTIVITY_TOKEN;
+    globalThis.fetch = async (url, options) => {
+      assert.equal(String(url), "http://127.0.0.1:7433/v1/verbs/search_knowledge");
+      assert.equal((options?.headers as Record<string,string>).authorization, "Bearer test-gateway-token");
+      assert.equal(JSON.parse(String(options?.body)).query, "type:thread channel:C1 sort:recent");
+      assert.equal("repo" in JSON.parse(String(options?.body)), false, "Gateway optional repo must be omitted, not null");
+      return Response.json({status:"ok",results:"Slack messages with dates"});
+    };
+    assert.deepEqual(await callVerb("search_knowledge", {query:"type:thread channel:C1 sort:recent"}),
+      {status:"ok",results:"Slack messages with dates"});
+    globalThis.fetch = async () => Response.json({status:"error",error:"backend unavailable"});
+    assert.equal((await callVerb("search_knowledge", {query:"test"})).status,"error");
+  } finally {
+    globalThis.fetch=originalFetch;
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env,saved);
+  }
+});

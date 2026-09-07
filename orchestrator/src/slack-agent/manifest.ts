@@ -51,6 +51,7 @@ export function buildManifest(projectName: string): Record<string, unknown> {
           "files:read",
           "channels:history",
           "channels:read",
+          "channels:join",
           "groups:history",
           "groups:read",
           "im:history",

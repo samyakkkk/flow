@@ -1323,6 +1323,9 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
 
   const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
   if (cloud) {
+    // The shared workspace defaults to builder MCP tools, which omit memory
+    // search. Answer jobs need the session surface (and no graph writes).
+    env.GATEWAY_MCP_READONLY = "1";
     Object.assign(env, cloudGitIdentity(env));
     const inherited = JSON.parse(env.OPENCODE_CONFIG_CONTENT || "{}") as Record<string, unknown>;
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cloudOpencodeConfig(inherited));

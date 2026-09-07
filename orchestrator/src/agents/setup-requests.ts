@@ -8,8 +8,10 @@ export interface SetupRequest {
   channel: string; thread: string; dm?: string; dmThread?: string;
   repo: string; environment: string; destination?: string; variable?: string;
   kind: "file" | "value" | "terminal"; reason: string;
-  state: "requesting" | "waiting" | "ready" | "resumed" | "cancelled";
+  state: "requesting" | "waiting" | "ready" | "resumed" | "completed" | "cancelled";
   encrypted?: string; resumeJob?: string; notice?: string; delivered?: boolean; createdAt: number;
+  retryAt?: number; errorAttempts?: number; errorNotified?: boolean;
+  lastError?: { stage: string; code: string; at: number };
 }
 db.exec(`CREATE TABLE IF NOT EXISTS setup_requests (id TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 export function requests(): SetupRequest[] {
@@ -26,11 +28,16 @@ export async function slackCall(method: string, args: Record<string, unknown>): 
   const token = getSetting("SLACK_BOT_TOKEN");
   if (!token) throw new Error("Slack is not connected");
   // files.info uses query/form parameters; unlike chat.postMessage it does not accept JSON bodies.
-  const info = method === "files.info";
+  const info = method === "files.info" || method === "conversations.info";
   const query = info ? `?${new URLSearchParams(Object.entries(args).map(([key, value]) => [key, String(value)]))}` : "";
   const response = await fetch(`https://slack.com/api/${method}${query}`, { method: info ? "GET" : "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" }, ...(info ? {} : { body: JSON.stringify(args) }), signal: AbortSignal.timeout(30_000) });
   const body = await response.json() as Record<string, any>;
-  if (!response.ok || !body.ok) throw new Error(`Slack ${method} failed (${String(body.error ?? response.status).replace(/[^a-zA-Z0-9_:-]/g, "")})`);
+  if (!response.ok || !body.ok) {
+    const code = String(body.error ?? response.status).replace(/[^a-zA-Z0-9_:-]/g, "");
+    throw Object.assign(new Error(`Slack ${method} failed (${code})`), {
+      code: `slack_${code}`, retryAfter: Number(response.headers.get("retry-after") ?? 0),
+    });
+  }
   return body;
 }
 export function setupUrl(id: string): string {

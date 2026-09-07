@@ -26,6 +26,9 @@ const SUGGESTED_PROMPTS = [
 export interface ListenerDeps {
   runtime: AgentRuntime;
   botUserId: string | undefined;
+  capture?: (event: Record<string, unknown>) => void;
+  authorize?: (userId: string) => Promise<boolean>;
+  replyChannel?: (channelId: string, userId: string) => Promise<string>;
 }
 
 // Bolt's event payloads vary by type and its agent-era typings are still
@@ -46,6 +49,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     const bolt = raw as unknown as { sayStream?: SayStreamFn; setStatus?: SetStatusFn };
     const event = (raw as unknown as { event: Ev }).event;
 
+    deps.capture?.(event);
     if (event.subtype && event.subtype !== "file_share") return;
     if (event.bot_id) return;
     const userId = event.user as string | undefined;
@@ -78,6 +82,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
 
     const prompt = stripMentions(text);
     if (!prompt && !(Array.isArray(event.files) && event.files.length)) return;
+    if (deps.authorize && !await deps.authorize(userId)) return;
 
     logger.info(`[slack-agent] ${surface} message from ${userId} in ${channelId} (thread ${threadTs})`);
     await respond({
@@ -93,6 +98,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
       teamId: (context.teamId as string | undefined) ?? (event.team as string | undefined),
       prompt: prompt || "Please describe the attached image.",
       files: Array.isArray(event.files) ? event.files : undefined,
+      resolveReplyChannel: deps.replyChannel ? () => deps.replyChannel!(channelId, userId) : undefined,
       viewingContext: getThreadContext(channelId, threadTs),
       sayStream: bolt.sayStream,
       setStatus: bolt.setStatus,
@@ -119,6 +125,8 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     const userId = (event.user as string | undefined) ?? "";
     const prompt = stripMentions((event.text as string | undefined) ?? "");
 
+    deps.capture?.(event);
+    if (deps.authorize && !await deps.authorize(userId)) return;
     markEngaged(channelId, threadTs);
 
     if (!prompt && !(Array.isArray(event.files) && event.files.length)) {
@@ -140,6 +148,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
       teamId: (context.teamId as string | undefined) ?? (event.team as string | undefined),
       prompt: prompt || "Please describe the attached image.",
       files: Array.isArray(event.files) ? event.files : undefined,
+      resolveReplyChannel: deps.replyChannel ? () => deps.replyChannel!(channelId, userId) : undefined,
       viewingContext: getThreadContext(channelId, threadTs),
       sayStream: bolt.sayStream,
       setStatus: bolt.setStatus,
@@ -215,6 +224,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     const threadTs = event.thread_ts as string | undefined;
     if (!channelId || !threadTs) return;
 
+    if (deps.authorize && !await deps.authorize(String(event.user_id ?? event.user ?? ""))) return;
     const hadRun = cancelRun(channelId, threadTs);
     logger.info(`[slack-agent] stop requested for ${channelId}:${threadTs} (in-flight: ${hadRun})`);
 

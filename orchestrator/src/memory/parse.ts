@@ -20,6 +20,7 @@ export interface RawObservation {
   // is cheap and recall-oriented; INCLUSION in the doc is earned separately
   // (user_stated fast-tracks, agent claims wait for strong tier).
   ambient: boolean;
+  evidence_seqs?: number[];
 }
 
 const KINDS: ReadonlySet<string> = new Set(["decision", "constraint", "gotcha", "how_to", "preference", "plan"]);
@@ -27,8 +28,8 @@ const SOURCES: ReadonlySet<string> = new Set(["user_stated", "agent_inferred", "
 
 // Return every top-level bracket block, then take the LAST that JSON-parses to
 // an array. Returns [] when nothing parses (an empty array is a valid answer).
-export function extractArray(result: string): unknown[] {
-  if (typeof result !== "string") return [];
+export function extractArrayOrNull(result: string): unknown[] | null {
+  if (typeof result !== "string") return null;
   const s = result.trim();
   const candidates: string[] = [];
   let depth = 0;
@@ -66,7 +67,11 @@ export function extractArray(result: string): unknown[] {
       /* try previous candidate */
     }
   }
-  return [];
+  return null;
+}
+
+export function extractArray(result: string): unknown[] {
+  return extractArrayOrNull(result) ?? [];
 }
 
 function toStringArray(v: unknown): string[] {
@@ -95,6 +100,7 @@ export function validateObservation(raw: unknown): RawObservation | null {
     },
     retrieval_keys: toStringArray(o.retrieval_keys),
     ambient: o.ambient === true,
+    ...(Array.isArray(o.evidence_seqs) ? { evidence_seqs: o.evidence_seqs as number[] } : {}),
   };
 }
 
