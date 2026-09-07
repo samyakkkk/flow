@@ -15,6 +15,12 @@ workspace has one brain, initially running locally; a future cloud migration
 will transfer its data and change its endpoint. Agent execution location is
 independent of brain location.
 
+The intended local experience is to launch the app and create projects in the UI,
+without running `flow up`. Local workspaces will share an app-managed FalkorDB
+instance with separate workspace graphs and a single embedding service/model.
+Remote brains will use their backend for graph and embedding operations. This
+lifecycle integration is planned; it is not implemented in this foundation.
+
 This branch does not migrate installed data, configure Flow Cloud, or change
 existing installations. Upstream build and run instructions below apply to the
 T3 application. See [NOTICE.md](NOTICE.md) for attribution and license boundaries.

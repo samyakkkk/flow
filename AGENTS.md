@@ -12,6 +12,15 @@ Do not introduce separate personal/company brain types or reintroduce removed
 per-turn memory injection. Do not restart existing Flow services without explicit
 authorization, or use live databases for migration experiments.
 
+The target local UX is app-first: launch the app and create projects in the UI,
+without `flow up` or other required CLI lifecycle commands. One app-managed local
+brain runtime shares one FalkorDB instance (separate graphs per workspace) and
+one loaded embedding service/model across local workspaces and windows. Creating
+a project must not spawn another database or load another embedding model.
+Remote brain connections route graph and embedding operations through the remote
+brain backend; do not silently fall back to a local brain when remote is offline.
+These are integration requirements, not claims that the foundation implements them.
+
 Consult Flow project memory through `flow-graph` MCP, orienting with repo `flow`
 and verifying the connected project before using it. A worktree's presence alone
 does not establish a Flow setup binding. Preserve upstream workflow guidance below
