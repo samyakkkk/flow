@@ -182,3 +182,73 @@ test("setup pause stops a real coding subprocess and releases its slot without h
   assert.equal(queue.requestCodingSlot("after-setup-pause").acquired, true);
   queue.releaseCodingSlot("after-setup-pause");
 });
+
+function seedNotificationRequest(id: string, delivered = false) {
+  db.exec("DELETE FROM setup_requests");
+  insertJob(`resume-${id}`, "fixture", "done");
+  db.prepare("UPDATE jobs SET result_json=? WHERE id=?").run(JSON.stringify({ answer_md: "Saved task result" }), `resume-${id}`);
+  requests.saveSetupRequest({ id, job: `parent-${id}`, resumeJob: `resume-${id}`, conversation: "fixture",
+    requester: "UORIGINAL", team: "TTEST", channel: "CTEST", thread: "original",
+    dm: "DTEST", dmThread: "setup", repo: "demo", environment: "staging", kind: "file",
+    destination: "config.json", reason: "test", state: "resumed", delivered, notice: delivered ? "done" : "running", createdAt: Date.now() });
+}
+
+test("completed legacy setup requests perform no Slack calls across repeated sweeps", async () => {
+  seedNotificationRequest("legacy-notification", true);
+  const fetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("Slack unavailable"); };
+  try {
+    for (let i=0;i<20;i++) await worker.sweepSetupRequests();
+    assert.equal(calls,0);
+    assert.equal(requests.getSetupRequest("legacy-notification")!.state,"completed");
+  } finally { globalThis.fetch=fetch; }
+});
+
+test("delivery failures back off, notify at most once, and retire after successful private delivery", async () => {
+  const id="delivery-retry";
+  seedNotificationRequest(id);
+  const fetch=globalThis.fetch;
+  let infoCalls=0;
+  let mode="rate";
+  const sent: Record<string,any>[]=[];
+  globalThis.fetch=async (url, options) => {
+    if(String(url).includes("conversations.info")) {
+      infoCalls++;
+      if(mode==="rate") return Response.json({ok:false,error:"ratelimited"},{status:429,headers:{"retry-after":"120"}});
+      if(mode==="error") return Response.json({ok:false,error:"channel_not_found"});
+      return Response.json({ok:true,channel:{is_ext_shared:true}});
+    }
+    if(String(url).endsWith("chat.postMessage")) {sent.push(JSON.parse(String(options?.body)));return Response.json({ok:true,ts:"1.0"});}
+    throw new Error("Unexpected request");
+  };
+  const allowRetry=()=>{const r=requests.getSetupRequest(id)!;r.retryAt=0;requests.saveSetupRequest(r);};
+  try {
+    await worker.sweepSetupRequests();
+    assert.ok(requests.getSetupRequest(id)!.retryAt! > Date.now()+110_000);
+    for(let i=0;i<10;i++) await worker.sweepSetupRequests();
+    assert.equal(infoCalls,1);assert.equal(sent.length,0);
+    mode="error";allowRetry();await worker.sweepSetupRequests();
+    assert.equal(sent.length,1);
+    assert.match(sent[0].text,/couldn’t deliver the task update/);
+    assert.doesNotMatch(sent[0].text,/conflict|couldn’t apply/);
+    assert.equal(requests.getSetupRequest(id)!.notice,"running");
+    allowRetry();await worker.sweepSetupRequests();assert.equal(sent.length,1);
+    mode="ok";allowRetry();await worker.sweepSetupRequests();
+    assert.equal(sent.length,2);assert.equal(sent[1].channel,"DTEST");assert.equal(sent[1].thread_ts,"setup");
+    assert.equal(requests.getSetupRequest(id)!.state,"completed");
+    const before=infoCalls;
+    for(let i=0;i<10;i++) await worker.sweepSetupRequests();
+    assert.equal(infoCalls,before);assert.equal(sent.length,2);
+  } finally {globalThis.fetch=fetch;}
+});
+
+test("unchanged running setup phase does not poll Slack", async () => {
+  seedNotificationRequest("unchanged-phase");
+  db.prepare("UPDATE jobs SET status='running' WHERE id=?").run("resume-unchanged-phase");
+  const fetch=globalThis.fetch;
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;throw new Error("Slack unavailable");};
+  try {for(let i=0;i<10;i++)await worker.sweepSetupRequests();assert.equal(calls,0);}
+  finally {globalThis.fetch=fetch;db.prepare("UPDATE jobs SET status='done' WHERE id=?").run("resume-unchanged-phase");}
+});

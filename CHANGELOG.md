@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — completed setup requests repeatedly sending error notifications
+Completed setup requests now enter a terminal state and make no further Slack calls. Unchanged task phases also skip channel lookups. Notification failures no longer reset the last delivered phase or masquerade as configuration conflicts. Retries use persisted backoff and honor Slack rate limits; an error notice is attempted at most once per setup request, independently of later progress notifications.
+
 ### Fixed — Slack agent knowledge retrieval
 Slack answer jobs now use the session MCP surface instead of the builder surface that omitted knowledge search. Cloud agents now explicitly discover and use indexed Slack history through `search_knowledge`, including channel-scoped chronological reads (`type:thread channel:<id-or-name> sort:recent`). Results include dates and Slack links. Job MCP subprocesses authenticate knowledge search through the gateway rather than calling the orchestrator without its admin credential.
 
