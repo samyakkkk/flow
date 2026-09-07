@@ -105,7 +105,9 @@ export async function POST() {
   // The env flow up gave THIS process would leak into the services the child
   // spawns ({...process.env, ...env}) — strip the dashboard-specific parts and
   // let the CLI re-derive them.
-  const stripped = ["PORT", "NODE_ENV", "FLOW_DATA_DIR", "FLOW_AUTH_PATH", "FLOW_MODE"];
+  // An explicit install must also clear guards inherited from older CLI
+  // self-updates, which used FLOW_NO_UPDATE to prevent recursive pulls.
+  const stripped = ["PORT", "NODE_ENV", "FLOW_DATA_DIR", "FLOW_AUTH_PATH", "FLOW_MODE", "FLOW_NO_UPDATE"];
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([k]) => !stripped.includes(k)),
   ) as NodeJS.ProcessEnv;

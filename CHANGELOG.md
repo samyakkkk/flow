@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — dashboard update button silently skipping installation
+The CLI now guards its update re-execution with a one-shot argument instead of an environment variable inherited by services. Explicit dashboard installs also clear the legacy `FLOW_NO_UPDATE` flag, so a previous update cannot silently disable later installations.
+
 ### Fixed — completed setup requests repeatedly sending error notifications
 Completed setup requests now enter a terminal state and make no further Slack calls. Unchanged task phases also skip channel lookups. Notification failures no longer reset the last delivered phase or masquerade as configuration conflicts. Retries use persisted backoff and honor Slack rate limits; an error notice is attempted at most once per setup request, independently of later progress notifications.
 
