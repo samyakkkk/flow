@@ -15,6 +15,7 @@ export type { TranscriptTurn, Surface, RuntimeQuery, RuntimeAnswer, AgentRuntime
 import type { AgentRuntime, RuntimeAnswer, RuntimeQuery } from "./types.js";
 
 interface AnswerPayload {
+  setup_wait?: string;
   answer_md?: string;
   citations?: { kind: string; ref: string }[];
   confidence?: number;
@@ -53,6 +54,7 @@ export class FlowRuntime implements AgentRuntime {
     const { id } = await enqueueJob({ type: "answer", input: {
       question,
       display_message: query.prompt,
+      slack_requester: query.context.userId,
       ...(query.images?.length ? { slack_images: query.images, slack_image_scope: query.imageScope } : {}),
       ...(conversation ? { conversation } : {}),
     } });
@@ -82,6 +84,7 @@ export class FlowRuntime implements AgentRuntime {
           const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
           return {
             markdown: renderAnswer(result),
+            waitingForSetup: Boolean(result.setup_wait),
             citations: result.citations ?? [],
             confidence: result.confidence,
           };

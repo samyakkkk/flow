@@ -146,7 +146,7 @@ export async function respond(args: RespondArgs): Promise<void> {
 
     if (controller.signal.aborted) return;
 
-    outcome = "Task finished. See the result in this thread.";
+    outcome = answer.waitingForSetup ? "Waiting for setup from the requester. The machine is available for other tasks." : "Task finished. See the result in this thread.";
 
     // Keep the thread engaged so plain follow-up replies reach us.
     markEngaged(args.channelId, args.threadTs);

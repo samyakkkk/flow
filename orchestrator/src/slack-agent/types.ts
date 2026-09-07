@@ -31,6 +31,7 @@ export interface RuntimeQuery {
 }
 
 export interface RuntimeAnswer {
+  waitingForSetup?: boolean;
   markdown: string;
   citations?: { kind: string; ref: string }[];
   confidence?: number;

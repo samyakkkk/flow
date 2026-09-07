@@ -9,6 +9,7 @@ Use flow_workspace without arguments to discover repositories and this conversat
 Questions need no worktree: use read, grep and glob against the returned source directories. Do not run shell commands to answer simple source questions.
 Only when the user requests changes, call flow_workspace with repo and edit=true. Re-read files in the returned worktree before editing them.
 The same conversation can acquire more worktrees as you discover other repositories to change. Reuse existing worktrees on follow-ups.
+Use flow_setup to resolve missing setup as part of the task. Inspect setup docs and config references first; list saved setup without reading values. Register required existing untracked config files with remember (source or worktree), including nested paths and arbitrary filenames. When a file/value or CLI installation/login is missing, request it from the original Slack requester using flow_setup. Specify the intended environment; never silently choose production. A request ends this turn and releases the coding slot; Flow resumes you after the reply. For shared CLI installs/authentication, request a terminal rather than telling the user to SSH. The terminal runs as your OS user; new processes can use saved CLI login/config, but terminal-only exports do not persist. Use a value/file request for persistent environment values. Verify setup after resuming. Do not treat mutable databases or Terraform state as reusable configuration. Never put credential content in tool arguments.
 All edits and commands must target your conversation's worktrees. Shared clones are read-only evidence. Never change their branches or files.
 Set bash.workdir explicitly to the chosen worktree. Do not use cd or Git directory overrides; Flow has already created your branch.
 Use the bash tool result and its exit metadata as execution evidence. A new shell cannot retrieve the previous shell exit status; do not run echo $? to check it. Once the requested check succeeds, report the result without rerunning it unless a new change or failure requires another check.
@@ -40,7 +41,7 @@ export function cloudGitIdentity(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export const CLOUD_PERMISSIONS = {
   "*": "deny", read: "allow", glob: "allow", grep: "allow", edit: "allow", bash: "allow",
-  flow_workspace: "allow", todowrite: "allow", todoread: "allow", external_directory: "allow",
+  flow_setup: "allow", flow_workspace: "allow", todowrite: "allow", todoread: "allow", external_directory: "allow",
   "graph_*": "allow",
 } as const;
 
@@ -160,18 +161,24 @@ export function createCloudToolPolicy(options: {
   };
 
   return async (tool: string, args: Record<string, unknown>): Promise<void> => {
-    if (GRAPH_TOOLS.has(tool) || tool === "flow_workspace" || tool === "todowrite" || tool === "todoread") return;
+    if (GRAPH_TOOLS.has(tool) || tool === "flow_setup" || tool === "flow_workspace" || tool === "todowrite" || tool === "todoread") return;
     if (!["read", "glob", "grep", "write", "edit", "apply_patch", "bash"].includes(tool)) {
       throw new Error(`Tool "${tool}" is not enabled for cloud tasks`);
     }
     if (["write", "edit", "apply_patch", "bash"].includes(tool)) await options.acquire?.();
     const repos = await options.repos();
     for (const repo of repos) if (repo.worktree) assertWorktree(repo.worktree.path);
+    const assertNotSetup = (target: string) => {
+      for (const repo of repos) for (const root of [repo.source, repo.worktree?.path].filter(Boolean) as string[]) {
+        if (repo.setupPaths?.some(file => canonicalPath(path.join(root, file)) === canonicalPath(target))) throw new Error("Setup file contents are private; use flow_setup without reading values");
+      }
+    };
 
     if (tool === "read" || tool === "glob" || tool === "grep") {
       const field = tool === "read" ? "filePath" : "path";
       const target = absolute(args[field]);
       assertCodePath(target);
+      assertNotSetup(target);
       for (const repo of repos) {
         if (within(repo.source, target)) {
           args[field] = repo.worktree
@@ -224,6 +231,7 @@ export function createCloudToolPolicy(options: {
     const redirects: string[] = [];
     for (const target of targets) {
       assertCodePath(target);
+      assertNotSetup(target);
       const own = repos.find((r) => r.worktree && within(r.worktree.path, target));
       if (own) continue;
       const source = repos.find((r) => within(r.source, target));

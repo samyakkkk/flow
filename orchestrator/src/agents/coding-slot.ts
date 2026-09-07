@@ -25,7 +25,7 @@ function proc(pid: number) {
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-    return { identity: fields[19], group: Number(fields[2]), zombie: fields[0] === "Z" };
+    return { identity: fields[19], group: Number(fields[2]), session: Number(fields[3]), zombie: fields[0] === "Z" };
   } catch { return undefined; }
 }
 function identity(pid: number): string {
@@ -38,7 +38,7 @@ function identity(pid: number): string {
 function groupAlive(pid: number): boolean {
   if (process.platform === "linux") {
     return readdirSync("/proc").some((name) => /^\d+$/.test(name) && (() => {
-      const p = proc(Number(name)); return p?.group === pid && !p.zombie;
+      const p = proc(Number(name)); return Boolean(p && (p.group === pid || p.session === pid) && !p.zombie);
     })());
   }
   try { process.kill(-pid, 0); return true; } catch { return false; }
@@ -48,6 +48,15 @@ function stopOrphan(row: Request): boolean {
   const now = identity(row.child);
   if (now !== "gone" && now !== row.child_identity) {
     throw new Error("Coding worker PID changed; inspect the machine before clearing its queue entry");
+  }
+  if (process.platform === "linux") {
+    // Interactive terminals put foreground jobs into separate process groups
+    // within the same session. Stop those too before admitting another writer.
+    for (const name of readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) continue;
+      const p = proc(Number(name));
+      if (p?.session === row.child) { try { process.kill(-p.group, "SIGKILL"); } catch {} }
+    }
   }
   try { process.kill(-row.child, "SIGKILL"); } catch { /* recheck below */ }
   return !groupAlive(row.child);

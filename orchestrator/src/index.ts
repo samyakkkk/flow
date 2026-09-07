@@ -9,6 +9,8 @@ import { registerPolicyRoutes } from "./policy.js";
 import { registerCorpusRoutes } from "./corpus.js";
 import db from "./db.js";
 import { getJob, enqueueJob, recoverStalledJobs, killRunningJobChildren, repoStatuses } from "./opencode.js";
+import { registerSetupRoutes } from "./agents/setup-routes.js";
+import { startSetupWorker } from "./agents/setup-worker.js";
 import { registerRepoEnvRoutes } from "./agents/repo-env-routes.js";
 import { registerCloudViewRoutes } from "./agents/cloud-view-routes.js";
 import { activityForRepo } from "./job-activity.js";
@@ -98,6 +100,7 @@ registerMemoryRoutes(app);
 setNodeAnchorProvider(makeGatewayAnchorProvider());
 registerSourceRoutes(app);
 registerRepoEnvRoutes(app);
+registerSetupRoutes(app);
 registerCloudViewRoutes(app);
 registerSlackAgentRoutes(app);
 registerTelemetryRoutes(app);
@@ -251,9 +254,11 @@ app.get<{ Querystring: { status?: string } }>(
 // ------------------------------------------------------------------
 // Graceful shutdown hook (registered before listen)
 // ------------------------------------------------------------------
+let stopSetupWorker: (() => void) | undefined;
 let stopWorkspaceCleanup: (() => void) | undefined;
 app.addHook("onClose", async () => {
   stopWorkspaceCleanup?.();
+  stopSetupWorker?.();
   stopDrainer();
   stopAllPollers();
   stopTelemetryReporter();
@@ -285,6 +290,7 @@ const start = async (): Promise<void> => {
     recoverStalledJobs();
     const { startWorkspaceCleanup } = await import("./agents/cloud-cleanup.js");
     stopWorkspaceCleanup = startWorkspaceCleanup();
+    stopSetupWorker = startSetupWorker();
 
     // Start outbox drainer (no-ops if FLOW_DRAIN_DISABLE=1 or already running)
     if (process.env.FLOW_DRAIN_DISABLE !== "1") {

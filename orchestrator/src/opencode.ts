@@ -680,7 +680,7 @@ function scheduleJob(id: string, opts: JobInput): void {
   }
   void withConversationTurn(key, async () => {
     if (getJob(id)?.status !== "queued") return;
-    await restoreConversationWorktrees(key, true);
+    // Workspace restoration/configuration happens under coding admission in the tool route.
     if (getJob(id)?.status !== "queued") return;
     // Resolve at execution time: the preceding turn may only just have created
     // its session, or may have failed after emitting its first session event.
@@ -888,6 +888,7 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       }
     }
   } catch (err) {
+    if (getJob(id)?.result_json?.includes('"setup_wait"')) return;
     updateJob.run({
       id,
       status: "failed",
@@ -1056,6 +1057,16 @@ interface SpawnResult { status: number | null; stdout: string; stderr: string; e
 // writing to the graph while the recovery pass re-queues a duplicate job.
 const jobChildren = new Map<string, ReturnType<typeof spawn>>();
 export function codingChildPid(id: string): number | undefined { return jobChildren.get(id)?.pid; }
+
+/** Persist the waiting outcome before stopping the CLI; its finally releases the coding slot. */
+export function pauseCloudJobForSetup(id: string, requestId: string): void {
+  const job = getJob(id);
+  if (!job || job.status !== "running") return;
+  updateJob.run({ id, status: "done", result_json: JSON.stringify({ setup_wait: requestId, answer_md: "I need some setup to continue. I’ve sent the original requester a DM and will resume this task when it’s ready." }) });
+  finishActivity(id, "done");
+  const child = jobChildren.get(id);
+  if (child) killTree(child);
+}
 
 export function cancelCloudJob(id: string): boolean {
   const job = getJob(id);

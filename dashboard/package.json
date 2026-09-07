@@ -15,6 +15,8 @@
   "dependencies": {
     "@falkordb/canvas": "^0.2.1",
     "@types/cytoscape": "^3.21.9",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.11",
     "marked": "^18.0.5",
     "next": "16.2.10",
