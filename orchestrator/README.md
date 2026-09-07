@@ -154,3 +154,12 @@ routing failures do not fall back to posting a shared answer. Known channels the
 bot has left are excluded from corpus search. Retrieval otherwise follows Flow's
 existing project-level access model, not individual Slack channel membership;
 only include private channels whose content is appropriate for that project.
+
+For chronological Slack reads, use `search_knowledge` with
+`type:thread channel:C012345 sort:recent` (or `channel:channel-name`). Omit
+keywords to list the latest indexed messages; add keywords to narrow results.
+The query is scoped to joined channels and includes dates, author IDs, and
+source links. Cloud agents are instructed to use this before answering Slack
+questions. Their MCP subprocess proxies knowledge search through its existing
+authenticated gateway connection because it does not receive the orchestrator's
+admin token. Verify the actual agent's tool calls as well as the backing API.

@@ -712,10 +712,13 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
     return { status: "error", error: "Pass `query` (single) or `queries` (batch, up to 10)." };
   }
   const repo = input.repo || process.env.FLOW_REPO || "";
-  const url =
+  // Job subprocesses intentionally lack the orchestrator admin token. Their
+  // existing gateway credential authenticates retrieval through the gateway.
+  const viaGateway = Boolean(process.env.FLOW_JOB_ID && process.env.GRAPH_GATEWAY_URL);
+  const url = viaGateway ? `${process.env.GRAPH_GATEWAY_URL!.replace(/\/$/, "")}/v1/verbs/search_knowledge` :
     process.env.FLOW_MEMORY_URL ||
     (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/search` : "");
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
+  const token = viaGateway ? process.env.GRAPH_GATEWAY_TOKEN || "" : process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
   if (!url) return { status: "error", error: "No orchestrator configured for memory search (FLOW_MEMORY_URL unset)." };
   // Proxy whichever form the caller sent — the orchestrator owns the batch
   // fan-out, grouping, and ranking. `query` wins if both are present.
@@ -730,9 +733,9 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(6000),
     });
-    const body = (await res.json().catch(() => ({}))) as { lines?: string; error?: string };
-    if (!res.ok) return { status: "error", error: `Memory search failed (${res.status}): ${body.error ?? ""}` };
-    return { status: "ok", results: body.lines ?? "(no memories match)" };
+    const body = (await res.json().catch(() => ({}))) as { lines?: string; results?: string; status?: string; error?: string };
+    if (!res.ok || body.status === "error") return { status: "error", error: `Memory search failed (${res.status}): ${body.error ?? ""}` };
+    return { status: "ok", results: (viaGateway ? body.results : body.lines) ?? "(no memories match)" };
   } catch (err) {
     return { status: "error", error: `Memory search failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -1018,7 +1021,7 @@ export const verbs = {
   },
   search_knowledge: {
     description:
-      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus the slack/linear corpus. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus indexed Slack messages/thread replies and the linear corpus. For Slack questions, call this before claiming no Slack access. To read latest channel messages use query: `type:thread channel:C012345 sort:recent` (or channel:channel-name); no keywords required. Add keywords to filter that channel. Results include timestamps and source links; they reflect the indexed archive, not a live Slack API request. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
     shape: searchMemoryInput,
     handler: searchMemory,
   },

@@ -68,6 +68,21 @@ export function searchCorpus(q: string, source?: string, limit = 20): SearchRow[
   return results.slice(0, lim);
 }
 
+/** Channel-scoped Slack retrieval, including chronological reads without keywords. */
+export function searchSlackArchive(channel: string | undefined, match: string, recent: boolean, limit: number): SearchRow[] {
+  return (db.prepare(`
+    SELECT sm.id,sm.text,sm.channel,sm.user_id,sm.ts,sm.thread_ts,sm.permalink,c.name AS channel_name
+    FROM slack_messages sm
+    JOIN slack_channels c ON c.workspace=sm.workspace AND c.id=sm.channel AND c.is_member=1
+    ${match ? "JOIN slack_messages_fts fts ON fts.rowid=sm.rowid" : ""}
+    WHERE (? IS NULL OR sm.channel=? COLLATE NOCASE OR c.name=? COLLATE NOCASE)
+    ${match ? "AND slack_messages_fts MATCH ?" : ""}
+    ORDER BY ${recent || !match ? "CAST(sm.ts AS REAL) DESC,sm.id" : "rank"} LIMIT ?
+  `).all(channel ?? null, channel ?? null, channel?.replace(/^#/, "") ?? null,
+    ...(match ? [match] : []), limit) as Array<{id:string;text:string;[key:string]:unknown}>)
+    .map(row => ({...row,source:"slack"}));
+}
+
 export function registerCorpusRoutes(app: FastifyInstance): void {
   // GET /v1/corpus/search?q=&source=&limit=
   app.get<{

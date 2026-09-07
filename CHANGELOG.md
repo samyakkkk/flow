@@ -4,6 +4,9 @@ All notable changes to Flow. Newest first. Dates are the day work landed.
 
 ## [Unreleased]
 
+### Fixed — Slack agent knowledge retrieval
+Cloud agents now explicitly discover and use indexed Slack history through `search_knowledge`, including channel-scoped chronological reads (`type:thread channel:<id-or-name> sort:recent`). Results include dates and Slack links. Job MCP subprocesses authenticate knowledge search through the gateway rather than calling the orchestrator without its admin credential.
+
 ### Added — Slack channel archive and resumable backfill
 The active Slack agent now captures raw channel messages and backfills joined channel history and replies with persistent cursors. Edits/deletions update keyword search; source links appear in `search_knowledge`. Authenticated archive status and explicit public-channel join endpoints expose progress and failures. The manifest adds `channels:join` (existing installations need a scope update); private channels require invitations. External Slack Connect users cannot invoke Flow, while their channel messages remain searchable; internal requests in shared channels receive private answers. Image content indexing and reconciliation of old-thread changes missed offline remain future work.
 

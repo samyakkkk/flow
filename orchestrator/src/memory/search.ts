@@ -27,7 +27,7 @@ import { cosine, blobToVec } from "../embed.js";
 import { getEmbedder, memoryVectors, type MemoryRow } from "./store.js";
 import { repoFamily } from "./repo-family.js";
 import { strengthTier } from "./strength.js";
-import { searchCorpus } from "../corpus.js";
+import { searchCorpus, searchSlackArchive } from "../corpus.js";
 import { itemsAnchoredToNode } from "./anchors.js";
 
 export const COSINE_FLOOR = 0.55;
@@ -49,6 +49,8 @@ export interface ParsedQuery {
   query: string; // query with node:/type: tokens removed
   node: string | null;
   type: SearchTypeFilter | null;
+  channel?: string;
+  recent?: boolean;
 }
 
 // `node:` values are graph node ids which contain colons AND, for endpoints, a
@@ -63,6 +65,8 @@ const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "
 export function parseSearchTokens(raw: string): ParsedQuery {
   let node: string | null = null;
   let type: SearchTypeFilter | null = null;
+  let channel: string | undefined;
+  let recent: boolean | undefined;
   const kept: string[] = [];
   const toks = raw.split(/\s+/).filter(Boolean);
   const isTypeTok = (t: string) =>
@@ -70,10 +74,12 @@ export function parseSearchTokens(raw: string): ParsedQuery {
 
   for (let i = 0; i < toks.length; i++) {
     const tok = toks[i];
+    if (tok.startsWith("channel:") && tok.length > 8) { channel = tok.slice(8).replace(/^<#([^>|]+)(?:\|[^>]+)?>$/, "$1"); continue; }
+    if (tok === "sort:recent") { recent = true; continue; }
     if (node === null && tok.startsWith("node:") && tok.length > 5) {
       const parts = [tok.slice(5)];
       // Absorb a path continuation for endpoint ids: '<...>:GET' + '/agents'.
-      while (i + 1 < toks.length && !isTypeTok(toks[i + 1])) {
+      while (i + 1 < toks.length && !isTypeTok(toks[i + 1]) && !/^(channel:|sort:)/.test(toks[i + 1])) {
         const next = toks[i + 1];
         const last = parts[parts.length - 1];
         const lastSeg = last.slice(last.lastIndexOf(":") + 1);
@@ -90,7 +96,7 @@ export function parseSearchTokens(raw: string): ParsedQuery {
     }
     kept.push(tok);
   }
-  return { query: kept.join(" ").trim(), node, type };
+  return { query: kept.join(" ").trim(), node, type, ...(channel ? {channel} : {}), ...(recent ? {recent} : {}) };
 }
 
 export interface MemoryHit {
@@ -114,6 +120,9 @@ export interface CorpusHit {
   permalink?: string;
   channel?: string;
   ts?: string;
+  channel_name?: string;
+  user_id?: string;
+  thread_ts?: string;
 }
 
 export interface SearchResult {
@@ -201,6 +210,13 @@ export async function searchMemory(input: SearchInput): Promise<SearchResult> {
   const effectiveQuery = parsed.query;
   const node = input.node ?? parsed.node;
   const type = input.type ?? parsed.type;
+
+  // Slack channel/chronological reads need no embedding or memory ranking.
+  if (parsed.channel || parsed.recent) {
+    const rows = !node && (!type || type === "thread")
+      ? searchSlackArchive(parsed.channel, ftsQuery(effectiveQuery), !!parsed.recent, limit) : [];
+    return { memories: [], corpus: rows.map(r => ({...r, source: "slack"} as CorpusHit)), durationMs: Date.now() - t0 };
+  }
 
   const queryFamily = repoFamily(input.repo);
   const queryTokens = meaningfulTokens(effectiveQuery);
@@ -449,7 +465,7 @@ export function renderSearchResult(res: SearchResult): string {
     lines.push("CORPUS:");
     for (const c of res.corpus) {
       const t = c.text.replace(/\s+/g, " ").trim();
-      lines.push(`- ${t.length > 180 ? t.slice(0, 179) + "…" : t} [${c.source}${c.channel ? ` channel:${c.channel}` : ""}] (${c.id})${c.permalink ? ` ${c.permalink}` : ""}`);
+      lines.push(`- ${t.length > (c.source === "slack" ? 1000 : 180) ? t.slice(0, c.source === "slack" ? 999 : 179) + "…" : t} [${c.source}${c.channel_name ? ` #${c.channel_name}` : ""}${c.ts && Number.isFinite(Number(c.ts)) ? ` at:${new Date(Number(c.ts) * 1000).toISOString()}` : ""}${c.user_id ? ` user:${c.user_id}` : ""}${c.channel ? ` channel:${c.channel}` : ""}] (${c.id})${c.permalink ? ` ${c.permalink}` : ""}`);
     }
   }
   return lines.join("\n");

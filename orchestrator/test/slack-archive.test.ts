@@ -177,3 +177,19 @@ test("unresolved reply routing cannot call the model or fall back to a shared ch
   });
   assert.equal(actions, 0);
 });
+
+test("latest Slack reads use channel scope and timestamp order without needing keywords", async () => {
+  const sync = new archive.SlackArchiveSync("T1", async () => ({channels:[{...row("C1"),name:"fluttergpt"},row("C2")]}));
+  await sync.discover();
+  archive.saveSlackMessage("T1","C1",{ts:"9.0",text:"older flutter conversation",user:"U1"});
+  archive.saveSlackMessage("T1","C1",{ts:"100.0",thread_ts:"9.0",text:"latest reply",user:"U2"});
+  archive.saveSlackMessage("T1","C2",{ts:"200.0",text:"different channel"});
+  const found = await search.searchMemory({query:"type:thread channel:C1 sort:recent"});
+  assert.deepEqual(found.corpus.map(r=>r.ts),["100.0","9.0"]);
+  assert.match(search.renderSearchResult(found),/#fluttergpt.*at:1970-01-01T00:01:40.000Z.*user:U2/);
+  assert.equal((await search.searchMemory({query:"channel:#fluttergpt sort:recent older"})).corpus.length,1);
+  assert.equal((await search.searchMemory({query:"channel:<#C1> sort:recent",limit:1})).corpus[0].ts,"100.0");
+  assert.equal((await search.searchMemory({query:"channel:missing sort:recent"})).corpus.length,0);
+  db.prepare("UPDATE slack_channels SET is_member=0 WHERE id='C1'").run();
+  assert.equal((await search.searchMemory({query:"channel:C1 sort:recent"})).corpus.length,0);
+});
