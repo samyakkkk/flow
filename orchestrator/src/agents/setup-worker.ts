@@ -6,7 +6,8 @@ import { codingSlotStatus, requestCodingSlot, releaseCodingSlot } from "./coding
 import { cloudMode, conversationRepos, ensureConversationWorktree } from "./cloud-workspaces.js";
 import { registerSetupFile, setupEnvironment, mergeSetupValue, rememberExistingSetup } from "./setup-files.js";
 import { requests, saveSetupRequest, setupData, slackCall, deliverSetupRequest } from "./setup-requests.js";
-import { cloudRunUrl } from "../slack-agent/runtime.js";
+import { redactCloudText } from "./repo-env.js";
+import { cloudRunUrl, renderAnswer } from "../slack-agent/runtime.js";
 import { sweepSetupTerminals, stopSetupTerminals } from "./setup-terminal.js";
 
 let sweeping = false;
@@ -48,16 +49,21 @@ export async function sweepSetupRequests(): Promise<void> {
             conversation: { source, workspace, id }, setup_request: request.id, slack_requester: request.requester,
             question: `${description}\nResume the original task and finish its requested delivery. Original request:\n${String(original?.input.question ?? original?.input.message ?? "Continue the task in this conversation")}`,
             display_message: `Setup ready: ${request.repo} (${request.environment}). Resume the original task.`,
-            reply_to: { channel: request.channel, thread_ts: request.thread }, workspace,
+            workspace,
           } });
           request.state = "resumed"; request.resumeJob = resumed.id; delete request.encrypted; delete request.notice; saveSetupRequest(request);
         }
         if (request.state === "resumed" && request.resumeJob) {
           const job = getJob(request.resumeJob);
           const phase = codingSlotStatus(request.resumeJob) ?? job?.status;
-          if (!phase || phase === request.notice) continue;
           const url = cloudRunUrl(request.resumeJob);
           const link = url ? `\n<${url}|View agent run>` : "";
+          if (job?.status === "done" && !request.delivered) {
+            const result = job.result_json ? JSON.parse(job.result_json) : {};
+            await slackCall("chat.postMessage", { channel: request.channel, thread_ts: request.thread, client_msg_id: request.resumeJob, text: redactCloudText(renderAnswer(result)) + link });
+            request.delivered = true; saveSetupRequest(request);
+          }
+          if (!phase || phase === request.notice) continue;
           const text = phase === "failed" ? "The resumed task stopped with an error. Its saved work is available in the agent run." : phase === "done" ? undefined : phase === "waiting" ? "Setup is ready. This task is queued behind another coding task." : phase === "coding" ? "Setup is ready. Your coding task has resumed." : request.notice ? undefined : "Setup is ready. I’m resuming the original task.";
           if (text) await slackCall("chat.postMessage", { channel: request.channel, thread_ts: request.thread, text: text + link });
           request.notice = phase; saveSetupRequest(request);

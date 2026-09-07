@@ -112,11 +112,15 @@ test("job-scoped request DMs original requester, pauses, releases slot, receives
   await worker.sweepSetupRequests(); assert.equal(requests.getSetupRequest(id)!.state, "ready");
   queue.releaseCodingSlot("second-task"); await worker.sweepSetupRequests();
   request = requests.getSetupRequest(id)!; assert.equal(request.state, "resumed"); assert.ok(request.resumeJob);
-  const resumed = jobs.getJob(request.resumeJob!)!; assert.equal(resumed.input.conversation_key, key); assert.deepEqual(resumed.input.reply_to, { channel: "CTEST", thread_ts: "slack-request" });
+  const resumed = jobs.getJob(request.resumeJob!)!; assert.equal(resumed.input.conversation_key, key); assert.equal(resumed.input.reply_to, undefined, "The setup worker owns final delivery, not the legacy outbox");
   assert.ok(!JSON.stringify(resumed).includes("private-test-value"));
   assert.equal(readFileSync(path.join(source, "services/config.json"), "utf8"), fileContent.toString());
   await worker.sweepSetupRequests(); assert.equal((db.prepare("SELECT count(*) AS count FROM jobs WHERE json_extract(input,'$.setup_request') = ?").get(id) as { count: number }).count, 1);
   for (let i = 0; i < 100 && jobs.getJob(request.resumeJob!)?.status !== "done"; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  await worker.sweepSetupRequests(); await worker.sweepSetupRequests();
+  const delivered = messages.filter(m => m.client_msg_id === request.resumeJob);
+  assert.equal(delivered.length, 1); assert.equal(delivered[0].channel, "CTEST"); assert.equal(delivered[0].thread_ts, "slack-request");
+  assert.equal(requests.getSetupRequest(id)!.delivered, true);
 });
 test("setup upload rejects external URLs and cancellation prevents resume", async () => {
   const { key } = await fresh(); insertJob("cancel-parent", key, "done");

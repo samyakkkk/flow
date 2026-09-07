@@ -9,7 +9,7 @@ export interface SetupRequest {
   repo: string; environment: string; destination?: string; variable?: string;
   kind: "file" | "value" | "terminal"; reason: string;
   state: "requesting" | "waiting" | "ready" | "resumed" | "cancelled";
-  encrypted?: string; resumeJob?: string; notice?: string; createdAt: number;
+  encrypted?: string; resumeJob?: string; notice?: string; delivered?: boolean; createdAt: number;
 }
 db.exec(`CREATE TABLE IF NOT EXISTS setup_requests (id TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 export function requests(): SetupRequest[] {
