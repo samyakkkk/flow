@@ -91,10 +91,12 @@ blindly force-cleaning. Local checkpoint branches are retained indefinitely.
 `FLOW_TEST_OPENCODE_BIN` to an installed OpenCode binary to include the real
 plugin smoke test. Run on Linux to exercise orphan process-group recovery.
 
-## Repository environment files
+## Legacy repository environment API
 
-In the server dashboard, expand **Environment files** on a repository row.
-Upload `.env`, `.env.local`, or another `.env.*` file (256 KiB maximum).
+The old dashboard upload panel has been removed in favor of conversational setup
+(described below). Existing stored files and `/v1/agents/repos/:repo/env` remain
+supported for compatibility: `.env`, `.env.local`, or another `.env.*` file
+(256 KiB maximum).
 Files are scoped to that repository in that Flow project. The API lists names
 and update times, never values. Uploading the same filename replaces its saved
 version; Remove deletes the saved version. Store development/test credentials.
@@ -105,7 +107,7 @@ migration makes existing encrypted settings and env files unreadable. This is
 protection for stored data, not isolation from administrators or task processes.
 Every authenticated administrator of the project can replace these files.
 
-At the start of a conversation turn, Flow writes uploads into the appropriate
+When a coding turn acquires its workspace, Flow writes uploads into the appropriate
 repo worktree with mode 0600. Uploads override source env copies. Applications
 must load the files as usual; Flow does not execute shell code from env files
 or globally export their contents. Changes during a run apply on a later turn.
