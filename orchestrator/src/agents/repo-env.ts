@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync, renameSync, unlinkS
 import path from "node:path";
 import db from "../db.js";
 import { encrypt, decrypt, getSetting, SETTINGS } from "../settings.js";
+import { setupFiles } from "./setup-files.js";
 import { containsSecret } from "../events.js";
 
 const prefix = (repo: string) => `repo-env:${repo}:`;
@@ -83,6 +84,20 @@ export function redactCloudText(text: string): string {
       const match = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$/.exec(line);
       if (match) values.push(match[1].replace(/^['"]|['"]$/g, ""));
     }
+  }
+  for (const file of setupFiles()) {
+    const decoded = decrypt(file.encrypted);
+    if (!decoded) continue;
+    const raw = Buffer.from(decoded, "base64").toString("utf8");
+    values.push(raw.trim());
+    for (const line of raw.split(/\r?\n/)) {
+      const match = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$/.exec(line);
+      if (match) values.push(match[1].replace(/^['"]|['"]$/g, ""));
+    }
+    try {
+      const collect = (value: unknown): void => { if (typeof value === "string") values.push(value); else if (value && typeof value === "object") Object.values(value).forEach(collect); };
+      collect(JSON.parse(raw));
+    } catch { /* non-JSON setup file */ }
   }
   for (const value of values.filter((v) => v.length >= 4).sort((a, b) => b.length - a.length)) text = text.replaceAll(value, "[redacted]");
   return text;

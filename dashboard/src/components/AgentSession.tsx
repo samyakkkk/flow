@@ -313,6 +313,7 @@ function mergeEvents(prev: SessionEvent[], incoming: SessionEvent[]): SessionEve
 
 function statusPill(status: string): { kind: "live" | "ok" | "warn" | "idle"; label: string } {
   if (status === "running" || status === "starting") return { kind: "live", label: status === "starting" ? "Starting" : "Working" };
+  if (status === "setup") return { kind: "warn", label: "Needs setup" };
   if (status === "waiting") return { kind: "warn", label: "Needs approval" };
   if (status === "idle") return { kind: "ok", label: "Done — steerable" };
   if (status === "error") return { kind: "warn", label: "Error" };

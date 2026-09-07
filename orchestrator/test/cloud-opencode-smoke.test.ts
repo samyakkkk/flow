@@ -45,6 +45,13 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
   const server = createServer(async (req, res) => {
     let input = "";
     for await (const chunk of req) input += chunk;
+    if (req.url?.endsWith("/setup")) {
+      assert.equal(req.headers.authorization, "Bearer smoke-token");
+      assert.deepEqual(JSON.parse(input), { action: "list", repo: "api" });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ files: [{ destination: "nested/.state.env", environment: "staging" }] }));
+      return;
+    }
     if (req.url?.endsWith("/workspace")) {
       assert.equal(req.headers.authorization, "Bearer smoke-token");
       const args = JSON.parse(input);
@@ -62,6 +69,7 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
       if (input.includes("Shared checkout edit blocked")) sawBlock = true;
       if (input.includes("without changing directories")) sawShellBlock = true;
       const calls = [
+        { name: "flow_setup", args: { action: "list", repo: "api" } },
         { name: "write", args: { filePath: path.join(source, "file.txt"), content: "should not land\n" } },
         { name: "read", args: { filePath: path.join(tree, "file.txt") } },
         { name: "write", args: { filePath: path.join(tree, "file.txt"), content: "changed\n" } },
@@ -113,6 +121,8 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
       throw new Error(`OpenCode smoke failed: ${err.message}\n${String(err.stdout).slice(-8000)}\n${String(err.stderr).slice(-12000)}`);
     });
     assert.ok(sawImage, "CLI image attachment did not reach the model request");
+    assert.ok(observedTools.has("flow_setup"), "Setup tool not exposed by real OpenCode");
+    assert.ok(result.stdout.includes("nested/.state.env"), "Setup tool was not executed successfully");
     assert.ok(observedTools.has("flow_workspace"), `Plugin tool not loaded: ${result.stderr}`);
     assert.ok(sawBlock, `Before-hook did not reject the shared path: ${result.stdout}`);
     assert.ok(sawShellBlock, `Before-hook did not reject the branch change: ${result.stdout}`);

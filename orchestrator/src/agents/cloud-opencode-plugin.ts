@@ -44,6 +44,19 @@ const cloudPlugin: Plugin = async ({ directory }) => {
       } };
     },
     tool: {
+      flow_setup: tool({
+        description: "Resolve missing repository configuration or CLI authentication. list shows saved setup paths without values. remember registers an existing untracked file from source/worktree and copies it privately to both and future worktrees. select chooses an environment. request DMs the ORIGINAL Slack requester for a file/value or interactive setup terminal, ends this turn, and resumes automatically when ready. Never pass secret content as arguments.",
+        args: { action: tool.schema.enum(["list", "remember", "select", "request"]), repo: tool.schema.string(), environment: tool.schema.string().optional(), kind: tool.schema.enum(["file", "value", "terminal"]).optional(), destination: tool.schema.string().optional(), variable: tool.schema.string().optional(), reason: tool.schema.string().optional(), from: tool.schema.enum(["source", "worktree"]).optional() },
+        async execute(args) {
+          for (;;) {
+            const response = await fetch(endpoint.replace(/workspace$/, "setup"), { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.FLOW_JOB_TOKEN}` }, body: JSON.stringify(args), signal: AbortSignal.timeout(90_000) });
+            const result = await response.json() as { error?: string };
+            if (response.status === 423) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+            if (!response.ok) throw new Error(result.error ?? "Setup request failed");
+            return JSON.stringify(result);
+          }
+        },
+      }),
       flow_workspace: tool({
         description: "List registered repos and this conversation's worktrees. With repo and edit=true, prepare or reuse its worktree for requested edits. Questions do not need one.",
         args: { repo: tool.schema.string().optional(), edit: tool.schema.boolean().optional() },

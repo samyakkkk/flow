@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import db from "../db.js";
 import { createSessionWorktree, overlayEnvFiles } from "./worktrees.js";
+import { applySetupFiles, setupFiles } from "./setup-files.js";
 import { applyRepoEnv } from "./repo-env.js";
 
 const exec = promisify(execFile);
@@ -20,6 +21,7 @@ export interface CloudRepo {
   name: string;
   source: string;
   baseBranch: string;
+  setupPaths?: string[];
   worktree?: { path: string; branch: string; base_commit: string; git_dir?: string | null; git_identity?: string | null; archived_at?: number | null; checkpoint_commit?: string | null; cleanup_error?: string | null };
 }
 
@@ -81,7 +83,7 @@ export function conversationRepos(key: string): CloudRepo[] {
     const worktree = db.prepare(
       "SELECT path, branch, base_commit, git_dir, git_identity, archived_at, checkpoint_commit, cleanup_error FROM cloud_worktrees WHERE conversation_key = ? AND repo = ?",
     ).get(key, repo.name) as CloudRepo["worktree"];
-    return { name: repo.name, source: path.join(workspace, "repos", repo.name), baseBranch: repo.branch, worktree };
+    return { name: repo.name, source: path.join(workspace, "repos", repo.name), baseBranch: repo.branch, setupPaths: setupFiles(repo.name).map(f => f.destination), worktree };
   });
 }
 
@@ -121,6 +123,7 @@ export async function ensureConversationWorktree(key: string, name: string, refr
       }
       await reconcileWorktree(key, repo);
       if (restored || refreshEnv) applyRepoEnv(name, repo.source, repo.worktree.path, repo.worktree.git_dir!);
+      if (restored || refreshEnv) applySetupFiles(key, name, repo.worktree.path);
       return repo;
     }
     let commit: string | undefined;
@@ -143,6 +146,7 @@ export async function ensureConversationWorktree(key: string, name: string, refr
     db.prepare("INSERT INTO cloud_worktrees (conversation_key, repo, path, branch, base_commit, git_dir, git_identity) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(key, name, result.path, result.branch, commit, gitDir, gitIdentity);
     applyRepoEnv(name, repo.source, result.path, gitDir);
+    applySetupFiles(key, name, result.path);
     return { ...repo, worktree: { ...result, base_commit: commit, git_dir: gitDir, git_identity: gitIdentity } };
   }
 }

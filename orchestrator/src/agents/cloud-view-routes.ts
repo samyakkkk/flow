@@ -4,6 +4,8 @@ import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
 import { cloudMode, conversationRepos, type ConversationRef } from "./cloud-workspaces.js";
 import { cloudEvents } from "./cloud-events.js";
 import { codingSlotStatus } from "./coding-slot.js";
+import { requests } from "./setup-requests.js";
+import { isSetupFile } from "./setup-files.js";
 import { redactCloudText } from "./repo-env.js";
 import { containsSecret } from "../events.js";
 
@@ -13,7 +15,8 @@ function summarize(id: string, includeEvents = true) {
   const result = raw ? { answer_md: redactCloudText(String(raw.answer_md ?? raw.error ?? "")), output: redactCloudText(String(raw.output ?? "")), exit_code: raw.exit_code } : null;
   let message = job.input.display_message ?? (job.input.manual_command ? `Terminal: ${(job.input.manual_command as { command: string }).command}` : job.input.message ?? job.input.question ?? "Task");
   if (!job.input.display_message && typeof message === "string" && message.startsWith("Style:")) message = message.slice(message.lastIndexOf("\n\n") + 2);
-  return { id, status: job.status, phase: ["running", "queued"].includes(job.status) ? codingSlotStatus(id) ?? job.status : job.status,
+  const pendingSetup = requests().some(r => r.job === id && ["requesting", "waiting", "ready"].includes(r.state));
+  return { id, status: job.status, phase: pendingSetup ? "setup" : ["running", "queued"].includes(job.status) ? codingSlotStatus(id) ?? job.status : job.status,
     message: redactCloudText(String(message)).slice(0, 8000), created_at: job.created_at, updated_at: job.updated_at,
     repos: conversationRepos(String(job.input.conversation_key)),
     command: Boolean(job.input.manual_command), session_id: job.session_id, result, events: includeEvents ? cloudEvents(id) : [] };
@@ -53,7 +56,7 @@ export function registerCloudViewRoutes(app: FastifyInstance): void {
     const result = await worktreeDiff(repo.worktree.path, repo.name);
     if ("error" in result) return reply.code(409).send(result);
     const sensitive = /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.npmrc|credentials|id_rsa|id_ed25519)$|\.(?:pem|key)$/i;
-    const files = result.files.filter(f => !sensitive.test(f.path));
+    const files = result.files.filter(f => !sensitive.test(f.path) && !isSetupFile(repo.name, f.path));
     const allowed = new Set(files.map(f => f.path));
     const diff = result.diff.split(/(?=^diff --git )/m).filter(chunk => {
       const name = chunk.split("\n")[0].match(/ b\/(.+)$/)?.[1];

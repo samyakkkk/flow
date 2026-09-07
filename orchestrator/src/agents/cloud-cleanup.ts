@@ -5,6 +5,7 @@ import db from "../db.js";
 import { containsSecret } from "../events.js";
 import { cloudGit, cloudMode, conversationRepos, reconcileWorktree, withConversationTurn, type CloudRepo } from "./cloud-workspaces.js";
 import { requestCodingSlot, releaseCodingSlot } from "./coding-slot.js";
+import { unchangedSetupFile, isSetupFile } from "./setup-files.js";
 import { managedEnvUnchanged, redactCloudText } from "./repo-env.js";
 
 const split = (s: string) => s.split("\0").filter(Boolean);
@@ -17,6 +18,7 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
   const cwd = tree.path;
   const metadata = tree.git_dir!;
   const unchangedEnv = (name: string) => {
+    if (unchangedSetupFile(repo.name, cwd, name)) return true;
     if (managedEnvUnchanged(metadata, cwd, name)) return true;
     if (!/^\.env(?:\.[^/]+)?$/.test(name)) return false;
     const local = path.join(cwd, name), source = path.join(repo.source, name);
@@ -32,7 +34,7 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
 
   // Only discard known rebuildable caches and unchanged copies of source env
   // files. Unknown ignored state (local databases, uploads, etc.) keeps the tree.
-  const ignored = split(await cloudGit(cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]));
+  const ignored = split(await cloudGit(cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]));
   for (const name of ignored) {
     if (name.split("/").some((part) => disposable.has(part))) continue;
     if (unchangedEnv(name)) continue;
@@ -47,6 +49,7 @@ async function checkpoint(key: string, repo: CloudRepo): Promise<void> {
     return existsSync(target) ? createHash("sha256").update(readFileSync(target)).digest("hex") : "deleted";
   }).join(":");
   for (const name of changed) {
+    if (isSetupFile(repo.name, name)) throw new Error("Setup file changes require private preservation; retained workspace");
     if (managedEnvUnchanged(metadata, cwd, name)) continue;
     if (unchangedEnv(name) && !(await cloudGit(cwd, ["ls-files", "--", name]))) continue;
     if (sensitiveName(name)) throw new Error("Credential-related changes require manual preservation; retained workspace");

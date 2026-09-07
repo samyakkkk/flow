@@ -1,3 +1,4 @@
+import { requests } from "./setup-requests.js";
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { containsSecret } from "../events.js";
@@ -41,16 +42,18 @@ export function registerCloudTaskRoutes(app: FastifyInstance): void {
       if (!job || job.status !== "running" || typeof key !== "string" || !["answer", "continue"].includes(job.type)) {
         return reply.code(403).send({ error: "A running cloud conversation job is required" });
       }
+      if (requests().some(r => r.job === job.id && ["requesting", "waiting", "ready"].includes(r.state))) return reply.code(409).send({ error: "Task is waiting for setup; stop this turn" });
       const { repo, edit, execution } = req.body ?? {};
       if ((repo !== undefined && typeof repo !== "string") || (execution !== undefined && typeof execution !== "boolean") || (edit !== undefined && typeof edit !== "boolean") || (edit && !repo)) {
         return reply.code(400).send({ error: "edit requires a registered repo name" });
       }
       try {
-        if (edit || execution) {
+        const needsRestore = conversationRepos(key).some(r => r.worktree?.archived_at);
+        if (edit || execution || needsRestore) {
           const slot = requestCodingSlot(req.params.id, codingChildPid(req.params.id));
           if (!slot.acquired) return reply.code(423).send({ error: "Waiting for the machine's coding slot", position: slot.position });
         }
-        await restoreConversationWorktrees(key);
+        if (edit || execution || needsRestore) await restoreConversationWorktrees(key, true);
         if (edit) await ensureConversationWorktree(key, repo!);
         return { repos: conversationRepos(key) };
       } catch (err) {

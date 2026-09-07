@@ -1,5 +1,4 @@
 "use client";
-import { RepoEnvPanel } from "./CloudAgents";
 // SourcesFrontDoor — the "sources front door" on the home page. Two doors,
 // never one ambiguous box: an "Add a folder" input (local mode only — point
 // Flow at a project folder or a folder of docs) stacked above the GitHub
@@ -221,7 +220,7 @@ function IndexLogPanel({ repo }: { repo: string }) {
   );
 }
 
-function SourceRow({ s, st, onChanged, mode }: { mode: FlowMode; s: SourceEntry; st?: RepoStatusEntry; onChanged: () => void }) {
+function SourceRow({ s, st, onChanged }: { s: SourceEntry; st?: RepoStatusEntry; onChanged: () => void }) {
   const { prefix } = useProject();
   const chip = sourceChip(s);
   // Prefer the orchestrator's state machine; fall back to the legacy guess
@@ -479,7 +478,6 @@ function SourceRow({ s, st, onChanged, mode }: { mode: FlowMode; s: SourceEntry;
         </div>
       </div>
 
-      {mode === "prod" && s.kind !== "docs" && <RepoEnvPanel repo={s.name} />}
 
       {/* Live indexer activity — appears while an index job runs */}
       {s.kind !== "docs" && <IndexActivityStrip repo={s.name} active={indexing || watchActivity} />}
@@ -667,7 +665,7 @@ export function SourcesFrontDoor({ variant, repos, mode, onChanged }: Props) {
       {repos.length > 0 && (
         <div className="flex flex-col gap-1.5">
           {repos.map((s, i) => (
-            <SourceRow key={i} s={s} st={statuses[s.name]} onChanged={onChanged} mode={mode} />
+            <SourceRow key={i} s={s} st={statuses[s.name]} onChanged={onChanged} />
           ))}
         </div>
       )}

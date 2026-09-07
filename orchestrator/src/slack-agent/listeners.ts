@@ -9,6 +9,7 @@
 // delivers message.im for the agent's own DM conversations.
 
 import type { App } from "@slack/bolt";
+import { receiveSetupReply } from "../agents/setup-requests.js";
 import { cancelRun } from "./cancel.js";
 import { isEngaged, markEngaged } from "./engagement.js";
 import { respond, stripMentions } from "./respond.js";
@@ -57,6 +58,8 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     const threadTs = (event.thread_ts as string | undefined) ?? ts;
     const channelType = event.channel_type as string | undefined;
     const text = (event.text as string | undefined) ?? "";
+
+    if (await receiveSetupReply({ team: (context.teamId as string | undefined) ?? (event.team as string | undefined), channel: channelId, thread: threadTs, user: userId, text, files: Array.isArray(event.files) ? event.files : undefined })) return;
 
     let surface: Surface;
     if (channelType === "im") surface = "dm";

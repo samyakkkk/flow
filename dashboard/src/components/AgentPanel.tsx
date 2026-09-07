@@ -35,7 +35,7 @@ const AGENT_BRANDS: Record<string, BrandName> = {
 
 function statusKind(status: string): "live" | "ok" | "warn" | "idle" {
   if (status === "running" || status === "starting") return "live";
-  if (status === "waiting") return "warn";
+  if (status === "waiting" || status === "setup") return "warn";
   if (status === "idle") return "ok";
   if (status === "error") return "warn";
   return "idle";
@@ -47,6 +47,7 @@ function statusLabel(status: string): string {
     starting: "Starting",
     running: "Working",
     waiting: "Needs approval",
+    setup: "Needs setup",
     idle: "Done — steerable",
     error: "Error",
     closed: "Closed",

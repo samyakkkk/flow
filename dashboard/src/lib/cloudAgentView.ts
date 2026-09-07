@@ -1,7 +1,7 @@
 export interface CloudRepo { name: string; baseBranch?: string; worktree?: { path: string; branch: string; archived_at?: number; cleanup_error?: string } }
 export interface CloudTurn { id: string; status: string; phase: string; message: string; created_at?: number; updated_at?: number; repos?: CloudRepo[]; result?: { answer_md?: string; output?: string }; events?: { kind: string; time: number; title: string; output?: string; status?: string }[] }
 export interface CloudRun { turns: CloudTurn[]; repos: CloudRepo[]; slackUrl?: string }
-export const cloudStatus = (turn: CloudTurn) => turn.phase === "waiting" || turn.status === "queued" ? "queued" : turn.status === "done" ? "idle" : turn.status === "failed" ? "error" : "running";
+export const cloudStatus = (turn: CloudTurn) => turn.phase === "setup" ? "setup" : turn.phase === "waiting" || turn.status === "queued" ? "queued" : turn.status === "done" ? "idle" : turn.status === "failed" ? "error" : "running";
 export function cloudSessionRow(turn: CloudTurn) {
   return { id: `cloud-${turn.id}`, backend: "opencode", repo: turn.repos?.map(r => r.name).join(", ") || "server", title: turn.message, status: cloudStatus(turn), live: ["running", "queued"].includes(turn.status), worktree_id: turn.repos?.find(r => r.worktree)?.worktree?.path ?? null, created_at: (turn.created_at ?? 0) * 1000, updated_at: (turn.updated_at ?? 0) * 1000 };
 }

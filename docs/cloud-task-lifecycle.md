@@ -91,10 +91,12 @@ blindly force-cleaning. Local checkpoint branches are retained indefinitely.
 `FLOW_TEST_OPENCODE_BIN` to an installed OpenCode binary to include the real
 plugin smoke test. Run on Linux to exercise orphan process-group recovery.
 
-## Repository environment files
+## Legacy repository environment API
 
-In the server dashboard, expand **Environment files** on a repository row.
-Upload `.env`, `.env.local`, or another `.env.*` file (256 KiB maximum).
+The old dashboard upload panel has been removed in favor of conversational setup
+(described below). Existing stored files and `/v1/agents/repos/:repo/env` remain
+supported for compatibility: `.env`, `.env.local`, or another `.env.*` file
+(256 KiB maximum).
 Files are scoped to that repository in that Flow project. The API lists names
 and update times, never values. Uploading the same filename replaces its saved
 version; Remove deletes the saved version. Store development/test credentials.
@@ -105,7 +107,7 @@ migration makes existing encrypted settings and env files unreadable. This is
 protection for stored data, not isolation from administrators or task processes.
 Every authenticated administrator of the project can replace these files.
 
-At the start of a conversation turn, Flow writes uploads into the appropriate
+When a coding turn acquires its workspace, Flow writes uploads into the appropriate
 repo worktree with mode 0600. Uploads override source env copies. Applications
 must load the files as usual; Flow does not execute shell code from env files
 or globally export their contents. Changes during a run apply on a later turn.
@@ -194,3 +196,48 @@ and twenty stored images per thread. Start a new thread when that storage limit
 is reached. Stored images are retained with the conversation; no automatic image
 retention cleanup is implemented yet. Unsupported attachments and inaccessible
 files produce a visible error rather than a text-only answer pretending to see them.
+
+## Conversational setup
+
+The dashboard no longer has a repository env-upload panel. In cloud Slack tasks,
+`flow_setup` lets the agent list saved setup, register an existing untracked file
+without reading its values, select an environment, or request a missing file,
+variable, or CLI setup from the original requester. Paths can be nested and files
+can have any name; each supplied file is limited to 1 MiB. Tracked files, Git
+metadata, traversal and symlink destinations are refused.
+
+A request opens a dedicated DM thread with the original requester. File/value
+replies are consumed by the setup handler before normal chat/image processing.
+Only the requester in the matching Slack workspace and DM thread can fulfill it.
+Raw values and files do not enter job prompts; files are stored encrypted with the
+project settings key. Slack itself retains the original attachment/message.
+
+The agent turn ends while waiting, releasing the machine coding slot. Requests
+survive restarts. Once fulfilled, a worker takes that slot to register files in
+both the source checkout and the task worktree, then resumes the same conversation
+and delivers the result to the original Slack thread. The resume job is deduplicated
+by request ID. Upload/network failures leave the request pending. Conflicting
+locally changed files are retained instead of overwritten. A requester can reply
+`cancel` in the setup DM thread to cancel a waiting request.
+
+Saved setup is keyed by repository, environment and destination. Environment
+selection sticks to each conversation; a single non-production environment can
+be reused automatically, while production requires explicit selection. Copies
+are mode 0600, excluded in Git's local exclude file, hidden from cloud diffs, and
+restored for future worktrees. This is coordination on a trusted shared host,
+not OS isolation; authenticated terminals and programs can access host files.
+Normal application loaders must load env files; values are not automatically
+exported into every shell. Register only reusable configuration, not databases,
+Terraform state or caches. Modified private setup keeps worktrees from being
+checkpointed automatically.
+
+Terminal requests link to an authenticated project dashboard page backed by
+node-pty and xterm.js. It starts a login shell as the Flow OS user in the source
+checkout and holds the same coding slot as agents. CLI installations and saved
+logins persist; shell-only exports do not. Terminal input/output is held only in
+bounded memory, never stored in the agent transcript. Closing the terminal
+releases its slot; “Done — resume task” also fulfills the setup request. The agent
+must verify the setup after resuming. Disconnected terminals close after five
+minutes without polling/input, and terminals have a one-hour maximum lifetime.
+A restart ends the terminal; the DM link can reopen it. Linux builds need the
+native build prerequisites for node-pty (Python and a C/C++ toolchain).
