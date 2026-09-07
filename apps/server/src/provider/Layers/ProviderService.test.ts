@@ -64,7 +64,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import { type ProviderServiceLiveOptions, makeProviderServiceLive } from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -415,6 +415,7 @@ const hasMetricSnapshot = (
 function makeProviderServiceLayer(
   input: {
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
+    readonly loadBrainContext?: ProviderServiceLiveOptions["loadBrainContext"];
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
@@ -445,7 +446,9 @@ function makeProviderServiceLayer(
 
   const layer = it.layer(
     Layer.mergeAll(
-      makeProviderServiceLive().pipe(
+      makeProviderServiceLive(
+        input.loadBrainContext ? { loadBrainContext: input.loadBrainContext } : undefined,
+      ).pipe(
         Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
@@ -4594,3 +4597,74 @@ describe("agent browser access", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+for (const driverName of [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "grok",
+  "opencode",
+  "antigravity",
+] as const) {
+  const driver = ProviderDriverKind.make(driverName);
+  const fake = makeFakeCodexAdapter(driver);
+  let binding = "brain-a";
+  let unavailable = false;
+  const setup = makeProviderServiceLayer({
+    registry: makeAdapterRegistryMock({ [driver]: fake.adapter }),
+    loadBrainContext: (_thread, previous) =>
+      unavailable
+        ? Effect.fail("Connected brain unavailable")
+        : Effect.succeed({
+            bindingKey: binding,
+            ...(previous !== binding ? { context: `Briefing ${binding}` } : {}),
+          }),
+  });
+  setup.layer(`project brain delivery (${driverName})`, (it) => {
+    it.effect(
+      "delivers once, refreshes a changed binding, retries rejected sends, and reattaches on resume",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          const threadId = asThreadId(`brain-${driverName}`);
+          const start = {
+            provider: driver,
+            providerInstanceId: ProviderInstanceId.make(driver),
+            threadId,
+            runtimeMode: "full-access" as const,
+            cwd: fixtureCwd(`brain-${driverName}`),
+          };
+          yield* provider.startSession(threadId, start);
+          yield* provider.sendTurn({ threadId, input: "/help" });
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "/help");
+          yield* provider.sendTurn({ threadId, input: "hello" });
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "Briefing brain-a\n\nhello");
+          yield* provider.sendTurn({ threadId, input: "again" });
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "again");
+          binding = "brain-b";
+          fake.sendTurn.mockImplementationOnce(() =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: driver,
+                method: "sendTurn",
+                detail: "Rejected send",
+              }),
+            ),
+          );
+          yield* provider.sendTurn({ threadId, input: "change" }).pipe(Effect.flip);
+          yield* provider.sendTurn({ threadId, input: "retry" });
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "Briefing brain-b\n\nretry");
+          unavailable = true;
+          const calls = fake.sendTurn.mock.calls.length;
+          const error = yield* provider.sendTurn({ threadId, input: "blocked" }).pipe(Effect.flip);
+          assert.include(error.message, "Connected brain unavailable");
+          assert.equal(fake.sendTurn.mock.calls.length, calls);
+          unavailable = false;
+          yield* provider.stopSession({ threadId });
+          yield* provider.startSession(threadId, start);
+          yield* provider.sendTurn({ threadId, input: "resumed" });
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "Briefing brain-b\n\nresumed");
+        }),
+    );
+  });
+}

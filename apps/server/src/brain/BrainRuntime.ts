@@ -632,6 +632,14 @@ export class BrainRuntime {
     this.commands = result.catch(() => {});
     return result;
   }
+  projectBrainId(projectId: ProjectId) {
+    return this.workspaces.find((entry) => entry.projectIds.includes(projectId))?.id;
+  }
+  async projectChatContext(projectId: ProjectId) {
+    // Binding is authoritative on the environment server, including worktree chats.
+    if (!this.projectBrainId(projectId)) return undefined;
+    return this.projectKnowledge(projectId, "");
+  }
   async projectKnowledge(projectId: ProjectId, query: string) {
     const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
     if (!workspace)
@@ -652,6 +660,8 @@ export class BrainRuntime {
     const ids = new Set(entities.map((entry) => entry.id));
     return {
       brain: workspace.name,
+      memories: knowledge.memories.slice(0, 20),
+      truncated: entities.length < knowledge.entities.length || knowledge.memories.length > 20,
       entities,
       edges: knowledge.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)),
       sources: workspace.sources.map(({ repository, status }) => ({ repository, status })),

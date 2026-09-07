@@ -45,7 +45,14 @@ it.effect(
         const runtime = {
           projectKnowledge: async (id: ProjectId) => {
             readProjects.push(id);
-            return { brain: "Only project A's brain", entities: [], edges: [], sources: [] };
+            return {
+              brain: "Only project A's brain",
+              entities: [],
+              edges: [],
+              sources: [],
+              memories: [],
+              truncated: false,
+            };
           },
         } as unknown as BrainRuntime;
         const projections = {

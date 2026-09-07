@@ -254,19 +254,24 @@ describe("native brain persistence", () => {
           const project = { id: ProjectId.make("project-one"), workspaceRoot: repoFolder };
           const otherProject = { id: ProjectId.make("project-two"), workspaceRoot: repoFolder };
           await expect(reopened.bindProject(project, "missing-brain")).rejects.toThrow("not found");
+          expect(await reopened.projectChatContext(project.id)).toBeUndefined();
           await reopened.bindProject(project, first!.id);
           await reopened.drain();
           const sourceCount = (await reopened.state()).workspaces[0]!.sources.length;
           await reopened.bindProject(project, first!.id);
           await reopened.bindProject(otherProject, first!.id);
           expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
-          expect((await reopened.projectKnowledge(project.id, "")).brain).toBe("First");
+          expect((await reopened.projectChatContext(project.id))?.brain).toBe("First");
+          expect((await reopened.projectChatContext(project.id))?.entities.length).toBeGreaterThan(
+            0,
+          );
           await reopened.bindProject(project, second!.id);
           await reopened.drain();
-          expect((await reopened.projectKnowledge(project.id, "Demo")).brain).toBe("Second");
+          expect((await reopened.projectChatContext(project.id))?.brain).toBe("Second");
           expect((await reopened.projectKnowledge(otherProject.id, "Demo")).brain).toBe("First");
           expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
           await reopened.bindProject(project, null);
+          expect(await reopened.projectChatContext(project.id)).toBeUndefined();
           await expect(reopened.projectKnowledge(project.id, "")).rejects.toThrow("no brain");
           expect(
             (await reopened.projectKnowledge(otherProject.id, "unknown-nonmatching-term")).entities,

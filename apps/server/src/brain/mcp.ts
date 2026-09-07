@@ -15,6 +15,8 @@ const BrainToolkit = Toolkit.make(
     parameters: Schema.Struct({ query: Schema.optional(Schema.String) }),
     success: Schema.Struct({
       brain: Schema.String,
+      memories: BrainKnowledge.fields.memories,
+      truncated: Schema.Boolean,
       entities: BrainKnowledge.fields.entities,
       edges: BrainKnowledge.fields.edges,
       sources: Schema.Array(

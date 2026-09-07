@@ -45,6 +45,10 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
+import {
+  makeBrainChatContextLoader,
+  type BrainChatContextLoader,
+} from "../../brain/chat-context.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import {
@@ -96,6 +100,7 @@ interface PendingCompaction {
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly loadBrainContext?: BrainChatContextLoader;
   /**
    * Overrides MCP credential issuance. The real issuer reads a module-global
    * registry that only a running MCP server installs, which makes the
@@ -338,6 +343,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
+  const deliveredBrainBindings = new Map<ThreadId, string>();
   const timedOutNativeCompactions = new Set<ThreadId>();
   const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
     Effect.gen(function* () {
@@ -743,6 +749,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
+      deliveredBrainBindings.delete(threadId);
       const browserEnabled = yield* agentBrowserAccessEnabled(threadId);
       if (!browserEnabled) {
         // Revoke the old token before issuing narrower capabilities. Clearing
@@ -762,7 +769,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+          deliveredBrainBindings.delete(threadId);
+        }),
+      ),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1450,7 +1462,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(input);
+            // Resolve the project on the server, even for existing chats. Only a new
+            // provider session or changed binding receives a briefing, never every turn.
+            const brain =
+              options?.loadBrainContext &&
+              parsed.continuation !== true &&
+              !parsed.input?.trimStart().startsWith("/")
+                ? yield* options
+                    .loadBrainContext(input.threadId, deliveredBrainBindings.get(input.threadId))
+                    .pipe(
+                      Effect.mapError(
+                        (message) =>
+                          new ProviderValidationError({
+                            operation: "ProviderService.brainContext",
+                            issue: message,
+                          }),
+                      ),
+                    )
+                : undefined;
+            const turn = yield* routed.adapter.sendTurn(
+              brain?.context
+                ? { ...input, input: `${brain.context}\n\n${input.input ?? ""}` }
+                : input,
+            );
+            // A rejected send must retry the same briefing on the next attempt.
+            if (brain) deliveredBrainBindings.set(input.threadId, brain.bindingKey);
             yield* associateTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,
@@ -2094,7 +2130,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
 export const ProviderServiceLive = Layer.effect(
   ProviderService.ProviderService,
-  makeProviderService(),
+  Effect.gen(function* () {
+    const loadBrainContext = yield* makeBrainChatContextLoader();
+    return yield* makeProviderService({ loadBrainContext });
+  }),
 );
 
 export function makeProviderServiceLive(options?: ProviderServiceLiveOptions) {
