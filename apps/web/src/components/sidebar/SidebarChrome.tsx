@@ -249,7 +249,7 @@ export function SidebarBrainLink() {
       >
         <BrainCircuit size={15} />
         <span>Brain</span>
-        <span className="ml-auto text-[9px] opacity-60">Preview</span>
+        <span className="ml-auto text-[9px] opacity-60">Local</span>
       </Link>
     </div>
   );

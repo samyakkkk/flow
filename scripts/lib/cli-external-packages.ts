@@ -11,9 +11,9 @@
  * as Node resolves it from the emitted bundle. Keeping both consumers on one
  * list prevents packaging from drifting away from the bundle boundary.
  *
- * Entries are matched as prefixes (`id.startsWith(prefix)`), so they also cover
- * a package's platform-specific siblings — `node-gyp-build` covers
- * `node-gyp-build-optional-packages`, `@yuuang/` covers every `ffi-rs-*` binding.
+ * Scoped families and node-gyp-build match prefixes; ordinary package names
+ * match exactly (including subpaths). In particular, externalizing `ms` must
+ * not accidentally externalize `msw` and its unrelated dependency closure.
  */
 /**
  * External because Node actually loads them from disk at runtime.
@@ -26,6 +26,127 @@
  * enforced by a test, not by inspection.
  */
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
+  // Native Brain runtime and its filesystem dependency closure. Keep these
+  // external so binary/module resolution works in the desktop sidecar.
+  "@falkordblite/",
+  "@huggingface/jinja",
+  "@isaacs/fs-minipass",
+  "@js-temporal/polyfill",
+  "@kwsites/file-exists",
+  "@kwsites/promise-deferred",
+  "@node-llama-cpp/",
+  "@node-rs/",
+  "@opentelemetry/api",
+  "at-least-node",
+  "clone",
+  "defaults",
+  "get-east-asian-width",
+  "has-flag",
+  "mimic-fn",
+  "supports-color",
+  "type-fest",
+  "typescript",
+  "wcwidth",
+  "@redis/bloom",
+  "@redis/client",
+  "@redis/json",
+  "@redis/search",
+  "@redis/time-series",
+  "@reflink/",
+  "@simple-git/args-pathspec",
+  "@simple-git/argv-parser",
+  "@tinyhttp/content-disposition",
+  "ansi-escapes",
+  "ansi-regex",
+  "ansi-styles",
+  "async-retry",
+  "bytes",
+  "chalk",
+  "chmodrp",
+  "chownr",
+  "ci-info",
+  "cli-cursor",
+  "cli-spinners",
+  "cliui",
+  "cluster-key-slot",
+  "cmake-js",
+  "color-convert",
+  "color-name",
+  "commander",
+  "cross-spawn",
+  "debug",
+  "deep-extend",
+  "emoji-regex",
+  "env-var",
+  "escalade",
+  "eventemitter3",
+  "falkordb",
+  "falkordblite",
+  "filename-reserved-regex",
+  "filenamify",
+  "fs-extra",
+  "generic-pool",
+  "get-caller-file",
+  "graceful-fs",
+  "ignore",
+  "ini",
+  "ipull",
+  "is-fullwidth-code-point",
+  "is-interactive",
+  "is-unicode-supported",
+  "isexe",
+  "jsbi",
+  "jsonfile",
+  "lifecycle-utils",
+  "lodash",
+  "lodash.debounce",
+  "log-symbols",
+  "lowdb",
+  "mimic-function",
+  "minimist",
+  "minipass",
+  "minizlib",
+  "ms",
+  "nanoid",
+  "node-api-headers",
+  "node-llama-cpp",
+  "onetime",
+  "ora",
+  "parse-ms",
+  "path-key",
+  "pretty-bytes",
+  "pretty-ms",
+  "proper-lockfile",
+  "rc",
+  "redis",
+  "require-directory",
+  "restore-cursor",
+  "retry",
+  "semver",
+  "shebang-command",
+  "shebang-regex",
+  "signal-exit",
+  "simple-git",
+  "sleep-promise",
+  "slice-ansi",
+  "stdin-discarder",
+  "stdout-update",
+  "steno",
+  "string-width",
+  "strip-ansi",
+  "strip-json-comments",
+  "tar",
+  "universalify",
+  "url-join",
+  "validate-npm-package-name",
+  "which",
+  "wrap-ansi",
+  "y18n",
+  "yallist",
+  "yargs",
+  "yargs-parser",
+  "yoctocolors",
+
   "node-pty",
   "ffi-rs",
   "@yuuang/",
@@ -69,7 +190,11 @@ export const CLI_EXTERNAL_PACKAGE_PREFIXES = [
 ] as const;
 
 export function isRuntimeExternalCliDependency(id: string): boolean {
-  return CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => id.startsWith(prefix));
+  return CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) =>
+    prefix.endsWith("/") || prefix === "node-gyp-build" || prefix === "@clerk/electron-passkeys"
+      ? id.startsWith(prefix)
+      : id === prefix || id.startsWith(`${prefix}/`),
+  );
 }
 
 /**
@@ -83,7 +208,10 @@ export function isRuntimeExternalCliDependency(id: string): boolean {
  * inlined while node-pty (a declared dependency) stayed external.
  */
 export function isExternalCliDependency(id: string): boolean {
-  return CLI_EXTERNAL_PACKAGE_PREFIXES.some((prefix) => id.startsWith(prefix));
+  return (
+    isRuntimeExternalCliDependency(id) ||
+    CLI_BUILD_ONLY_EXTERNAL_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}/`))
+  );
 }
 
 /** True when the CLI bundle should inline `id` rather than leave it external. */

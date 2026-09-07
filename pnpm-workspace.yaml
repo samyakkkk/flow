@@ -15,8 +15,10 @@ allowBuilds:
   electron: true
   electron-winstaller: false
   esbuild: true
+  falkordblite: false
   msgpackr-extract: true
   msw: false
+  node-llama-cpp: true
   node-pty: true
   sharp: true
   utf-8-validate: false
@@ -93,6 +95,9 @@ minimumReleaseAgeExclude:
   - "@anthropic-ai/claude-agent-sdk@0.3.260"
 
 overrides:
+  # falkordblite 0.3.0 points at unpublished 0.1.1 native packages.
+  "falkordblite>@falkordblite/darwin-arm64": "-"
+  "falkordblite>@falkordblite/linux-x64": 8.2.3-falkordb.4.16.3
   # The SDK always receives the user's Claude executable, so its bundled binaries are unused.
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-arm64": "-"
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-x64": "-"

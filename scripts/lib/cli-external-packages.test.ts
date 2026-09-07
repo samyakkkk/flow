@@ -10,7 +10,7 @@ import * as Schema from "effect/Schema";
 import serverPackageJson from "../../apps/server/package.json" with { type: "json" };
 
 import {
-  CLI_RUNTIME_EXTERNAL_PREFIXES,
+  isRuntimeExternalCliDependency,
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
   shouldBundleCliDependency,
@@ -35,6 +35,11 @@ describe("shouldBundleCliDependency", () => {
     for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/hostProcess"]) {
       assert.strictEqual(shouldBundleCliDependency(id), true, id);
     }
+  });
+
+  it("does not confuse a dependency with a similarly named package", () => {
+    assert.strictEqual(shouldBundleCliDependency("ms"), false);
+    assert.strictEqual(shouldBundleCliDependency("msw"), true);
   });
 
   it("never bundles node: builtins", () => {
@@ -87,7 +92,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
   it("selects every external root declared by the server", () => {
     assert.deepStrictEqual(
       Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      ["@ff-labs/fff-node", "msgpackr-extract", "node-pty"],
+      ["@ff-labs/fff-node", "falkordblite", "msgpackr-extract", "node-llama-cpp", "node-pty"],
     );
   });
 });
@@ -150,8 +155,7 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
 
   // Runtime-external only. The build-only entries resolve `bun:*` and are never
   // loaded by Node, so their closure genuinely does not need to be external.
-  const isRuntimeExternal = (name: string) =>
-    CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => name.startsWith(prefix));
+  const isRuntimeExternal = (name: string) => isRuntimeExternalCliDependency(name);
 
   // A cold walk of the pnpm store can exceed the root timeout when the Windows
   // lane runs four filesystem-heavy workspace suites at once.

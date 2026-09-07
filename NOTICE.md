@@ -14,3 +14,9 @@ The original Flow source is preserved under `flow/`, from Flow commit
 continues to carry its existing [AGPL-3.0-only license](flow/LICENSE). The root
 MIT license does not relicense the Flow subtree. Dependencies and vendored
 components retain their own licenses and notices.
+
+The local Brain integration under `apps/server/src/brain/` adapts Flow's
+AGPL-3.0-only embedding implementation and imports its graph ontology. Those
+adapted files retain their source license; the root MIT notice does not
+relicense them. FalkorDB, its native server binaries, and node-llama-cpp retain
+their respective upstream licenses.

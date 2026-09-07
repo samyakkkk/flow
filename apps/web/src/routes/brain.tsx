@@ -1,3 +1,3 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { BrainPage } from "../components/brain/BrainPage";
-export const Route = createFileRoute("/brain")({ component: BrainPage });
+import { LiveBrainPage } from "../components/brain/LiveBrainPage";
+export const Route = createFileRoute("/brain")({ component: LiveBrainPage });

@@ -3,6 +3,7 @@ export interface BrainEntity {
   name: string;
   kind: string;
   description: string;
+  source?: string;
   x: number;
   y: number;
 }

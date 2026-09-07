@@ -1,28 +1,38 @@
 import { isElectron } from "../../env";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   BrainCircuit,
   Search,
   Network,
   BookOpen,
   Database,
-  ArrowUpRight,
-  GitBranch,
   MessageSquare,
   Layers,
 } from "lucide-react";
-import { sampleBrainRepository } from "../../brain/sampleData";
+import type { BrainSnapshot } from "../../brain/repository";
 import { searchMemories } from "../../brain/repository";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import "./brain.css";
 
-export function BrainPage() {
-  const [workspaceId, setWorkspaceId] = useState("sample-flow");
+export function BrainPage({
+  snapshot,
+  workspaces,
+  onWorkspaceChange,
+  controls,
+  sources,
+  runtimeLabel,
+}: {
+  snapshot: BrainSnapshot;
+  workspaces: readonly { id: string; name: string }[];
+  onWorkspaceChange: (id: string) => void;
+  controls: ReactNode;
+  sources: ReactNode;
+  runtimeLabel: string;
+}) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("All");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const snapshot = sampleBrainRepository.read(workspaceId);
   const selected = snapshot.entities.find((entity) => entity.id === selectedId);
   const memories = searchMemories(snapshot, query, kind);
   return (
@@ -40,15 +50,15 @@ export function BrainPage() {
               Workspace{" "}
               <select
                 aria-label="Brain workspace"
-                value={workspaceId}
+                value={snapshot.id}
                 onChange={(event) => {
-                  setWorkspaceId(event.target.value);
+                  onWorkspaceChange(event.target.value);
                   setSelectedId(null);
                   setQuery("");
                   setKind("All");
                 }}
               >
-                {sampleBrainRepository.listWorkspaces().map((workspace) => (
+                {workspaces.map((workspace) => (
                   <option key={workspace.id} value={workspace.id}>
                     {workspace.name}
                   </option>
@@ -59,9 +69,8 @@ export function BrainPage() {
           <div className="brain-intro">
             <div>
               <h1>
-                A little context.
-                <br />
-                <span>A lot less starting over.</span>
+                {snapshot.name}
+                <span> / Brain</span>
               </h1>
               <p>{snapshot.description}</p>
             </div>
@@ -69,11 +78,7 @@ export function BrainPage() {
               <BrainCircuit size={44} strokeWidth={1.25} />
             </div>
           </div>
-          <div className="brain-sample">
-            <span className="brain-dot" />
-            <strong>Sample workspace</strong>
-            <span>Explore example data. Your real brain is not connected.</span>
-          </div>
+          {controls}
           <div className="brain-stats">
             {[
               { label: "Knowledge entities", value: snapshot.entities.length, icon: Network },
@@ -100,6 +105,13 @@ export function BrainPage() {
                 <span className="brain-small-label">{snapshot.edges.length} relationships</span>
               </div>
               <div className="brain-graph" aria-label="Workspace knowledge graph">
+                {snapshot.entities.length === 0 && (
+                  <div className="brain-empty">
+                    <Network size={24} />
+                    <h3>No knowledge indexed yet</h3>
+                    <p>Connect a GitHub repository below to build this brain.</p>
+                  </div>
+                )}
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                   {snapshot.edges.map((edge) => {
                     const from = snapshot.entities.find((entity) => entity.id === edge.from)!;
@@ -157,6 +169,16 @@ export function BrainPage() {
                   <span className="brain-kind">{selected.kind}</span>
                   <h3>{selected.name}</h3>
                   <p>{selected.description}</p>
+                  {selected.source && (
+                    <a
+                      className="brain-evidence"
+                      href={selected.source}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View source on GitHub ↗
+                    </a>
+                  )}
                   <h4>Connected memories</h4>
                   {snapshot.memories
                     .filter((memory) => memory.entityIds.includes(selected.id))
@@ -197,13 +219,13 @@ export function BrainPage() {
                   <div className="brain-runtime">
                     <span className="brain-dot" />
                     <div>
-                      <strong>Preview mode</strong>
-                      <small>Example data · no brain service connected</small>
+                      <strong>FalkorDB</strong>
+                      <small>{runtimeLabel}</small>
                     </div>
                   </div>
                   <p className="brain-future">
-                    Next: connect the app-managed local brain, with one shared database and
-                    embedding model.
+                    Each workspace keeps its own graph. The database and embedding service are
+                    shared.
                   </p>
                 </>
               )}
@@ -263,8 +285,12 @@ export function BrainPage() {
               {memories.length === 0 && (
                 <div className="brain-empty">
                   <Search size={22} />
-                  <h3>No matching memories</h3>
-                  <p>Try another search or filter.</p>
+                  <h3>{snapshot.memories.length ? "No matching memories" : "No memories yet"}</h3>
+                  <p>
+                    {snapshot.memories.length
+                      ? "Try another search or filter."
+                      : "Repository facts are shown in the graph. Memories appear only when the source supports a decision, preference, or lesson."}
+                  </p>
                   <button
                     onClick={() => {
                       setQuery("");
@@ -277,37 +303,7 @@ export function BrainPage() {
               )}
             </div>
           </section>
-          <section className="brain-card brain-sources">
-            <div className="brain-card-heading">
-              <div>
-                <h2>
-                  <GitBranch size={16} />
-                  Sources & connectors
-                </h2>
-                <p>Where your brain gets its context.</p>
-              </div>
-              <span className="brain-small-label">Sample sources</span>
-            </div>
-            <div className="brain-source-grid">
-              {snapshot.sources.map((source) => (
-                <div key={source.name}>
-                  <GitBranch size={18} />
-                  <div>
-                    <strong>{source.name}</strong>
-                    <small>{source.detail}</small>
-                  </div>
-                  <span className="brain-kind">Example</span>
-                </div>
-              ))}
-            </div>
-            <div className="brain-connector-note">
-              <Layers size={16} />
-              <span>Slack, Linear & more</span>
-              <span className="ml-auto">
-                Connector setup comes next <ArrowUpRight size={13} />
-              </span>
-            </div>
-          </section>
+          {sources}
           <footer className="brain-bottom">
             One workspace. One brain.<span>Local first. Ready for a remote home.</span>
           </footer>

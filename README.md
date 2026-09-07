@@ -1,10 +1,18 @@
 # Flow
 
 This branch establishes Flow's agent workspace on the T3 Code foundation. It is
-an independent fork, with T3's original Git history retained. The web and desktop interface now includes a Brain preview with two isolated
-sample workspaces, a knowledge map, searchable memories, and source details.
-Open **Brain** in the sidebar or **Open brain** in the command palette.
-The preview uses example data; no live brain connection is implemented yet.
+an independent fork, with T3's original Git history retained. The web and desktop interface includes a local Brain backed by native FalkorDB.
+Open **Brain** in the sidebar, create a workspace, choose Claude Code or Codex as
+its default indexing CLI, and connect a GitHub repository. Public repositories
+work without GitHub sign-in; private repositories use the selected computer's
+existing GitHub CLI sign-in (managed in Settings → Source control).
+
+The first import builds a bounded architecture graph from up to 80 text files,
+validates file citations, creates local EmbeddingGemma vectors, and persists the
+result in FalkorDB. The selected CLI uses its existing provider credentials and
+model settings. This is an initial repository indexing integration; passive
+session memory, incremental indexing, project-to-brain bindings, and cloud brain
+migration are not connected yet.
 
 The root contains T3's web, desktop, mobile, and server applications. The existing
 Flow implementation is preserved under [`flow/`](flow/README.md), including its
@@ -17,10 +25,17 @@ will transfer its data and change its endpoint. Agent execution location is
 independent of brain location.
 
 The intended local experience is to launch the app and create projects in the UI,
-without running `flow up`. Local workspaces will share an app-managed FalkorDB
-instance with separate workspace graphs and a single embedding service/model.
-Remote brains will use their backend for graph and embedding operations. This
-lifecycle integration is planned; it is not implemented in this foundation.
+without running `flow up`. Local workspaces in one app server share an app-managed FalkorDB instance with
+separate workspace graphs and one lazily loaded embedding model. No Docker or
+`flow up` is used. Native FalkorDB binaries support Apple Silicon macOS 15+ and Linux
+x64; other platforms are not supported by this native integration yet. On macOS,
+the app downloads a checksum-verified upstream binary bundle with its native
+libraries (no Homebrew or Python interpreter required). The graph
+storage directory is derived from the installation home under `~/.flow-brain/`
+(to keep Unix socket paths short); workspace settings and model files are kept
+in that installation’s `userdata/brain/`. The UI uses the selected computer’s
+authenticated connection. Moving a brain independently to a remote backend is
+still a future integration.
 
 This branch does not migrate installed data, configure Flow Cloud, or change
 existing installations. Upstream build and run instructions below apply to the

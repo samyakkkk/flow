@@ -554,3 +554,210 @@
     padding: 6px 8px;
   }
 }
+.brain-live-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.brain-live-controls button,
+.brain-github-body button,
+.brain-sources > .brain-card-heading > button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--background);
+}
+.brain-live-controls button:disabled,
+.brain-github-body button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.brain-live-controls select,
+.brain-live-controls input,
+.brain-github-body input {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  min-width: 0;
+  color: var(--foreground);
+}
+.brain-connection-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brain-connection-row label {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.brain-connection-row button {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.brain-health {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.brain-health > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.brain-health strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.brain-health small {
+  display: block;
+  width: 100%;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.brain-status {
+  display: inline-block;
+  font-size: 9px;
+  color: var(--muted-foreground);
+  border-radius: 5px;
+  padding: 3px 7px;
+  background: var(--secondary);
+  margin-left: 7px;
+}
+.brain-status-ready {
+  color: #39977e;
+  background: #39977e15;
+}
+.brain-status-error,
+.brain-error {
+  color: #c06565;
+  background: #c0656512;
+}
+.brain-error {
+  padding: 12px 15px;
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.brain-workspace-create {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 15px;
+}
+.brain-workspace-create summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.brain-live-controls form,
+.brain-github-body form {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.brain-live-controls form label,
+.brain-github-body form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.brain-cli {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+.brain-cli label {
+  font-size: 11px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.brain-cli small {
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.brain-github-body {
+  padding: 0 20px 20px;
+}
+.brain-github-body > p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  line-height: 1.7;
+}
+.brain-github-body > a,
+.brain-evidence {
+  font-size: 11px;
+  color: var(--brain-accent);
+}
+.brain-github-body .brain-disclosure {
+  font-size: 10px;
+  margin: 12px 0;
+}
+.brain-live-source {
+  display: flex;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.brain-live-source > div {
+  flex: 1;
+  min-width: 0;
+}
+.brain-live-source a {
+  font-size: 12px;
+  font-weight: 500;
+}
+.brain-live-source small {
+  display: block;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-top: 6px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.brain-graph > .brain-empty {
+  padding-top: 100px;
+}
+.brain-memory-list a:hover,
+.brain-evidence:hover {
+  text-decoration: underline;
+}
+@media (max-width: 600px) {
+  .brain-health {
+    grid-template-columns: 1fr;
+  }
+  .brain-connection-row select {
+    max-width: 200px;
+  }
+  .brain-github-body form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .brain-live-controls form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .brain-live-source {
+    flex-wrap: wrap;
+  }
+}

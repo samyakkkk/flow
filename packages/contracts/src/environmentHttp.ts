@@ -1,3 +1,4 @@
+import { BrainCommand, BrainResponse } from "./brain.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -614,7 +615,17 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+class EnvironmentBrainHttpApi extends HttpApiGroup.make("brain").add(
+  HttpApiEndpoint.post("request", "/api/brain/request", {
+    headers: OptionalBearerHeaders,
+    payload: Schema.Struct({ command: BrainCommand }),
+    success: BrainResponse,
+    error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentBrainHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
