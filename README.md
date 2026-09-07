@@ -1,4 +1,25 @@
-# T3 Code
+# Flow
+
+This branch establishes Flow's agent workspace on the T3 Code foundation. It is
+an independent fork, with T3's original Git history retained. The application is
+still the upstream T3 implementation; the Flow Brain interface and connection
+have not been integrated yet.
+
+The root contains T3's web, desktop, mobile, and server applications. The existing
+Flow implementation is preserved under [`flow/`](flow/README.md), including its
+local brain, graph gateway, memory pipeline, connectors, and cloud modules. Its
+npm workspace remains separate from the root workspace.
+
+The first integration target is the complete free local developer setup. A
+workspace has one brain, initially running locally; a future cloud migration
+will transfer its data and change its endpoint. Agent execution location is
+independent of brain location.
+
+This branch does not migrate installed data, configure Flow Cloud, or change
+existing installations. Upstream build and run instructions below apply to the
+T3 application. See [NOTICE.md](NOTICE.md) for attribution and license boundaries.
+
+## Upstream T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 

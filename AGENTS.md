@@ -1,3 +1,22 @@
+# Flow fork context
+
+This is the existing Flow repository with T3 Code imported at the root. The
+original Flow implementation is preserved under `flow/`. The current task owner
+is the Flow developer; references to T3 maintainers below describe upstream.
+
+Preserve both Git histories and license notices. Keep Flow's brain services and
+data model separate from T3's interactive agent runtime. The first integration
+target is local installation; retain cloud code and remote-compatible boundaries.
+A workspace has one brain whose location can later change through data migration.
+Do not introduce separate personal/company brain types or reintroduce removed
+per-turn memory injection. Do not restart existing Flow services without explicit
+authorization, or use live databases for migration experiments.
+
+Consult Flow project memory through `flow-graph` MCP, orienting with repo `flow`
+and verifying the connected project before using it. A worktree's presence alone
+does not establish a Flow setup binding. Preserve upstream workflow guidance below
+for the T3 code; instructions in `flow/` apply to the preserved Flow components.
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
