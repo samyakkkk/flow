@@ -8,6 +8,7 @@ import {
   type BrainSource,
   type BrainWorkspace,
   type BrainKnowledge,
+  type ProjectId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { FalkorDB } from "falkordblite";
@@ -20,9 +21,25 @@ import { indexRepository } from "./indexer.ts";
 import { githubRepository, run } from "./process.ts";
 
 type Source = { -readonly [K in keyof BrainSource]: BrainSource[K] };
-type Workspace = { id: string; name: string; cli: BrainWorkspace["cli"]; sources: Source[] };
+type Workspace = {
+  id: string;
+  name: string;
+  cli: BrainWorkspace["cli"];
+  sources: Source[];
+  projectIds: ProjectId[];
+};
 const decodeWorkspaces = Schema.decodeUnknownSync(Schema.Array(WorkspaceSchema));
 const decodeStoredKnowledge = Schema.decodeUnknownSync(WorkspaceSchema.fields.knowledge);
+const decodeGithubRepositories = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      private: Schema.Boolean,
+      description: Schema.optional(Schema.String),
+      defaultBranch: Schema.optional(Schema.String),
+    }),
+  ),
+);
 const emptyKnowledge = (): BrainKnowledge => ({ entities: [], edges: [], memories: [] });
 const active = (source: Source) =>
   ["queued", "cloning", "indexing", "embedding"].includes(source.status);
@@ -45,6 +62,7 @@ export class BrainRuntime {
   private jobs = new Map<string, AbortController>();
   private queue: Promise<void> = Promise.resolve();
   private writes: Promise<void> = Promise.resolve();
+  private commands: Promise<unknown> = Promise.resolve();
   private closed = false;
   private ownsLock = false;
   private readonly databasePath: string;
@@ -83,6 +101,7 @@ export class BrainRuntime {
       );
       this.workspaces = saved.map((workspace) => ({
         ...workspace,
+        projectIds: [...(workspace.projectIds ?? [])],
         sources: workspace.sources.map((source) =>
           active({ ...source })
             ? {
@@ -95,10 +114,12 @@ export class BrainRuntime {
       }));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-        throw new Error("Brain workspace registry could not be read. It has been left untouched.");
+        throw new Error("Brain workspace registry could not be read. It has been left untouched.", {
+          cause: error,
+        });
     }
     this.clis = await Promise.all(
-      (["claude", "codex"] as const).map(async (id) => ({
+      (["claude", "codex", "opencode"] as const).map(async (id) => ({
         id,
         installed: await run(id, ["--version"]).then(
           () => true,
@@ -108,6 +129,16 @@ export class BrainRuntime {
     );
     await this.refreshGithub();
     await this.start();
+    if (this.db?.isRunning)
+      await Promise.all(this.workspaces.map((workspace) => this.ensureWorkspaceGraph(workspace)));
+  }
+  private async ensureWorkspaceGraph(workspace: Workspace) {
+    const graph = this.db!.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
+    await graph.query(
+      "MERGE (brain:Brain {id: $id}) SET brain.name = $name, brain.createdAt = coalesce(brain.createdAt, $createdAt)",
+      { params: { id: workspace.id, name: workspace.name, createdAt: new Date().toISOString() } },
+    );
+    return graph;
   }
   private save() {
     const data = JSON.stringify(
@@ -237,6 +268,7 @@ export class BrainRuntime {
       const knowledge = decodeStoredKnowledge(JSON.parse(row.data));
       const prefix = (id: string) => `${source.id}:${id}`;
       const citation = (path: string) => {
+        if (source.localPath) return path;
         const match = /^(.*):(\d+)$/.exec(path);
         return match
           ? `https://github.com/${source.repository}/blob/${source.commit}/${match[1]!.split("/").map(encodeURIComponent).join("/")}#L${match[2]}`
@@ -287,24 +319,80 @@ export class BrainRuntime {
       ),
     };
   }
-  async command(command: BrainCommand) {
+  command(command: BrainCommand) {
+    const result = this.commands.then(() => this.executeCommand(command));
+    this.commands = result.catch(() => {});
+    return result;
+  }
+  private async executeCommand(command: BrainCommand) {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
-    if (command.action === "read") return;
-    if (command.action === "start") return this.start();
-    if (command.action === "refreshGithub") return this.refreshGithub();
+    if (command.action === "read") return null;
+    if (command.action === "listGithubRepositories") return null;
+    if (command.action === "bindProject")
+      throw new Error("Project connections must be resolved by the server.");
+    if (command.action === "start") {
+      await this.start();
+      return null;
+    }
+    if (command.action === "refreshGithub") {
+      await this.refreshGithub();
+      return null;
+    }
     if (command.action === "create") {
       const name = command.name.trim();
       if (!name || name.length > 80)
         throw new Error("Workspace name must contain 1–80 characters.");
-      this.workspaces.push({ id: NodeCrypto.randomUUID(), name, cli: command.cli, sources: [] });
-      await this.save();
-      return;
+      if (this.workspaces.some((workspace) => workspace.name.toLowerCase() === name.toLowerCase()))
+        throw new Error("A brain with that name already exists.");
+      if (!this.db?.isRunning)
+        throw new Error("The local brain could not be started. Retry after checking the app logs.");
+      if (!this.clis.find((cli) => cli.id === command.cli)?.installed)
+        throw new Error(`Install ${command.cli} before using it to create a brain.`);
+      const workspace: Workspace = {
+        id: NodeCrypto.randomUUID(),
+        name,
+        cli: command.cli,
+        sources: [],
+        projectIds: [],
+      };
+      const graph = await this.ensureWorkspaceGraph(workspace);
+      this.workspaces.push(workspace);
+      try {
+        await this.save();
+      } catch (error) {
+        this.workspaces = this.workspaces.filter((entry) => entry.id !== workspace.id);
+        await graph.delete().catch(() => {});
+        throw error;
+      }
+      return workspace.id;
     }
     const workspace = this.workspace(command.workspaceId);
     if (command.action === "configure") {
+      if (!this.clis.some((cli) => cli.id === command.cli && cli.installed))
+        throw new Error(`Install ${command.cli} before choosing it.`);
+      const previous = workspace.cli;
       workspace.cli = command.cli;
-      await this.save();
-      return;
+      try {
+        await this.save();
+      } catch (error) {
+        workspace.cli = previous;
+        throw error;
+      }
+      return null;
+    }
+    if (command.action === "removeSource") {
+      const source = workspace.sources.find((entry) => entry.id === command.sourceId);
+      if (!source) throw new Error("Source not found.");
+      if (active(source)) throw new Error("Cancel indexing before removing this source.");
+      const previous = workspace.sources;
+      workspace.sources = workspace.sources.filter((entry) => entry !== source);
+      try {
+        await this.save();
+      } catch (error) {
+        workspace.sources = previous;
+        throw error;
+      }
+      return null;
     }
     if (command.action === "cancel") {
       const source = workspace.sources.find((entry) => entry.id === command.sourceId);
@@ -315,25 +403,34 @@ export class BrainRuntime {
         source.message = "Indexing cancelled. The previous index is preserved.";
         await this.save();
       }
-      return;
+      return null;
     }
     if (!this.db?.isRunning)
       throw new Error("Start the local FalkorDB runtime before importing a repository.");
     if (!this.clis.find((cli) => cli.id === workspace.cli)?.installed)
       throw new Error(`Install ${workspace.cli} and refresh the app before indexing.`);
     let source: Source;
-    if (command.action === "import") {
-      const repository = githubRepository(command.repository);
+    let previousSource: Source | undefined;
+    if (command.action === "import" || command.action === "importFolder") {
+      const folder =
+        command.action === "importFolder" ? await this.inspectFolder(command.path) : null;
+      const repository =
+        command.action === "import" ? githubRepository(command.repository) : folder!.repository;
+      const branch = command.action === "import" ? (command.branch?.trim() ?? "") : "";
+      if (branch) await run("git", ["check-ref-format", "--branch", branch]);
       if (
-        workspace.sources.some(
-          (entry) => entry.repository.toLowerCase() === repository.toLowerCase(),
+        workspace.sources.some((entry) =>
+          folder?.localPath
+            ? entry.localPath === folder.localPath
+            : !entry.localPath && entry.repository.toLowerCase() === repository.toLowerCase(),
         )
       )
         throw new Error("That repository is already connected. Use Reindex to update it.");
       source = {
         id: NodeCrypto.randomUUID(),
         repository,
-        branch: "",
+        ...(folder?.localPath ? { localPath: folder.localPath } : {}),
+        branch,
         commit: "",
         revision: "",
         status: "queued",
@@ -341,18 +438,45 @@ export class BrainRuntime {
         indexedAt: null,
       };
       workspace.sources.push(source);
+      if (folder && !folder.hasCommit) {
+        source.status = "waiting";
+        source.message = "Make the first Git commit, then index this source.";
+        try {
+          await this.save();
+        } catch (error) {
+          workspace.sources = workspace.sources.filter((entry) => entry !== source);
+          throw error;
+        }
+        return null;
+      }
     } else {
       const found = workspace.sources.find((entry) => entry.id === command.sourceId);
       if (!found) throw new Error("Source not found.");
       source = found;
       if (this.jobs.has(source.id)) throw new Error("This repository already has an indexing job.");
+      previousSource = { ...source };
       source.status = "queued";
       source.message = "Waiting for the shared indexer…";
     }
+    try {
+      await this.enqueue(workspace, source);
+    } catch (error) {
+      if (previousSource) Object.assign(source, previousSource);
+      else workspace.sources = workspace.sources.filter((entry) => entry !== source);
+      throw error;
+    }
+    return null;
+  }
+  private async enqueue(workspace: Workspace, source: Source) {
     const controller = new AbortController();
     this.jobs.set(source.id, controller);
     const cli = workspace.cli;
-    await this.save();
+    try {
+      await this.save();
+    } catch (error) {
+      this.jobs.delete(source.id);
+      throw error;
+    }
     this.queue = this.queue
       .then(async () => {
         try {
@@ -377,6 +501,111 @@ export class BrainRuntime {
         };
       });
   }
+  private async inspectFolder(path: string) {
+    if (!NodePath.isAbsolute(path))
+      throw new Error("Choose an absolute folder path on this computer.");
+    const localPath = await NodeFSP.realpath(path);
+    if (!(await NodeFSP.stat(localPath)).isDirectory()) throw new Error("Choose a folder.");
+    const origin = await run("git", ["remote", "get-url", "origin"], { cwd: localPath }).catch(
+      () => "",
+    );
+    let repository = NodePath.basename(localPath);
+    let github = false;
+    if (/^(https:\/\/github\.com\/|git@github\.com:)/i.test(origin)) {
+      repository = githubRepository(origin.replace(/^git@github\.com:/i, "https://github.com/"));
+      github = true;
+    }
+    const hasCommit = await run("git", ["rev-parse", "--verify", "HEAD"], { cwd: localPath }).then(
+      () => true,
+      () => false,
+    );
+    return {
+      repository,
+      localPath: github ? undefined : localPath,
+      hasCommit: github || hasCommit,
+    };
+  }
+  /** Resolve the path from T3's project record, never from an agent's arguments. */
+  bindProject(project: { id: ProjectId; workspaceRoot: string }, workspaceId: string | null) {
+    const result = this.commands.then(async () => {
+      if (this.closed) throw new Error("Brain runtime is shutting down.");
+      const workspace = workspaceId ? this.workspace(workspaceId) : null;
+      if (workspace) {
+        const folder = await this.inspectFolder(project.workspaceRoot);
+        const existing = workspace.sources.find((source) =>
+          folder.localPath
+            ? source.localPath === folder.localPath
+            : !source.localPath &&
+              source.repository.toLowerCase() === folder.repository.toLowerCase(),
+        );
+        if (!existing)
+          await this.executeCommand({
+            action: "importFolder",
+            workspaceId: workspace.id,
+            path: project.workspaceRoot,
+          });
+      }
+      const previous = this.workspaces.map((entry) => [...entry.projectIds]);
+      for (const entry of this.workspaces)
+        entry.projectIds = entry.projectIds.filter((id) => id !== project.id);
+      workspace?.projectIds.push(project.id);
+      try {
+        await this.save();
+      } catch (error) {
+        this.workspaces.forEach((entry, i) => {
+          entry.projectIds = previous[i]!;
+        });
+        throw error;
+      }
+    });
+    this.commands = result.catch(() => {});
+    return result;
+  }
+  async projectKnowledge(projectId: ProjectId, query: string) {
+    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    if (!workspace)
+      throw new Error("This project has no brain connected. Choose one on the Brain page.");
+    if (!this.db?.isRunning)
+      throw new Error("The connected brain is unavailable. Reconnect and retry.");
+    const knowledge = await this.readKnowledge(workspace);
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const entities = knowledge.entities
+      .filter(
+        (entry) =>
+          terms.length === 0 ||
+          terms.some((term) =>
+            `${entry.name} ${entry.description} ${entry.kind}`.toLowerCase().includes(term),
+          ),
+      )
+      .slice(0, 40);
+    const ids = new Set(entities.map((entry) => entry.id));
+    return {
+      brain: workspace.name,
+      entities,
+      edges: knowledge.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)),
+      sources: workspace.sources.map(({ repository, status }) => ({ repository, status })),
+    };
+  }
+  async listGithubRepositories() {
+    await this.refreshGithub();
+    if (!this.github.connected)
+      throw new Error(
+        "Connect GitHub in Settings → Source control to browse private repositories.",
+      );
+    const rows = await run("gh", [
+      "api",
+      "user/repos?per_page=100&sort=pushed",
+      "--paginate",
+      "--jq",
+      '.[] | {name: .full_name, private: .private, description: (.description // ""), defaultBranch: (.default_branch // "")}',
+    ]);
+    return decodeGithubRepositories(
+      rows
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).slice(0, 1000);
+  }
   private async index(
     workspace: Workspace,
     source: Source,
@@ -388,9 +617,15 @@ export class BrainRuntime {
     const repoPath = NodePath.join(directory, "repository");
     await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
     source.status = "cloning";
-    source.message = `Cloning ${source.repository} from GitHub…`;
+    source.message = `Reading ${source.repository}…`;
     await this.save();
-    if (this.github.connected)
+    if (source.localPath)
+      await run(
+        "git",
+        ["clone", "--no-local", "--single-branch", "--no-tags", "--", source.localPath, repoPath],
+        { signal, timeout: 5 * 60_000 },
+      );
+    else if (this.github.connected)
       await run(
         "gh",
         [
@@ -403,6 +638,7 @@ export class BrainRuntime {
           "1",
           "--single-branch",
           "--no-tags",
+          ...(source.branch ? ["--branch", source.branch] : []),
         ],
         { signal, timeout: 5 * 60_000 },
       );
@@ -415,6 +651,7 @@ export class BrainRuntime {
           "1",
           "--single-branch",
           "--no-tags",
+          ...(source.branch ? ["--branch", source.branch] : []),
           "--",
           `https://github.com/${source.repository}.git`,
           repoPath,
@@ -424,18 +661,20 @@ export class BrainRuntime {
     const commit = await run("git", ["rev-parse", "HEAD"], { cwd: repoPath, signal });
     const branch = await run("git", ["branch", "--show-current"], { cwd: repoPath, signal });
     source.status = "indexing";
-    source.message = `${cli === "claude" ? "Claude Code" : "Codex"} is building the architecture graph…`;
+    const cliName = cli === "claude" ? "Claude Code" : cli === "codex" ? "Codex" : "OpenCode";
+    source.message = `${cliName} is building the architecture graph…`;
     await this.save();
-    const { knowledge, coverage } = await indexRepository(
+    const { knowledge: indexedKnowledge, coverage } = await indexRepository(
       cli,
       source.repository,
       repoPath,
       NodePath.join(directory, "analysis"),
       signal,
     );
+    const knowledge = { ...indexedKnowledge, memories: [] };
     signal.throwIfAborted();
     source.status = "embedding";
-    source.message = "Creating local embeddings and writing to FalkorDB…";
+    source.message = "Saving knowledge…";
     await this.save();
     const graph = this.db!.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
     for (const entity of knowledge.entities) {
@@ -462,22 +701,6 @@ export class BrainRuntime {
       await graph.query(
         `MATCH (a:BrainEntity {id: $from, sourceId: $sourceId, revision: $revision}), (b:BrainEntity {id: $to, sourceId: $sourceId, revision: $revision}) CREATE (a)-[:${edge.label}]->(b)`,
         { params: { from: edge.from, to: edge.to, sourceId: source.id, revision } },
-      );
-    }
-    for (const memory of knowledge.memories) {
-      const vector = await this.embeddings.embed(`${memory.title}\n${memory.body}`);
-      signal.throwIfAborted();
-      await graph.query(
-        "CREATE (:BrainMemory {id: $id, sourceId: $sourceId, revision: $revision, data: $data, embedding: vecf32($vector)})",
-        {
-          params: {
-            id: memory.id,
-            sourceId: source.id,
-            revision,
-            data: JSON.stringify(memory),
-            vector,
-          },
-        },
       );
     }
     signal.throwIfAborted();
@@ -508,8 +731,13 @@ export class BrainRuntime {
   async drain() {
     await this.queue;
   }
+  /** Test seam for verifying that creation establishes the graph immediately. */
+  async dbGraphNames() {
+    return this.db?.list() ?? [];
+  }
   async close() {
     this.closed = true;
+    await this.commands;
     for (const controller of this.jobs.values()) controller.abort();
     await this.starting;
     await this.queue;

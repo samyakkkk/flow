@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
+import { ProjectId } from "./baseSchemas.ts";
 
-export const BrainCli = Schema.Literals(["claude", "codex"]);
+export const BrainCli = Schema.Literals(["claude", "codex", "opencode"]);
 export type BrainCli = typeof BrainCli.Type;
 export const BrainEntity = Schema.Struct({
   id: Schema.String,
@@ -28,6 +29,7 @@ export type BrainKnowledge = typeof BrainKnowledge.Type;
 export const BrainSource = Schema.Struct({
   id: Schema.String,
   repository: Schema.String,
+  localPath: Schema.optional(Schema.String),
   branch: Schema.String,
   commit: Schema.String,
   revision: Schema.String,
@@ -39,6 +41,7 @@ export const BrainSource = Schema.Struct({
     "ready",
     "error",
     "cancelled",
+    "waiting",
   ]),
   message: Schema.String,
   indexedAt: Schema.NullOr(Schema.String),
@@ -49,6 +52,7 @@ export const BrainWorkspace = Schema.Struct({
   name: Schema.String,
   cli: BrainCli,
   sources: Schema.Array(BrainSource),
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
   knowledge: BrainKnowledge,
 });
 export type BrainWorkspace = typeof BrainWorkspace.Type;
@@ -74,15 +78,32 @@ export const BrainCommand = Schema.Union([
   Schema.Struct({ action: Schema.Literal("read") }),
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({ action: Schema.Literal("refreshGithub") }),
+  Schema.Struct({ action: Schema.Literal("listGithubRepositories") }),
+  Schema.Struct({
+    action: Schema.Literal("bindProject"),
+    workspaceId: Schema.NullOr(Schema.String),
+    projectId: ProjectId,
+  }),
   Schema.Struct({ action: Schema.Literal("create"), name: Schema.String, cli: BrainCli }),
   Schema.Struct({ action: Schema.Literal("configure"), workspaceId: Schema.String, cli: BrainCli }),
   Schema.Struct({
     action: Schema.Literal("import"),
     workspaceId: Schema.String,
     repository: Schema.String,
+    branch: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     action: Schema.Literal("reindex"),
+    workspaceId: Schema.String,
+    sourceId: Schema.String,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("importFolder"),
+    workspaceId: Schema.String,
+    path: Schema.String,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("removeSource"),
     workspaceId: Schema.String,
     sourceId: Schema.String,
   }),
@@ -96,4 +117,16 @@ export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
   error: Schema.NullOr(Schema.String),
+  createdWorkspaceId: Schema.NullOr(Schema.String),
+  repositories: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        private: Schema.Boolean,
+        description: Schema.optional(Schema.String),
+        defaultBranch: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 });
+export type BrainResponse = typeof BrainResponse.Type;

@@ -26,6 +26,8 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useProjectBrainChoice } from "../brain/useProjectBrainChoice";
+import { brainCommand } from "../../state/brain";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -962,6 +964,8 @@ function ImportStep({
 }) {
   const { environments } = useEnvironments();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const connectBrain = useAtomCommand(brainCommand, { reportFailure: false });
+  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const projects = useProjects();
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string> | null>(null);
@@ -1067,6 +1071,12 @@ function ImportStep({
       }
       if (importedProjects.has(candidate.key)) continue;
       let projectId = resolveOnboardingProjectId(readProjects(), environmentId, candidate);
+      const brainChoice = await chooseBrain(environmentId, candidate.title, projectId ?? undefined);
+      if (!brainChoice) {
+        setIsImporting(false);
+        return;
+      }
+      if (importGeneration !== importGenerationRef.current) return;
       if (projectId === null) {
         let attempt = projectAttempts.get(candidate.key);
         if (attempt === undefined) {
@@ -1104,6 +1114,19 @@ function ImportStep({
         }
       }
 
+      {
+        const connection = await connectBrain({
+          environmentId,
+          input: { action: "bindProject", projectId, workspaceId: brainChoice.workspaceId },
+        });
+        if (connection._tag === "Failure" || connection.value.error) {
+          setIsImporting(false);
+          setImportError(
+            "Project saved, but its brain could not be connected. Retry or connect it from the Brain page.",
+          );
+          return;
+        }
+      }
       const threadImportResult = await importThreads({
         environmentId,
         input: { projectId, expectedWorkspaceRoot: candidate.path },
@@ -1181,6 +1204,7 @@ function ImportStep({
       title="Choose your projects"
       description="Import projects and conversations from your selected computers."
     >
+      {brainChoiceDialog}
       {candidates.length > 0 ? (
         <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span role="status">

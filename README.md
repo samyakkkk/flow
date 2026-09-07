@@ -1,9 +1,11 @@
 # Flow
 
 This branch establishes Flow's agent workspace on the T3 Code foundation. It is
-an independent fork, with T3's original Git history retained. The web and desktop interface includes a local Brain backed by native FalkorDB.
-Open **Brain** in the sidebar, create a workspace, choose Claude Code or Codex as
-its default indexing CLI, and connect a GitHub repository. Public repositories
+an independent fork, with T3's original Git history retained. The web and desktop
+interface includes a local Brain backed by native FalkorDB. Open **Brain** in the
+sidebar, use the selector and **New brain** inside that page, and choose Claude Code,
+Codex, or OpenCode as its default indexing CLI. Connect GitHub repositories or a
+local Git folder through the source cards. Public repositories
 work without GitHub sign-in; private repositories use the selected computer's
 existing GitHub CLI sign-in (managed in Settings → Source control).
 
@@ -11,8 +13,17 @@ The first import builds a bounded architecture graph from up to 80 text files,
 validates file citations, creates local EmbeddingGemma vectors, and persists the
 result in FalkorDB. The selected CLI uses its existing provider credentials and
 model settings. This is an initial repository indexing integration; passive
-session memory, incremental indexing, project-to-brain bindings, and cloud brain
-migration are not connected yet.
+session memory, incremental indexing, the Linear/Fireflies/notes/Slack workers,
+and cloud brain migration are not connected yet. Those source cards are marked
+as coming later; the original Flow graph-builder pipeline has not yet replaced
+this bounded indexer.
+
+When adding a project in the web or desktop UI, choose its brain (or create one).
+The repository is registered as a source automatically. Change the connection
+in **Brain → Projects**; disconnecting a project retains the old brain's source.
+New agent sessions use the `brain_search` tool to read their connected brain with
+source citations, independently of browser-control permission. No per-turn
+memory injection is added. Mobile project creation does not yet have a Brain picker.
 
 The root contains T3's web, desktop, mobile, and server applications. The existing
 Flow implementation is preserved under [`flow/`](flow/README.md), including its

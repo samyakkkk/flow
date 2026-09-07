@@ -6,6 +6,7 @@ import { HttpServer } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import { McpInvocationContext, requireMcpCapability } from "./McpInvocationContext.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
@@ -30,6 +31,27 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
       Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
       Effect.provide(NodeServices.layer),
     );
+
+it.effect("a Brain credential cannot control the browser", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("brain-only"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: ["brain"],
+    });
+    const scope = yield* registry.resolve(
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, ""),
+    );
+    expect(scope?.capabilities.has("brain")).toBe(true);
+    expect(scope?.capabilities.has("preview")).toBe(false);
+    const result = yield* requireMcpCapability("preview").pipe(
+      Effect.provideService(McpInvocationContext, scope!),
+      Effect.result,
+    );
+    expect(result._tag).toBe("Failure");
+  }),
+);
 
 it.effect("stores only a token hash, resolves the bearer token, and revokes by thread", () =>
   Effect.gen(function* () {

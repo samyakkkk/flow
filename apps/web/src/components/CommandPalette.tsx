@@ -76,6 +76,8 @@ import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
+import { brainCommand } from "../state/brain";
+import { useProjectBrainChoice } from "./brain/useProjectBrainChoice";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -583,6 +585,8 @@ function OpenCommandPaletteDialog(props: {
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
+  const connectBrain = useAtomCommand(brainCommand, { reportFailure: false });
+  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
     reportFailure: false,
   });
@@ -1711,7 +1715,7 @@ function OpenCommandPaletteDialog(props: {
     title: "Open brain",
     icon: <BrainCircuit className={ITEM_ICON_CLASS} />,
     run: async () => {
-      await navigate({ to: "/brain" });
+      await navigate({ to: "/brain", search: { brain: undefined, environment: undefined } });
     },
   });
 
@@ -1848,7 +1852,32 @@ function OpenCommandPaletteDialog(props: {
         projects.filter((project) => project.environmentId === input.environmentId),
         cwd,
       );
+      const brainChoice = await chooseBrain(
+        input.environmentId,
+        inferProjectTitleFromPath(cwd),
+        existing?.id,
+      );
+      if (!brainChoice) return;
+      const bindBrain = async (projectId: ProjectId) => {
+        const result = await connectBrain({
+          environmentId: input.environmentId,
+          input: { action: "bindProject", projectId, workspaceId: brainChoice.workspaceId },
+        });
+        if (result._tag === "Success" && !result.value.error) return true;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Project saved; brain connection failed",
+            description:
+              result._tag === "Success"
+                ? (result.value.error ?? "Retry from the Brain page.")
+                : "Open the Brain page to connect this project again.",
+          }),
+        );
+        return false;
+      };
       if (existing) {
+        if (!(await bindBrain(existing.id))) return;
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -1906,6 +1935,8 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      if (brainChoice.workspaceId && !(await bindBrain(projectId))) return;
+
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),
       );
@@ -1925,6 +1956,8 @@ function OpenCommandPaletteDialog(props: {
     [
       handleNewThread,
       createProject,
+      connectBrain,
+      chooseBrain,
       environments,
       navigate,
       primaryEnvironmentId,
@@ -2552,95 +2585,101 @@ function OpenCommandPaletteDialog(props: {
   ) : null;
 
   return (
-    <CommandPaletteContent
-      key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
-      aria-label="Command palette"
-      autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
-      footerActionLabel={footerActionLabel}
-      footerTrailing={footerTrailing}
-      inputAccessory={inputAccessory}
-      inputProps={{
-        // The submit button is absolutely positioned over the field, so the
-        // inner input must reserve enough room for the full action label.
-        className:
-          addProjectCloneFlow?.step === "repository"
-            ? "*:data-[slot=autocomplete-input]:pe-32!"
+    <>
+      {brainChoiceDialog}
+      <CommandPaletteContent
+        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
+        aria-label="Command palette"
+        autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
+        footerActionLabel={footerActionLabel}
+        footerTrailing={footerTrailing}
+        inputAccessory={inputAccessory}
+        inputProps={{
+          // The submit button is absolutely positioned over the field, so the
+          // inner input must reserve enough room for the full action label.
+          className:
+            addProjectCloneFlow?.step === "repository"
+              ? "*:data-[slot=autocomplete-input]:pe-32!"
+              : isBrowsing
+                ? browseInputEndPaddingClass({
+                    willCreateProjectPath,
+                    hasHighlightedBrowseItem,
+                  })
+                : undefined,
+          placeholder: inputPlaceholder,
+          wrapperClassName: isSubmenu
+            ? "[&_[data-slot=autocomplete-start-addon]]:pointer-events-auto"
+            : undefined,
+          ...(isSubmenu
+            ? {
+                startAddon: (
+                  <button
+                    type="button"
+                    className="flex cursor-pointer items-center"
+                    aria-label="Back"
+                    onClick={popView}
+                  >
+                    <ArrowLeftIcon />
+                  </button>
+                ),
+              }
             : isBrowsing
-              ? browseInputEndPaddingClass({
-                  willCreateProjectPath,
-                  hasHighlightedBrowseItem,
-                })
-              : undefined,
-        placeholder: inputPlaceholder,
-        wrapperClassName: isSubmenu
-          ? "[&_[data-slot=autocomplete-start-addon]]:pointer-events-auto"
-          : undefined,
-        ...(isSubmenu
-          ? {
-              startAddon: (
-                <button
-                  type="button"
-                  className="flex cursor-pointer items-center"
-                  aria-label="Back"
-                  onClick={popView}
-                >
-                  <ArrowLeftIcon />
-                </button>
-              ),
-            }
-          : isBrowsing
-            ? { startAddon: <FolderPlusIcon /> }
-            : {}),
-        onKeyDown: handleKeyDown,
-      }}
-      mode="none"
-      onItemHighlighted={(value) => {
-        setHighlightedItemValue(typeof value === "string" ? value : null);
-      }}
-      onValueChange={handleQueryChange}
-      panelClassName="max-h-[min(28rem,70vh)]"
-      showBackHint={isSubmenu}
-      value={query}
-    >
-      {remoteProjectContext ? (
-        <div className="p-2 pb-0">
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Repository</div>
-          <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
-            {remoteProjectContext.icon}
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-foreground text-sm">{remoteProjectContext.title}</span>
-              <span className="truncate text-muted-foreground/85 text-xs">
-                {remoteProjectContext.description}
+              ? { startAddon: <FolderPlusIcon /> }
+              : {}),
+          onKeyDown: handleKeyDown,
+        }}
+        mode="none"
+        onItemHighlighted={(value) => {
+          setHighlightedItemValue(typeof value === "string" ? value : null);
+        }}
+        onValueChange={handleQueryChange}
+        panelClassName="max-h-[min(28rem,70vh)]"
+        showBackHint={isSubmenu}
+        value={query}
+      >
+        {remoteProjectContext ? (
+          <div className="p-2 pb-0">
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Repository</div>
+            <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
+              {remoteProjectContext.icon}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-foreground text-sm">
+                  {remoteProjectContext.title}
+                </span>
+                <span className="truncate text-muted-foreground/85 text-xs">
+                  {remoteProjectContext.description}
+                </span>
               </span>
-            </span>
+            </div>
           </div>
-        </div>
-      ) : null}
-      <CommandPaletteResults
-        groups={displayedGroups}
-        highlightedItemValue={highlightedItemValue}
-        isActionsOnly={isActionsOnly}
-        keybindings={keybindings}
-        onExecuteItem={executeItem}
-        {...(addProjectCloneFlow?.step === "repository"
-          ? {
-              emptyStateMessage:
-                addProjectCloneFlow.source === "url"
-                  ? "Enter a Git clone URL and press Enter to continue."
-                  : "Enter a repository path and press Enter to look it up.",
-            }
-          : addProjectCloneFlow?.step === "confirm"
-            ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-            : relativePathNeedsActiveProject
-              ? { emptyStateMessage: "Relative paths require an active project." }
-              : willCreateProjectPath
-                ? {
-                    emptyStateMessage: "Press Enter to create this folder and add it as a project.",
-                  }
-                : threadSearch.isPending
-                  ? { emptyStateMessage: "Searching thread messages…" }
-                  : {})}
-      />
-    </CommandPaletteContent>
+        ) : null}
+        <CommandPaletteResults
+          groups={displayedGroups}
+          highlightedItemValue={highlightedItemValue}
+          isActionsOnly={isActionsOnly}
+          keybindings={keybindings}
+          onExecuteItem={executeItem}
+          {...(addProjectCloneFlow?.step === "repository"
+            ? {
+                emptyStateMessage:
+                  addProjectCloneFlow.source === "url"
+                    ? "Enter a Git clone URL and press Enter to continue."
+                    : "Enter a repository path and press Enter to look it up.",
+              }
+            : addProjectCloneFlow?.step === "confirm"
+              ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+              : relativePathNeedsActiveProject
+                ? { emptyStateMessage: "Relative paths require an active project." }
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage:
+                        "Press Enter to create this folder and add it as a project.",
+                    }
+                  : threadSearch.isPending
+                    ? { emptyStateMessage: "Searching thread messages…" }
+                    : {})}
+        />
+      </CommandPaletteContent>
+    </>
   );
 }

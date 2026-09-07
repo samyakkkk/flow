@@ -6,6 +6,11 @@ import { it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { BrainRuntime } from "./BrainRuntime.ts";
+import { ProjectId, BrainWorkspace } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+const decodeRegistry = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(BrainWorkspace)),
+);
 
 const { index } = vi.hoisted(() => ({ index: vi.fn() }));
 vi.mock("./indexer.ts", () => ({ indexRepository: index }));
@@ -75,9 +80,24 @@ describe("native brain persistence", () => {
           runtimes.push(runtime);
           await runtime.initialize();
           expect((await runtime.state()).database.status).toBe("ready");
-          await runtime.command({ action: "create", name: "First", cli: "claude" });
-          await runtime.command({ action: "create", name: "Second", cli: "codex" });
+          const firstId = await runtime.command({ action: "create", name: "First", cli: "claude" });
+          const secondId = await runtime.command({
+            action: "create",
+            name: "Second",
+            cli: "codex",
+          });
           const [first, second] = (await runtime.state()).workspaces;
+          expect(firstId).toBe(first?.id);
+          expect(secondId).toBe(second?.id);
+          expect(await runtime.dbGraphNames()).toEqual(
+            expect.arrayContaining([
+              `brain_${first!.id.replaceAll("-", "")}`,
+              `brain_${second!.id.replaceAll("-", "")}`,
+            ]),
+          );
+          await expect(
+            runtime.command({ action: "create", name: "first", cli: "claude" }),
+          ).rejects.toThrow("already exists");
           index.mockResolvedValue({ knowledge, coverage: "1 of 1" });
           await runtime.command({
             action: "import",
@@ -139,6 +159,48 @@ describe("native brain persistence", () => {
           await duplicate.initialize();
           expect((await duplicate.state()).database.status).toBe("error");
           expect((await reopened.state()).database.status).toBe("ready");
+          const repoFolder = NodePath.join(directory, "local-repo");
+          await NodeFSP.mkdir(repoFolder);
+          const project = { id: ProjectId.make("project-one"), workspaceRoot: repoFolder };
+          const otherProject = { id: ProjectId.make("project-two"), workspaceRoot: repoFolder };
+          await expect(reopened.bindProject(project, "missing-brain")).rejects.toThrow("not found");
+          await reopened.bindProject(project, first!.id);
+          await reopened.drain();
+          const sourceCount = (await reopened.state()).workspaces[0]!.sources.length;
+          await reopened.bindProject(project, first!.id);
+          await reopened.bindProject(otherProject, first!.id);
+          expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
+          expect((await reopened.projectKnowledge(project.id, "")).brain).toBe("First");
+          await reopened.bindProject(project, second!.id);
+          await reopened.drain();
+          expect((await reopened.projectKnowledge(project.id, "Demo")).brain).toBe("Second");
+          expect((await reopened.projectKnowledge(otherProject.id, "Demo")).brain).toBe("First");
+          expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
+          await reopened.bindProject(project, null);
+          await expect(reopened.projectKnowledge(project.id, "")).rejects.toThrow("no brain");
+          expect(
+            (await reopened.projectKnowledge(otherProject.id, "unknown-nonmatching-term")).entities,
+          ).toHaveLength(0);
+          const registry = decodeRegistry(
+            await NodeFSP.readFile(NodePath.join(directory, "state", "workspaces.json"), "utf8"),
+          );
+          expect(registry[0]!.projectIds).toEqual([otherProject.id]);
+          expect(registry[1]!.projectIds).toEqual([]);
+          const races = await Promise.allSettled([
+            reopened.command({ action: "create", name: "Race", cli: "claude" }),
+            reopened.command({ action: "create", name: "race", cli: "claude" }),
+          ]);
+          expect(races.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+          const localSource = (await reopened.state()).workspaces[0]!.sources.find(
+            (entry) => entry.localPath,
+          );
+          expect(localSource).toBeDefined();
+          await reopened.command({
+            action: "removeSource",
+            workspaceId: first!.id,
+            sourceId: localSource!.id,
+          });
+          expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount - 1);
         });
       }),
     120_000,

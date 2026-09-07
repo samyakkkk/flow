@@ -4434,6 +4434,7 @@ const decodeBrowserAccessThreadShell = Schema.decodeUnknownEffect(OrchestrationT
 
 describe("agent browser access", () => {
   const revokedThreads: Array<ThreadId> = [];
+  const issuedCapabilities = new Map<ThreadId, readonly string[]>();
   const projectId = ProjectId.make("project-browser-access");
 
   const startSessionWith = (
@@ -4502,6 +4503,7 @@ describe("agent browser access", () => {
         issueMcpCredential: (request) =>
           Effect.sync(() => {
             issued.push(request.threadId);
+            issuedCapabilities.set(request.threadId, request.capabilities ?? []);
             return undefined;
           }),
         revokeMcpCredential: (revoked) => Effect.sync(() => void revokedThreads.push(revoked)),
@@ -4539,14 +4541,12 @@ describe("agent browser access", () => {
       return issued;
     });
 
-  // Credential issuance is the observable that matters: it is the only place a
-  // credential is minted, and `/mcp` accepts nothing else, so withholding it is
-  // what actually denies every provider and external MCP client.
-  it.effect("requests no MCP credential when agent browser access is off", () =>
+  it.effect("grants Brain reads without granting browser access when it is off", () =>
     Effect.gen(function* () {
       const issued = yield* startSessionWith(false, asThreadId("thread-browser-off"));
 
-      assert.deepEqual(issued, []);
+      assert.deepEqual(issued, [asThreadId("thread-browser-off")]);
+      assert.deepEqual(issuedCapabilities.get(asThreadId("thread-browser-off")), ["brain"]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -4571,15 +4571,17 @@ describe("agent browser access", () => {
       const issued = yield* startSessionWith(true, threadId);
 
       assert.deepEqual(issued, [threadId]);
+      assert.deepEqual(issuedCapabilities.get(threadId), ["brain", "preview"]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("withholds and revokes MCP credentials when the project disables browser access", () =>
+  it.effect("revokes browser access while retaining Brain reads when the project disables it", () =>
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-off");
       revokedThreads.length = 0;
       const issued = yield* startSessionWith(true, threadId, false);
-      assert.deepEqual(issued, []);
+      assert.deepEqual(issued, [threadId]);
+      assert.deepEqual(issuedCapabilities.get(threadId), ["brain"]);
       assert.deepEqual(revokedThreads, [threadId]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );

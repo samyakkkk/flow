@@ -8,10 +8,10 @@ import {
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
+import { useEnvironments } from "../../state/environments";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -239,6 +239,7 @@ export function SidebarBrainLink() {
     <div className="px-3 pb-2">
       <Link
         to="/brain"
+        search={{ brain: undefined, environment: undefined }}
         onClick={() => {
           if (isMobile) setOpenMobile(false);
         }}
@@ -249,7 +250,6 @@ export function SidebarBrainLink() {
       >
         <BrainCircuit size={15} />
         <span>Brain</span>
-        <span className="ml-auto text-[9px] opacity-60">Local</span>
       </Link>
     </div>
   );
