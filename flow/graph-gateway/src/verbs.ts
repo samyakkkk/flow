@@ -1,3 +1,4 @@
+import { sessionValue } from "./session-context.js";
 import { z } from "zod";
 import { sourceRead, sourceSearch } from "./source.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
@@ -212,7 +213,7 @@ async function findEntityOne(graph: string, q: string, type: string | undefined,
 // param. The orchestrator's family gate is lenient (same product family) so a
 // missing repo just widens eligibility.
 function memoryRepo(): string | null {
-  return process.env.FLOW_REPO || null;
+  return sessionValue("FLOW_REPO") || null;
 }
 
 async function findEntity(input: z.infer<z.ZodObject<typeof findEntityInput>>) {
@@ -669,7 +670,7 @@ async function correctGraph(input: z.infer<z.ZodObject<typeof correctGraphInput>
         evidence,
         repo: input.repo ?? null,
         actor: input.provenance.actor,
-        session: process.env.FLOW_AGENT_SESSION ?? null,
+        session: sessionValue("FLOW_AGENT_SESSION") ?? null,
         graph: input.graph,
       }),
       signal: AbortSignal.timeout(5000),
@@ -711,7 +712,7 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
   if (input.query === undefined && input.queries === undefined) {
     return { status: "error", error: "Pass `query` (single) or `queries` (batch, up to 10)." };
   }
-  const repo = input.repo || process.env.FLOW_REPO || "";
+  const repo = input.repo || sessionValue("FLOW_REPO") || "";
   // Job subprocesses intentionally lack the orchestrator admin token. Their
   // existing gateway credential authenticates retrieval through the gateway.
   const viaGateway = Boolean(process.env.FLOW_JOB_ID && process.env.GRAPH_GATEWAY_URL);
@@ -757,8 +758,8 @@ const rememberInput = {
 };
 
 async function rememberVerb(input: z.infer<z.ZodObject<typeof rememberInput>>) {
-  const repo = input.repo || process.env.FLOW_REPO || "";
-  const branch = input.branch || process.env.FLOW_BRANCH || "";
+  const repo = input.repo || sessionValue("FLOW_REPO") || "";
+  const branch = input.branch || sessionValue("FLOW_BRANCH") || "";
   const url =
     process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/remember") ||
     (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/remember` : "");
@@ -772,7 +773,7 @@ async function rememberVerb(input: z.infer<z.ZodObject<typeof rememberInput>>) {
         text: input.text,
         repo: repo || null,
         branch: branch || null,
-        session: process.env.FLOW_AGENT_SESSION ?? null,
+        session: sessionValue("FLOW_AGENT_SESSION") ?? null,
       }),
       signal: AbortSignal.timeout(5000),
     });
@@ -846,8 +847,8 @@ async function fetchMemoryStats(): Promise<MemoryStats | null> {
 }
 
 async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
-  const repo = input.repo || process.env.FLOW_REPO || "";
-  const branch = input.branch || process.env.FLOW_BRANCH || "";
+  const repo = input.repo || sessionValue("FLOW_REPO") || "";
+  const branch = input.branch || sessionValue("FLOW_BRANCH") || "";
 
   const [repoRows, counts, memStats, orientDocs] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),

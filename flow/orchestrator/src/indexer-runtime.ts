@@ -114,6 +114,7 @@ export function mcpEnv(opts: McpSpecOpts): Record<string, string> {
   }
   if (process.env.JOURNAL_PATH) env.JOURNAL_PATH = process.env.JOURNAL_PATH;
   if (process.env.FALKOR_HOST) env.FALKOR_HOST = process.env.FALKOR_HOST;
+  if (process.env.FALKOR_SOCKET) env.FALKOR_SOCKET = process.env.FALKOR_SOCKET;
   if (process.env.FALKOR_PORT) env.FALKOR_PORT = process.env.FALKOR_PORT;
   if (opts.writeScope) env.FLOW_WRITE_SCOPE = opts.writeScope;
   return env;
@@ -125,7 +126,7 @@ export function mcpServerSpec(opts: McpSpecOpts): {
   args: string[];
   env: Record<string, string>;
 } {
-  return { command: binPath("tsx"), args: [GATEWAY_MCP], env: mcpEnv(opts) };
+  return { command: GATEWAY_MCP.endsWith(".mjs") ? process.execPath : binPath("tsx"), args: [GATEWAY_MCP], env: mcpEnv(opts) };
 }
 
 // Resolve the real, non-Flow-managed CLI executable on the user's machine.

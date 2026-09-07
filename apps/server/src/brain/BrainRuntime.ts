@@ -1,3 +1,9 @@
+// @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
+import {
+  startSessionWorker,
+  type BrainCapture,
+  type BrainSessionContext,
+} from "./session-worker.ts";
 import { prepareNativeFalkor } from "./native.ts";
 // @effect-diagnostics globalDate:off - Persisted wall-clock timestamps at the native adapter boundary.
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
@@ -48,6 +54,16 @@ const active = (source: Source) =>
 /** One owner per T3 installation, shared by every workspace and renderer. */
 export class BrainRuntime {
   private db: FalkorDB | undefined;
+  private sessionWorkers = new Map<
+    string,
+    Promise<Awaited<ReturnType<typeof startSessionWorker>>>
+  >();
+  private sessionBridge: Promise<Awaited<ReturnType<typeof startBuilderBridge>>> | undefined;
+  private captureQueue: Promise<void> = Promise.resolve();
+  private captureRetry: ReturnType<typeof setTimeout> | undefined;
+  private captureBacklog = new Map<string, Workspace>();
+  private captureSequence = 0;
+  private projectRepositories = new Map<string, Promise<string>>();
   private starting: Promise<void> | undefined;
   private database: BrainState["database"] = {
     status: "stopped",
@@ -134,6 +150,7 @@ export class BrainRuntime {
     if (this.db?.isRunning)
       await Promise.all(this.workspaces.map((workspace) => this.ensureWorkspaceGraph(workspace)));
     if (this.db?.isRunning) {
+      for (const workspace of this.workspaces) this.queueCapture(workspace);
       for (const workspace of this.workspaces)
         for (const source of workspace.sources)
           if (source.status === "queued") await this.enqueue(workspace, source);
@@ -433,6 +450,9 @@ export class BrainRuntime {
         workspace.cli = previous;
         throw error;
       }
+      const worker = this.sessionWorkers.get(workspace.id);
+      this.sessionWorkers.delete(workspace.id);
+      if (worker) await (await worker).close();
       return null;
     }
     if (command.action === "removeSource") {
@@ -632,30 +652,145 @@ export class BrainRuntime {
     this.commands = result.catch(() => {});
     return result;
   }
-  async projectKnowledge(projectId: ProjectId, query: string) {
-    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
-    if (!workspace)
-      throw new Error("This project has no brain connected. Choose one on the Brain page.");
-    if (!this.db?.isRunning)
-      throw new Error("The connected brain is unavailable. Reconnect and retry.");
-    const knowledge = await this.readKnowledge(workspace);
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const entities = knowledge.entities
-      .filter(
-        (entry) =>
-          terms.length === 0 ||
-          terms.some((term) =>
-            `${entry.name} ${entry.description} ${entry.kind}`.toLowerCase().includes(term),
-          ),
-      )
-      .slice(0, 40);
-    const ids = new Set(entities.map((entry) => entry.id));
-    return {
-      brain: workspace.name,
-      entities,
-      edges: knowledge.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)),
-      sources: workspace.sources.map(({ repository, status }) => ({ repository, status })),
+  private sessionRepository(root: string) {
+    let repo = this.projectRepositories.get(root);
+    if (!repo) {
+      repo = this.inspectFolder(root).then((folder) => folder.repository);
+      this.projectRepositories.set(root, repo);
+      repo.catch(() => this.projectRepositories.delete(root));
+    }
+    return repo;
+  }
+  projectBrainId(projectId: ProjectId) {
+    return this.workspaces.find((entry) => entry.projectIds.includes(projectId))?.id;
+  }
+  private async sessionWorker(workspace: Workspace) {
+    let pending = this.sessionWorkers.get(workspace.id);
+    if (pending && !(await pending).alive) {
+      this.sessionWorkers.delete(workspace.id);
+      pending = undefined;
+    }
+    if (!pending) {
+      pending = (async () => {
+        if (!this.db?.isRunning || this.closed)
+          throw new Error("The connected brain is unavailable");
+        this.sessionBridge ??= startBuilderBridge(this.embeddings);
+        const bridge = await this.sessionBridge;
+        const directory = NodePath.join(this.directory, "workspaces", workspace.id);
+        await NodeFSP.mkdir(directory, { recursive: true });
+        await this.writeSessionSources(workspace);
+        return startSessionWorker({
+          GRAPH_NAME: `flow_brain_${workspace.id.replaceAll("-", "")}`,
+          FALKOR_SOCKET: this.db.socketPath,
+          FLOW_PROJECT_NAME: workspace.name,
+          DB_PATH: NodePath.join(directory, "flow.db"),
+          JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
+          OPENCODE_WORKSPACE_DIR: directory,
+          FLOW_SOURCE_REGISTRY: NodePath.join(directory, "repos.json"),
+          FLOW_EMBED_URL: bridge.url,
+          FLOW_EMBED_TOKEN: bridge.token,
+          FLOW_ADMIN_TOKEN: NodeCrypto.randomBytes(32).toString("hex"),
+          INDEXER_RUNTIME: workspace.cli,
+        });
+      })();
+      this.sessionWorkers.set(workspace.id, pending);
+      pending.catch(() => {
+        if (this.sessionWorkers.get(workspace.id) === pending)
+          this.sessionWorkers.delete(workspace.id);
+      });
+    }
+    return pending;
+  }
+  private async writeSessionSources(workspace: Workspace) {
+    const directory = NodePath.join(this.directory, "workspaces", workspace.id);
+    await NodeFSP.mkdir(directory, { recursive: true });
+    const registry = {
+      repos: workspace.sources.map((source) => ({
+        name: source.repository,
+        localPath: NodePath.join(directory, "repos", source.repository),
+        branch: source.branch,
+        kind: "code",
+        lastIndexedCommit: source.lastFlowCommit,
+      })),
     };
+    const file = NodePath.join(directory, "repos.json");
+    const temp = `${file}.${NodeCrypto.randomUUID()}.tmp`;
+    await NodeFSP.writeFile(temp, JSON.stringify(registry));
+    await NodeFSP.rename(temp, file);
+  }
+  async callProjectTool(
+    projectId: ProjectId,
+    name: string,
+    args: Record<string, unknown>,
+    context: BrainSessionContext,
+  ) {
+    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    if (!workspace) throw new Error("This project has no connected brain");
+    if (
+      (name === "source_read" || name === "source_search") &&
+      !workspace.sources.some((source) => source.repository === args.repo)
+    )
+      throw new Error("Repository is not a source of the connected brain");
+    await this.writeSessionSources(workspace);
+    const worker = await this.sessionWorker(workspace);
+    if (this.projectBrainId(projectId) !== workspace.id)
+      throw new Error("The project's brain changed. Retry the tool call.");
+    const repo = context.workspaceRoot
+      ? await this.sessionRepository(context.workspaceRoot)
+      : context.repo;
+    return worker.call(name, args, { ...context, ...(repo ? { repo } : {}) });
+  }
+  async captureProjectEvent(projectId: ProjectId, input: BrainCapture) {
+    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    if (!workspace) return;
+    const repo = input.context.workspaceRoot
+      ? await this.sessionRepository(input.context.workspaceRoot)
+      : input.context.repo;
+    input = { ...input, context: { ...input.context, ...(repo ? { repo } : {}) } };
+    const directory = NodePath.join(this.directory, "capture", workspace.id);
+    await NodeFSP.mkdir(directory, { recursive: true });
+    this.captureSequence = Math.max(Date.now() * 1000, this.captureSequence + 1);
+    const file = NodePath.join(directory, `${this.captureSequence}.json`);
+    await NodeFSP.writeFile(file + ".tmp", JSON.stringify(input), { mode: 0o600 });
+    await NodeFSP.rename(file + ".tmp", file);
+    this.queueCapture(workspace);
+  }
+  private queueCapture(workspace: Workspace) {
+    if (this.closed) return;
+    this.captureQueue = this.captureQueue
+      .then(async () => {
+        await this.flushCapture(workspace);
+        this.captureBacklog.delete(workspace.id);
+      })
+      .catch(() => {
+        this.captureBacklog.set(workspace.id, workspace);
+        if (!this.captureRetry && !this.closed) {
+          this.captureRetry = setTimeout(() => {
+            this.captureRetry = undefined;
+            for (const entry of this.captureBacklog.values()) this.queueCapture(entry);
+          }, 5000);
+          this.captureRetry.unref();
+        }
+      });
+  }
+  private async flushCapture(workspace: Workspace) {
+    const directory = NodePath.join(this.directory, "capture", workspace.id);
+    const files = (await NodeFSP.readdir(directory).catch(() => []))
+      .filter((file) => file.endsWith(".json"))
+      .sort();
+    if (!files.length) return;
+    const worker = await this.sessionWorker(workspace);
+    for (const filename of files) {
+      const file = NodePath.join(directory, filename);
+      await worker.capture(JSON.parse(await NodeFSP.readFile(file, "utf8")) as BrainCapture);
+      await NodeFSP.unlink(file);
+    }
+  }
+  async drainCapture() {
+    await this.captureQueue;
+    await Promise.all(
+      [...this.sessionWorkers.values()].map(async (pending) => (await pending).drain()),
+    );
   }
   async listGithubBranches(repository: string) {
     const name = githubRepository(repository);
@@ -810,6 +945,7 @@ export class BrainRuntime {
       source.commit = commit;
       source.branch = branch;
       source.lastFlowCommit = commit;
+      await this.writeSessionSources(workspace);
       source.lastFlowBranch = branch;
       source.revision = revision;
       source.status = "ready";
@@ -834,16 +970,24 @@ export class BrainRuntime {
   }
   async close() {
     this.closed = true;
+    if (this.captureRetry) clearTimeout(this.captureRetry);
     await this.commands;
     for (const controller of this.jobs.values()) controller.abort();
     await this.starting;
     await this.queue;
+    await this.captureQueue;
+    await Promise.allSettled(
+      [...this.sessionWorkers.values()].map(async (worker) => (await worker).close()),
+    );
+    if (this.sessionBridge) await (await this.sessionBridge).close();
     await this.embeddings.close();
     await this.db?.close();
-    if (this.ownsLock)
+    if (this.ownsLock) {
+      this.ownsLock = false;
       await NodeFSP.rm(NodePath.join(this.databasePath, "owner.lock"), {
         recursive: true,
         force: true,
       });
+    }
   }
 }

@@ -1,3 +1,4 @@
+import * as Random from "effect/Random";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -45,6 +46,13 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
+import {
+  makeBrainChatContextLoader,
+  makeBrainChatCapture,
+  captureRuntimeEvent,
+  type BrainChatCapture,
+  type BrainChatContextLoader,
+} from "../../brain/chat-context.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import {
@@ -96,6 +104,8 @@ interface PendingCompaction {
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly loadBrainContext?: BrainChatContextLoader;
+  readonly captureBrainEvent?: BrainChatCapture;
   /**
    * Overrides MCP credential issuance. The real issuer reads a module-global
    * registry that only a running MCP server installs, which makes the
@@ -338,6 +348,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
+  const deliveredBrainBindings = new Map<ThreadId, string>();
+  const captureBrainBindings = new Map<ThreadId, string>();
   const timedOutNativeCompactions = new Set<ThreadId>();
   const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
     Effect.gen(function* () {
@@ -743,6 +755,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
+      deliveredBrainBindings.delete(threadId);
+      captureBrainBindings.delete(threadId);
       const browserEnabled = yield* agentBrowserAccessEnabled(threadId);
       if (!browserEnabled) {
         // Revoke the old token before issuing narrower capabilities. Clearing
@@ -762,16 +776,42 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+          deliveredBrainBindings.delete(threadId);
+          captureBrainBindings.delete(threadId);
+        }),
+      ),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (event.type === "thread.state.changed" && event.payload.state === "compacted")
+            deliveredBrainBindings.delete(event.threadId);
+        }),
+      ),
       Effect.tap((canonicalEvent) =>
         canonicalEventLogger
           ? canonicalEventLogger.write(canonicalEvent, canonicalEvent.threadId)
           : Effect.void,
       ),
+      Effect.tap((canonicalEvent) => {
+        const capture = captureRuntimeEvent(canonicalEvent);
+        return capture &&
+          options?.captureBrainEvent &&
+          captureBrainBindings.has(canonicalEvent.threadId)
+          ? options
+              .captureBrainEvent(
+                canonicalEvent.threadId,
+                capture,
+                captureBrainBindings.get(canonicalEvent.threadId),
+              )
+              .pipe(Effect.catch((error) => Effect.logWarning(error)))
+          : Effect.void;
+      }),
       Effect.flatMap((canonicalEvent) => PubSub.publish(runtimeEventPubSub, canonicalEvent)),
       Effect.asVoid,
     );
@@ -1450,7 +1490,45 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(input);
+            // Resolve the project on the server, even for existing chats. Only a new
+            // provider session or changed binding receives a briefing, never every turn.
+            const brain =
+              options?.loadBrainContext &&
+              parsed.continuation !== true &&
+              !parsed.input?.trimStart().startsWith("/")
+                ? yield* options
+                    .loadBrainContext(input.threadId, deliveredBrainBindings.get(input.threadId))
+                    .pipe(
+                      Effect.mapError(
+                        (message) =>
+                          new ProviderValidationError({
+                            operation: "ProviderService.brainContext",
+                            issue: message,
+                          }),
+                      ),
+                    )
+                : undefined;
+            if (brain) captureBrainBindings.set(input.threadId, brain.bindingKey);
+            if (parsed.input && parsed.continuation !== true && options?.captureBrainEvent) {
+              yield* options
+                .captureBrainEvent(
+                  input.threadId,
+                  {
+                    receipt: `prompt:${[yield* Random.nextInt, yield* Random.nextInt, yield* Random.nextInt, yield* Random.nextInt].join("-")}`,
+                    kind: "user_prompt",
+                    data: { text: parsed.input },
+                  },
+                  captureBrainBindings.get(input.threadId),
+                )
+                .pipe(Effect.catch((error) => Effect.logWarning(error)));
+            }
+            const turn = yield* routed.adapter.sendTurn(
+              brain?.context
+                ? { ...input, input: `${brain.context}\n\n${input.input ?? ""}` }
+                : input,
+            );
+            // A rejected send must retry the same briefing on the next attempt.
+            if (brain) deliveredBrainBindings.set(input.threadId, brain.bindingKey);
             yield* associateTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,
@@ -2094,7 +2172,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
 export const ProviderServiceLive = Layer.effect(
   ProviderService.ProviderService,
-  makeProviderService(),
+  Effect.gen(function* () {
+    const loadBrainContext = yield* makeBrainChatContextLoader();
+    const captureBrainEvent = yield* makeBrainChatCapture();
+    return yield* makeProviderService({ loadBrainContext, captureBrainEvent });
+  }),
 );
 
 export function makeProviderServiceLive(options?: ProviderServiceLiveOptions) {

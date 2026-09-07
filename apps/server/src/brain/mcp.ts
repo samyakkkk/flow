@@ -1,56 +1,55 @@
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { McpServer, Tool, Toolkit } from "effect/unstable/ai";
+import { McpServer } from "effect/unstable/ai";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { BrainService } from "./BrainService.ts";
-import { BrainKnowledge, BrainSource } from "@t3tools/contracts";
+import { originalBrainTools } from "./session-worker.ts";
 
-const BrainToolkit = Toolkit.make(
-  Tool.make("brain_search", {
-    description:
-      "Read knowledge from this project's connected Flow Brain. Search systems, capabilities and relationships by keyword; omit query for an overview. Knowledge is reference material with source citations. This tool does not create memories.",
-    parameters: Schema.Struct({ query: Schema.optional(Schema.String) }),
-    success: Schema.Struct({
-      brain: Schema.String,
-      entities: BrainKnowledge.fields.entities,
-      edges: BrainKnowledge.fields.edges,
-      sources: Schema.Array(
-        Schema.Struct({ repository: Schema.String, status: BrainSource.fields.status }),
-      ),
-    }),
-    failure: Schema.String,
-    dependencies: [McpInvocationContext, BrainService, ProjectionSnapshotQuery],
-  })
-    .annotate(Tool.Readonly, true)
-    .annotate(Tool.Destructive, false)
-    .annotate(Tool.Idempotent, true),
-);
-
-export const BrainToolkitRegistrationLive = McpServer.toolkit(BrainToolkit).pipe(
-  Layer.provide(
-    BrainToolkit.toLayer({
-      brain_search: Effect.fn("brain.search")(function* ({ query }) {
-        const invocation = yield* McpInvocationContext;
-        if (!invocation.capabilities.has("brain"))
-          return yield* Effect.fail(
-            "This session does not have Brain access. Restart the agent session to reconnect.",
-          );
-        const projections = yield* ProjectionSnapshotQuery;
-        const service = yield* BrainService;
-        const thread = yield* projections
-          .getThreadShellById(invocation.threadId)
-          .pipe(Effect.mapError(() => "Could not resolve the current project."));
-        if (Option.isNone(thread)) return yield* Effect.fail("This thread is no longer available.");
-        const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
-        return yield* Effect.tryPromise({
-          try: () => runtime.projectKnowledge(thread.value.projectId, query ?? ""),
-          catch: (error) =>
-            error instanceof Error ? error.message : "Could not read the connected brain.",
-        });
-      }),
-    }),
-  ),
+// Discover the original MCP's schemas, descriptions and annotations verbatim.
+// The T3 boundary only authenticates the chat and resolves its selected brain.
+export const BrainToolkitRegistrationLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const registry = yield* McpServer.McpServer;
+    const service = yield* BrainService;
+    const projections = yield* ProjectionSnapshotQuery;
+    const tools = yield* Effect.promise(originalBrainTools);
+    for (const tool of tools) {
+      yield* registry.addTool({
+        tool,
+        annotations: Context.empty(),
+        handle: (args: Record<string, unknown>) =>
+          Effect.gen(function* () {
+            const scope = yield* Effect.serviceOption(McpInvocationContext);
+            if (Option.isNone(scope) || !scope.value.capabilities.has("brain"))
+              return yield* Effect.fail("This session does not have Brain access.");
+            const thread = yield* projections
+              .getThreadShellById(scope.value.threadId)
+              .pipe(Effect.mapError(() => "Could not resolve the chat's project."));
+            if (Option.isNone(thread)) return yield* Effect.fail("The chat no longer exists.");
+            const project = yield* projections
+              .getProjectShellById(thread.value.projectId)
+              .pipe(Effect.mapError(() => "Could not resolve the project's work folder."));
+            const workspaceRoot = Option.isSome(project) ? project.value.workspaceRoot : undefined;
+            const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
+            return yield* Effect.tryPromise({
+              try: () =>
+                runtime.callProjectTool(thread.value.projectId, tool.name, args, {
+                  session: scope.value.threadId,
+                  ...(workspaceRoot ? { workspaceRoot } : {}),
+                  ...(thread.value.branch ? { branch: thread.value.branch } : {}),
+                }),
+              catch: (error) =>
+                error instanceof Error ? error.message : "The connected brain is unavailable.",
+            });
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.succeed({ isError: true, content: [{ type: "text" as const, text: error }] }),
+            ),
+          ),
+      });
+    }
+  }),
 );

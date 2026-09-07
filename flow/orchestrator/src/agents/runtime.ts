@@ -55,7 +55,7 @@ export interface PromptAttachment {
 const IMAGE_MIME = /^image\//;
 
 export const FLOW_ROOT = fileURLToPath(new URL("../../..", import.meta.url)); // flow/
-export const GATEWAY_MCP = path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
+export const GATEWAY_MCP = process.env.FLOW_GATEWAY_MCP ?? path.join(FLOW_ROOT, "graph-gateway", "src", "mcp.ts");
 
 // npm workspaces hoist bins to the root node_modules; fall back to the
 // orchestrator's own node_modules for non-workspace installs.
@@ -718,7 +718,11 @@ export function appendTranscriptEvents(
   return seq;
 }
 
+let hostedTranscriptReader: ((id: string) => SessionEvent[] | undefined) | undefined;
+export function setHostedTranscriptReader(reader: (id: string) => SessionEvent[] | undefined): void { hostedTranscriptReader = reader; }
 export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
+  const hosted = hostedTranscriptReader?.(id);
+  if (hosted) return hosted.filter(event => event.seq > sinceSeq);
   const p = transcriptPath(id);
   if (!existsSync(p)) return [];
   const out: SessionEvent[] = [];

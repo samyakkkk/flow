@@ -43,12 +43,13 @@ it.effect(
       Effect.gen(function* () {
         const readProjects: string[] = [];
         const runtime = {
-          projectKnowledge: async (id: ProjectId) => {
+          callProjectTool: async (id: ProjectId) => {
             readProjects.push(id);
-            return { brain: "Only project A's brain", entities: [], edges: [], sources: [] };
+            return { content: [{ type: "text", text: "Only project A's brain" }] };
           },
         } as unknown as BrainRuntime;
         const projections = {
+          getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: (id: ThreadId) => {
             expect(id).toBe(scope.threadId);
             return Effect.succeed(Option.some({ projectId } as OrchestrationThreadShell));
@@ -62,14 +63,14 @@ it.effect(
         yield* Effect.gen(function* () {
           const server = yield* McpServer.McpServer;
           const result = yield* server
-            .callTool({ name: "brain_search", arguments: { query: "architecture" } })
+            .callTool({ name: "search_knowledge", arguments: { query: "architecture" } })
             .pipe(
               Effect.provideService(McpSchema.McpServerClient, client),
               Effect.provideService(McpInvocationContext, scope),
             );
           expect(result.isError).not.toBe(true);
           expect(readProjects).toEqual([projectId]);
-          const denied = yield* server.callTool({ name: "brain_search", arguments: {} }).pipe(
+          const denied = yield* server.callTool({ name: "search_knowledge", arguments: {} }).pipe(
             Effect.provideService(McpSchema.McpServerClient, client),
             Effect.provideService(McpInvocationContext, {
               ...scope,

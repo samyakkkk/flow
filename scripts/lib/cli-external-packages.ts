@@ -26,6 +26,9 @@
  * enforced by a test, not by inspection.
  */
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
+  "better-sqlite3",
+  "bindings",
+  "file-uri-to-path",
   // Native Brain runtime and its filesystem dependency closure. Keep these
   // external so binary/module resolution works in the desktop sidecar.
   "@falkordblite/",

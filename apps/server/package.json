@@ -16,7 +16,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/bin.ts",
-    "build:bundle": "vp pack && vp pack src/service-launcher.ts --out-dir dist --no-clean && vp pack ../../flow/graph-gateway/src/mcp.ts --out-dir dist --no-clean && node scripts/copy-brain-assets.mjs",
+    "build:bundle": "vp pack && vp pack src/service-launcher.ts --out-dir dist --no-clean && vp pack ../../flow/graph-gateway/src/mcp.ts --out-dir dist --no-clean && vp pack ../../flow/orchestrator/src/brain-runtime.ts --out-dir dist --no-clean && node scripts/copy-brain-assets.mjs",
     "start": "node dist/bin.mjs",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run"
@@ -37,7 +37,8 @@
     "stream-chain": "^4.2.5",
     "stream-json": "3.6.0",
     "yaml": "catalog:",
-    "yauzl": "^3.4.0"
+    "yauzl": "^3.4.0",
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

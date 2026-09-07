@@ -16,7 +16,31 @@ const decodeRegistry = Schema.decodeUnknownSync(
 
 const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(BrainWorkspace)));
 
-const { index } = vi.hoisted(() => ({ index: vi.fn() }));
+const { index, captureState } = vi.hoisted(() => ({
+  index: vi.fn(),
+  captureState: { fail: false, receipts: [] as unknown[] },
+}));
+vi.mock("./session-worker.ts", async (original) => {
+  const module = await original<typeof import("./session-worker.ts")>();
+  return {
+    ...module,
+    startSessionWorker: async (env: Record<string, string>, catalog?: boolean) => {
+      const worker = await module.startSessionWorker(
+        { ...env, FLOW_DISTILLER: "0", FLOW_SESSION_SEARCH: "0" },
+        catalog,
+        process.env.T3_TEST_BRAIN_ENTRY,
+      );
+      const capture = worker.capture;
+      worker.capture = async (input) => {
+        if (captureState.fail) throw new Error("Simulated unavailable worker");
+        const result = await capture(input);
+        captureState.receipts.push(result);
+        return result;
+      };
+      return worker;
+    },
+  };
+});
 vi.mock("./indexer.ts", () => ({ indexRepository: index }));
 vi.mock("./process.ts", async (original) => ({
   ...(await original<typeof import("./process.ts")>()),
@@ -255,22 +279,105 @@ describe("native brain persistence", () => {
           const otherProject = { id: ProjectId.make("project-two"), workspaceRoot: repoFolder };
           await expect(reopened.bindProject(project, "missing-brain")).rejects.toThrow("not found");
           await reopened.bindProject(project, first!.id);
+          const context = {
+            session: "integration-chat",
+            repo: "octocat/Hello-World",
+            branch: "main",
+          };
+          const orient = await reopened.callProjectTool(project.id, "orient", {}, context);
+          expect(orient.isError).not.toBe(true);
+          expect(
+            orient.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
+          ).toContain("CONNECTED PROJECT");
+          const orientations = await Promise.all(
+            ["alpha-repo", "beta-repo"].map((repo) =>
+              reopened.callProjectTool(project.id, "orient", {}, { ...context, repo }),
+            ),
+          );
+          expect(
+            orientations[0]!.content
+              .flatMap((item) => (item.type === "text" ? [item.text] : []))
+              .join("\n"),
+          ).toContain('repo "alpha-repo"');
+          expect(
+            orientations[1]!.content
+              .flatMap((item) => (item.type === "text" ? [item.text] : []))
+              .join("\n"),
+          ).toContain('repo "beta-repo"');
+          const found = await reopened.callProjectTool(
+            project.id,
+            "find_entity",
+            { q: "Demo" },
+            context,
+          );
+          expect(found.isError).not.toBe(true);
+          expect(
+            found.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
+          ).toContain("Demo");
+          const denied = await reopened.callProjectTool(
+            project.id,
+            "read_query",
+            { graph: "other-brain", cypher: "MATCH (n) RETURN n" },
+            context,
+          );
+          expect(denied.isError).toBe(true);
+          const saved = await reopened.callProjectTool(
+            project.id,
+            "remember",
+            { text: "The integration sentinel uses zebrapotato isolation." },
+            context,
+          );
+          expect(saved.isError).not.toBe(true);
+          await reopened.captureProjectEvent(project.id, {
+            context,
+            receipt: "user-1",
+            kind: "user_prompt",
+            data: { text: "Preserve the complete Flow brain" },
+          });
+          await reopened.captureProjectEvent(project.id, {
+            context,
+            receipt: "user-1",
+            kind: "user_prompt",
+            data: { text: "Preserve the complete Flow brain" },
+          });
+          await reopened.drainCapture();
+          expect(captureState.receipts[0]).toEqual(captureState.receipts[1]);
+          const memory = await reopened.callProjectTool(
+            project.id,
+            "search_knowledge",
+            { query: "zebrapotato" },
+            context,
+          );
+          expect(
+            memory.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
+          ).toContain("zebrapotato");
+
           await reopened.drain();
           const sourceCount = (await reopened.state()).workspaces[0]!.sources.length;
           await reopened.bindProject(project, first!.id);
           await reopened.bindProject(otherProject, first!.id);
           expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
-          expect((await reopened.projectKnowledge(project.id, "")).brain).toBe("First");
+          expect(reopened.projectBrainId(project.id)).toBe(first!.id);
           await reopened.bindProject(project, second!.id);
+          const isolated = await reopened.callProjectTool(
+            project.id,
+            "search_knowledge",
+            { query: "zebrapotato" },
+            context,
+          );
+          expect(
+            isolated.content
+              .flatMap((item) => (item.type === "text" ? [item.text] : []))
+              .join("\n"),
+          ).not.toContain("zebrapotato");
           await reopened.drain();
-          expect((await reopened.projectKnowledge(project.id, "Demo")).brain).toBe("Second");
-          expect((await reopened.projectKnowledge(otherProject.id, "Demo")).brain).toBe("First");
+          expect(reopened.projectBrainId(project.id)).toBe(second!.id);
+          expect(reopened.projectBrainId(otherProject.id)).toBe(first!.id);
           expect((await reopened.state()).workspaces[0]!.sources).toHaveLength(sourceCount);
           await reopened.bindProject(project, null);
-          await expect(reopened.projectKnowledge(project.id, "")).rejects.toThrow("no brain");
-          expect(
-            (await reopened.projectKnowledge(otherProject.id, "unknown-nonmatching-term")).entities,
-          ).toHaveLength(0);
+          await expect(reopened.callProjectTool(project.id, "orient", {}, context)).rejects.toThrow(
+            "no connected brain",
+          );
           const registry = decodeRegistry(
             await NodeFSP.readFile(NodePath.join(directory, "state", "workspaces.json"), "utf8"),
           );
@@ -352,6 +459,17 @@ describe("native brain persistence", () => {
               .find((entry) => entry.id === aliasBrain)
               ?.knowledge.entities.map((node) => node.id),
           ).toEqual(["repo:normalized"]);
+          captureState.fail = true;
+          await reopened.captureProjectEvent(otherProject.id, {
+            context,
+            receipt: "recover-after-crash",
+            kind: "user_prompt",
+            data: { text: "Retain the durable capture" },
+          });
+          await reopened.drainCapture();
+          const spool = NodePath.join(directory, "state", "capture", first!.id);
+          expect((await NodeFSP.readdir(spool)).length).toBeGreaterThan(0);
+          captureState.fail = false;
           await reopened.close();
           runtimes.splice(runtimes.indexOf(reopened), 1);
           const file = NodePath.join(directory, "state", "workspaces.json");
@@ -371,6 +489,19 @@ describe("native brain persistence", () => {
           const beforeRecovery = index.mock.calls.length;
           await recovered.initialize();
           await recovered.drain();
+          await recovered.drainCapture();
+          expect(await NodeFSP.readdir(spool)).toHaveLength(0);
+          const retainedMemory = await recovered.callProjectTool(
+            otherProject.id,
+            "search_knowledge",
+            { query: "zebrapotato" },
+            context,
+          );
+          expect(
+            retainedMemory.content
+              .flatMap((item) => (item.type === "text" ? [item.text] : []))
+              .join("\n"),
+          ).toContain("zebrapotato");
           expect(index.mock.calls.length - beforeRecovery).toBe(1);
           expect((await recovered.state()).workspaces[0]!.sources[0]!.status).toBe("ready");
         });
