@@ -381,7 +381,8 @@ export class BrainRuntime {
   private async executeCommand(command: BrainCommand) {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "read") return null;
-    if (command.action === "listGithubRepositories") return null;
+    if (command.action === "listGithubRepositories" || command.action === "listGithubBranches")
+      return null;
     if (command.action === "bindProject")
       throw new Error("Project connections must be resolved by the server.");
     if (command.action === "start") {
@@ -655,6 +656,24 @@ export class BrainRuntime {
       edges: knowledge.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)),
       sources: workspace.sources.map(({ repository, status }) => ({ repository, status })),
     };
+  }
+  async listGithubBranches(repository: string) {
+    const name = githubRepository(repository);
+    const rows = await run("gh", [
+      "api",
+      `repos/${name}/branches?per_page=100`,
+      "--paginate",
+      "--jq",
+      ".[].name",
+    ]);
+    return [
+      ...new Set(
+        rows
+          .split("\n")
+          .map((branch) => branch.trim())
+          .filter(Boolean),
+      ),
+    ];
   }
   async listGithubRepositories() {
     await this.refreshGithub();

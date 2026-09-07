@@ -16,7 +16,9 @@ import {
   Layers,
   ArrowUp,
   ChevronRight,
-  XIcon,
+  ListIcon,
+  Trash2Icon,
+  LoaderCircle,
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -31,7 +33,7 @@ import {
 } from "../ui/dialog";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
-import type { SendBrainCommand } from "./BrainControls";
+import { BrainSelect, type SendBrainCommand } from "./BrainControls";
 
 const active = (status: string) => ["queued", "cloning", "indexing", "embedding"].includes(status);
 const statusLabel = (status: string) =>
@@ -61,6 +63,12 @@ export function BrainSources({
   busy: boolean;
 }) {
   const [modal, setModal] = useState<"github" | "folder" | null>(null);
+  const [connectedModal, setConnectedModal] = useState<"github" | "folder" | null>(null);
+  const [loadingRepositories, setLoadingRepositories] = useState(false);
+  const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
+  const [branchOptions, setBranchOptions] = useState<Record<string, readonly string[]>>({});
+  const [loadingBranches, setLoadingBranches] = useState<Record<string, boolean>>({});
+  const [branchErrors, setBranchErrors] = useState<Record<string, string>>({});
   const [repository, setRepository] = useState("");
   const [repositories, setRepositories] = useState<NonNullable<BrainResponse["repositories"]>>([]);
   const [branches, setBranches] = useState<Record<string, string>>({});
@@ -78,6 +86,36 @@ export function BrainSources({
     workspace.sources.some(
       (source) => !source.localPath && source.repository.toLowerCase() === name.toLowerCase(),
     );
+  async function loadRepositories() {
+    setLoadingRepositories(true);
+    setError("");
+    try {
+      const result = await send({ action: "listGithubRepositories" }, true);
+      if (result?.repositories) {
+        setRepositories(result.repositories);
+        setRepositoriesLoaded(true);
+      } else setError(result?.error ?? "Could not load repositories. Try again.");
+    } finally {
+      setLoadingRepositories(false);
+    }
+  }
+  async function loadBranches(name: string) {
+    if (loadingBranches[name] || branchOptions[name]) return;
+    setLoadingBranches((current) => ({ ...current, [name]: true }));
+    setBranchErrors((current) => ({ ...current, [name]: "" }));
+    try {
+      const result = await send({ action: "listGithubBranches", repository: name }, true);
+      if (result?.branches)
+        setBranchOptions((current) => ({ ...current, [name]: result.branches! }));
+      else
+        setBranchErrors((current) => ({
+          ...current,
+          [name]: result?.error ?? "Could not load branches.",
+        }));
+    } finally {
+      setLoadingBranches((current) => ({ ...current, [name]: false }));
+    }
+  }
   async function connect(names: string[]) {
     setError("");
     for (const name of names) {
@@ -128,11 +166,7 @@ export function BrainSources({
       action: () => {
         setError("");
         setModal("github");
-        if (state.github.connected && repositories.length === 0)
-          void send({ action: "listGithubRepositories" }).then((result) => {
-            if (result?.repositories) setRepositories(result.repositories);
-            else setError(result?.error ?? "Could not load repositories.");
-          });
+        if (state.github.connected && !repositoriesLoaded) void loadRepositories();
       },
       label: "Connect repositories",
     },
@@ -173,129 +207,78 @@ export function BrainSources({
               </p>
             </div>
             {card.action ? (
-              <Button
-                aria-label={card.label}
-                variant="outline"
-                size="sm"
-                className="w-full text-xs"
-                onClick={card.action}
-              >
-                {card.name === "GitHub Repos" ? "Connect" : "Browse"}
-              </Button>
+              <div className="flex w-full items-center gap-2">
+                <Button
+                  aria-label={card.label}
+                  variant="outline"
+                  size="sm"
+                  className="min-w-0 flex-1 text-xs"
+                  onClick={card.action}
+                >
+                  {card.name === "GitHub Repos" ? "Connect" : "Browse"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label={
+                    card.name === "GitHub Repos"
+                      ? "Connected GitHub repositories"
+                      : "Connected local folders"
+                  }
+                  onClick={() =>
+                    setConnectedModal(card.name === "GitHub Repos" ? "github" : "folder")
+                  }
+                >
+                  <ListIcon size={16} />
+                </Button>
+              </div>
             ) : (
               <span className="text-[11px] text-muted-foreground">Coming later</span>
             )}
           </article>
         ))}
       </div>
-      {workspace.sources.length > 0 && (
-        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
-          {workspace.sources.map((source) => (
-            <article key={source.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-              {source.localPath ? (
-                <Folder size={16} className="text-muted-foreground" />
-              ) : (
-                <Github size={16} className="text-muted-foreground" />
-              )}
-              <div className="min-w-0 flex-1">
-                {source.localPath ? (
-                  <span className="text-sm font-medium">{source.repository}</span>
-                ) : (
-                  <a
-                    href={`https://github.com/${source.repository}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm font-medium hover:underline"
-                  >
-                    {source.repository}
-                  </a>
+      <Dialog
+        open={connectedModal !== null}
+        onOpenChange={(open) => !open && setConnectedModal(null)}
+      >
+        <DialogPopup className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {connectedModal === "github"
+                ? "Connected GitHub repositories"
+                : "Connected local folders"}
+            </DialogTitle>
+            <DialogDescription>
+              Sources connected to {workspace.name}. Reindex to pull the latest committed changes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            {workspace.sources.some(
+              (source) => Boolean(source.localPath) === (connectedModal === "folder"),
+            ) ? (
+              <BrainSourceList
+                sources={workspace.sources.filter(
+                  (source) => Boolean(source.localPath) === (connectedModal === "folder"),
                 )}
-                <p
-                  role="status"
-                  className={`mt-1 break-words text-xs ${source.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
-                >
-                  {source.message}
-                </p>
-                {source.localPath && (
-                  <p className="mt-1 truncate text-xs text-muted-foreground">{source.localPath}</p>
-                )}
-              </div>
-              <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
-                {statusLabel(source.status)}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  void send({
-                    action: active(source.status) ? "cancel" : "reindex",
-                    workspaceId: workspace.id,
-                    sourceId: source.id,
-                  })
-                }
-              >
-                {active(source.status)
-                  ? "Cancel"
-                  : source.status === "ready"
-                    ? "Reindex"
-                    : source.status === "waiting"
-                      ? "Index"
-                      : "Retry"}
-              </Button>
-              {!active(source.status) && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove ${source.repository} from brain`}
-                  disabled={busy}
-                  onClick={() =>
-                    void send({
-                      action: "removeSource",
-                      workspaceId: workspace.id,
-                      sourceId: source.id,
-                    })
-                  }
-                >
-                  <XIcon size={14} />
-                </Button>
-              )}
-              {(active(source.status) || source.activity || source.summary) && (
-                <details className="w-full min-w-0 rounded-md border border-border bg-background px-3 py-2 text-xs">
-                  <summary className="cursor-pointer text-muted-foreground">
-                    Logs
-                    {source.activity
-                      ? ` · ${source.activity.filesRead} files read · ${source.activity.graphWrites} graph writes`
-                      : ""}
-                  </summary>
-                  <div className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">
-                    {source.activity?.events.length ? (
-                      source.activity.events.map((event) => (
-                        <div key={event.seq} className="py-0.5">
-                          {new Date(event.ts).toLocaleTimeString()} · {event.label}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-muted-foreground">
-                        {source.status === "queued"
-                          ? "Waiting for the shared indexer…"
-                          : active(source.status)
-                            ? "Waiting for indexer activity…"
-                            : "No tool activity recorded for this run."}
-                      </p>
-                    )}
-                  </div>
-                  {source.summary && !active(source.status) && (
-                    <p className="mt-3 whitespace-pre-wrap break-words text-muted-foreground">
-                      {source.summary}
-                    </p>
-                  )}
-                </details>
-              )}
-            </article>
-          ))}
-        </div>
-      )}
+                workspaceId={workspace.id}
+                send={send}
+                busy={busy}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No {connectedModal === "github" ? "GitHub repositories" : "local folders"} connected
+                yet.
+              </p>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConnectedModal(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
       <Dialog
         open={modal !== null}
         onOpenChange={(open) => {
@@ -345,16 +328,10 @@ export function BrainSources({
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={busy}
-                    onClick={() => {
-                      setError("");
-                      void send({ action: "listGithubRepositories" }).then((result) => {
-                        if (result?.repositories) setRepositories(result.repositories);
-                        else setError(result?.error ?? "Could not load repositories.");
-                      });
-                    }}
+                    disabled={loadingRepositories}
+                    onClick={() => void loadRepositories()}
                   >
-                    Browse repositories
+                    {loadingRepositories ? "Loading repositories…" : "Browse repositories"}
                   </Button>
                   {!state.github.connected && (
                     <Link to="/settings/source-control" className="text-xs underline">
@@ -362,6 +339,19 @@ export function BrainSources({
                     </Link>
                   )}
                 </div>
+                {loadingRepositories && (
+                  <div
+                    role="status"
+                    className="flex items-center gap-2 rounded-lg border border-border p-4 text-sm text-muted-foreground"
+                  >
+                    <LoaderCircle size={16} /> Loading repositories…
+                  </div>
+                )}
+                {repositoriesLoaded && !loadingRepositories && repositories.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No repositories found for this account.
+                  </p>
+                )}
                 {repositories.length > 0 && (
                   <>
                     <Input
@@ -380,14 +370,16 @@ export function BrainSources({
                                 type="checkbox"
                                 disabled={busy || connected(repo.name)}
                                 checked={connected(repo.name) || selected.has(repo.name)}
-                                onChange={(event) =>
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
                                   setSelected((current) => {
                                     const next = new Set(current);
-                                    if (event.target.checked) next.add(repo.name);
+                                    if (checked) next.add(repo.name);
                                     else next.delete(repo.name);
                                     return next;
-                                  })
-                                }
+                                  });
+                                  if (checked) void loadBranches(repo.name);
+                                }}
                               />
                               <span className="min-w-0 flex-1 truncate">{repo.name}</span>
                               <span className="text-xs text-muted-foreground">
@@ -404,21 +396,47 @@ export function BrainSources({
                               </p>
                             )}
                             {selected.has(repo.name) && !connected(repo.name) && (
-                              <label className="flex items-center gap-2 pl-6 text-xs text-muted-foreground">
-                                Branch
-                                <Input
-                                  aria-label={`Branch for ${repo.name}`}
-                                  size="sm"
-                                  value={branches[repo.name] ?? repo.defaultBranch ?? ""}
-                                  onChange={(event) =>
-                                    setBranches((current) => ({
-                                      ...current,
-                                      [repo.name]: event.target.value,
-                                    }))
-                                  }
-                                  placeholder="Default branch"
-                                />
-                              </label>
+                              <div className="space-y-2 pl-6 text-xs text-muted-foreground">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  Branch
+                                  <BrainSelect
+                                    label={`Branch for ${repo.name}`}
+                                    disabled={busy || Boolean(loadingBranches[repo.name])}
+                                    value={branches[repo.name] ?? repo.defaultBranch ?? ""}
+                                    options={[
+                                      ...new Set([
+                                        repo.defaultBranch || "",
+                                        ...(branchOptions[repo.name] ?? []),
+                                      ]),
+                                    ].map((branch) => ({
+                                      value: branch,
+                                      label: branch
+                                        ? `${branch}${branch === repo.defaultBranch ? " (default)" : ""}`
+                                        : "Default branch",
+                                    }))}
+                                    onChange={(branch) =>
+                                      setBranches((current) => ({
+                                        ...current,
+                                        [repo.name]: branch,
+                                      }))
+                                    }
+                                  />
+                                  {loadingBranches[repo.name] && (
+                                    <span role="status">Loading branches…</span>
+                                  )}
+                                </div>
+                                {branchErrors[repo.name] && (
+                                  <p role="alert" className="text-destructive">
+                                    {branchErrors[repo.name]}{" "}
+                                    <button
+                                      className="underline"
+                                      onClick={() => void loadBranches(repo.name)}
+                                    >
+                                      Retry
+                                    </button>
+                                  </p>
+                                )}
+                              </div>
                             )}
                           </div>
                         ))}
@@ -519,6 +537,155 @@ export function BrainSources({
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+    </section>
+  );
+}
+
+export function BrainSourceList({
+  sources,
+  workspaceId,
+  send,
+  busy,
+}: {
+  sources: BrainWorkspace["sources"];
+  workspaceId: string;
+  send: SendBrainCommand;
+  busy: boolean;
+}) {
+  return (
+    <>
+      {sources.length > 0 && (
+        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          {sources.map((source) => (
+            <article key={source.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+              {source.localPath ? (
+                <Folder size={16} className="text-muted-foreground" />
+              ) : (
+                <Github size={16} className="text-muted-foreground" />
+              )}
+              <div className="min-w-0 flex-1">
+                {source.localPath ? (
+                  <span className="text-sm font-medium">{source.repository}</span>
+                ) : (
+                  <a
+                    href={`https://github.com/${source.repository}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm font-medium hover:underline"
+                  >
+                    {source.repository}
+                  </a>
+                )}
+                <p
+                  role="status"
+                  className={`mt-1 break-words text-xs ${source.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                >
+                  {source.message}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {source.branch || "Default branch"} ·{" "}
+                  {source.indexedAt
+                    ? `Last indexed ${new Date(source.indexedAt).toLocaleString()}`
+                    : "Not indexed yet"}
+                </p>
+                {source.localPath && (
+                  <p className="mt-1 truncate text-xs text-muted-foreground">{source.localPath}</p>
+                )}
+              </div>
+              <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                {statusLabel(source.status)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void send({
+                    action: active(source.status) ? "cancel" : "reindex",
+                    workspaceId,
+                    sourceId: source.id,
+                  })
+                }
+              >
+                {active(source.status)
+                  ? "Cancel"
+                  : source.status === "ready"
+                    ? "Reindex"
+                    : source.status === "waiting"
+                      ? "Index"
+                      : "Retry"}
+              </Button>
+              {!active(source.status) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Delete ${source.repository} from brain`}
+                  disabled={busy}
+                  onClick={() =>
+                    void send({
+                      action: "removeSource",
+                      workspaceId,
+                      sourceId: source.id,
+                    })
+                  }
+                >
+                  <Trash2Icon size={14} />
+                </Button>
+              )}
+              {(active(source.status) || source.activity || source.summary) && (
+                <details className="w-full min-w-0 rounded-md border border-border bg-background px-3 py-2 text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">
+                    Logs
+                    {source.activity
+                      ? ` · ${source.activity.filesRead} files read · ${source.activity.graphWrites} graph writes`
+                      : ""}
+                  </summary>
+                  <div className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">
+                    {source.activity?.events.length ? (
+                      source.activity.events.map((event) => (
+                        <div key={event.seq} className="py-0.5">
+                          {new Date(event.ts).toLocaleTimeString()} · {event.label}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground">
+                        {source.status === "queued"
+                          ? "Waiting for the shared indexer…"
+                          : active(source.status)
+                            ? "Waiting for indexer activity…"
+                            : "No tool activity recorded for this run."}
+                      </p>
+                    )}
+                  </div>
+                  {source.summary && !active(source.status) && (
+                    <p className="mt-3 whitespace-pre-wrap break-words text-muted-foreground">
+                      {source.summary}
+                    </p>
+                  )}
+                </details>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+export function BrainIndexing({
+  workspace,
+  send,
+  busy,
+}: {
+  workspace: BrainWorkspace;
+  send: SendBrainCommand;
+  busy: boolean;
+}) {
+  const sources = workspace.sources.filter((source) => active(source.status));
+  if (!sources.length) return null;
+  return (
+    <section aria-label="Active indexing">
+      <BrainSourceList sources={sources} workspaceId={workspace.id} send={send} busy={busy} />
     </section>
   );
 }

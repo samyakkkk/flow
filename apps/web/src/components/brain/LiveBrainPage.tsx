@@ -15,7 +15,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { useProjects } from "../../state/entities";
 import type { BrainSnapshot } from "../../brain/repository";
 import { BrainPage } from "./BrainPage";
-import { BrainSources } from "./BrainSources";
+import { BrainSources, BrainIndexing } from "./BrainSources";
 import { BrainSelect, CreateBrainDialog, cliName } from "./BrainControls";
 import { Button } from "../ui/button";
 import {
@@ -119,7 +119,7 @@ function BrainController({
     async (input: BrainCommand, background = false): Promise<BrainResponse | null> => {
       if (!environmentId) return null;
       while (pending.current) {
-        if (background) return null;
+        if (background && input.action === "read") return null;
         await pending.current.catch(() => {});
       }
       if (!mounted.current) return null;
@@ -191,6 +191,7 @@ function BrainController({
         loading={!state && Boolean(environmentId) && !error}
         error={error ?? selectionError}
         onCreate={() => setCreateOpen(true)}
+        indexing={workspace && <BrainIndexing workspace={workspace} send={send} busy={busy} />}
         toolbar={
           <header className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-3">

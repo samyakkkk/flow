@@ -15,6 +15,7 @@ export function BrainPage({
   loading,
   error,
   toolbar,
+  indexing,
   children,
   onCreate,
 }: {
@@ -24,6 +25,7 @@ export function BrainPage({
   loading: boolean;
   error: string | null;
   toolbar: ReactNode;
+  indexing: ReactNode;
   children: ReactNode;
   onCreate: () => void;
 }) {
@@ -113,6 +115,7 @@ export function BrainPage({
               </div>
             )}
           </section>
+          {hasBrain && indexing}
           {hasBrain && children}
         </div>
       </main>

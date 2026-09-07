@@ -101,6 +101,7 @@ export const BrainCommand = Schema.Union([
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({ action: Schema.Literal("refreshGithub") }),
   Schema.Struct({ action: Schema.Literal("listGithubRepositories") }),
+  Schema.Struct({ action: Schema.Literal("listGithubBranches"), repository: Schema.String }),
   Schema.Struct({
     action: Schema.Literal("bindProject"),
     workspaceId: Schema.NullOr(Schema.String),
@@ -140,6 +141,7 @@ export const BrainResponse = Schema.Struct({
   state: BrainState,
   error: Schema.NullOr(Schema.String),
   createdWorkspaceId: Schema.NullOr(Schema.String),
+  branches: Schema.optional(Schema.Array(Schema.String)),
   repositories: Schema.optional(
     Schema.Array(
       Schema.Struct({

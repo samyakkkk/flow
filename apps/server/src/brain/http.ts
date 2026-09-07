@@ -25,7 +25,9 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
       Effect.fn("environment.brain.request")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         yield* requireEnvironmentScope(
-          ["read", "listGithubRepositories"].includes(args.payload.command.action)
+          ["read", "listGithubRepositories", "listGithubBranches"].includes(
+            args.payload.command.action,
+          )
             ? AuthOrchestrationReadScope
             : AuthOrchestrationOperateScope,
         );
@@ -42,6 +44,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
         return yield* Effect.tryPromise(async () => {
           let error: string | null = null;
           let createdWorkspaceId: string | null = null;
+          let branches: string[] | undefined;
           let repositories: { name: string; private: boolean }[] | undefined;
           try {
             if (command.action === "bindProject") {
@@ -52,6 +55,8 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
               await runtime.bindProject(project.value, command.workspaceId);
             } else if (command.action === "listGithubRepositories") {
               repositories = await runtime.listGithubRepositories();
+            } else if (command.action === "listGithubBranches") {
+              branches = await runtime.listGithubBranches(command.repository);
             } else createdWorkspaceId = await runtime.command(command);
           } catch (cause) {
             error = cause instanceof Error ? cause.message : "Brain operation failed.";
@@ -60,6 +65,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
             state: await runtime.state(),
             error,
             createdWorkspaceId,
+            ...(branches ? { branches } : {}),
             ...(repositories ? { repositories } : {}),
           };
         }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));

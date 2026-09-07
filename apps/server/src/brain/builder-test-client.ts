@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Test-only stdio MCP client for the original gateway process.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
-import * as NodeEvents from "node:events";
 import { builderMcpCommand } from "./builder-assets.ts";
 import type { BuilderContext } from "./indexer.ts";
 
@@ -77,7 +76,7 @@ export async function builderTestClient(context: BuilderContext) {
       return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
     },
     async close() {
-      const exited = NodeEvents.once(child, "close");
+      const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
       child.stdin.end();
       await exited;
       lines.close();
