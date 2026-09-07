@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useMode } from "@/lib/useMode";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
 import { Button } from "@/components/ui";
@@ -81,6 +82,8 @@ export function AgentTaskComposer({
   worktreeTarget = null,
   onClearWorktreeTarget,
 }: AgentTaskComposerProps) {
+  const { mode, loading: modeLoading } = useMode();
+  const cloud = mode === "prod";
   const router = useRouter();
   const { prefix } = useProject();
 
@@ -131,6 +134,19 @@ export function AgentTaskComposer({
 
   // Load available agents, repos, and registered work folders
   const refresh = useCallback(async () => {
+    if (modeLoading) return;
+    if (cloud) {
+      try {
+        const response = await fetch(prefix("/api/cloud/tasks"));
+        if (!response.ok) throw new Error("Could not load server repositories");
+        const data = await response.json();
+        setRepos(data.repos.map((r: { name: string }) => ({ name: r.name, cloned: true })));
+        setRepo(prev => prev || data.repos[0]?.name || "");
+        setAgents([{ id: "opencode", name: "OpenCode", installed: true }]);
+        setBackend("opencode");
+      } catch (e) { setError((e as Error).message); }
+      return;
+    }
     try {
       const res = await fetch(prefix("/api/agents"));
       if (!res.ok) return;
@@ -164,7 +180,7 @@ export function AgentTaskComposer({
     } catch {
       // swallow
     }
-  }, [prefix, workFolder]);
+  }, [prefix, workFolder, cloud, modeLoading]);
 
   useEffect(() => {
     refresh();
@@ -173,7 +189,7 @@ export function AgentTaskComposer({
   // Probe the selected backend's advertised options (model selector, thought
   // toggles, modes) via a scratch ACP session in the orchestrator.
   useEffect(() => {
-    if (!backend) return;
+    if (!backend || cloud || modeLoading) return;
     let cancelled = false;
     setOptionsLoading(true);
     setConfigOptions([]);
@@ -207,7 +223,7 @@ export function AgentTaskComposer({
     return () => {
       cancelled = true;
     };
-  }, [backend, prefix]);
+  }, [backend, prefix, cloud, modeLoading]);
 
   const handleConfigChange = useCallback((configId: string, value: string | boolean) => {
     setConfigValues((v) => ({ ...v, [configId]: value }));
@@ -258,6 +274,7 @@ export function AgentTaskComposer({
 
   // Handle image / file attachments
   const processFiles = async (files: File[]) => {
+    if (cloud) { setError("Cloud task attachments are not supported yet. Upload repository env files on the home page."); return; }
     const newAtts: Attachment[] = [];
     for (const file of files) {
       if (file.size > 15 * 1024 * 1024) {
@@ -319,7 +336,7 @@ export function AgentTaskComposer({
     e?.preventDefault();
     if (!prompt.trim() || starting) return;
 
-    if (!workFolder && !worktreeTarget) {
+    if (!cloud && !workFolder && !worktreeTarget) {
       setError("Please choose a local folder to run the agent task in.");
       setIsFolderPickerOpen(true);
       return;
@@ -330,6 +347,13 @@ export function AgentTaskComposer({
     setCollision(null);
 
     try {
+      if (cloud) {
+        const response = await fetch(prefix("/api/cloud/tasks"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: repo ? `Repository: ${repo}\n\n${prompt.trim()}` : prompt.trim(), conversation: { source: "dashboard", id: crypto.randomUUID() } }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not start cloud task");
+        router.push(prefix(`/agents/cloud-${data.id}`));
+        return;
+      }
       // A copy target runs the session inside that existing separate copy —
       // no work folder, no placement, no collision prompt.
       const target = worktreeTarget
@@ -384,7 +408,11 @@ export function AgentTaskComposer({
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {/* Target — TOP LEFT: an existing separate copy when one is picked
             ("+ new session" on a copy card), otherwise the local folder. */}
-        {worktreeTarget ? (
+        {cloud ? (
+          <label className="flex items-center gap-2 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line text-[11px] font-mono">
+            <span>📁</span><select aria-label="Server repository" value={repo} onChange={e => setRepo(e.target.value)} className="bg-transparent text-ink outline-none"><option value="">All repositories</option>{repos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}</select><span className="text-text-muted">server</span>
+          </label>
+        ) : worktreeTarget ? (
           <div className="flex items-center gap-1.5 bg-cream/70 px-2.5 py-1.5 rounded-lg border border-line min-w-0 max-w-[45%]">
             <span className="text-xs">⎇</span>
             <span className="text-[11px] font-mono text-ink truncate flex-1" title={worktreeTarget.path}>
@@ -572,7 +600,8 @@ export function AgentTaskComposer({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-line bg-cream text-[11.5px] text-text-muted hover:text-ink transition font-mono cursor-pointer"
-              title="Attach images or context files"
+              disabled={cloud}
+              title={cloud ? "Cloud task attachments are not supported yet" : "Attach images or context files"}
             >
               <span>📎</span>
               <span>Attach</span>
@@ -581,7 +610,7 @@ export function AgentTaskComposer({
 
           {/* ACP config pills — CENTER (model name + mode/effort toggles) */}
           <div className="min-w-0 flex-1 flex justify-center">
-            {optionsLoading ? (
+            {cloud ? <span className="text-[10.5px] text-text-muted font-mono">Server defaults · queued execution</span> : optionsLoading ? (
               <span className="text-[10.5px] text-text-muted font-mono animate-pulse">
                 Loading agent options…
               </span>
@@ -604,7 +633,7 @@ export function AgentTaskComposer({
             <Button
               type="submit"
               variant="primary"
-              disabled={!prompt.trim() || starting || !backend}
+              disabled={!prompt.trim() || starting || !backend || modeLoading}
               arrow
               className="py-1.5 px-4 text-[12.5px] font-medium"
             >

@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Shell } from "@/components/Shell";
 import { KeyGate } from "@/components/KeyGate";
 import { BrainCanvas } from "@/components/BrainCanvas";
+import { RepoEnvPanel } from "@/components/CloudAgents";
 import { AgentPanel } from "@/components/AgentPanel";
 import { IntegrationCatalog } from "@/components/IntegrationCatalog";
 import { CodingToolsPanel } from "@/components/CodingToolsPanel";
@@ -266,6 +267,11 @@ export default function HomePage() {
             mode={mode}
             onChanged={() => void loadAll()}
           />
+          {mode === "prod" && reposWithStatus.length > 0 && <section className="mt-5 rounded-xl border border-line bg-paper p-4">
+            <Heading as="h3" variant="card">Repository environments</Heading>
+            <p className="my-2 text-sm text-text-muted">Configure env files for server tasks in each repository.</p>
+            {reposWithStatus.filter(repo => repo.kind !== "docs").map(repo => <div key={repo.name} className="mt-3"><p className="mb-2 text-sm font-medium">{repo.name}</p><RepoEnvPanel repo={repo.name} /></div>)}
+          </section>}
         </div>
 
         {/* 3. THE INTERFACE DECISION: use Flow in your own AI tools (left) —

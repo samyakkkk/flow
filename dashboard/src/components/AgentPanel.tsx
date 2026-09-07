@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useMode } from "@/lib/useMode";
+import { cloudSessionRow } from "@/lib/cloudAgentView";
 import Link from "next/link";
 import { useProject } from "@/lib/useProject";
 import { BodyText, Heading, StatusPill } from "@/components/ui";
@@ -41,6 +43,7 @@ function statusKind(status: string): "live" | "ok" | "warn" | "idle" {
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
+    queued: "Queued",
     starting: "Starting",
     running: "Working",
     waiting: "Needs approval",
@@ -60,20 +63,23 @@ function timeAgo(ts: number): string {
 }
 
 export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: AgentPanelProps) {
+  const { mode, loading: modeLoading } = useMode();
+  const cloud = mode === "prod";
   const { prefix } = useProject();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
 
   const refreshSessions = useCallback(async () => {
+    if (modeLoading) return;
     try {
-      const res = await fetch(prefix("/api/agents/sessions"));
+      const res = await fetch(prefix(cloud ? "/api/cloud/tasks" : "/api/agents/sessions"));
       if (res.ok) {
         const data = await res.json();
-        setSessions(data.sessions ?? []);
+        setSessions(cloud ? data.tasks.map(cloudSessionRow) : data.sessions ?? []);
       }
     } catch {
       // swallow
     }
-  }, [prefix]);
+  }, [prefix, cloud, modeLoading]);
 
   useEffect(() => {
     refreshSessions();
@@ -92,8 +98,7 @@ export function AgentPanel({ nodeCount, selectedNodeTag, onClearNodeTag }: Agent
             Or run agents right here
           </Heading>
           <BodyText className="mt-1">
-            Same brain, your own subscriptions — tasks run on the CLIs already installed on your
-            machine. The only difference is which interface you drive from.
+            {cloud ? "The same brain, with tasks running in separate worktrees on this server. Follow progress here or continue the conversation in Slack." : "Same brain, your own subscriptions — tasks run on the CLIs already installed on your machine. The only difference is which interface you drive from."}
           </BodyText>
         </div>
 

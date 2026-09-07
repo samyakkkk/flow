@@ -1,3 +1,4 @@
+import { validateImagePaths } from "./slack-agent/images.js";
 // opencode.ts — Job queue for opencode sessions: index_repo | enrich | answer | continue | correct_graph.
 //
 // Real runs spawn `opencode run --format json` so we can parse the sessionID from the
@@ -36,9 +37,12 @@ import { track } from "./telemetry.js";
 import { resolveGithubDefaultBranch } from "./repo-branch.js";
 import {
   bindConversation, cloudMode, conversationKey, conversationSession, ensureConversation,
-  slackConversation, type ConversationRef,
+  slackConversation, cloudTaskTimeoutMs, restoreConversationWorktrees, reconcileConversation, withConversationTurn, ensureConversationWorktree, conversationRepos, type ConversationRef,
 } from "./agents/cloud-workspaces.js";
-import { cloudOpencodeConfig } from "./agents/cloud-tool-policy.js";
+import { cloudGitIdentity, cloudOpencodeConfig, cloudShellVerificationFailed, createCloudToolPolicy } from "./agents/cloud-tool-policy.js";
+import { releaseCodingSlot, requestCodingSlot, attachCodingChild } from "./agents/coding-slot.js";
+import { redactCloudText } from "./agents/repo-env.js";
+import { recordCloudEvent } from "./agents/cloud-events.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -110,6 +114,8 @@ export interface Job {
   result_json?: string;
   repo?: string;
   notify_count: number;
+  created_at?: number;
+  updated_at?: number;
   session_id?: string;
 }
 
@@ -666,15 +672,15 @@ function normalizeCloudJob(opts: JobInput, id: string): JobInput {
 
 // Serialize complete turns (not just process starts) within each conversation.
 // Other conversations continue independently. A failed turn releases the queue.
-const conversationTurns = new Map<string, Promise<void>>();
 function scheduleJob(id: string, opts: JobInput): void {
   const key = opts.input.conversation_key;
   if (!cloudMode() || typeof key !== "string" || !["answer", "continue"].includes(opts.type)) {
     void runJob(id, opts);
     return;
   }
-  const previous = conversationTurns.get(key) ?? Promise.resolve();
-  const turn = previous.then(async () => {
+  void withConversationTurn(key, async () => {
+    if (getJob(id)?.status !== "queued") return;
+    await restoreConversationWorktrees(key, true);
     if (getJob(id)?.status !== "queued") return;
     // Resolve at execution time: the preceding turn may only just have created
     // its session, or may have failed after emitting its first session event.
@@ -686,8 +692,6 @@ function scheduleJob(id: string, opts: JobInput): void {
   }).catch((err) => {
     updateJob.run({ id, status: "failed", result_json: JSON.stringify({ error: String(err) }) });
   });
-  conversationTurns.set(key, turn);
-  void turn.then(() => { if (conversationTurns.get(key) === turn) conversationTurns.delete(key); });
 }
 
 // One normalization boundary for every index entry point. Explicit input wins;
@@ -801,7 +805,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
 
     let runResult: { result: unknown; sessionId: string };
 
-    if (process.env.FLOW_FAKE_OPENCODE) {
+    if (cloudMode() && opts.input.manual_command) {
+      runResult = await runCloudCommand(opts, id);
+    } else if (process.env.FLOW_FAKE_OPENCODE) {
       runResult = await runFakeOpencode(opts, id);
     } else {
       runResult = await runRealOpencode(opts, id);
@@ -903,6 +909,9 @@ async function runJob(id: string, opts: JobInput): Promise<void> {
       }
     }
   } finally {
+    try {
+      if (typeof opts.input.conversation_key === "string") await reconcileConversation(opts.input.conversation_key);
+    } finally { releaseCodingSlot(id); }
     if (opts.type === "index_repo" && repo) {
       runningRepos.delete(repo);
       // Release-then-run: hand the freed slot to the first waiting job whose
@@ -1046,6 +1055,7 @@ interface SpawnResult { status: number | null; stdout: string; stderr: string; e
 // dies with its parent) so a restart can never leave an orphaned indexer
 // writing to the graph while the recovery pass re-queues a duplicate job.
 const jobChildren = new Map<string, ReturnType<typeof spawn>>();
+export function codingChildPid(id: string): number | undefined { return jobChildren.get(id)?.pid; }
 
 export function cancelCloudJob(id: string): boolean {
   const job = getJob(id);
@@ -1100,7 +1110,7 @@ export function killJobsForRepo(repo: string): string[] {
   return killed;
 }
 
-function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string, onLine?: (line: string) => void, jobId?: string): Promise<SpawnResult> {
+function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string, onLine?: (line: string) => void, jobId?: string, commandInput?: string): Promise<SpawnResult> {
   return new Promise((resolve) => {
     // stdin MUST be 'ignore': with the default 'pipe', opencode sees an open
     // stdin and waits on it forever, producing zero output (the runs hang at
@@ -1110,7 +1120,7 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
     // kill reaches the CLI's own children (MCP subprocess, git, etc.).
     const child = spawn(cmd, args, {
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [commandInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       ...(cwd ? { cwd } : {}),
       ...(jobId ? { detached: true } : {}),
     });
@@ -1118,6 +1128,7 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timeoutError: Error | undefined;
     // Incremental line splitter for the live activity feed — a failing
     // callback must never take the job down with it.
     let pending = "";
@@ -1135,13 +1146,49 @@ function spawnAsync(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
       if (jobId) jobChildren.delete(jobId);
     };
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; killTree(child); cleanup(); resolve({ status: null, stdout, stderr, error: new Error(`opencode timed out after ${timeoutMs}ms`) }); }
+      if (!settled) { timeoutError = new Error(`opencode timed out after ${timeoutMs}ms`); killTree(child); }
     }, timeoutMs);
-    child.stdout.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; feedLines(s); });
-    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    // The leader may exit while a dev server still holds its pipes open.
+    // Stop descendants before close, which is the boundary for slot release.
+    child.on("exit", () => { if (jobId) killTree(child); });
+    if (commandInput !== undefined) child.once("spawn", () => {
+      try {
+        attachCodingChild(jobId!, child.pid!);
+        child.stdin!.on("error", () => {});
+        child.stdin!.end(commandInput + "\n");
+      } catch (error) { timeoutError = error as Error; killTree(child); }
+    });
+    child.stdout!.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; if (commandInput !== undefined) stdout = stdout.slice(-256_000); feedLines(s); });
+    child.stderr!.on("data", (d: Buffer) => { const s = d.toString(); stderr += s; if (commandInput !== undefined) { stderr = stderr.slice(-256_000); feedLines(s); } });
     child.on("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status: null, stdout, stderr, error }); } });
-    child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status, stdout, stderr }); } });
+    child.on("close", (status) => { if (!settled) { settled = true; clearTimeout(timer); cleanup(); resolve({ status, stdout, stderr, error: timeoutError }); } });
   });
+}
+
+async function runCloudCommand(opts: JobInput, id: string): Promise<{ result: unknown; sessionId: string }> {
+  const key = String(opts.input.conversation_key);
+  const input = opts.input.manual_command as { repo: string; command: string };
+  while (!requestCodingSlot(id).acquired) {
+    if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+  const repo = await ensureConversationWorktree(key, input.repo, true);
+  const args: Record<string, unknown> = { command: input.command, workdir: repo.worktree!.path };
+  await createCloudToolPolicy({ directory: WORKSPACE_DIR, repos: async () => conversationRepos(key), ensure: (name) => ensureConversationWorktree(key, name) })("bash", args);
+  const env = { ...process.env };
+  delete env.FLOW_ADMIN_TOKEN; delete env.BASH_ENV; delete env.ENV;
+  if (getJob(id)?.status !== "running") throw new Error("Command cancelled");
+  const result = await spawnAsync("/bin/bash", ["--noprofile", "--norc", "-s"], env, 120_000, String(args.workdir), (line) => {
+    recordCloudEvent(id, JSON.stringify({ type: "text", part: { text: line } }));
+  }, id, String(args.command));
+  const output = redactCloudText((result.stdout + result.stderr).slice(-64_000));
+  const error = result.error?.message;
+  persistJobTranscript(id, JSON.stringify({ type: "text", part: { text: output } }), "");
+  return { sessionId: String(opts.input.session_id ?? ""), result: {
+    answer_md: error ? `Command stopped: ${error}` : `Command exited with status ${result.status}.`,
+    output, exit_code: result.status, citations: [], confidence: 1, gaps: [],
+  } };
 }
 
 // ------------------------------------------------------------------
@@ -1172,6 +1219,7 @@ async function runRealOpencode(opts: JobInput, jobId: string): Promise<{ result:
 // Index/enrich runs read whole repos — give them real time. Conversational
 // jobs stay snappy.
 function indexerTimeout(opts: JobInput): number {
+  if (cloudMode() && ["answer", "continue"].includes(opts.type)) return cloudTaskTimeoutMs();
   return opts.type === "index_repo" || opts.type === "enrich" ? 45 * 60 * 1000 : 15 * 60 * 1000;
 }
 
@@ -1258,10 +1306,13 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   const args: string[] = ["run", "--format", "json", "-m", model, "--dir", WORKSPACE_DIR];
   if (agent) args.push("--agent", agent);
   if (resumeSessionId) args.push("--session", resumeSessionId);
-  args.push(prompt);
+  const images = validateImagePaths(opts.input.slack_image_scope, opts.input.slack_images);
+  for (const image of images) args.push("--file", image);
+  args.push("--", prompt);
 
   const env = indexerChildEnv(opts, jobId, `opencode:${agent ?? "opencode"}:${jobId}`);
   if (cloud) {
+    Object.assign(env, cloudGitIdentity(env));
     const inherited = JSON.parse(env.OPENCODE_CONFIG_CONTENT || "{}") as Record<string, unknown>;
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cloudOpencodeConfig(inherited));
   }
@@ -1280,6 +1331,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   const t0 = Date.now();
   const spawned = await spawnAsync(opencodeBin, args, env, timeoutMs, cloud ? WORKSPACE_DIR : undefined, (line) => {
     recordActivityLine(jobId, "opencode", line);
+    if (cloud) recordCloudEvent(jobId, line);
     if (cloud && typeof opts.input.conversation_key === "string") {
       try {
         const event = JSON.parse(line) as { sessionID?: string };
@@ -1293,7 +1345,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
   );
   const latencyMs = Date.now() - t0;
 
-  persistJobTranscript(jobId, spawned.stdout ?? "", spawned.stderr ?? "");
+  persistJobTranscript(jobId, cloud ? redactCloudText(spawned.stdout ?? "") : spawned.stdout ?? "", cloud ? redactCloudText(spawned.stderr ?? "") : spawned.stderr ?? "");
 
   if (spawned.error || spawned.status !== 0) {
     logLLM({
@@ -1330,7 +1382,7 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
     }
   }
 
-  const answerMd = textParts.join("") || "(no answer)";
+  const answerMd = cloud ? redactCloudText(textParts.join("") || "(no answer)") : textParts.join("") || "(no answer)";
 
   logLLM({
     kind: "opencode_job", ref: jobId, model, ok: true, latencyMs,
@@ -1340,7 +1392,13 @@ async function runOpencodeBackend(opts: JobInput, jobId: string): Promise<{ resu
 
   // For answer/continue jobs, return a structured answer; for others return minimal ok
   if (opts.type === "answer" || opts.type === "continue") {
-    return { result: parseAnswerPayload(answerMd, textParts.at(-1)), sessionId };
+    if (cloud && cloudShellVerificationFailed(spawned.stdout)) {
+      return { result: {
+        answer_md: "The task's shell commands did not complete successfully, so I could not verify the result. Any worktree changes are preserved. Please follow up in this thread to retry validation.",
+        citations: [], confidence: 0, gaps: ["Shell verification failed; tests are not confirmed to have passed."],
+      }, sessionId };
+    }
+    return { result: parseAnswerPayload(answerMd, cloud && textParts.length ? redactCloudText(textParts.at(-1)!) : textParts.at(-1)), sessionId };
   }
 
   return { result: { status: "ok", raw: answerMd }, sessionId };

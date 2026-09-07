@@ -9,19 +9,26 @@ const cloudPlugin: Plugin = async ({ directory }) => {
     throw new Error("Cloud plugin requires a prod job identity");
   }
   const endpoint = `${process.env.ORCHESTRATOR_URL}/v1/agents/tasks/${encodeURIComponent(process.env.FLOW_JOB_ID)}/workspace`;
-  async function workspace(repo?: string, edit = false): Promise<CloudRepo[]> {
+  async function workspace(repo?: string, edit = false, execution = false): Promise<CloudRepo[]> {
+    for (;;) {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${process.env.FLOW_JOB_TOKEN}` },
-      body: JSON.stringify({ repo, edit }),
+      body: JSON.stringify({ repo, edit, execution }),
       signal: AbortSignal.timeout(90_000),
     });
     const body = await response.json() as { repos?: CloudRepo[]; error?: string };
+    if (response.status === 423) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      continue;
+    }
     if (!response.ok || !body.repos) throw new Error(body.error ?? `Workspace request failed (${response.status})`);
     return body.repos;
+    }
   }
   const guard = createCloudToolPolicy({
     directory,
+    acquire: async () => { await workspace(undefined, false, true); },
     repos: () => workspace(),
     ensure: async (repo) => {
       const result = (await workspace(repo, true)).find((r) => r.name === repo);

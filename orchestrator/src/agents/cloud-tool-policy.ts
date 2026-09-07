@@ -11,11 +11,32 @@ Only when the user requests changes, call flow_workspace with repo and edit=true
 The same conversation can acquire more worktrees as you discover other repositories to change. Reuse existing worktrees on follow-ups.
 All edits and commands must target your conversation's worktrees. Shared clones are read-only evidence. Never change their branches or files.
 Set bash.workdir explicitly to the chosen worktree. Do not use cd or Git directory overrides; Flow has already created your branch.
+Use the bash tool result and its exit metadata as execution evidence. A new shell cannot retrieve the previous shell exit status; do not run echo $? to check it. Once the requested check succeeds, report the result without rerunning it unless a new change or failure requires another check.
+Run checks directly. Do not mask a failing check with a successful tail/head pipeline or a trailing successful command. Report errors as failures, even if a wrapper exited zero. Call failures pre-existing only when you verified them against the base; otherwise say their origin is unverified.
 Tests and dependency installation also write files, so run them in the worktree. Existing host CLI authentication is available.
+Flow serializes coding across this machine. Your first edit or shell command may wait for another task; ordinary questions can run concurrently.
+Keep processes in the foreground. Do not use nohup, setsid, daemon mode, Docker, system services, global installs, or change shared CLI configuration. Install tools locally in your worktree. Flow stops task processes at the end of each turn.
+Flow may checkpoint an inactive worktree locally and remove it to save disk. On a follow-up it restores your files; rediscover paths with flow_workspace. Branch names and paths can change; the Slack conversation is the task identity.
 Never read credentials or .env files. Never copy secrets into responses or commits. Do not claim that unmerged changes describe the base branch.
+For a requested code change, complete delivery unless the user explicitly asks for a local-only change or no PR: inspect the diff, run relevant checks, commit only the intended files, push the task branch, and create a pull request with gh. On follow-ups, update the existing PR for this task branch rather than creating duplicates. Never merge automatically or push directly to the base branch. Do not force-push or bypass hooks.
+Before publishing, inspect the staged diff and exclude credentials, env files, generated junk and unrelated changes. Use explicit file paths when staging.
+Flow supplies a process-local Git author and committer identity. Use git commit normally; do not run git config or ask for permission to change shared config. Use git status --short --branch to discover the current branch and the registered baseBranch from flow_workspace for the PR base. Push with an explicit task branch refspec. If authentication, permissions, a missing CLI or repository policy blocks delivery, report the exact failed command and a sanitized error, what remains saved, and the specific setup needed; do not claim a generic guardrail requires the user to do the work.
+The final answer for a coding task must include what changed and why, the actual PR URL (or a precise publishing blocker), checks run with pass/fail results, and material limitations. For visible UI changes, capture and inspect screenshots using available browser tooling when feasible, and share accessible evidence links. A server-local screenshot path is not a Slack attachment or a user-accessible link. If screenshot tooling or delivery is unavailable, say so; never invent evidence. Do not run tests or create PRs for ordinary informational questions.
 Graph tools are read-only except remember and correct_graph (advisory flags). Do not mutate graph entities directly.
 Return JSON: {"answer_md":"<answer or change summary, validation, and branch/PR when applicable>","citations":[{"kind":"file|node|slack|linear","ref":"<reference>"}],"confidence":0.9,"gaps":[]}.
 Do not claim tests passed or a PR was created unless the corresponding tool actually succeeded.`;
+
+/** Identity belongs to the subprocess, never the shared repository configuration. */
+export function cloudGitIdentity(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const name = env.FLOW_GIT_AUTHOR_NAME || "Flow";
+  const email = env.FLOW_GIT_AUTHOR_EMAIL || "flow@localhost";
+  return {
+    GIT_AUTHOR_NAME: env.GIT_AUTHOR_NAME || name,
+    GIT_AUTHOR_EMAIL: env.GIT_AUTHOR_EMAIL || email,
+    GIT_COMMITTER_NAME: env.GIT_COMMITTER_NAME || name,
+    GIT_COMMITTER_EMAIL: env.GIT_COMMITTER_EMAIL || email,
+  };
+}
 
 export const CLOUD_PERMISSIONS = {
   "*": "deny", read: "allow", glob: "allow", grep: "allow", edit: "allow", bash: "allow",
@@ -113,6 +134,8 @@ function checkShellCommand(command: string, repos: CloudRepo[]): void {
   if (command.includes("`") || command.includes("$(")) refused();
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
+    if (["nohup", "setsid", "disown", "docker", "podman", "systemctl", "service", "sudo"].includes(path.basename(word)) ||
+        ["--global", "--daemon", "--detach"].includes(word) || word === "-g") refused();
     if (["cd", "chdir", "pushd", "popd"].includes(word) || /\.\.[/\\]|^GIT_[A-Z_]+=|^--(?:git-dir|work-tree)|(?:^|[/\\])\.git(?:[/\\]|$)/.test(word)) refused();
     if (repos.some((r) => word.includes(r.source) || word.includes(canonicalPath(r.source)) ||
       word.includes(path.dirname(r.source) + path.sep))) refused();
@@ -129,6 +152,7 @@ export function createCloudToolPolicy(options: {
   directory: string;
   repos: () => Promise<CloudRepo[]>;
   ensure: (repo: string) => Promise<CloudRepo>;
+  acquire?: () => Promise<void>;
 }) {
   const absolute = (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) throw new Error("An explicit repository path is required");
@@ -140,6 +164,7 @@ export function createCloudToolPolicy(options: {
     if (!["read", "glob", "grep", "write", "edit", "apply_patch", "bash"].includes(tool)) {
       throw new Error(`Tool "${tool}" is not enabled for cloud tasks`);
     }
+    if (["write", "edit", "apply_patch", "bash"].includes(tool)) await options.acquire?.();
     const repos = await options.repos();
     for (const repo of repos) if (repo.worktree) assertWorktree(repo.worktree.path);
 
@@ -162,14 +187,33 @@ export function createCloudToolPolicy(options: {
     }
 
     if (tool === "bash") {
-      const cwd = absolute(args.workdir);
+      if (typeof args.command !== "string") throw new Error("command is required");
+      let command = args.command;
+      let workdir = args.workdir;
+      // Models often send `cd <tree> && command` even with a workdir field.
+      // Translate only this simple prefix into an owned cwd; never execute cd.
+      const prefix = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*&&\s*([\s\S]+)$/.exec(command);
+      if (prefix) {
+        const target = absolute(prefix[1] ?? prefix[2] ?? prefix[3]);
+        if (!repos.some((r) => r.worktree && within(r.worktree.path, target)) ||
+            (workdir !== undefined && canonicalPath(absolute(workdir)) !== canonicalPath(target))) {
+          throw new Error("Run commands in workdir without changing directories, branches, Git metadata, or targeting shared clones");
+        }
+        workdir = target;
+        command = prefix[4];
+      }
+      const owned = repos.filter((r) => r.worktree);
+      if (workdir === undefined && owned.length === 1) workdir = owned[0].worktree!.path;
+      const cwd = absolute(workdir);
       const repo = repos.find((r) => r.worktree && within(r.worktree.path, cwd));
       if (!repo) throw new Error("Shell commands require an existing conversation worktree in workdir; use flow_workspace(repo, edit=true)");
-      if (typeof args.command !== "string") throw new Error("command is required");
       // These catch direct attempts to leave the selected tree or mutate shared
       // Git administration. They do not inspect programs launched by a command:
       // worktree mode is an execution policy, not an OS sandbox.
-      checkShellCommand(args.command, repos);
+      checkShellCommand(command, repos);
+      // Preserve failed check exit codes when agents trim output with head/tail.
+      const pipeline = parse(command).some(token => typeof token === "object" && "op" in token && ["|", "|&"].includes(token.op));
+      args.command = pipeline ? `set -o pipefail\n${command}` : command;
       args.workdir = canonicalPath(cwd);
       return;
     }
@@ -194,4 +238,18 @@ export function createCloudToolPolicy(options: {
       throw new Error(`Shared checkout edit blocked. Worktree ready. Re-read and retry using these paths:\n${redirects.join("\n")}`);
     }
   };
+}
+
+/** Tool evidence wins over a model's claim that a blocked test passed. */
+export function cloudShellVerificationFailed(transcript: string): boolean {
+  let attempted = false, succeeded = false;
+  for (const line of transcript.split("\n")) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type !== "tool_use" || event.part?.tool !== "bash") continue;
+      attempted = true;
+      if (event.part.state?.status === "completed" && event.part.state?.metadata?.exit === 0) succeeded = true;
+    } catch { /* malformed events do not establish success */ }
+  }
+  return attempted && !succeeded;
 }

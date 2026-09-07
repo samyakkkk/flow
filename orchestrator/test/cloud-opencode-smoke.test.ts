@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -34,6 +34,9 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
   const pkg = { dependencies: { "@opencode-ai/plugin": "1.17.20" } };
   writeFileSync(path.join(configDir, "package.json"), JSON.stringify(pkg));
   writeFileSync(path.join(configDir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": pkg } }));
+  const image = path.join(root, "fixture.png");
+  writeFileSync(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAAG0lEQVR4nGP4z8BANiJf56jmUc2jmkc1U0UzADHNjoAymaoJAAAAAElFTkSuQmCC", "base64"));
+  let sawImage = false;
   let created = false;
   let turn = 0;
   let sawBlock = false;
@@ -54,6 +57,7 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
     }
     if (req.url?.endsWith("/chat/completions")) {
       const body = JSON.parse(input);
+      if (body.messages?.some((m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === "image_url" && p.image_url?.url?.startsWith("data:image/png;base64,")))) sawImage = true;
       for (const entry of body.tools ?? []) observedTools.add(entry.function.name);
       if (input.includes("Shared checkout edit blocked")) sawBlock = true;
       if (input.includes("without changing directories")) sawShellBlock = true;
@@ -62,7 +66,8 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
         { name: "read", args: { filePath: path.join(tree, "file.txt") } },
         { name: "write", args: { filePath: path.join(tree, "file.txt"), content: "changed\n" } },
         { name: "bash", args: { command: "git switch -c unexpected", workdir: tree } },
-        { name: "bash", args: { command: "git diff --stat", workdir: tree } },
+        { name: "bash", args: { command: "git diff --stat" } },
+        { name: "bash", args: { command: `cd '${tree}' && pwd` } },
       ];
       const next = body.tools?.length ? calls[turn++] : undefined;
       res.setHeader("content-type", "text/event-stream");
@@ -87,7 +92,7 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
     const config = cloudOpencodeConfig({
       provider: { fixture: {
         npm: "@ai-sdk/openai-compatible", name: "Fixture", options: { baseURL: `${url}/v1`, apiKey: "fixture" },
-        models: { fixture: { name: "Fixture", limit: { context: 32_000, output: 4096 }, tool_call: true } },
+        models: { fixture: { name: "Fixture", limit: { context: 32_000, output: 4096 }, tool_call: true, modalities: { input: ["text", "image"], output: ["text"] } } },
       } },
       small_model: "fixture/fixture",
     });
@@ -101,15 +106,19 @@ test("real OpenCode loads the cloud hook and refuses source edits before executi
       XDG_CACHE_HOME: path.join(root, "cache"), XDG_STATE_HOME: path.join(root, "state"),
     };
     const child = exec(process.env.FLOW_TEST_OPENCODE_BIN!, [
-      "run", "--print-logs", "--log-level", "DEBUG", "--format", "json", "--agent", "flow-cloud", "-m", "fixture/fixture", "--dir", root, "Run the fixture",
+      "run", "--print-logs", "--log-level", "DEBUG", "--format", "json", "--agent", "flow-cloud", "-m", "fixture/fixture", "--dir", root, "--file", image, "--", "Run the fixture",
     ], { cwd: root, env, timeout: 45_000, maxBuffer: 4 * 1024 * 1024 });
     child.child.stdin?.end(); // OpenCode reads piped stdin before starting the turn.
     const result = await child.catch((err) => {
       throw new Error(`OpenCode smoke failed: ${err.message}\n${String(err.stdout).slice(-8000)}\n${String(err.stderr).slice(-12000)}`);
     });
+    assert.ok(sawImage, "CLI image attachment did not reach the model request");
     assert.ok(observedTools.has("flow_workspace"), `Plugin tool not loaded: ${result.stderr}`);
     assert.ok(sawBlock, `Before-hook did not reject the shared path: ${result.stdout}`);
     assert.ok(sawShellBlock, `Before-hook did not reject the branch change: ${result.stdout}`);
+    const shell = result.stdout.split("\n").flatMap((line) => { try { const e = JSON.parse(line); return e.type === "tool_use" && e.part?.tool === "bash" ? [e.part.state] : []; } catch { return []; } });
+    assert.equal(shell.filter((s) => s.status === "completed" && s.metadata?.exit === 0).length, 2);
+    assert.equal(realpathSync(shell.at(-1).output.trim()), realpathSync(tree));
     assert.equal(readFileSync(path.join(source, "file.txt"), "utf8"), "base\n");
     assert.equal(readFileSync(path.join(tree, "file.txt"), "utf8"), "changed\n");
     const branch = await exec("git", ["-C", source, "branch", "--show-current"]);

@@ -2,6 +2,8 @@
 // Slack Connect, threads). Sets the running status, gathers thread context,
 // asks the runtime, and streams the answer back with the agent-session UX.
 
+import { imageScope, savedImages, receiveImages, type SlackFile } from "./images.js";
+import { getSetting } from "../settings.js";
 import { beginRun, endRun } from "./cancel.js";
 import { markEngaged } from "./engagement.js";
 import type { AgentRuntime, Surface, TranscriptTurn } from "./types.js";
@@ -16,12 +18,14 @@ export type SetStatusFn = (args: Record<string, unknown>) => Promise<unknown>;
 export type SayFn = (args: { text: string; thread_ts?: string }) => Promise<unknown>;
 
 export interface SlackClientLike {
+  files?: { info(args: { file: string }): Promise<{ file?: SlackFile & { url_private?: string; url_private_download?: string } }> };
   conversations: {
     replies(args: { channel: string; ts: string; limit?: number }): Promise<{
       messages?: Array<{ user?: string; bot_id?: string; text?: string; subtype?: string; ts?: string }>;
     }>;
   };
   chat: {
+    update?(args: { channel: string; ts: string; text: string }): Promise<unknown>;
     postMessage(args: { channel: string; text: string; thread_ts?: string }): Promise<unknown>;
   };
 }
@@ -38,6 +42,7 @@ export interface RespondArgs {
   userId: string;
   teamId?: string;
   prompt: string;
+  files?: SlackFile[];
   /** Extra context line (e.g. from assistant_thread_context) folded into the query. */
   viewingContext?: string;
   sayStream?: SayStreamFn;
@@ -72,6 +77,26 @@ export async function respond(args: RespondArgs): Promise<void> {
     }
   };
 
+  let queueMessageTs: string | undefined;
+  let queueSeen = false;
+  let runUrl: string | undefined;
+  const withRunLink = (text: string) => runUrl ? `${text}\n<${runUrl}|View agent run>` : text;
+  let progress = Promise.resolve();
+  const queueNotice = (text: string, first = false) => {
+    // Serialize delivery so a slow post cannot land after its start/completion update.
+    progress = progress.then(async () => {
+      if (first) {
+        const posted = await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) }) as { ts?: string };
+        queueMessageTs = posted?.ts;
+      } else if (queueMessageTs && client.chat.update) {
+        await client.chat.update({ channel: args.channelId, ts: queueMessageTs, text: withRunLink(text) });
+      } else {
+        await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) });
+      }
+    }).catch(err => logger.warn(`[respond] queue notification failed: ${trimError(err)}`));
+  };
+  let outcome = "Task stopped. It is no longer queued.";
+
   try {
     await setStatusSafe("Thinking…", true);
 
@@ -82,9 +107,18 @@ export async function respond(args: RespondArgs): Promise<void> {
 
     const prompt = args.viewingContext ? `${args.prompt}\n\n(${args.viewingContext})` : args.prompt;
 
+    const scope = imageScope(args.teamId ?? "", args.channelId, args.threadTs);
+    const images = args.files?.length ? await receiveImages({
+      scope, files: args.files, token: getSetting("SLACK_BOT_TOKEN") ?? "", signal: controller.signal,
+      info: async id => {
+        if (!client.files) throw new Error("Slack files API unavailable");
+        return client.files.info({ file: id });
+      },
+    }) : savedImages(scope);
     const answer = await runtime.ask({
       prompt,
       transcript,
+      ...(images.length ? { images, imageScope: scope } : {}),
       context: {
         surface: args.surface,
         channelId: args.channelId,
@@ -94,34 +128,53 @@ export async function respond(args: RespondArgs): Promise<void> {
       },
       signal: controller.signal,
       onStatus: (s) => void setStatusSafe(s),
+      onRun: (url) => { runUrl = url; },
+      onCodingStatus: (status, url) => {
+        runUrl = url ?? runUrl;
+        if (controller.signal.aborted) return;
+        if (status === "waiting" && !queueSeen) {
+          queueSeen = true;
+          queueNotice("Another coding task is running. Yours is queued and will start automatically.", true);
+        } else if (status === "coding" && queueSeen) {
+          queueNotice("Your coding task has started.");
+        } else if (status === "coding" && runUrl) {
+          queueSeen = true;
+          queueNotice("Your coding task has started.", true);
+        }
+      },
     });
 
     if (controller.signal.aborted) return;
+
+    outcome = "Task finished. See the result in this thread.";
 
     // Keep the thread engaged so plain follow-up replies reach us.
     markEngaged(args.channelId, args.threadTs);
 
     if (args.sayStream) {
       const streamer = args.sayStream({ thread_ts: args.threadTs });
-      await streamer.append({ markdown_text: answer.markdown });
+      await streamer.append({ markdown_text: withRunLink(answer.markdown) });
       await streamer.stop({ blocks: FOOTER_BLOCKS });
     } else {
-      await client.chat.postMessage({ channel: args.channelId, text: answer.markdown, thread_ts: args.threadTs });
+      await client.chat.postMessage({ channel: args.channelId, text: withRunLink(answer.markdown), thread_ts: args.threadTs });
     }
   } catch (err) {
     if (isAbort(err) || controller.signal.aborted) {
       logger.info(`[respond] run for ${args.channelId}:${args.threadTs} stopped`);
       return;
     }
+    outcome = "Task failed. See the error in this thread.";
     logger.error(`[respond] failed for ${args.channelId}:${args.threadTs}: ${err}`);
     const text = `:warning: I couldn't answer that one. (${trimError(err)})`;
     try {
-      if (args.say) await args.say({ text, thread_ts: args.threadTs });
-      else await client.chat.postMessage({ channel: args.channelId, text, thread_ts: args.threadTs });
+      if (args.say) await args.say({ text: withRunLink(text), thread_ts: args.threadTs });
+      else await client.chat.postMessage({ channel: args.channelId, text: withRunLink(text), thread_ts: args.threadTs });
     } catch (sendErr) {
       logger.error(`[respond] could not deliver error message: ${sendErr}`);
     }
   } finally {
+    if (queueSeen) queueNotice(outcome);
+    await progress;
     endRun(args.channelId, args.threadTs, controller);
     await setStatusSafe(""); // clear "running" if the stream path didn't
   }
@@ -139,7 +192,7 @@ async function fetchTranscript(
     const turns: TranscriptTurn[] = [];
     for (const msg of res.messages ?? []) {
       if (msg.ts === currentTs) continue;
-      if (msg.subtype) continue;
+      if (msg.subtype && msg.subtype !== "file_share") continue;
       const text = stripMentions(msg.text ?? "");
       if (!text) continue;
       const fromBot = Boolean(msg.bot_id) || (botUserId !== undefined && msg.user === botUserId);

@@ -180,6 +180,11 @@ db.exec(`
     path TEXT NOT NULL UNIQUE,
     branch TEXT NOT NULL,
     base_commit TEXT NOT NULL,
+    git_dir TEXT,
+    git_identity TEXT,
+    archived_at INTEGER,
+    checkpoint_commit TEXT,
+    cleanup_error TEXT,
     PRIMARY KEY (conversation_key, repo)
   );
 

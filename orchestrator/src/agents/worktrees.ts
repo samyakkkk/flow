@@ -89,7 +89,7 @@ async function uniqueBranch(srcCheckout: string, baseSlug: string): Promise<{ br
 // and that change would leak into every other tree pointed at the same target.
 // A copy is an independent snapshot: whatever the agent does to it, the blast
 // radius stays inside this worktree.
-async function overlayEnvFiles(srcCheckout: string, dest: string): Promise<void> {
+export async function overlayEnvFiles(srcCheckout: string, dest: string): Promise<void> {
   let names: string[];
   try {
     const entries = await readdir(srcCheckout, { withFileTypes: true });

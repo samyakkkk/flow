@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMode } from "@/lib/useMode";
+import { cloudSessionRow, type CloudTurn } from "@/lib/cloudAgentView";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/lib/useProject";
@@ -59,7 +61,7 @@ function AgentBrandIcon({ backend, className }: { backend: string; className?: s
 
 function statusKind(status: string): "live" | "ok" | "warn" | "idle" {
   if (status === "running" || status === "starting") return "live";
-  if (status === "waiting") return "warn";
+  if (status === "waiting" || status === "queued") return "warn";
   if (status === "idle") return "ok";
   if (status === "error") return "warn";
   return "idle";
@@ -67,6 +69,7 @@ function statusKind(status: string): "live" | "ok" | "warn" | "idle" {
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
+    queued: "Queued",
     starting: "Starting",
     running: "Working",
     waiting: "Needs approval",
@@ -96,6 +99,9 @@ function hasActiveSession(wt: Worktree): boolean {
 }
 
 export function AgentsView() {
+  const { mode, loading: modeLoading } = useMode();
+  const cloud = mode === "prod";
+  const [cloudTasks, setCloudTasks] = useState<CloudTurn[]>([]);
   const router = useRouter();
   const { prefix } = useProject();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -108,7 +114,15 @@ export function AgentsView() {
   const composerRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
+    if (modeLoading) return;
     try {
+      if (cloud) {
+        const response = await fetch(prefix("/api/cloud/tasks"));
+        if (!response.ok) return;
+        const data = await response.json();
+        setCloudTasks(data.tasks); setSessions(data.tasks.map(cloudSessionRow)); setTreesLoaded(true);
+        return;
+      }
       const [s, w] = await Promise.all([
         fetch(prefix("/api/agents/sessions")).then((r) => (r.ok ? r.json() : {})) as Promise<{ sessions?: SessionRow[] }>,
         fetch(prefix("/api/agents/worktrees")).then((r) => (r.ok ? r.json() : {})) as Promise<{ worktrees?: Worktree[] }>,
@@ -121,7 +135,7 @@ export function AgentsView() {
     } finally {
       setLoading(false);
     }
-  }, [prefix]);
+  }, [prefix, cloud, modeLoading]);
 
   useEffect(() => {
     refresh();
@@ -157,7 +171,7 @@ export function AgentsView() {
               Start a new coding task
             </h2>
             <p className="text-text-muted text-[12.5px] mt-0.5">
-              Select your engine, model, and target local folder below to launch an agent.
+              {cloud ? "Choose a repository on the server and describe the task. Coding work runs one task at a time." : "Select your engine, model, and target local folder below to launch an agent."}
             </p>
           </div>
 
@@ -170,14 +184,21 @@ export function AgentsView() {
 
       {/* Split view: workspaces (separate copies) left, session history right */}
       <div className="grid gap-10 lg:gap-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-start">
-        <WorkspacesColumn
+        {cloud ? <div className="flex flex-col gap-3">
+          <Kicker>Workspaces · separate copies</Kicker>
+          <p className="text-text-muted text-[12px]">Each conversation keeps its own worktrees. Checkpointed copies restore when you continue the task.</p>
+          {cloudTasks.filter(t => t.repos?.some(r => r.worktree)).map(task => <Card key={task.id} className="p-4">
+            {task.repos?.filter(r => r.worktree).map(repo => <div key={repo.name} className="mb-3"><p className="text-[13px] font-medium">⎇ {repo.worktree!.branch}</p><p className="mt-1 text-[10px] uppercase tracking-wide font-mono text-text-muted">{repo.name} · {repo.worktree!.archived_at ? "checkpointed" : "working copy"}</p></div>)}
+            <SessionCard s={cloudSessionRow(task)} href={prefix(`/agents/cloud-${task.id}`)} />
+          </Card>)}
+        </div> : <WorkspacesColumn
           trees={trees}
           loaded={treesLoaded}
           onNavigate={navigate}
           onNewSession={startInCopy}
           onChanged={refresh}
-        />
-        <SessionsColumn sessions={sessions} loading={loading} />
+        />}
+        <SessionsColumn sessions={sessions} loading={loading} cloud={cloud} />
       </div>
     </div>
   );
@@ -232,9 +253,11 @@ function SessionCard({
 function SessionsColumn({
   sessions,
   loading,
+  cloud = false,
 }: {
   sessions: SessionRow[];
   loading: boolean;
+  cloud?: boolean;
 }) {
   const { prefix } = useProject();
   const [showAll, setShowAll] = useState(false);
@@ -248,6 +271,7 @@ function SessionsColumn({
   useEffect(() => {
     const q = query.trim();
     if (!q) return;
+    if (cloud) { setResults(sessions.filter(s => `${s.title} ${s.repo}`.toLowerCase().includes(q.toLowerCase())).map(s => ({ ...s, score: 1, snippet: null }))); setSearching(false); return; }
     let stale = false;
     const t = setTimeout(async () => {
       try {
@@ -264,7 +288,7 @@ function SessionsColumn({
       stale = true;
       clearTimeout(t);
     };
-  }, [query, prefix]);
+  }, [query, prefix, cloud, sessions]);
 
   return (
     <div>

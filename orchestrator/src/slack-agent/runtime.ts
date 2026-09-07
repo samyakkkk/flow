@@ -7,8 +7,9 @@
 // answer-job pipeline (opencode answerer over the knowledge graph + memory).
 
 import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
-import { cloudMode, slackConversation } from "../agents/cloud-workspaces.js";
+import { cloudMode, cloudTaskTimeoutMs, slackConversation, conversationKey, conversationRepos } from "../agents/cloud-workspaces.js";
 import { containsSecret } from "../events.js";
+import { codingSlotStatus } from "../agents/coding-slot.js";
 import type { TranscriptTurn as Turn } from "./types.js";
 export type { TranscriptTurn, Surface, RuntimeQuery, RuntimeAnswer, AgentRuntime } from "./types.js";
 import type { AgentRuntime, RuntimeAnswer, RuntimeQuery } from "./types.js";
@@ -20,12 +21,24 @@ interface AnswerPayload {
   gaps?: string[];
 }
 
+/** FLOW_PUBLIC_URL is this project's externally accessible dashboard URL, including its path. */
+export function cloudRunUrl(id: string, base = process.env.FLOW_PUBLIC_URL): string | undefined {
+  if (!base) return;
+  try {
+    const url = new URL(base);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return;
+    url.search = ""; url.hash = "";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/agents/cloud-${encodeURIComponent(id)}`;
+    return url.toString();
+  } catch { return; }
+}
+
 const POLL_MS = 1000;
 
 export class FlowRuntime implements AgentRuntime {
   readonly name = "flow";
 
-  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? 900_000 : 300_000))) {}
+  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? cloudTaskTimeoutMs() : 300_000))) {}
 
   async ask(query: RuntimeQuery): Promise<RuntimeAnswer> {
     if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -33,23 +46,37 @@ export class FlowRuntime implements AgentRuntime {
     const cloud = cloudMode();
     if (cloud && containsSecret(question)) throw new Error("Message contains credentials");
 
+    const conversation = cloud ? slackConversation(
+      query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
+    ) : undefined;
     query.onStatus?.("Searching the knowledge graph…");
     const { id } = await enqueueJob({ type: "answer", input: {
       question,
-      ...(cloud ? { conversation: slackConversation(
-        query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
-      ) } : {}),
+      display_message: query.prompt,
+      ...(query.images?.length ? { slack_images: query.images, slack_image_scope: query.imageScope } : {}),
+      ...(conversation ? { conversation } : {}),
     } });
+    const url = cloudRunUrl(id);
+    if (conversation && url && conversationRepos(conversationKey(conversation)).some(repo => repo.worktree)) {
+      query.onRun?.(url);
+    }
     const onAbort = () => { if (cloud) cancelCloudJob(id); };
     query.signal?.addEventListener("abort", onAbort, { once: true });
     if (query.signal?.aborted) onAbort();
 
     try {
       const deadline = Date.now() + this.answerTimeoutMs;
+      let lastStatus: string | undefined;
       while (Date.now() < deadline) {
         if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
         await sleep(POLL_MS, query.signal);
         const job = getJob(id);
+        const status = codingSlotStatus(id);
+        if (status && status !== lastStatus) {
+          query.onStatus?.(status === "waiting" ? "Waiting for the machine’s coding slot…" : "Working in this task’s workspace…");
+          query.onCodingStatus?.(status, cloudRunUrl(id));
+          lastStatus = status;
+        }
         if (!job) throw new Error(`answer job ${id} disappeared`);
         if (job.status === "done") {
           const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
@@ -91,7 +118,9 @@ const SLACK_STYLE =
   "lead with the direct answer in a sentence or two, plain conversational tone. " +
   "Format for easy reading: short paragraphs mixed with bullet points where they " +
   "help (steps, lists, key facts) — no headers or heavy formatting. Keep it short " +
-  "by default and go deeper only when the question asks for detail.";
+  "by default and go deeper only when the question asks for detail. For coding tasks, include " +
+  "a complete handoff: changes, PR link, checks and their results, and available screenshot evidence. " +
+  "Do not shorten away verification or blockers, or describe unfinished delivery as done.";
 
 export function buildQuestion(query: RuntimeQuery): string {
   const parts: string[] = [SLACK_STYLE, ""];
@@ -102,6 +131,7 @@ export function buildQuestion(query: RuntimeQuery): string {
       .join("\n");
     parts.push(`Conversation so far (Slack thread):\n${lines}\n`);
   }
+  if (query.images?.length) parts.push("Attached images are ordered oldest to newest from this Slack thread. Use the latest image for references such as this image; earlier images are retained for follow-ups.\n");
   parts.push(query.prompt);
   return parts.join("\n");
 }

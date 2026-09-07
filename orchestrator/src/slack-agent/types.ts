@@ -12,6 +12,8 @@ export interface RuntimeQuery {
   prompt: string;
   /** Prior turns in this thread, oldest first (excludes the current prompt). */
   transcript: TranscriptTurn[];
+  images?: string[];
+  imageScope?: string;
   context: {
     surface: Surface;
     channelId: string;
@@ -22,6 +24,10 @@ export interface RuntimeQuery {
   signal?: AbortSignal;
   /** Optional progress callback — surfaced as the Slack "running" status. */
   onStatus?: (status: string) => void;
+  /** Machine coding-slot transitions, independent of Slack status support. */
+  /** A retained coding conversation can link its run even on a read-only follow-up. */
+  onRun?: (url: string) => void;
+  onCodingStatus?: (status: "waiting" | "coding", runUrl?: string) => void;
 }
 
 export interface RuntimeAnswer {

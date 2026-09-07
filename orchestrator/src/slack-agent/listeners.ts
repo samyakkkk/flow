@@ -45,7 +45,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     const bolt = raw as unknown as { sayStream?: SayStreamFn; setStatus?: SetStatusFn };
     const event = (raw as unknown as { event: Ev }).event;
 
-    if (event.subtype) return;
+    if (event.subtype && event.subtype !== "file_share") return;
     if (event.bot_id) return;
     const userId = event.user as string | undefined;
     if (!userId) return;
@@ -74,7 +74,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
     }
 
     const prompt = stripMentions(text);
-    if (!prompt) return;
+    if (!prompt && !(Array.isArray(event.files) && event.files.length)) return;
 
     logger.info(`[slack-agent] ${surface} message from ${userId} in ${channelId} (thread ${threadTs})`);
     await respond({
@@ -88,7 +88,8 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
       messageTs: ts,
       userId,
       teamId: (context.teamId as string | undefined) ?? (event.team as string | undefined),
-      prompt,
+      prompt: prompt || "Please describe the attached image.",
+      files: Array.isArray(event.files) ? event.files : undefined,
       viewingContext: getThreadContext(channelId, threadTs),
       sayStream: bolt.sayStream,
       setStatus: bolt.setStatus,
@@ -117,7 +118,7 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
 
     markEngaged(channelId, threadTs);
 
-    if (!prompt) {
+    if (!prompt && !(Array.isArray(event.files) && event.files.length)) {
       await say({ text: "Hi! Ask me anything about the codebase, past decisions, or team memory.", thread_ts: threadTs });
       return;
     }
@@ -134,7 +135,8 @@ export function registerListeners(app: App, deps: ListenerDeps): void {
       messageTs: ts,
       userId,
       teamId: (context.teamId as string | undefined) ?? (event.team as string | undefined),
-      prompt,
+      prompt: prompt || "Please describe the attached image.",
+      files: Array.isArray(event.files) ? event.files : undefined,
       viewingContext: getThreadContext(channelId, threadTs),
       sayStream: bolt.sayStream,
       setStatus: bolt.setStatus,
