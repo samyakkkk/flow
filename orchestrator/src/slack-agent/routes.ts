@@ -8,7 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { FLOW_ROOT } from "../agents/runtime.js";
-import { slackAgentStatus } from "./boot.js";
+import { slackAgentStatus, slackArchiveStatus, joinSlackPublicChannels } from "./boot.js";
 import { buildManifest, createAppUrl } from "./manifest.js";
 
 function projectName(): string {
@@ -23,6 +23,9 @@ function projectName(): string {
 }
 
 export function registerSlackAgentRoutes(app: FastifyInstance): void {
+  app.get("/v1/slack-agent/archive", async () => slackArchiveStatus());
+  app.post("/v1/slack-agent/join-public-channels", async () => joinSlackPublicChannels());
+
   app.get("/v1/slack-agent/status", async (_req, reply) => {
     return reply.send(slackAgentStatus());
   });

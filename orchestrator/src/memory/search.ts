@@ -111,6 +111,9 @@ export interface CorpusHit {
   id: string;
   text: string;
   source: string; // slack | linear | meeting
+  permalink?: string;
+  channel?: string;
+  ts?: string;
 }
 
 export interface SearchResult {
@@ -419,8 +422,12 @@ function corpusHits(
   const match = ftsQuery(query);
   if (!match) return [];
   try {
-    const rows = searchCorpus(match, source, limit) as Array<{ id: string; text?: string; source: string }>;
-    return rows.map((r) => ({ id: r.id, text: String(r.text ?? ""), source: r.source }));
+    const rows = searchCorpus(match, source, limit);
+    return rows.map((r) => ({ id: r.id, text: String(r.text ?? ""), source: r.source,
+      ...(typeof r.permalink === "string" ? { permalink: r.permalink } : {}),
+      ...(typeof r.channel === "string" ? { channel: r.channel } : {}),
+      ...(typeof r.ts === "string" ? { ts: r.ts } : {}),
+    }));
   } catch {
     return [];
   }
@@ -442,7 +449,7 @@ export function renderSearchResult(res: SearchResult): string {
     lines.push("CORPUS:");
     for (const c of res.corpus) {
       const t = c.text.replace(/\s+/g, " ").trim();
-      lines.push(`- ${t.length > 180 ? t.slice(0, 179) + "…" : t} [${c.source}] (${c.id})`);
+      lines.push(`- ${t.length > 180 ? t.slice(0, 179) + "…" : t} [${c.source}${c.channel ? ` channel:${c.channel}` : ""}] (${c.id})${c.permalink ? ` ${c.permalink}` : ""}`);
     }
   }
   return lines.join("\n");

@@ -8,9 +8,11 @@
 // The legacy ambient adapter (../adapters/slack.ts) is intentionally NOT
 // booted anymore: one Slack app must own exactly one Socket Mode connection
 // (Slack round-robins events across connections, which would silently split
-// traffic). MIGRATION(slack-agent): ambient capture, G10 thread binding, and
-// outbox slack_post delivery will move onto this module over time.
+// traffic). This connection also captures channel messages; historical
+// backfill uses the Web API. G10 binding/outbox delivery remain separate work.
 
+import { SlackArchiveSync, saveSlackMessage, type SlackApi } from "./archive.js";
+import { internalUserGuard } from "./access.js";
 import { getSetting } from "../settings.js";
 import { registerListeners } from "./listeners.js";
 import { EchoRuntime, FlowRuntime } from "./runtime.js";
@@ -25,6 +27,14 @@ interface SlackAgentState {
   connectedAt: number | null;
   lastError: string | null;
   booting: boolean;
+}
+
+let archive: SlackArchiveSync | null = null;
+
+export function slackArchiveStatus() { return archive?.status() ?? { connected: false }; }
+export async function joinSlackPublicChannels() {
+  if (!archive) throw new Error("Slack is not connected");
+  return archive.joinPublicChannels();
 }
 
 const state: SlackAgentState = {
@@ -64,29 +74,46 @@ export async function bootSlackAgent(): Promise<boolean> {
       logLevel: (process.env.LOG_LEVEL as never) ?? LogLevel.WARN,
     });
 
+    const auth = await app.client.auth.test({ token: botToken });
+    if (!auth.team_id || !auth.user_id) throw new Error("Slack identity unavailable");
+    state.botUserId = auth.user_id;
+    state.botName = auth.user ?? null;
+    state.team = auth.team ?? null;
+    const { WebClient } = await import("@slack/web-api");
+    const syncClient = new WebClient(botToken, { rejectRateLimitedCalls: true, retryConfig: { retries: 0 } });
+    const api: SlackApi = async (method, args) => syncClient.apiCall(method, args);
+    const authorize = internalUserGuard(auth.team_id, api);
+    const teamId = auth.team_id;
+    archive = new SlackArchiveSync(teamId, api);
     registerListeners(app, {
       runtime: makeRuntime(),
-      get botUserId() {
-        return state.botUserId ?? undefined;
+      get botUserId() { return state.botUserId ?? undefined; },
+      authorize,
+      async replyChannel(channelId, userId) {
+        const info = await api("conversations.info", { channel: channelId });
+        if (!info.channel) throw new Error("Channel identity unavailable");
+        if (!info.channel.is_ext_shared) return channelId;
+        const dm = await api("conversations.open", { users: userId });
+        if (!dm.channel?.id) throw new Error("Private reply destination unavailable");
+        return dm.channel.id;
+      },
+      capture(event) {
+        if (typeof event.channel !== "string" || event.channel.startsWith("D") || event.channel_type === "im" || event.channel_type === "mpim") return;
+        // Only channel events are archived; bot DMs remain session conversations.
+        saveSlackMessage(teamId, event.channel, event);
       },
     });
 
-    try {
-      const auth = await app.client.auth.test({ token: botToken });
-      state.botUserId = (auth.user_id as string | undefined) ?? null;
-      state.botName = (auth.user as string | undefined) ?? null;
-      state.team = (auth.team as string | undefined) ?? null;
-    } catch (err) {
-      console.warn(`[slack-agent] auth.test failed: ${err}`);
-    }
-
     await app.start();
     state.app = app as unknown as { stop(): Promise<void> };
+    archive.start();
     state.connectedAt = Date.now();
     state.lastError = null;
     console.log(`[slack-agent] connected as ${state.botName ?? "?"} (${state.botUserId ?? "?"}) in team ${state.team ?? "?"}`);
     return true;
   } catch (err) {
+    archive?.stop();
+    archive = null;
     state.lastError = String(err instanceof Error ? err.message : err).slice(0, 300);
     console.error(`[slack-agent] boot failed: ${err}`);
     return false;
@@ -96,6 +123,8 @@ export async function bootSlackAgent(): Promise<boolean> {
 }
 
 export async function stopSlackAgent(): Promise<void> {
+  archive?.stop();
+  archive = null;
   const app = state.app;
   state.app = null;
   state.botUserId = null;

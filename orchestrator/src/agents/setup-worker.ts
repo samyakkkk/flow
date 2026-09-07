@@ -57,15 +57,22 @@ export async function sweepSetupRequests(): Promise<void> {
           const job = getJob(request.resumeJob);
           const phase = codingSlotStatus(request.resumeJob) ?? job?.status;
           const url = cloudRunUrl(request.resumeJob);
+          // Re-check the channel before delayed delivery: setup may finish long
+          // after the original response, and shared channels need private output.
+          const info = await slackCall("conversations.info", { channel: request.channel });
+          if (!info.channel) throw new Error("Reply destination unavailable");
+          const shared = !!info.channel.is_ext_shared;
+          if (shared && !request.dm) throw new Error("Private reply destination unavailable");
+          const destination = { channel: shared ? request.dm! : request.channel, thread_ts: shared ? request.dmThread : request.thread };
           const link = url ? `\n<${url}|View agent run>` : "";
           if (job?.status === "done" && !request.delivered) {
             const result = job.result_json ? JSON.parse(job.result_json) : {};
-            await slackCall("chat.postMessage", { channel: request.channel, thread_ts: request.thread, client_msg_id: request.resumeJob, text: redactCloudText(renderAnswer(result)) + link });
+            await slackCall("chat.postMessage", { ...destination, client_msg_id: request.resumeJob, text: redactCloudText(renderAnswer(result)) + link });
             request.delivered = true; saveSetupRequest(request);
           }
           if (!phase || phase === request.notice) continue;
           const text = phase === "failed" ? "The resumed task stopped with an error. Its saved work is available in the agent run." : phase === "done" ? undefined : phase === "waiting" ? "Setup is ready. This task is queued behind another coding task." : phase === "coding" ? "Setup is ready. Your coding task has resumed." : request.notice ? undefined : "Setup is ready. I’m resuming the original task.";
-          if (text) await slackCall("chat.postMessage", { channel: request.channel, thread_ts: request.thread, text: text + link });
+          if (text) await slackCall("chat.postMessage", { ...destination, text: text + link });
           request.notice = phase; saveSetupRequest(request);
         }
       } catch {

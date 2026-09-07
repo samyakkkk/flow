@@ -26,7 +26,7 @@ export async function slackCall(method: string, args: Record<string, unknown>): 
   const token = getSetting("SLACK_BOT_TOKEN");
   if (!token) throw new Error("Slack is not connected");
   // files.info uses query/form parameters; unlike chat.postMessage it does not accept JSON bodies.
-  const info = method === "files.info";
+  const info = method === "files.info" || method === "conversations.info";
   const query = info ? `?${new URLSearchParams(Object.entries(args).map(([key, value]) => [key, String(value)]))}` : "";
   const response = await fetch(`https://slack.com/api/${method}${query}`, { method: info ? "GET" : "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" }, ...(info ? {} : { body: JSON.stringify(args) }), signal: AbortSignal.timeout(30_000) });
   const body = await response.json() as Record<string, any>;

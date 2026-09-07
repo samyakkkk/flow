@@ -272,6 +272,16 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 17,
+    name: "durable transcript distillation checkpoints and event evidence",
+    up: (db) => { db.exec(DISTILL_CHECKPOINT_SCHEMA); },
+  },
+  {
+    id: 18,
+    name: "Slack channel archive and resumable history/thread sync",
+    up: (db) => { db.exec(SLACK_ARCHIVE_SCHEMA); },
+  },
 ];
 
 // Orient docs — the AMBIENT memory tier. One rendered document per scope
@@ -442,3 +452,56 @@ export function migrate(db: DB, opts: { fresh: boolean }): void {
     console.log(`[db] migration ${m.id} applied: ${m.name}`);
   }
 }
+
+
+// Inputs and extraction outputs survive restarts; applied observations are
+// identified by stable job/item IDs. No FK to runtime-owned agent_sessions.
+export const DISTILL_CHECKPOINT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS memory_distill_jobs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    since_seq INTEGER NOT NULL,
+    through_seq INTEGER NOT NULL,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    UNIQUE(session_id, since_seq)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_distill_pending_session
+    ON memory_distill_jobs(session_id) WHERE status = 'pending';
+  CREATE TABLE IF NOT EXISTS observation_events (
+    observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    PRIMARY KEY(observation_id, session_id, event_seq)
+  );
+  CREATE INDEX IF NOT EXISTS idx_observation_events_source
+    ON observation_events(session_id, event_seq);
+`;
+
+
+export const SLACK_ARCHIVE_SCHEMA = `
+ CREATE TABLE IF NOT EXISTS slack_channels (
+   workspace TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
+   is_private INTEGER NOT NULL DEFAULT 0, is_ext_shared INTEGER NOT NULL DEFAULT 0,
+   is_member INTEGER NOT NULL DEFAULT 0, is_archived INTEGER NOT NULL DEFAULT 0,
+   oldest TEXT NOT NULL DEFAULT '0', latest TEXT NOT NULL DEFAULT '',
+   cursor TEXT NOT NULL DEFAULT '', synced_at INTEGER NOT NULL DEFAULT 0,
+   error TEXT, PRIMARY KEY(workspace, id)
+ );
+ CREATE TABLE IF NOT EXISTS slack_archive (
+   id TEXT PRIMARY KEY, workspace TEXT NOT NULL, channel TEXT NOT NULL,
+   ts TEXT NOT NULL, revision TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+   payload TEXT, captured_at INTEGER NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS slack_thread_sync (
+   workspace TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,
+   cursor TEXT NOT NULL DEFAULT '', requested TEXT NOT NULL DEFAULT '',
+   completed TEXT NOT NULL DEFAULT '', error TEXT,
+   PRIMARY KEY(workspace, channel, ts)
+ );
+`;

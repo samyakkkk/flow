@@ -1,13 +1,6 @@
-// distiller.ts — the session-end write path. NON-BLOCKING: the runtime queues a
-// distill job; it never delays session ops. One LLM call slims + extracts
-// durable observations, each is consolidated into the memories store, then a
-// cheap decay sweep runs.
-//
-// Pipeline: transcript events → slim → prompt → claude CLI → parse array →
-//   insert observations (embed at write) → consolidate (band + judge) → sweep.
-//
-// FLOW_DISTILLER=0 disables the whole path. The judge is the default haiku judge
-// but is injectable for tests via distillSession({ judge }).
+// Explicit remember and legacy/offline whole-session distillation helpers.
+// Live session triggers use checkpoint.ts: full retained transcript context,
+// validated event citations, persisted extraction output and incremental ranges.
 
 import { slimTranscript, type SlimEvent } from "./slim.js";
 import { buildDistillerPrompt } from "./prompt.js";

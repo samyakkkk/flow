@@ -33,9 +33,10 @@ export function searchCorpus(q: string, source?: string, limit = 20): SearchRow[
         FROM slack_messages_fts fts
         JOIN slack_messages sm ON sm.rowid = fts.rowid
         WHERE slack_messages_fts MATCH ?
+          AND NOT EXISTS (SELECT 1 FROM slack_channels c WHERE c.workspace=sm.workspace AND c.id=sm.channel AND c.is_member=0)
         ORDER BY rank
         LIMIT ?
-      `).all(q, lim) as Record<string, unknown>[];
+      `).all(q, lim) as Array<{ id: string; text: string; [key: string]: unknown }>;
       results.push(...rows.map((r) => ({ ...r, source: "slack" as Source })));
     }
 
@@ -47,7 +48,7 @@ export function searchCorpus(q: string, source?: string, limit = 20): SearchRow[
         WHERE linear_tickets_fts MATCH ?
         ORDER BY rank
         LIMIT ?
-      `).all(q, lim) as Record<string, unknown>[];
+      `).all(q, lim) as Array<{ id: string; text: string; [key: string]: unknown }>;
       results.push(...rows.map((r) => ({ ...r, source: "linear" as Source })));
     }
 
@@ -59,7 +60,7 @@ export function searchCorpus(q: string, source?: string, limit = 20): SearchRow[
         WHERE meeting_segments_fts MATCH ?
         ORDER BY rank
         LIMIT ?
-      `).all(q, lim) as Record<string, unknown>[];
+      `).all(q, lim) as Array<{ id: string; text: string; [key: string]: unknown }>;
       results.push(...rows.map((r) => ({ ...r, source: "meeting" as Source })));
     }
   }

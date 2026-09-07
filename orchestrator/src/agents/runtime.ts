@@ -735,7 +735,8 @@ export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
 }
 
 // Wire the memory distiller's triggers: give it the transcript reader (avoids an
-// import cycle) and start the idle sweep. Guarded so tests that never touch
+// import cycle) and start five-minute checkpoints, including active sessions.
+// Guarded so tests that never touch
 // sessions don't spin up a timer; FLOW_DISTILLER=0 disables both.
 setTranscriptReader((id) => readTranscript(id).map((e) => ({ seq: e.seq, kind: e.kind, data: e.data })));
 startIdleSweep();

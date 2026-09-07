@@ -18,6 +18,7 @@
 //
 // The judge is INJECTED so tests use a deterministic fake and never call an LLM.
 
+import db from "../db.js";
 import { cosine, blobToVec } from "../embed.js";
 import {
   type ObservationRow,
@@ -85,54 +86,50 @@ export function recomputeStrength(memoryId: string): MemoryRow {
 }
 
 export async function consolidateObservation(obs: ObservationRow, judge: Judge): Promise<ConsolidateResult> {
-  // Candidates are PROJECT-WIDE, not family-scoped: all repos in a project
-  // share memories (Samyak, 2026-07-19), so the same fact learned from two
-  // repos merges and strengthens instead of duplicating per family. The T_LO
-  // band + judge already own the same/new decision; widening candidates only
-  // adds cheap in-process cosine comparisons.
+  // A committed attachment is the durable application receipt. Never rerun its
+  // judge or reinforcement (including after a checkpoint process crashes).
+  const applied = () => (db.prepare("SELECT memory_id FROM observations WHERE id = ?").get(obs.id) as { memory_id: string | null } | undefined)?.memory_id;
+  const previous = applied();
+  if (previous) return { action: "same", memoryId: previous, created: false };
+
   const match = bestMatch(obs, activeMemoryRows());
+  const decision = !match || match.sim < T_LO
+    ? { verdict: "new" as const }
+    : await judge(match.mem, obs);
 
-  // No candidate at all, or below T_LO → brand-new memory.
-  if (!match || match.sim < T_LO) {
-    const mem = createMemory(obs);
-    recomputeStrength(mem.id);
-    await anchorAfterConsolidate(mem.id);
-    return { action: "new", memoryId: mem.id, created: true };
-  }
-
-  // At/above T_LO → the judge decides.
-  const { verdict, refinedClaim } = await judge(match.mem, obs);
-
-  if (verdict === "new") {
-    const mem = createMemory(obs);
-    recomputeStrength(mem.id);
-    await anchorAfterConsolidate(mem.id);
-    return { action: "new", memoryId: mem.id, created: true };
-  }
-
-  // same | refines | contradicts all ATTACH the observation to the matched memory.
-  attachObservation(match.mem.id, obs.id);
-  const now = Math.floor(Date.now() / 1000);
-  const nextWeight = strongerWeight(match.mem.max_source_weight, obs.source_weight);
-
-  if (verdict === "contradicts") {
-    updateMemory(match.mem.id, {
-      contradiction_count: match.mem.contradiction_count + 1,
-      max_source_weight: nextWeight,
-      last_reinforced_at: now,
-    });
-  } else {
-    // same or refines: reinforce.
-    const fields: Partial<MemoryRow> = { max_source_weight: nextWeight, last_reinforced_at: now };
-    if (verdict === "refines" && refinedClaim && refinedClaim.trim()) {
-      fields.claim = refinedClaim.trim();
+  // All SQL effects of applying one observation are atomic. No asynchronous
+  // model calls or graph writes may run inside this SQLite transaction.
+  const result = db.transaction((): ConsolidateResult => {
+    const already = applied();
+    if (already) return { action: "same", memoryId: already, created: false };
+    const target = match ? getMemory(match.mem.id) : undefined;
+    if (decision.verdict === "new" || !target) {
+      const mem = createMemory(obs);
+      recomputeStrength(mem.id);
+      return { action: "new", memoryId: mem.id, created: true };
     }
-    updateMemory(match.mem.id, fields);
-  }
 
-  recomputeStrength(match.mem.id);
-  await anchorAfterConsolidate(match.mem.id);
-  return { action: verdict, memoryId: match.mem.id, created: false };
+    const cited = db.prepare("SELECT session_id, event_seq FROM observation_events WHERE observation_id = ?")
+      .all(obs.id) as Array<{ session_id: string; event_seq: number }>;
+    const hasNewEvidence = cited.length === 0 || cited.some((e) => !db.prepare(`
+      SELECT 1 FROM observation_events e JOIN observations o ON o.id = e.observation_id
+      WHERE o.memory_id = ? AND e.session_id = ? AND e.event_seq = ? LIMIT 1
+    `).get(target.id, e.session_id, e.event_seq));
+    attachObservation(target.id, obs.id);
+    if (hasNewEvidence) {
+      const fields: Partial<MemoryRow> = {
+        max_source_weight: strongerWeight(target.max_source_weight, obs.source_weight),
+        last_reinforced_at: Math.floor(Date.now() / 1000),
+      };
+      if (decision.verdict === "contradicts") fields.contradiction_count = target.contradiction_count + 1;
+      if (decision.verdict === "refines" && decision.refinedClaim?.trim()) fields.claim = decision.refinedClaim.trim();
+      updateMemory(target.id, fields);
+    }
+    recomputeStrength(target.id);
+    return { action: decision.verdict, memoryId: target.id, created: false };
+  })();
+  await anchorAfterConsolidate(result.memoryId);
+  return result;
 }
 
 // Resolve a memory's anchors and invalidate the headline cache for any node it

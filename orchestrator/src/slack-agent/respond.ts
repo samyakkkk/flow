@@ -48,6 +48,7 @@ export interface RespondArgs {
   sayStream?: SayStreamFn;
   setStatus?: SetStatusFn;
   say?: SayFn;
+  resolveReplyChannel?: () => Promise<string>;
 }
 
 const LOADING_MESSAGES = [
@@ -67,9 +68,11 @@ const FOOTER_BLOCKS = [
 export async function respond(args: RespondArgs): Promise<void> {
   const { client, logger, runtime } = args;
   const controller = beginRun(args.channelId, args.threadTs);
+  let replyChannel = args.channelId;
+  let deliveryResolved = !args.resolveReplyChannel;
 
   const setStatusSafe = async (status: string, loading = false) => {
-    if (!args.setStatus) return;
+    if (!args.setStatus || !deliveryResolved || replyChannel !== args.channelId) return;
     try {
       await args.setStatus(loading ? { status, loading_messages: LOADING_MESSAGES } : { status });
     } catch {
@@ -86,18 +89,20 @@ export async function respond(args: RespondArgs): Promise<void> {
     // Serialize delivery so a slow post cannot land after its start/completion update.
     progress = progress.then(async () => {
       if (first) {
-        const posted = await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) }) as { ts?: string };
+        const posted = await client.chat.postMessage({ channel: replyChannel, thread_ts: replyChannel === args.channelId ? args.threadTs : undefined, text: withRunLink(text) }) as { ts?: string };
         queueMessageTs = posted?.ts;
       } else if (queueMessageTs && client.chat.update) {
-        await client.chat.update({ channel: args.channelId, ts: queueMessageTs, text: withRunLink(text) });
+        await client.chat.update({ channel: replyChannel, ts: queueMessageTs, text: withRunLink(text) });
       } else {
-        await client.chat.postMessage({ channel: args.channelId, thread_ts: args.threadTs, text: withRunLink(text) });
+        await client.chat.postMessage({ channel: replyChannel, thread_ts: replyChannel === args.channelId ? args.threadTs : undefined, text: withRunLink(text) });
       }
     }).catch(err => logger.warn(`[respond] queue notification failed: ${trimError(err)}`));
   };
   let outcome = "Task stopped. It is no longer queued.";
 
   try {
+    if (args.resolveReplyChannel) replyChannel = await args.resolveReplyChannel();
+    deliveryResolved = true;
     await setStatusSafe("Thinking…", true);
 
     const transcript =
@@ -151,12 +156,12 @@ export async function respond(args: RespondArgs): Promise<void> {
     // Keep the thread engaged so plain follow-up replies reach us.
     markEngaged(args.channelId, args.threadTs);
 
-    if (args.sayStream) {
+    if (args.sayStream && replyChannel === args.channelId) {
       const streamer = args.sayStream({ thread_ts: args.threadTs });
       await streamer.append({ markdown_text: withRunLink(answer.markdown) });
       await streamer.stop({ blocks: FOOTER_BLOCKS });
     } else {
-      await client.chat.postMessage({ channel: args.channelId, text: withRunLink(answer.markdown), thread_ts: args.threadTs });
+      await client.chat.postMessage({ channel: replyChannel, text: withRunLink(answer.markdown), thread_ts: replyChannel === args.channelId ? args.threadTs : undefined });
     }
   } catch (err) {
     if (isAbort(err) || controller.signal.aborted) {
@@ -167,8 +172,9 @@ export async function respond(args: RespondArgs): Promise<void> {
     logger.error(`[respond] failed for ${args.channelId}:${args.threadTs}: ${err}`);
     const text = `:warning: I couldn't answer that one. (${trimError(err)})`;
     try {
-      if (args.say) await args.say({ text: withRunLink(text), thread_ts: args.threadTs });
-      else await client.chat.postMessage({ channel: args.channelId, text: withRunLink(text), thread_ts: args.threadTs });
+      if (!deliveryResolved) return; // Never fall back to a public channel on routing failure.
+      if (args.say && replyChannel === args.channelId) await args.say({ text: withRunLink(text), thread_ts: args.threadTs });
+      else await client.chat.postMessage({ channel: replyChannel, text: withRunLink(text), thread_ts: replyChannel === args.channelId ? args.threadTs : undefined });
     } catch (sendErr) {
       logger.error(`[respond] could not deliver error message: ${sendErr}`);
     }

@@ -70,6 +70,8 @@ const insertObservationStmt = db.prepare(`
 `);
 
 export interface NewObservation {
+  id?: string;
+  evidence_seqs?: number[];
   source: "session" | "slack" | "linear" | "meeting";
   repo?: string | null;
   branch?: string | null;
@@ -93,7 +95,9 @@ export function observationEmbedText(claim: string, keys: string[]): string {
 
 // Insert an observation, embedding at write time (best-effort). Returns the row.
 export async function insertObservation(o: NewObservation): Promise<ObservationRow> {
-  const id = randomUUID();
+  const id = o.id ?? randomUUID();
+  const existing = db.prepare("SELECT * FROM observations WHERE id = ?").get(id) as ObservationRow | undefined;
+  if (existing) return existing;
   const keys = o.retrieval_keys ?? [];
   const vec = await _embedder(observationEmbedText(o.claim, keys).slice(0, 2000));
   const row = {
@@ -114,7 +118,13 @@ export async function insertObservation(o: NewObservation): Promise<ObservationR
     embedding: vec ? vecToBlob(vec) : null,
     memory_id: o.memory_id ?? null,
   };
-  insertObservationStmt.run(row);
+  db.transaction(() => {
+    insertObservationStmt.run(row);
+    if (o.session_id && o.evidence_seqs) {
+      const insert = db.prepare("INSERT OR IGNORE INTO observation_events(observation_id, session_id, event_seq) VALUES (?, ?, ?)");
+      for (const seq of o.evidence_seqs) insert.run(id, o.session_id, seq);
+    }
+  })();
   invalidateVectorCache();
   return { ...row, created_at: Math.floor(Date.now() / 1000) };
 }
@@ -228,7 +238,13 @@ export function recomputePeopleCount(memoryId: string): number {
 }
 
 export function evidenceCount(memoryId: string): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM observations WHERE memory_id = ?`).get(memoryId) as { n: number };
+  const row = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM observations o WHERE o.memory_id = @id
+       AND NOT EXISTS (SELECT 1 FROM observation_events e WHERE e.observation_id = o.id))
+      + (SELECT COUNT(*) FROM (
+          SELECT DISTINCT e.session_id, e.event_seq FROM observation_events e
+          JOIN observations o ON o.id = e.observation_id WHERE o.memory_id = @id
+        )) AS n`).get({ id: memoryId }) as { n: number };
   return row.n || 0;
 }
 

@@ -49,6 +49,7 @@ before(async () => {
     const target = String(url);
     if (target.startsWith("https://slack.com/api/")) {
       const args = JSON.parse(String(options?.body ?? "{}"));
+      if (target.includes("conversations.info?")) return Response.json({ ok: true, channel: { id: "CTEST", is_ext_shared: false } });
       if (target.endsWith("conversations.open")) { assert.equal(args.users, "UORIGINAL"); return Response.json({ ok: true, channel: { id: "DTEST" } }); }
       if (target.endsWith("chat.postMessage")) { messages.push(args); return Response.json({ ok: true, ts: `${messages.length}.001` }); }
       if (target.includes("files.info?")) { assert.equal(options?.method, "GET"); assert.equal(new URL(target).searchParams.get("file"), "FTEST"); return Response.json({ ok: true, file: { size: fileContent.length, url_private: downloadUrl } }); }
