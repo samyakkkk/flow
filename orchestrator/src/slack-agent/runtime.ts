@@ -82,6 +82,7 @@ export class FlowRuntime implements AgentRuntime {
         if (!job) throw new Error(`answer job ${id} disappeared`);
         if (job.status === "done") {
           const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
+          if (result.setup_wait && url) query.onRun?.(url);
           return {
             markdown: renderAnswer(result),
             waitingForSetup: Boolean(result.setup_wait),
