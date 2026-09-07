@@ -18,6 +18,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { BrainEmbeddings } from "./embeddings.ts";
 import { indexRepository } from "./indexer.ts";
+import { startBuilderBridge } from "./builder-bridge.ts";
 import { githubRepository, run } from "./process.ts";
 
 type Source = { -readonly [K in keyof BrainSource]: BrainSource[K] };
@@ -106,8 +107,9 @@ export class BrainRuntime {
           active({ ...source })
             ? {
                 ...source,
-                status: "error",
-                message: "Indexing was interrupted. Retry to continue.",
+                status: "queued",
+                reindexRequested: false,
+                message: "Resuming indexing after restart…",
               }
             : { ...source },
         ),
@@ -131,6 +133,11 @@ export class BrainRuntime {
     await this.start();
     if (this.db?.isRunning)
       await Promise.all(this.workspaces.map((workspace) => this.ensureWorkspaceGraph(workspace)));
+    if (this.db?.isRunning) {
+      for (const workspace of this.workspaces)
+        for (const source of workspace.sources)
+          if (source.status === "queued") await this.enqueue(workspace, source);
+    }
   }
   private async ensureWorkspaceGraph(workspace: Workspace) {
     const graph = this.db!.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
@@ -138,6 +145,7 @@ export class BrainRuntime {
       "MERGE (brain:Brain {id: $id}) SET brain.name = $name, brain.createdAt = coalesce(brain.createdAt, $createdAt)",
       { params: { id: workspace.id, name: workspace.name, createdAt: new Date().toISOString() } },
     );
+    await this.flowGraph(workspace).query("RETURN 1 AS ready");
     return graph;
   }
   private save() {
@@ -249,7 +257,53 @@ export class BrainRuntime {
     if (!workspace) throw new Error("Workspace not found.");
     return workspace;
   }
+  private flowGraph(workspace: Workspace) {
+    return this.db!.selectGraph(`flow_brain_${workspace.id.replaceAll("-", "")}`);
+  }
   private async readKnowledge(workspace: Workspace): Promise<BrainKnowledge> {
+    if (this.db?.isRunning && workspace.sources.some((source) => source.pipeline === "flow")) {
+      const graph = this.flowGraph(workspace);
+      // Read the canonical graph, including writes from an in-flight builder.
+      // Never send embedding vectors or wait for a final provider response.
+      const [nodes, relations] = await Promise.all([
+        graph.roQuery<{
+          id: string;
+          name: string;
+          kind: string;
+          description: string;
+          source: string;
+          properties: Record<string, string>;
+        }>(
+          "MATCH (n) WHERE n.id IS NOT NULL RETURN n.id AS id, coalesce(n.name,n.id) AS name, labels(n)[0] AS kind, coalesce(n.description,'') AS description, coalesce(n.evidence,'') AS source, {aliases:n.aliases, purpose:n.purpose, uses:n.uses, does_not_use:n.does_not_use, sensitive_to:n.sensitive_to, not_sensitive_to:n.not_sensitive_to, triage_note:n.triage_note, confidence:n.confidence} AS properties ORDER BY n.id",
+        ),
+        graph.roQuery<{ from: string; to: string; label: string }>(
+          "MATCH (a)-[r]->(b) WHERE a.id IS NOT NULL AND b.id IS NOT NULL RETURN a.id AS from, b.id AS to, type(r) AS label",
+        ),
+      ]);
+      return {
+        entities: (nodes.data ?? []).map((node) => {
+          node.properties = Object.fromEntries(
+            Object.entries(node.properties ?? {}).filter(
+              ([, value]) => typeof value === "string" && value.length > 0,
+            ),
+          );
+          const source = workspace.sources.find((source) =>
+            node.source.startsWith(`${source.repository} `),
+          );
+          if (!source || source.localPath) return node;
+          const evidence = node.source.slice(source.repository.length + 1);
+          const match = /^(.*):(\d+)$/.exec(evidence);
+          return match
+            ? {
+                ...node,
+                source: `https://github.com/${source.repository}/blob/${source.evidenceCommit || source.commit || source.branch || "HEAD"}/${match[1]!.split("/").map(encodeURIComponent).join("/")}#L${match[2]}`,
+              }
+            : node;
+        }),
+        edges: relations.data ?? [],
+        memories: [],
+      };
+    }
     if (!this.db?.isRunning) return emptyKnowledge();
     const graph = this.db.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
     const combined = {
@@ -397,10 +451,11 @@ export class BrainRuntime {
     if (command.action === "cancel") {
       const source = workspace.sources.find((entry) => entry.id === command.sourceId);
       if (!source) throw new Error("Source not found.");
+      source.reindexRequested = false;
       this.jobs.get(source.id)?.abort();
       if (active(source)) {
         source.status = "cancelled";
-        source.message = "Indexing cancelled. The previous index is preserved.";
+        source.message = "Indexing cancelled. Knowledge already written is preserved.";
         await this.save();
       }
       return null;
@@ -453,7 +508,12 @@ export class BrainRuntime {
       const found = workspace.sources.find((entry) => entry.id === command.sourceId);
       if (!found) throw new Error("Source not found.");
       source = found;
-      if (this.jobs.has(source.id)) throw new Error("This repository already has an indexing job.");
+      if (this.jobs.has(source.id)) {
+        // Flow coalesces repeated requests into one follow-up pass per repository.
+        source.reindexRequested = true;
+        await this.save();
+        return null;
+      }
       previousSource = { ...source };
       source.status = "queued";
       source.message = "Waiting for the shared indexer…";
@@ -483,15 +543,25 @@ export class BrainRuntime {
           if (!controller.signal.aborted)
             await this.index(workspace, source, cli, controller.signal);
         } catch (error) {
-          source.status = controller.signal.aborted ? "cancelled" : "error";
+          source.status = this.closed
+            ? "queued"
+            : controller.signal.aborted
+              ? "cancelled"
+              : "error";
           source.message = controller.signal.aborted
-            ? "Indexing cancelled. The previous index is preserved."
+            ? "Indexing cancelled. Knowledge already written is preserved."
             : error instanceof Error
               ? error.message
               : "Indexing failed. Retry to continue.";
           await this.save();
         } finally {
           this.jobs.delete(source.id);
+          if (source.reindexRequested && !this.closed && source.status !== "cancelled") {
+            source.reindexRequested = false;
+            source.status = "queued";
+            source.message = "Waiting for the shared indexer…";
+            await this.enqueue(workspace, source);
+          }
         }
       })
       .catch(() => {
@@ -614,18 +684,36 @@ export class BrainRuntime {
   ) {
     const revision = NodeCrypto.randomUUID();
     const directory = NodePath.join(this.directory, "jobs", revision);
-    const repoPath = NodePath.join(directory, "repository");
+    const workspacePath = NodePath.join(this.directory, "workspaces", workspace.id);
+    const repoPath = NodePath.join(workspacePath, "repos", source.repository);
     await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+    await NodeFSP.mkdir(NodePath.dirname(repoPath), { recursive: true, mode: 0o700 });
     source.status = "cloning";
     source.message = `Reading ${source.repository}…`;
+    source.activity = { toolCalls: 0, filesRead: 0, graphWrites: 0, events: [] };
     await this.save();
-    if (source.localPath)
+    const exists = await NodeFSP.stat(NodePath.join(repoPath, ".git")).then(
+      () => true,
+      () => false,
+    );
+    if (exists) {
+      // Only app-owned clones live here; users' work folders are never checked out.
+      await run("git", ["fetch", "--prune", "origin", ...(source.branch ? [source.branch] : [])], {
+        cwd: repoPath,
+        signal,
+        timeout: 5 * 60_000,
+      });
+      await run("git", ["checkout", "-B", source.branch || "main", "FETCH_HEAD"], {
+        cwd: repoPath,
+        signal,
+      });
+    } else if (source.localPath) {
       await run(
         "git",
         ["clone", "--no-local", "--single-branch", "--no-tags", "--", source.localPath, repoPath],
         { signal, timeout: 5 * 60_000 },
       );
-    else if (this.github.connected)
+    } else if (this.github.connected) {
       await run(
         "gh",
         [
@@ -634,21 +722,17 @@ export class BrainRuntime {
           source.repository,
           repoPath,
           "--",
-          "--depth",
-          "1",
           "--single-branch",
           "--no-tags",
           ...(source.branch ? ["--branch", source.branch] : []),
         ],
         { signal, timeout: 5 * 60_000 },
       );
-    else
+    } else {
       await run(
         "git",
         [
           "clone",
-          "--depth",
-          "1",
           "--single-branch",
           "--no-tags",
           ...(source.branch ? ["--branch", source.branch] : []),
@@ -658,78 +742,72 @@ export class BrainRuntime {
         ],
         { signal, timeout: 5 * 60_000 },
       );
+    }
     const commit = await run("git", ["rev-parse", "HEAD"], { cwd: repoPath, signal });
     const branch = await run("git", ["branch", "--show-current"], { cwd: repoPath, signal });
+    const previousCommit = source.lastFlowCommit;
+    const previousBranch = source.lastFlowBranch;
+    await this.flowGraph(workspace).query("RETURN 1 AS ready");
+    source.pipeline = "flow";
+    source.evidenceCommit = commit;
     source.status = "indexing";
-    const cliName = cli === "claude" ? "Claude Code" : cli === "codex" ? "Codex" : "OpenCode";
-    source.message = `${cliName} is building the architecture graph…`;
+    source.message = `${workspace.cli === "claude" ? "Claude Code" : workspace.cli === "codex" ? "Codex" : "OpenCode"} is building the knowledge graph…`;
     await this.save();
-    const { knowledge: indexedKnowledge, coverage } = await indexRepository(
-      cli,
-      source.repository,
-      repoPath,
-      NodePath.join(directory, "analysis"),
-      signal,
-    );
-    const knowledge = { ...indexedKnowledge, memories: [] };
-    signal.throwIfAborted();
-    source.status = "embedding";
-    source.message = "Saving knowledge…";
-    await this.save();
-    const graph = this.db!.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
-    for (const entity of knowledge.entities) {
-      const vector = await this.embeddings.embed(`${entity.name}\n${entity.description}`);
+    const bridge = await startBuilderBridge(this.embeddings);
+    try {
+      const result = await indexRepository(cli, source.repository, repoPath, directory, signal, {
+        platform: this.host.platform,
+        graph: `flow_brain_${workspace.id.replaceAll("-", "")}`,
+        socket: this.db!.socketPath,
+        embedUrl: bridge.url,
+        embedToken: bridge.token,
+        workspace: workspacePath,
+        branch,
+        previousCommit,
+        previousBranch,
+        onActivity: (activity) => {
+          if (activity)
+            source.activity = {
+              ...activity.counts,
+              events: activity.events.map((event) => ({ ...event })),
+            };
+        },
+      });
       signal.throwIfAborted();
-      // Kinds are validated against the shared Flow ontology before interpolation.
-      await graph.query(
-        `CREATE (n:BrainEntity:${entity.kind} {id: $id, sourceId: $sourceId, revision: $revision, name: $name, description: $description, source: $source, embedding: vecf32($vector)})`,
+      // Same orchestrator-owned freshness metadata as Flow. Update the builder's
+      // repository node; do not manufacture a disconnected node for a different ID convention.
+      await this.flowGraph(workspace).query(
+        "MATCH (n:Repository) WHERE n.id = $id OR n.name = $name SET n.default_branch = $branch, n.head_commit = $commit, n.indexed_at = $at",
         {
           params: {
-            id: entity.id,
-            sourceId: source.id,
-            revision,
-            name: entity.name,
-            description: entity.description,
-            source: entity.source,
-            vector,
+            id: `repo:${source.repository}`,
+            name: source.repository,
+            branch,
+            commit,
+            at: new Date().toISOString(),
           },
         },
       );
-    }
-    for (const edge of knowledge.edges) {
-      signal.throwIfAborted();
-      await graph.query(
-        `MATCH (a:BrainEntity {id: $from, sourceId: $sourceId, revision: $revision}), (b:BrainEntity {id: $to, sourceId: $sourceId, revision: $revision}) CREATE (a)-[:${edge.label}]->(b)`,
-        { params: { from: edge.from, to: edge.to, sourceId: source.id, revision } },
-      );
-    }
-    signal.throwIfAborted();
-    await graph.query(
-      "CREATE (:BrainIndex {sourceId: $sourceId, revision: $revision, data: $data})",
-      { params: { sourceId: source.id, revision, data: JSON.stringify(knowledge) } },
-    );
-    // Publish only after the complete index is durable (AOF fsync=always).
-    const previous = {
-      commit: source.commit,
-      branch: source.branch,
-      revision: source.revision,
-      indexedAt: source.indexedAt,
-    };
-    source.commit = commit;
-    source.branch = branch;
-    source.revision = revision;
-    source.status = "ready";
-    source.indexedAt = new Date().toISOString();
-    source.message = `${coverage} · ${cli}`;
-    try {
+      source.commit = commit;
+      source.branch = branch;
+      source.lastFlowCommit = commit;
+      source.lastFlowBranch = branch;
+      source.revision = revision;
+      source.status = "ready";
+      source.indexedAt = new Date().toISOString();
+      source.summary = result.summary;
+      source.message = `${result.incremental ? "Incremental update" : "Indexed"} · ${cli}`;
       await this.save();
-    } catch (error) {
-      Object.assign(source, previous);
-      throw error;
+    } finally {
+      await bridge.close();
     }
   }
   async drain() {
-    await this.queue;
+    let pending: Promise<void>;
+    do {
+      pending = this.queue;
+      await pending;
+    } while (pending !== this.queue);
   }
   /** Test seam for verifying that creation establishes the graph immediately. */
   async dbGraphNames() {

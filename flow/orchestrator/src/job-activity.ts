@@ -1,3 +1,5 @@
+// @effect-diagnostics globalDate:off - Original Flow activity timestamps shared with native adapters.
+// @effect-diagnostics globalConsole:off - Original Flow indexer activity log.
 // job-activity.ts — live, in-memory activity feed for indexer jobs.
 //
 // Each backend CLI streams JSONL while it works; the job runner feeds every

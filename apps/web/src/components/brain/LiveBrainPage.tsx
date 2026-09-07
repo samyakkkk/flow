@@ -157,10 +157,15 @@ function BrainController({
     void send({ action: "read" }, true);
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void send({ action: "read" }, true);
-    }, 3000);
+    }, 2000);
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") void send({ action: "read" }, true);
+    };
+    document.addEventListener("visibilitychange", refreshOnVisible);
     return () => {
       mounted.current = false;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
     };
   }, [send]);
 

@@ -63,7 +63,7 @@ export function BrainPage({
               {hasBrain && (
                 <span className="text-xs text-muted-foreground">
                   {isIndexing
-                    ? "Building knowledge…"
+                    ? `Building · ${snapshot.entities.length} entities · ${snapshot.edges.length} relationships`
                     : `${snapshot.entities.length} ${snapshot.entities.length === 1 ? "entity" : "entities"} · ${snapshot.edges.length} relationships`}
                 </span>
               )}
@@ -97,7 +97,7 @@ export function BrainPage({
                   <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
                     {hasBrain
                       ? isIndexing
-                        ? "The graph will update when indexing completes."
+                        ? "Nodes and connections appear here as the indexer discovers them."
                         : snapshot.sources.length > 0
                           ? "Check the connected sources below to start or retry indexing."
                           : "Connect a GitHub repository or local folder below."

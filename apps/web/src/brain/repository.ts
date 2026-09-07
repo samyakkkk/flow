@@ -4,6 +4,7 @@ export interface BrainEntity {
   kind: string;
   description: string;
   source?: string;
+  properties?: Readonly<Record<string, string>> | undefined;
   x: number;
   y: number;
 }

@@ -31,6 +31,8 @@ export default defineConfig({
   },
   fmt: {
     ignorePatterns: [
+      // Preserved Flow services retain their own formatting during integration.
+      "flow/**",
       ".repos/**",
       ".alchemy",
       "dist",

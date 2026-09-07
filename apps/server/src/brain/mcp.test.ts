@@ -69,15 +69,13 @@ it.effect(
             );
           expect(result.isError).not.toBe(true);
           expect(readProjects).toEqual([projectId]);
-          const denied = yield* server
-            .callTool({ name: "brain_search", arguments: {} })
-            .pipe(
-              Effect.provideService(McpSchema.McpServerClient, client),
-              Effect.provideService(McpInvocationContext, {
-                ...scope,
-                capabilities: new Set<"brain">(),
-              }),
-            );
+          const denied = yield* server.callTool({ name: "brain_search", arguments: {} }).pipe(
+            Effect.provideService(McpSchema.McpServerClient, client),
+            Effect.provideService(McpInvocationContext, {
+              ...scope,
+              capabilities: new Set<"brain">(),
+            }),
+          );
           expect(denied.isError).toBe(true);
           expect(readProjects).toEqual([projectId]);
         }).pipe(Effect.provide(layer));

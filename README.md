@@ -9,14 +9,15 @@ local Git folder through the source cards. Public repositories
 work without GitHub sign-in; private repositories use the selected computer's
 existing GitHub CLI sign-in (managed in Settings → Source control).
 
-The first import builds a bounded architecture graph from up to 80 text files,
-validates file citations, creates local EmbeddingGemma vectors, and persists the
-result in FalkorDB. The selected CLI uses its existing provider credentials and
-model settings. This is an initial repository indexing integration; passive
-session memory, incremental indexing, the Linear/Fireflies/notes/Slack workers,
-and cloud brain migration are not connected yet. Those source cards are marked
-as coming later; the original Flow graph-builder pipeline has not yet replaced
-this bounded indexer.
+Indexing uses Flow's original graph-builder instructions and graph gateway,
+including provenance, duplicate detection, usage contracts, cross-repository
+links, and incremental Git updates. Builders write directly to FalkorDB as they
+explore; the graph and per-repository activity logs refresh every two seconds
+while the page is visible. The selected CLI uses its existing credentials and
+Flow's indexing model defaults (overridable with GRAPH_BUILDER_MODEL).
+Passive session memory, Linear/Fireflies/notes/Slack workers, and cloud Brain
+migration remain deferred. Older prototype graphs are retained for reference;
+reindex their sources to build them with the full Flow pipeline.
 
 When adding a project in the web or desktop UI, choose its brain (or create one).
 The repository is registered as a source automatically. Change the connection

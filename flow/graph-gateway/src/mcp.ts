@@ -4,6 +4,19 @@ import { z } from "zod";
 import { callVerb, verbs } from "./verbs.js";
 import { SESSION_VERBS } from "./session-verbs.js";
 
+// The app's single indexing queue runs the original boot migrations and
+// embedding repair against its shared model; short-lived MCP sessions do not.
+if (process.env.FLOW_MAINTENANCE_GRAPH) {
+  const graph = process.env.FLOW_FIXED_GRAPH || process.env.FLOW_MAINTENANCE_GRAPH;
+  const { runGraphMigrations, reconcileAfterModelReady } = await import("./reconcile.js");
+  const { close } = await import("./graph.js");
+  try {
+    await runGraphMigrations(graph);
+    await reconcileAfterModelReady(graph);
+  } finally { await close(); }
+  process.exit(0);
+}
+
 // MCP face of the gateway (stdio). Same verbs, same validation, same journal —
 // MCP is just a protocol adapter over the single write path.
 //
@@ -134,6 +147,10 @@ for (const [name, verb] of Object.entries(verbs)) {
     name,
     { description: verb.description, inputSchema: verb.shape, annotations },
     async (args: unknown) => {
+      // App-managed builders are bound to one Brain, regardless of model arguments.
+      if (process.env.FLOW_FIXED_GRAPH) {
+        args = { ...((args ?? {}) as Record<string, unknown>), graph: process.env.FLOW_FIXED_GRAPH };
+      }
       const idFields = WRITE_VERB_ID_FIELDS[name];
       if (MODE === "builder" && idFields) {
         const input = (args ?? {}) as Record<string, unknown>;

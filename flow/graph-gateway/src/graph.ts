@@ -9,7 +9,7 @@ let db: FalkorDB | null = null;
 
 async function connect(): Promise<FalkorDB> {
   if (!db) {
-    db = await FalkorDB.connect({ socket: { host, port } });
+    db = await FalkorDB.connect({ socket: process.env.FALKOR_SOCKET ? { path: process.env.FALKOR_SOCKET } : { host, port } });
   }
   return db;
 }

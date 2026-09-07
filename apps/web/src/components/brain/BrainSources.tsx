@@ -260,6 +260,38 @@ export function BrainSources({
                   <XIcon size={14} />
                 </Button>
               )}
+              {(active(source.status) || source.activity || source.summary) && (
+                <details className="w-full min-w-0 rounded-md border border-border bg-background px-3 py-2 text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">
+                    Logs
+                    {source.activity
+                      ? ` · ${source.activity.filesRead} files read · ${source.activity.graphWrites} graph writes`
+                      : ""}
+                  </summary>
+                  <div className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">
+                    {source.activity?.events.length ? (
+                      source.activity.events.map((event) => (
+                        <div key={event.seq} className="py-0.5">
+                          {new Date(event.ts).toLocaleTimeString()} · {event.label}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground">
+                        {source.status === "queued"
+                          ? "Waiting for the shared indexer…"
+                          : active(source.status)
+                            ? "Waiting for indexer activity…"
+                            : "No tool activity recorded for this run."}
+                      </p>
+                    )}
+                  </div>
+                  {source.summary && !active(source.status) && (
+                    <p className="mt-3 whitespace-pre-wrap break-words text-muted-foreground">
+                      {source.summary}
+                    </p>
+                  )}
+                </details>
+              )}
             </article>
           ))}
         </div>

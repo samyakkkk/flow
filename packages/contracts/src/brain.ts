@@ -9,6 +9,7 @@ export const BrainEntity = Schema.Struct({
   kind: Schema.String,
   description: Schema.String,
   source: Schema.String,
+  properties: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 export const BrainMemory = Schema.Struct({
   id: Schema.String,
@@ -45,6 +46,27 @@ export const BrainSource = Schema.Struct({
   ]),
   message: Schema.String,
   indexedAt: Schema.NullOr(Schema.String),
+  pipeline: Schema.optional(Schema.Literal("flow")),
+  evidenceCommit: Schema.optional(Schema.String),
+  lastFlowCommit: Schema.optional(Schema.String),
+  lastFlowBranch: Schema.optional(Schema.String),
+  reindexRequested: Schema.optional(Schema.Boolean),
+  activity: Schema.optional(
+    Schema.Struct({
+      toolCalls: Schema.Number,
+      filesRead: Schema.Number,
+      graphWrites: Schema.Number,
+      events: Schema.Array(
+        Schema.Struct({
+          seq: Schema.Number,
+          ts: Schema.Number,
+          kind: Schema.String,
+          label: Schema.String,
+        }),
+      ),
+    }),
+  ),
+  summary: Schema.optional(Schema.String),
 });
 export type BrainSource = typeof BrainSource.Type;
 export const BrainWorkspace = Schema.Struct({

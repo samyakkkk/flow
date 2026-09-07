@@ -132,7 +132,7 @@ export function BrainGraph({
           </p>
         )}
         {selected && (
-          <article className="absolute bottom-4 right-4 left-4 z-10 rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-lg md:left-auto md:w-72">
+          <article className="absolute bottom-4 right-4 left-4 z-10 max-h-[280px] overflow-y-auto rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-lg md:left-auto md:w-72">
             <div className="flex items-start justify-between gap-3">
               <span className="text-xs text-muted-foreground">{selected.kind}</span>
               <Button
@@ -148,6 +148,18 @@ export function BrainGraph({
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {selected.description}
             </p>
+            {selected.properties && (
+              <dl className="mt-3 space-y-2 text-xs">
+                {Object.entries(selected.properties).map(([key, value]) => (
+                  <div key={key}>
+                    <dt className="font-medium capitalize">{key.replaceAll("_", " ")}</dt>
+                    <dd className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
             {selected.source.startsWith("https://github.com/") ? (
               <a
                 href={selected.source}

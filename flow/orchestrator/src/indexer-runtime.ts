@@ -1,3 +1,4 @@
+import { INDEXER_DEFAULT_MODELS } from "./indexer-defaults.js";
 // indexer-runtime.ts — backend selection + shared config for the multi-CLI
 // indexer. Indexing jobs can run through any locally-installed coding CLI
 // (opencode, codex, or claude); this module resolves which one to use and
@@ -20,11 +21,7 @@ export type IndexerBackend = "opencode" | "codex" | "claude";
 
 // Per-backend default models. Kept as one map so bumping a model is a
 // one-line change. GRAPH_BUILDER_MODEL (setting or env) overrides these.
-export const INDEXER_DEFAULT_MODELS: Record<IndexerBackend, string> = {
-  opencode: "opencode/deepseek-v4-flash-free", // a free model opencode ships; zero keys needed
-  codex: "gpt-5.6-luna",
-  claude: "sonnet", // CLI alias; resolves to Claude Sonnet 5 today
-};
+export { INDEXER_DEFAULT_MODELS } from "./indexer-defaults.js";
 
 // Order the auto resolver walks: first locally-installed CLI wins.
 const BACKEND_ORDER: IndexerBackend[] = ["opencode", "codex", "claude"];
