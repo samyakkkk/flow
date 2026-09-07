@@ -1,4 +1,5 @@
 import {
+  BrainCircuit,
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
@@ -230,3 +231,26 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     </SidebarFooter>
   );
 });
+
+export function SidebarBrainLink() {
+  const active = useLocation({ select: (location) => location.pathname === "/brain" });
+  const { isMobile, setOpenMobile } = useSidebar();
+  return (
+    <div className="px-3 pb-2">
+      <Link
+        to="/brain"
+        onClick={() => {
+          if (isMobile) setOpenMobile(false);
+        }}
+        className={cn(
+          "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          active && "bg-sidebar-accent text-sidebar-accent-foreground",
+        )}
+      >
+        <BrainCircuit size={15} />
+        <span>Brain</span>
+        <span className="ml-auto text-[9px] opacity-60">Preview</span>
+      </Link>
+    </div>
+  );
+}

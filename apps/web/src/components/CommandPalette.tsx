@@ -46,6 +46,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  BrainCircuit,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -1700,6 +1701,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:brain",
+    searchTerms: ["brain", "memory", "knowledge", "connectors"],
+    title: "Open brain",
+    icon: <BrainCircuit className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/brain" });
     },
   });
 

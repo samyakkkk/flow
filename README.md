@@ -1,9 +1,10 @@
 # Flow
 
 This branch establishes Flow's agent workspace on the T3 Code foundation. It is
-an independent fork, with T3's original Git history retained. The application is
-still the upstream T3 implementation; the Flow Brain interface and connection
-have not been integrated yet.
+an independent fork, with T3's original Git history retained. The web and desktop interface now includes a Brain preview with two isolated
+sample workspaces, a knowledge map, searchable memories, and source details.
+Open **Brain** in the sidebar or **Open brain** in the command palette.
+The preview uses example data; no live brain connection is implemented yet.
 
 The root contains T3's web, desktop, mobile, and server applications. The existing
 Flow implementation is preserved under [`flow/`](flow/README.md), including its
