@@ -228,10 +228,11 @@ function maybeSelfUpdate() {
     }
   }
 
-  // Re-exec the updated CLI; FLOW_NO_UPDATE stops recursion.
-  const child = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], {
+  // Keep the recursion guard on this invocation. An environment flag would
+  // survive in the dashboard and silently disable its next update request.
+  const child = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2), "--no-update"], {
     stdio: "inherit",
-    env: { ...process.env, FLOW_NO_UPDATE: "1" },
+    env: { ...process.env },
   });
   process.exit(child.status ?? 0);
 }
