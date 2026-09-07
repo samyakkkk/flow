@@ -724,8 +724,8 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
   // fan-out, grouping, and ranking. `query` wins if both are present.
   const payload =
     input.query !== undefined
-      ? { query: input.query, repo: repo || null, limit: input.limit }
-      : { queries: input.queries, repo: repo || null, limit: input.limit };
+      ? { query: input.query, repo: repo || (viaGateway ? undefined : null), limit: input.limit }
+      : { queries: input.queries, repo: repo || (viaGateway ? undefined : null), limit: input.limit };
   try {
     const res = await fetch(url, {
       method: "POST",

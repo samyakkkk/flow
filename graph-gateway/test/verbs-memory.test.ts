@@ -274,6 +274,7 @@ test("job knowledge search authenticates through the gateway without an orchestr
       assert.equal(String(url), "http://127.0.0.1:7433/v1/verbs/search_knowledge");
       assert.equal((options?.headers as Record<string,string>).authorization, "Bearer test-gateway-token");
       assert.equal(JSON.parse(String(options?.body)).query, "type:thread channel:C1 sort:recent");
+      assert.equal("repo" in JSON.parse(String(options?.body)), false, "Gateway optional repo must be omitted, not null");
       return Response.json({status:"ok",results:"Slack messages with dates"});
     };
     assert.deepEqual(await callVerb("search_knowledge", {query:"type:thread channel:C1 sort:recent"}),
