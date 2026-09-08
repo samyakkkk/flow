@@ -49,6 +49,8 @@ const decodeGithubRepositories = Schema.decodeUnknownSync(
     }),
   ),
 );
+const decodeConsultedNodeIds = Schema.decodeUnknownSync(Schema.Array(Schema.String));
+const FLOW_NODE_IDS_META_KEY = "flow/nodeIds";
 const emptyKnowledge = (): BrainKnowledge => ({ entities: [], edges: [], memories: [] });
 const active = (source: Source) =>
   ["queued", "cloning", "indexing", "embedding"].includes(source.status);
@@ -791,7 +793,25 @@ export class BrainRuntime {
     const repo = context.workspaceRoot
       ? await this.sessionRepository(context.workspaceRoot)
       : context.repo;
-    return worker.call(name, args, { ...context, ...(repo ? { repo } : {}) });
+    const resolvedContext = { ...context, ...(repo ? { repo } : {}) };
+    const result = await worker.call(name, args, resolvedContext);
+    if (name === "find_entity") {
+      let nodeIds: ReadonlyArray<string> = [];
+      try {
+        nodeIds = decodeConsultedNodeIds(result._meta?.[FLOW_NODE_IDS_META_KEY] ?? []);
+      } catch {
+        // Activity metadata is optional and must never make a brain lookup fail.
+      }
+      if (nodeIds.length > 0) {
+        await this.captureBrainEvent(workspace.id, {
+          context: resolvedContext,
+          receipt: `graph-${NodeCrypto.randomUUID()}`,
+          kind: "graph",
+          data: { verb: name, nodeIds },
+        }).catch(() => {});
+      }
+    }
+    return result;
   }
   async captureProjectEvent(projectId: ProjectId, input: BrainCapture) {
     const workspace = this.workspaces.find((entry) => entry.id === this.projectBrainId(projectId));

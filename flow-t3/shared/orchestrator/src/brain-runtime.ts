@@ -1,6 +1,6 @@
 // App-owned host for the original Flow brain. No interactive ACP sessions or
 // integration pollers are started here. Database/model ownership stays with T3.
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import { LiveMemoryScheduler } from "./memory/live-scheduler.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -88,10 +88,33 @@ if (process.argv.includes("--catalog")) {
   });
   const readMemories = (sessionId: string) => {
     const memories = db.prepare(`SELECT id, claim AS text, created_at * 1000 AS createdAt, source_weight AS origin FROM observations WHERE session_id = ? AND id NOT IN (SELECT observation_id FROM chat_memory_retired) ORDER BY created_at, id`).all(sessionId);
+    const allConsultedNodeIds = new Set<string>();
+    const recentConsultedNodeIds = new Set<string>();
+    const recentCutoff = Date.now() - 45_000;
+    const graphRows = db.prepare("SELECT data, ts FROM t3_capture WHERE session = ? AND kind = 'graph' ORDER BY seq DESC LIMIT 100").all(sessionId) as Array<{ data: string; ts: number }>;
+    for (const row of graphRows) {
+      let data: { nodeIds?: unknown };
+      try { data = JSON.parse(row.data) as { nodeIds?: unknown }; }
+      catch { continue; }
+      if (!Array.isArray(data.nodeIds)) continue;
+      for (const id of data.nodeIds) {
+        if (typeof id !== "string" || id.length === 0 || id.length >= 200) continue;
+        if (allConsultedNodeIds.size < 100) allConsultedNodeIds.add(id);
+        if (row.ts >= recentCutoff && recentConsultedNodeIds.size < 100) {
+          recentConsultedNodeIds.add(id);
+        }
+      }
+    }
+    const consultedNodeIds = recentConsultedNodeIds.size > 0
+      ? [...recentConsultedNodeIds]
+      : [...allConsultedNodeIds];
     const pending = db.prepare("SELECT error FROM memory_distill_jobs WHERE session_id = ? AND status = 'pending' LIMIT 1").get(sessionId) as { error: string | null } | undefined;
     const status = process.env.FLOW_DISTILLER === "0" ? "disabled" : pending?.error ? "error" : live.pending(sessionId) || pending ? "extracting" : "idle";
-    const value = { memories, status };
-    return { ...value, revision: createHash("sha256").update(JSON.stringify(value)).digest("hex") };
+    const value = { memories, status, consultedNodeIds };
+    return {
+      ...value,
+      revision: NodeCrypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+    };
   };
   const catalog = await session("catalog");
   process.send?.({ ready: true, tools: (await catalog.client.listTools()).tools });
@@ -113,7 +136,7 @@ if (process.argv.includes("--catalog")) {
       } else if (message.method === "capture") {
         const input = message.params as Parameters<typeof capture>[0];
         const stored = capture(input);
-        if (process.env.FLOW_DISTILLER !== "0") {
+        if (process.env.FLOW_DISTILLER !== "0" && input.kind !== "graph") {
           const data = input.data as { content?: { text?: string }; text?: string; sessionUpdate?: string };
           const text = input.kind === "user_prompt" ? data.text ?? "" : data.sessionUpdate === "agent_message_chunk" ? data.content?.text ?? "" : "";
           live.capture(stored.id, text.length, Boolean(input.closed));

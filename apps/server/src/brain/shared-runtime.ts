@@ -35,7 +35,7 @@ const Context = Schema.Struct({
 const Capture = Schema.Struct({
   context: Context,
   receipt: Schema.String,
-  kind: Schema.Literals(["user_prompt", "update", "error", "created"]),
+  kind: Schema.Literals(["user_prompt", "update", "error", "created", "graph"]),
   data: Schema.Unknown,
   closed: Schema.optionalKey(Schema.Boolean),
 });

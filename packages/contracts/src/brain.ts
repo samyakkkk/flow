@@ -99,6 +99,7 @@ export const BrainState = Schema.Struct({
 export type BrainState = typeof BrainState.Type;
 export const ChatMemoryList = Schema.Struct({
   revision: Schema.optionalKey(Schema.String),
+  consultedNodeIds: Schema.optionalKey(Schema.Array(Schema.String)),
   memories: Schema.Array(
     Schema.Struct({
       id: Schema.String,
