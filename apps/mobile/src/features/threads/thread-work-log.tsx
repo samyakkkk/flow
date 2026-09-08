@@ -45,8 +45,9 @@ import {
   type ThreadWorkGroupScrollPosition,
 } from "./thread-feed-live-follow";
 import {
-  formatFlowBrainToolCallValue,
-  resolveFlowBrainToolCallDetails,
+  resolveFlowBrainConsultationDisplay,
+  type FlowBrainDisplayField,
+  type FlowBrainDisplayItem,
   resolveWorkEntryToolPresentation,
   type ToolGroupSummaryKind,
   workEntryViewedImagePath,
@@ -719,6 +720,84 @@ function workLogRowKey(row: ThreadFeedActivity): string {
   return row.id;
 }
 
+function BrainDisplayField({ field }: { readonly field: FlowBrainDisplayField }) {
+  const values = Array.isArray(field.value) ? field.value : null;
+  return (
+    <View className="gap-1">
+      <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
+        {field.label}
+      </Text>
+      {values ? (
+        <View className="flex-row flex-wrap gap-1.5">
+          {values.map((value) => (
+            <View
+              key={value}
+              className="rounded-md border border-adaptive-neutral-300-a60-white-a12 bg-subtle px-2 py-1"
+            >
+              <Text selectable className="text-2xs leading-normal text-foreground-muted">
+                {value}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text
+          selectable
+          className={cn("text-2xs leading-normal text-foreground-muted", field.code && "font-mono")}
+        >
+          {field.value}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function BrainDisplayItem({ item }: { readonly item: FlowBrainDisplayItem }) {
+  return (
+    <View className="gap-1 rounded-md border border-adaptive-neutral-300-a60-white-a12 bg-subtle/40 px-2.5 py-2">
+      <View className="flex-row flex-wrap items-center gap-x-2 gap-y-0.5">
+        {item.eyebrow ? (
+          <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
+            {item.eyebrow}
+          </Text>
+        ) : null}
+        {item.id ? (
+          <Text selectable className="font-mono text-3xs text-foreground-muted opacity-60">
+            {item.id}
+          </Text>
+        ) : null}
+      </View>
+      <Text selectable className="font-t3-medium text-2xs leading-normal text-foreground">
+        {item.title}
+      </Text>
+      {item.description ? (
+        <Text selectable className="text-2xs leading-normal text-foreground-muted">
+          {item.description}
+        </Text>
+      ) : null}
+      {(item.fields?.length ?? 0) > 0 ? (
+        <View className="mt-1 gap-2 border-t border-adaptive-neutral-300-a60-white-a12 pt-2">
+          {item.fields!.map((field) => (
+            <BrainDisplayField key={field.label} field={field} />
+          ))}
+        </View>
+      ) : null}
+      {(item.tags?.length ?? 0) > 0 ? (
+        <View className="mt-1 flex-row flex-wrap gap-1">
+          {item.tags!.map((tag) => (
+            <Text
+              key={tag}
+              className="rounded bg-subtle px-1.5 py-0.5 text-3xs text-foreground-muted"
+            >
+              {tag}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   props: Omit<
     ThreadWorkLogProps,
@@ -738,7 +817,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   const canExpand = row.canExpand;
   const fullDetail = expanded ? row.getFullDetail() : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
-  const brainDetails = resolveFlowBrainToolCallDetails(row.workEntry);
+  const brainDisplay = resolveFlowBrainConsultationDisplay(row.workEntry);
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
   const previewText = workEntryRowLabel(row.workEntry);
   const displayText = workEntryRowLabel(row.workEntry, expanded);
@@ -866,54 +945,105 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
             </View>
           ) : null}
-          {brainDetails ? (
+          {brainDisplay ? (
             <ScrollView
               nestedScrollEnabled
               directionalLockEnabled
               showsVerticalScrollIndicator
-              className="max-h-72"
+              className="max-h-96"
               contentContainerStyle={{ paddingRight: 8, gap: 12 }}
             >
               <View className="flex-row items-center gap-1.5">
-                <SymbolView
-                  name="brain"
-                  size={12}
-                  tintColor={props.iconSubtleColor}
-                  type="monochrome"
-                />
-                <Text className="font-t3-medium text-xs text-foreground-muted">
-                  Brain consultation
-                </Text>
-                <Text className="ml-auto rounded bg-subtle px-1.5 py-0.5 font-mono text-3xs text-foreground-muted">
-                  {brainDetails.tool}
+                <View className="h-6 w-6 items-center justify-center rounded-md bg-adaptive-amber-500-a12-a16">
+                  <SymbolView
+                    name="brain"
+                    size={12}
+                    tintColor={props.iconSubtleColor}
+                    type="monochrome"
+                  />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <Text className="font-t3-medium text-xs text-foreground">Brain consultation</Text>
+                  <Text className="text-3xs text-foreground-muted">{brainDisplay.toolLabel}</Text>
+                </View>
+                <Text className="rounded-full bg-subtle px-2 py-0.5 text-3xs text-foreground-muted">
+                  {brainDisplay.responseSummary}
                 </Text>
               </View>
-              <View className="gap-1.5">
+              <View className="gap-2">
                 <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
                   Request
                 </Text>
-                <Text
-                  selectable
-                  className="font-mono text-2xs leading-normal text-foreground-muted"
-                >
-                  {formatFlowBrainToolCallValue(brainDetails.request, "No parameters")}
-                </Text>
+                {brainDisplay.requestFields.length > 0 ? (
+                  brainDisplay.requestFields.map((field) => (
+                    <BrainDisplayField key={field.label} field={field} />
+                  ))
+                ) : (
+                  <Text className="text-2xs text-foreground-muted">No parameters</Text>
+                )}
               </View>
-              <View className="gap-1.5 border-t border-adaptive-neutral-300-a60-white-a12 pt-2.5">
+              <View className="gap-2.5 border-t border-adaptive-neutral-300-a60-white-a12 pt-2.5">
                 <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
                   Response
                 </Text>
-                <Text
-                  selectable
-                  className="font-mono text-2xs leading-normal text-foreground-muted"
-                >
-                  {formatFlowBrainToolCallValue(
-                    brainDetails.response,
-                    row.lifecycleStatus === "inProgress"
-                      ? "Waiting for response…"
-                      : "No response body",
-                  )}
-                </Text>
+                {brainDisplay.responseSections.length > 0 ? (
+                  brainDisplay.responseSections.map((section) => (
+                    <View
+                      key={section.title}
+                      className="gap-2 rounded-lg border border-adaptive-neutral-300-a60-white-a12 px-2.5 py-2"
+                    >
+                      <View className="flex-row items-baseline gap-2">
+                        <Text className="min-w-0 flex-1 font-t3-medium text-2xs text-foreground">
+                          {section.title}
+                        </Text>
+                        {section.subtitle ? (
+                          <Text className="text-3xs text-foreground-muted">{section.subtitle}</Text>
+                        ) : null}
+                      </View>
+                      {section.text ? (
+                        <Text
+                          selectable
+                          className={cn(
+                            "text-2xs leading-normal text-foreground-muted",
+                            section.code && "font-mono",
+                          )}
+                        >
+                          {section.text}
+                        </Text>
+                      ) : null}
+                      {(section.fields?.length ?? 0) > 0
+                        ? section.fields!.map((field) => (
+                            <BrainDisplayField key={field.label} field={field} />
+                          ))
+                        : null}
+                      {(section.tags?.length ?? 0) > 0 ? (
+                        <View className="flex-row flex-wrap gap-1.5">
+                          {section.tags!.map((tag) => (
+                            <Text
+                              key={tag}
+                              className="rounded-md bg-subtle px-2 py-1 font-mono text-3xs text-foreground-muted"
+                            >
+                              {tag}
+                            </Text>
+                          ))}
+                        </View>
+                      ) : null}
+                      {(section.items?.length ?? 0) > 0 ? (
+                        <View className="gap-1.5">
+                          {section.items!.map((item) => (
+                            <BrainDisplayItem key={item.id ?? item.title} item={item} />
+                          ))}
+                        </View>
+                      ) : section.text || section.fields?.length || section.tags?.length ? null : (
+                        <Text className="text-2xs text-foreground-muted">No results</Text>
+                      )}
+                    </View>
+                  ))
+                ) : (
+                  <Text className="text-2xs text-foreground-muted">
+                    {brainDisplay.responseSummary}
+                  </Text>
+                )}
               </View>
             </ScrollView>
           ) : (
