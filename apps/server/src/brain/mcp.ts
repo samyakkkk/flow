@@ -45,6 +45,7 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
               .pipe(Effect.mapError(() => "Could not resolve the project's work folder."));
             const workspaceRoot = Option.isSome(project) ? project.value.workspaceRoot : undefined;
             const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
+            if (Option.isSome(project)) runtime.projectBindings?.register(project.value);
             if (tool.name === "get_chat_memories") {
               const memories = yield* Effect.tryPromise({
                 try: () => runtime.chatMemories(thread.value.projectId, scope.value.threadId),

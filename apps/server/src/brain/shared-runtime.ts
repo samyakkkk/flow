@@ -1,3 +1,4 @@
+import { ProjectBrainBindings } from "./project-bindings.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Private local instance transport.
 // @effect-diagnostics globalFetch:off - Local transport outside the Effect runtime.
 // @effect-diagnostics globalTimers:off - Persisted capture retry lifecycle.
@@ -13,6 +14,7 @@ import type { BrainRuntime } from "./BrainRuntime.ts";
 import type { BrainCapture, BrainSessionContext } from "./session-worker.ts";
 export type BrainClient = Pick<
   BrainRuntime,
+  | "projectBindings"
   | "chatMemories"
   | "projectBrainId"
   | "callProjectTool"
@@ -173,6 +175,7 @@ const decodeRepositories = Schema.decodeUnknownSync(
 );
 const decodeBranches = Schema.decodeUnknownSync(Schema.Array(Schema.String));
 export class SharedBrainRuntime implements BrainClient {
+  readonly projectBindings: ProjectBrainBindings;
   private bindings: Record<string, string> = {};
   private queue = Promise.resolve();
   private writes = Promise.resolve();
@@ -183,6 +186,7 @@ export class SharedBrainRuntime implements BrainClient {
   private readonly directory: string;
   private readonly instance: string;
   constructor(source: string, directory: string, instance: string) {
+    this.projectBindings = new ProjectBrainBindings(directory);
     this.source = source;
     this.directory = directory;
     this.instance = instance;
@@ -208,6 +212,7 @@ export class SharedBrainRuntime implements BrainClient {
     return reply.result;
   }
   async initialize() {
+    await this.projectBindings.initialize();
     await NodeFSP.mkdir(NodePath.join(this.directory, "capture"), { recursive: true });
     try {
       this.bindings = decodeBindings(
@@ -222,7 +227,7 @@ export class SharedBrainRuntime implements BrainClient {
     this.flush();
   }
   projectBrainId(project: ProjectId) {
-    return this.bindings[project];
+    return this.projectBindings.resolve(project, (id) => this.bindings[id]);
   }
   async chatMemories(projectId: ProjectId, session: string, revision?: string) {
     const workspace = this.projectBrainId(projectId);
@@ -238,27 +243,25 @@ export class SharedBrainRuntime implements BrainClient {
     const state = decodeState(await this.request("state", { metadataOnly }));
     return {
       ...state,
+      configuredProjectIds: this.projectBindings.configuredProjectIds(),
       workspaces: state.workspaces
-        .filter((w) => !projectId || this.bindings[projectId] === w.id)
+        .filter((w) => !projectId || this.projectBrainId(projectId) === w.id)
         .map((w) => ({
           ...w,
-          projectIds: Object.entries(this.bindings)
-            .filter(([, id]) => id === w.id)
-            .map(([id]) => decodeProjectId(id)),
+          projectIds: this.projectBindings.idsFor(
+            w.id,
+            (id) => this.bindings[id],
+            Object.keys(this.bindings).map((id) => decodeProjectId(id)),
+          ),
         })),
     };
   }
   bindProject(project: { id: ProjectId; workspaceRoot: string }, workspace: string | null) {
+    this.projectBindings.register(project);
     const pending = this.writes.then(async () => {
       if (workspace && !(await this.state()).workspaces.some((w) => w.id === workspace))
         throw Error("Brain is not available on the source instance");
-      const next = { ...this.bindings };
-      if (workspace) next[project.id] = workspace;
-      else delete next[project.id];
-      const file = NodePath.join(this.directory, "bindings.json");
-      await NodeFSP.writeFile(file + ".tmp", JSON.stringify(next), { mode: 0o600 });
-      await NodeFSP.rename(file + ".tmp", file);
-      this.bindings = next;
+      await this.projectBindings.bind(project.id, workspace);
     });
     this.writes = pending.catch(() => {});
     return pending;
@@ -269,12 +272,12 @@ export class SharedBrainRuntime implements BrainClient {
     args: Record<string, unknown>,
     context: BrainSessionContext,
   ) {
-    const workspace = this.bindings[project];
+    const workspace = this.projectBrainId(project);
     if (!workspace) throw Error("This project has no connected shared brain");
     return decodeToolResult(await this.request("call", { workspace, name, args, context }));
   }
   async captureProjectEvent(project: ProjectId, capture: BrainCapture) {
-    const workspace = this.bindings[project];
+    const workspace = this.projectBrainId(project);
     if (!workspace) return;
     this.sequence = Math.max(this.sequence + 1, Date.now() * 1000);
     const file = NodePath.join(this.directory, "capture", `${this.sequence}.json`);

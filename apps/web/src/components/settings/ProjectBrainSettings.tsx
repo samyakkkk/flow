@@ -1,10 +1,10 @@
-import { BrainIcon } from "../brain/BrainIcon";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { BrainCommand, BrainState, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { BrainCommand, BrainState, EnvironmentId } from "@t3tools/contracts";
 import type { SidebarProjectGroupMember } from "../../sidebarProjectGrouping";
 import { brainCommand } from "../../state/brain";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { BrainSelect, CreateBrainDialog } from "../brain/BrainControls";
+import { BrainIcon } from "../brain/BrainIcon";
 import { Button } from "../ui/button";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -13,134 +13,146 @@ export function ProjectBrainSettings({
 }: {
   members: readonly SidebarProjectGroupMember[];
 }) {
-  const environmentIds = [...new Set(members.map((member) => member.environmentId))];
-  return (
-    <SettingsSection title="Brain">
-      <p className="px-4 text-sm text-muted-foreground">
-        Choose the shared knowledge your project uses. Connecting a brain adds this repository as a
-        source.
-      </p>
-      {environmentIds.map((environmentId) => (
-        <EnvironmentBrainSettings
-          key={environmentId}
-          environmentId={environmentId}
-          members={members.filter((member) => member.environmentId === environmentId)}
-          showCheckout={members.length > 1}
-        />
-      ))}
-    </SettingsSection>
-  );
-}
-
-function EnvironmentBrainSettings({
-  environmentId,
-  members,
-  showCheckout,
-}: {
-  environmentId: EnvironmentId;
-  members: SidebarProjectGroupMember[];
-  showCheckout: boolean;
-}) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
-  const [state, setState] = useState<BrainState | null>(null);
+  const targets = useMemo(
+    () => [...new Map(members.map((member) => [member.environmentId, member])).values()],
+    [members],
+  );
+  const [states, setStates] = useState<Map<EnvironmentId, BrainState>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [createFor, setCreateFor] = useState<ProjectId | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const pending = useRef(false);
   const generation = useRef(0);
-  const send = useCallback(
-    async (input: BrainCommand) => {
-      if (pending.current) return null;
-      pending.current = true;
-      const request = ++generation.current;
-      setBusy(true);
-      setError("");
-      try {
-        const result = await execute({ environmentId, input });
-        if (request !== generation.current) return null;
-        if (result._tag === "Failure") {
-          setError("Could not reach this machine's brains. Check the connection and retry.");
-          return null;
-        }
-        setState(result.value.state);
-        setError(result.value.error ?? "");
-        return result.value;
-      } finally {
-        if (request === generation.current) {
-          pending.current = false;
-          setBusy(false);
-        }
-      }
-    },
-    [environmentId, execute],
-  );
-
+  const refresh = useCallback(async () => {
+    const request = ++generation.current;
+    const results = await Promise.all(
+      targets.map(async (target) => {
+        const result = await execute({
+          environmentId: target.environmentId,
+          input: { action: "read", metadataOnly: true, projectId: target.id },
+        });
+        return { target, result };
+      }),
+    );
+    if (request !== generation.current) return;
+    const next = new Map<EnvironmentId, BrainState>();
+    for (const { target, result } of results) {
+      if (result._tag === "Success" && !result.value.error)
+        next.set(target.environmentId, result.value.state);
+    }
+    setStates(next);
+    if (next.size !== targets.length)
+      setError("Could not load brains from every machine for this project. Reconnect and retry.");
+  }, [execute, targets]);
   useEffect(() => {
-    void send({ action: "read", metadataOnly: true });
+    void refresh();
     return () => {
       generation.current++;
-      pending.current = false;
     };
-  }, [send]);
-
+  }, [refresh]);
+  const first = targets[0];
+  const available = first ? states.get(first.environmentId) : undefined;
+  const loaded = states.size === targets.length && targets.length > 0;
+  const choices = (available?.workspaces ?? []).filter((brain) =>
+    targets.every((target) =>
+      states.get(target.environmentId)?.workspaces.some((other) => other.id === brain.id),
+    ),
+  );
+  const assignments = new Set(
+    members.map(
+      (member) =>
+        states
+          .get(member.environmentId)
+          ?.workspaces.find((brain) => brain.projectIds?.includes(member.id))?.id ?? "none",
+    ),
+  );
+  const mixed = loaded && assignments.size > 1;
+  const selected = mixed ? "conflict" : ([...assignments][0] ?? "none");
+  async function bind(workspaceId: string | null) {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      for (const target of targets) {
+        const result = await execute({
+          environmentId: target.environmentId,
+          input: { action: "bindProject", projectId: target.id, workspaceId },
+        });
+        if (result._tag === "Failure" || result.value.error) {
+          setError(
+            result._tag === "Success"
+              ? (result.value.error ?? "Could not save the project brain.")
+              : "Could not save the brain on every machine. Reconnect and retry.",
+          );
+          break;
+        }
+      }
+      await refresh();
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
+  async function send(input: BrainCommand) {
+    if (!first) return null;
+    const result = await execute({ environmentId: first.environmentId, input });
+    if (result._tag === "Failure") return null;
+    setStates((previous) => new Map(previous).set(first.environmentId, result.value.state));
+    return result.value;
+  }
   return (
-    <>
-      {members.map((member) => (
-        <SettingsRow
-          key={member.id}
-          title={
-            showCheckout
-              ? `Project brain · ${member.environmentLabel ?? "This machine"}`
-              : "Project brain"
-          }
-          description={
-            showCheckout
-              ? member.workspaceRoot
-              : "Select a brain, create one, or choose No brain to disconnect."
-          }
-          control={
-            <div className="flex flex-wrap items-center gap-2">
-              <BrainSelect
-                label={`Brain for ${member.workspaceRoot}`}
-                value={
-                  state?.workspaces.find((brain) => brain.projectIds?.includes(member.id))?.id ??
-                  "none"
-                }
-                options={[
-                  {
-                    value: "none",
-                    label: state ? "No brain" : busy ? "Loading brains…" : "Brains unavailable",
-                  },
-                  ...(state?.workspaces ?? []).map((brain) => ({
-                    value: brain.id,
-                    label: brain.name,
-                    icon: <BrainIcon id={brain.id} />,
-                  })),
-                ]}
-                disabled={!state || busy}
-                onChange={(value) => {
-                  void send({
-                    action: "bindProject",
-                    projectId: member.id,
-                    workspaceId: value === "none" ? null : value,
-                  });
-                }}
-              />
+    <SettingsSection title="Brain">
+      <SettingsRow
+        title="Project brain"
+        description="One brain for this project, shared by its checkouts and chats. Connecting adds the repository as a source."
+        control={
+          <div className="flex flex-wrap items-center gap-2">
+            <BrainSelect
+              label="Project brain"
+              value={selected}
+              disabled={!loaded || busy}
+              options={[
+                { value: "none", label: loaded ? "No brain" : "Loading brains…" },
+                ...(mixed
+                  ? [{ value: "conflict", label: "Choose one brain", disabled: true }]
+                  : []),
+                ...choices.map((brain) => ({
+                  value: brain.id,
+                  label: brain.name,
+                  icon: <BrainIcon id={brain.id} />,
+                })),
+              ]}
+              onChange={(value) => void bind(value === "none" ? null : value)}
+            />
+            {targets.length === 1 && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!state || busy}
-                onClick={() => setCreateFor(member.id)}
+                disabled={!loaded || busy}
+                onClick={() => setCreateOpen(true)}
               >
                 New brain
               </Button>
-            </div>
-          }
-        />
-      ))}
+            )}
+          </div>
+        }
+      />
+      {mixed && (
+        <p role="alert" className="px-4 text-sm text-destructive">
+          This project's checkouts previously used different brains. Choose one above to use for the
+          whole project.
+        </p>
+      )}
+      {loaded && targets.length > 1 && choices.length === 0 && (
+        <p className="px-4 text-sm text-muted-foreground">
+          Connect these machines to the same shared brain to select it for this project.
+        </p>
+      )}
       {busy && (
         <p role="status" className="px-4 text-sm text-muted-foreground">
-          Updating brains…
+          Saving project brain…
         </p>
       )}
       {error && (
@@ -150,23 +162,22 @@ function EnvironmentBrainSettings({
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => void send({ action: "read", metadataOnly: true })}
+            onClick={() => {
+              setError("");
+              void refresh();
+            }}
           >
             Retry
           </Button>
         </div>
       )}
       <CreateBrainDialog
-        open={createFor !== null}
-        onOpenChange={(open) => {
-          if (!open) setCreateFor(null);
-        }}
-        state={state}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        state={available ?? null}
         send={send}
-        onCreated={(workspaceId) => {
-          if (createFor) void send({ action: "bindProject", projectId: createFor, workspaceId });
-        }}
+        onCreated={(id) => void bind(id)}
       />
-    </>
+    </SettingsSection>
   );
 }

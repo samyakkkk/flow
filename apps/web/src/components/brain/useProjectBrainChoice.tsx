@@ -46,23 +46,24 @@ export function useProjectBrainChoice() {
       setState(null);
       setError("");
       setLoading(true);
-      void execute({ environmentId, input: { action: "read", metadataOnly: true } }).then(
-        (result) => {
-          if (generation.current !== request) return;
-          setLoading(false);
-          if (result._tag === "Success" && !result.value.error) {
-            setState(result.value.state);
-            if (projectId)
-              setSelected(
-                result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
-                  ?.id ?? "none",
-              );
-          } else
-            setError(
-              "Could not load brains from this computer. You can retry, or continue without a brain.",
+      void execute({
+        environmentId,
+        input: { action: "read", metadataOnly: true, projectId },
+      }).then((result) => {
+        if (generation.current !== request) return;
+        setLoading(false);
+        if (result._tag === "Success" && !result.value.error) {
+          setState(result.value.state);
+          if (projectId)
+            setSelected(
+              result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
+                ?.id ?? "none",
             );
-        },
-      );
+        } else
+          setError(
+            "Could not load brains from this computer. You can retry, or continue without a brain.",
+          );
+      });
       return new Promise((resolve) => {
         resolver.current = resolve;
       });

@@ -37,12 +37,23 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
           Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
         );
         const command = args.payload.command;
+        if (command.action === "read" && command.projectId) {
+          const selectedProject = yield* projections
+            .getProjectShellById(command.projectId)
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          if (Option.isSome(selectedProject))
+            runtime.projectBindings.register(selectedProject.value);
+        }
         if (command.action === "readChat") {
           const thread = yield* projections
             .getThreadShellById(command.threadId)
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
           if (Option.isNone(thread))
             return yield* failEnvironmentInternal("internal_error", new Error("Chat not found."));
+          const chatProject = yield* projections
+            .getProjectShellById(thread.value.projectId)
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          if (Option.isSome(chatProject)) runtime.projectBindings.register(chatProject.value);
           return yield* Effect.tryPromise(async () => {
             try {
               return {
@@ -81,6 +92,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
                 throw new Error(
                   "Project not found on this computer. Retry after it finishes being created.",
                 );
+              runtime.projectBindings.register(project.value);
               await runtime.bindProject(project.value, command.workspaceId);
             } else if (command.action === "listGithubRepositories") {
               repositories = await runtime.listGithubRepositories();
@@ -104,7 +116,11 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
         }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         if (command.action === "bindProject" && !response.error) {
           yield* settings
-            .updateSettings({ projectBrainSetupComplete: { [command.projectId]: true } })
+            .updateSettings({
+              projectBrainSetupComplete: Object.fromEntries(
+                runtime.projectBindings.members(command.projectId).map((id) => [id, true]),
+              ),
+            })
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         }
         return response;

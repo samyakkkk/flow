@@ -1,3 +1,4 @@
+import { ProjectBrainBindings } from "./project-bindings.ts";
 import { brainResourceEnvironment } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
 import {
@@ -86,6 +87,7 @@ export class BrainRuntime {
   private readonly databasePath: string;
   readonly embeddings: BrainEmbeddings;
 
+  readonly projectBindings: ProjectBrainBindings;
   readonly directory: string;
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
   constructor(
@@ -97,6 +99,7 @@ export class BrainRuntime {
     },
   ) {
     this.directory = directory;
+    this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
     // FalkorDBLite requires a <104-byte Unix socket path on macOS. Worktree
     // paths routinely exceed that. Stable hashed storage also isolates dev homes.
@@ -110,6 +113,7 @@ export class BrainRuntime {
     this.embeddings = new BrainEmbeddings(NodePath.join(directory, "models"));
   }
   async initialize() {
+    await this.projectBindings.initialize();
     await NodeFSP.mkdir(this.directory, { recursive: true, mode: 0o700 });
     try {
       const saved = decodeWorkspaces(
@@ -382,6 +386,7 @@ export class BrainRuntime {
         message: "FalkorDB stopped. Retry the local runtime; existing data has not been replaced.",
       };
     return {
+      configuredProjectIds: this.projectBindings.configuredProjectIds(),
       database: this.database,
       embeddings: { status: this.embeddings.status, message: this.embeddings.message },
       github: this.github,
@@ -389,10 +394,16 @@ export class BrainRuntime {
       workspaces: await Promise.all(
         this.workspaces
           .filter(
-            (workspace) => projectId === undefined || workspace.projectIds.includes(projectId),
+            (workspace) =>
+              projectId === undefined || this.projectBrainId(projectId) === workspace.id,
           )
           .map(async (workspace) => ({
             ...workspace,
+            projectIds: this.projectBindings.idsFor(
+              workspace.id,
+              (id) => this.legacyProjectBrainId(id),
+              workspace.projectIds,
+            ),
             sources: workspace.sources.map((source) => ({ ...source })),
             knowledge: metadataOnly ? emptyKnowledge() : await this.readKnowledge(workspace),
           })),
@@ -628,6 +639,7 @@ export class BrainRuntime {
   }
   /** Resolve the path from T3's project record, never from an agent's arguments. */
   bindProject(project: { id: ProjectId; workspaceRoot: string }, workspaceId: string | null) {
+    this.projectBindings.register(project);
     const result = this.commands.then(async () => {
       if (this.closed) throw new Error("Brain runtime is shutting down.");
       const workspace = workspaceId ? this.workspace(workspaceId) : null;
@@ -646,18 +658,7 @@ export class BrainRuntime {
             path: project.workspaceRoot,
           });
       }
-      const previous = this.workspaces.map((entry) => [...entry.projectIds]);
-      for (const entry of this.workspaces)
-        entry.projectIds = entry.projectIds.filter((id) => id !== project.id);
-      workspace?.projectIds.push(project.id);
-      try {
-        await this.save();
-      } catch (error) {
-        this.workspaces.forEach((entry, i) => {
-          entry.projectIds = previous[i]!;
-        });
-        throw error;
-      }
+      await this.projectBindings.bind(project.id, workspaceId);
     });
     this.commands = result.catch(() => {});
     return result;
@@ -671,8 +672,11 @@ export class BrainRuntime {
     }
     return repo;
   }
-  projectBrainId(projectId: ProjectId) {
+  private legacyProjectBrainId(projectId: ProjectId) {
     return this.workspaces.find((entry) => entry.projectIds.includes(projectId))?.id;
+  }
+  projectBrainId(projectId: ProjectId) {
+    return this.projectBindings.resolve(projectId, (id) => this.legacyProjectBrainId(id));
   }
   private async sessionWorker(workspace: Workspace) {
     let pending = this.sessionWorkers.get(workspace.id);
@@ -744,7 +748,7 @@ export class BrainRuntime {
     await NodeFSP.rename(temp, file);
   }
   async chatMemories(projectId: ProjectId, session: string, revision?: string) {
-    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    const workspace = this.workspaces.find((entry) => entry.id === this.projectBrainId(projectId));
     if (!workspace) return { memories: [], status: "disabled" as const };
     const result = await this.brainMemories(workspace.id, session, revision);
     if (this.projectBrainId(projectId) !== workspace.id)
@@ -763,7 +767,7 @@ export class BrainRuntime {
     args: Record<string, unknown>,
     context: BrainSessionContext,
   ) {
-    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    const workspace = this.workspaces.find((entry) => entry.id === this.projectBrainId(projectId));
     if (!workspace) throw new Error("This project has no connected brain");
     const result = await this.callBrainTool(workspace.id, name, args, context);
     if (this.projectBrainId(projectId) !== workspace.id)
@@ -790,7 +794,7 @@ export class BrainRuntime {
     return worker.call(name, args, { ...context, ...(repo ? { repo } : {}) });
   }
   async captureProjectEvent(projectId: ProjectId, input: BrainCapture) {
-    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    const workspace = this.workspaces.find((entry) => entry.id === this.projectBrainId(projectId));
     if (!workspace) return;
     return this.captureBrainEvent(workspace.id, input);
   }

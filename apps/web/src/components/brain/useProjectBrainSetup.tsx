@@ -24,8 +24,10 @@ export function useProjectBrainSetup() {
       try {
         const read = await execute({
           environmentId,
-          input: { action: "read", metadataOnly: true },
+          input: { action: "read", metadataOnly: true, projectId },
         });
+        if (read._tag === "Success" && read.value.state.configuredProjectIds?.includes(projectId))
+          return true;
         const connected =
           read._tag === "Success" &&
           read.value.state.workspaces.some((brain) => brain.projectIds?.includes(projectId));

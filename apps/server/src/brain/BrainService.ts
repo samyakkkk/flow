@@ -1,3 +1,4 @@
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { HostProcessPlatform, HostProcessArchitecture } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -24,6 +25,18 @@ export class BrainService extends Context.Service<
       const path = yield* Path.Path;
       const platform = yield* HostProcessPlatform;
       const architecture = yield* HostProcessArchitecture;
+      const projections = yield* ProjectionSnapshotQuery;
+      const registerProjects = (runtime: BrainClient) =>
+        Effect.gen(function* () {
+          const snapshot = yield* projections
+            .getShellSnapshot()
+            .pipe(Effect.mapError((error) => new BrainServiceError({ message: String(error) })));
+          for (const project of snapshot.projects) runtime.projectBindings.register(project);
+          yield* Effect.tryPromise({
+            try: () => runtime.projectBindings.adoptLegacy((id) => runtime.projectBrainId(id)),
+            catch: (error) => new BrainServiceError({ message: String(error) }),
+          });
+        });
       if (process.env.FLOW_SHARED_BRAIN_HOME) {
         const shared = new SharedBrainRuntime(
           process.env.FLOW_SHARED_BRAIN_HOME,
@@ -38,6 +51,7 @@ export class BrainService extends Context.Service<
               message: cause instanceof Error ? cause.message : "Shared brain unavailable",
             }),
         });
+        yield* registerProjects(shared);
         return BrainService.of({ ready: Effect.succeed(shared) });
       }
       const runtime = new BrainRuntime(path.join(config.stateDir, "brain"), {
@@ -65,6 +79,7 @@ export class BrainService extends Context.Service<
         });
         yield* Effect.addFinalizer(() => Effect.promise(close));
       }
+      yield* registerProjects(runtime);
       return BrainService.of({ ready: Effect.succeed(runtime) });
     }),
   );

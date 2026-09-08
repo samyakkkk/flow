@@ -36,6 +36,7 @@ export const makeBrainChatContextLoader = Effect.fn("brain.makeChatContextLoader
         .pipe(Effect.mapError(() => "Could not resolve the project's work folder."));
       const workspaceRoot = Option.isSome(project) ? project.value.workspaceRoot : undefined;
       const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
+      if (Option.isSome(project)) runtime.projectBindings?.register(project.value);
       const bindingKey = runtime.projectBrainId(thread.value.projectId) ?? "";
       if (bindingKey === previousBinding) return { bindingKey };
       if (!bindingKey)
@@ -106,6 +107,7 @@ export const makeBrainChatCapture = Effect.fn("brain.makeChatCapture")(function*
         .pipe(Effect.mapError(() => "Could not resolve the project's work folder."));
       const workspaceRoot = Option.isSome(project) ? project.value.workspaceRoot : undefined;
       const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
+      if (Option.isSome(project)) runtime.projectBindings?.register(project.value);
       if (!runtime.projectBrainId(thread.value.projectId)) return;
       if (
         expectedBinding !== undefined &&

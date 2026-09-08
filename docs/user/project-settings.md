@@ -38,8 +38,8 @@ local work, resolve it yourself before automatic pulls can resume.
 
 Select a project in **Settings → Projects**. The **Brain** section at the top shows its current
 brain. Choose another brain, use **New brain** to create and connect one, or select **No brain**
-to disconnect. Projects with multiple checkouts show a separate choice for each checkout on its
-machine.
+to disconnect. One brain is shared by all checkouts of the same repository, including checkouts
+added later. If older checkouts used different brains, choose one for the project to resolve the conflict.
 
 In a chat with no connected brain, you can also use **Connect brain** in the Flow side panel
 to choose or create one for the project. Before the first message in an unconfigured project,

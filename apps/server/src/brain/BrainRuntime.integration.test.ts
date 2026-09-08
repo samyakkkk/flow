@@ -15,6 +15,9 @@ const decodeRegistry = Schema.decodeUnknownSync(
 );
 
 const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(BrainWorkspace)));
+const decodeProjectBindings = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
+);
 
 const { index, captureState } = vi.hoisted(() => ({
   index: vi.fn(),
@@ -405,11 +408,20 @@ describe("native brain persistence", () => {
           await expect(reopened.callProjectTool(project.id, "orient", {}, context)).rejects.toThrow(
             "no connected brain",
           );
-          const registry = decodeRegistry(
-            await NodeFSP.readFile(NodePath.join(directory, "state", "workspaces.json"), "utf8"),
-          );
-          expect(registry[0]!.projectIds).toEqual([otherProject.id]);
-          expect(registry[1]!.projectIds).toEqual([]);
+          const boundState = await reopened.state();
+          expect(boundState.workspaces[0]!.projectIds).toEqual([otherProject.id]);
+          expect(boundState.workspaces[1]!.projectIds).toEqual([]);
+          expect(
+            decodeProjectBindings(
+              await NodeFSP.readFile(
+                NodePath.join(directory, "state", "project-brains.json"),
+                "utf8",
+              ),
+            ),
+          ).toEqual({
+            [`project:${project.id}`]: null,
+            [`project:${otherProject.id}`]: first!.id,
+          });
           const races = await Promise.allSettled([
             reopened.command({ action: "create", name: "Race", cli: "claude" }),
             reopened.command({ action: "create", name: "race", cli: "claude" }),
