@@ -171,22 +171,24 @@ export function ChatBrainPanel({
               Loading your brain…
             </p>
           )}
-          <div className="px-2 py-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full"
-              disabled={connecting}
-              onClick={() => void connectBrain()}
-            >
-              {connecting ? "Saving brain choice…" : brain ? "Change brain" : "Connect brain"}
-            </Button>
-            {connectionError && (
-              <p role="alert" className="pt-2 text-xs text-destructive">
-                {connectionError}
-              </p>
-            )}
-          </div>
+          {!brain && (
+            <div className="px-2 py-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full"
+                disabled={connecting}
+                onClick={() => void connectBrain()}
+              >
+                {connecting ? "Connecting…" : "Connect brain"}
+              </Button>
+              {connectionError && (
+                <p role="alert" className="pt-2 text-xs text-destructive">
+                  {connectionError}
+                </p>
+              )}
+            </div>
+          )}
           {response && (
             <>
               <section aria-label="Connected brain">
