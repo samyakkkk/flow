@@ -9,7 +9,7 @@ export function builderAsset(name: string): string {
   return NodeFS.readFileSync(
     NodeFS.existsSync(packaged)
       ? packaged
-      : NodePath.resolve(here, "../../../../flow/index-workspace", name),
+      : NodePath.resolve(here, "../../../../flow-t3/shared/index-workspace", name),
     "utf8",
   );
 }
@@ -18,10 +18,14 @@ export function builderMcpCommand(): { command: string; args: string[] } {
   if (NodeFS.existsSync(packaged)) return { command: process.execPath, args: [packaged] };
   const tsx = NodePath.resolve(
     here,
-    "../../../../flow/graph-gateway/node_modules/tsx/dist/loader.mjs",
+    "../../../../flow-t3/shared/graph-gateway/node_modules/tsx/dist/loader.mjs",
   );
   return {
     command: process.execPath,
-    args: ["--import", tsx, NodePath.resolve(here, "../../../../flow/graph-gateway/src/mcp.ts")],
+    args: [
+      "--import",
+      tsx,
+      NodePath.resolve(here, "../../../../flow-t3/shared/graph-gateway/src/mcp.ts"),
+    ],
   };
 }

@@ -1,3 +1,4 @@
+import { brainResourceEnvironment } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
 import {
   startSessionWorker,
@@ -680,15 +681,17 @@ export class BrainRuntime {
         await NodeFSP.mkdir(directory, { recursive: true });
         await this.writeSessionSources(workspace);
         return startSessionWorker({
-          GRAPH_NAME: `flow_brain_${workspace.id.replaceAll("-", "")}`,
-          FALKOR_SOCKET: this.db.socketPath,
+          ...brainResourceEnvironment({
+            graphName: `flow_brain_${workspace.id.replaceAll("-", "")}`,
+            databaseSocket: this.db.socketPath,
+            embeddingUrl: bridge.url,
+            embeddingToken: bridge.token,
+          }),
           FLOW_PROJECT_NAME: workspace.name,
           DB_PATH: NodePath.join(directory, "flow.db"),
           JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
           OPENCODE_WORKSPACE_DIR: directory,
           FLOW_SOURCE_REGISTRY: NodePath.join(directory, "repos.json"),
-          FLOW_EMBED_URL: bridge.url,
-          FLOW_EMBED_TOKEN: bridge.token,
           FLOW_ADMIN_TOKEN: NodeCrypto.randomBytes(32).toString("hex"),
           INDEXER_RUNTIME: workspace.cli,
         });

@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.92,
+  "extracted": {
+    "claim": "Redis is used for all session caching in production",
+    "subject": "session caching",
+    "technology": "Redis"
+  }
+}

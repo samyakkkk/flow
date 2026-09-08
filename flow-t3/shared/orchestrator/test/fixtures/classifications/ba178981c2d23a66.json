@@ -1,0 +1,8 @@
+{
+  "classification": "task_discussion",
+  "confidence": 0.85,
+  "extracted": {
+    "task": "Build GraphQL API layer on top of existing REST services",
+    "area": "api"
+  }
+}

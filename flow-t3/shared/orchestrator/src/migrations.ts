@@ -1,0 +1,507 @@
+// Versioned SQLite migrations, tracked with SQLite's native PRAGMA user_version.
+//
+// How it composes with db.ts:
+//   - db.ts always runs the full baseline schema (CREATE ... IF NOT EXISTS), so
+//     a FRESH database already matches the latest shape — it just gets stamped
+//     with the latest version, no migrations run.
+//   - An EXISTING database walks every migration with id > its stored version,
+//     each inside a transaction, stamping user_version as it goes.
+//
+// Rules for adding a migration:
+//   - Append only, next integer id — never renumber or edit a shipped one.
+//   - Also update the baseline schema in db.ts so fresh DBs are born current.
+//   - One-way schema changes only. Convergent enrichment (backfills that can
+//     re-run) belongs in a boot reconciler, not here — see graph-gateway's
+//     reconcile.ts for the pattern.
+//
+// Migrations 1-4 predate versioning (they shipped as tolerant try/catch ALTERs
+// at module load). Every existing DB already has those columns but reports
+// user_version 0, so these four must stay duplicate-tolerant. Future
+// migrations should be strict: a real failure must crash boot loudly, not be
+// swallowed.
+
+import type Database from "better-sqlite3";
+
+type DB = Database.Database;
+
+export interface Migration {
+  id: number;
+  name: string;
+  up: (db: DB) => void;
+}
+
+// ALTER TABLE ADD COLUMN that tolerates the column already existing (needed
+// for the pre-versioning migrations only — see header).
+function addColumn(db: DB, sql: string): void {
+  try {
+    db.exec(sql);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/duplicate column name/i.test(msg)) throw err;
+  }
+}
+
+export const MIGRATIONS: Migration[] = [
+  {
+    id: 1,
+    name: "poll_cursors: add detail column",
+    up: (db) => addColumn(db, "ALTER TABLE poll_cursors ADD COLUMN detail TEXT"),
+  },
+  {
+    id: 2,
+    name: "events: add classification_json column",
+    up: (db) => addColumn(db, "ALTER TABLE events ADD COLUMN classification_json TEXT"),
+  },
+  {
+    id: 3,
+    name: "jobs: add notify_count column",
+    up: (db) => addColumn(db, "ALTER TABLE jobs ADD COLUMN notify_count INTEGER NOT NULL DEFAULT 0"),
+  },
+  {
+    id: 4,
+    name: "jobs: add session_id column",
+    up: (db) => addColumn(db, "ALTER TABLE jobs ADD COLUMN session_id TEXT"),
+  },
+  {
+    id: 5,
+    name: "corrections: agent-flagged graph inaccuracies awaiting indexer verification",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS corrections (
+          id          TEXT PRIMARY KEY,
+          target_ids  TEXT NOT NULL,
+          reason      TEXT NOT NULL,
+          evidence    TEXT,
+          repo        TEXT,
+          actor       TEXT,
+          session     TEXT,
+          graph_name  TEXT,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          job_id      TEXT,
+          resolution  TEXT,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `),
+  },
+  {
+    id: 6,
+    name: "branch_notes: Flow-side working memory scoped to repo+branch",
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS branch_notes (
+          id          TEXT PRIMARY KEY,
+          repo        TEXT NOT NULL,
+          branch      TEXT NOT NULL,
+          kind        TEXT NOT NULL DEFAULT 'note',
+          text        TEXT NOT NULL,
+          anchor_hint TEXT,
+          actor       TEXT,
+          session     TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          embedding   BLOB,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_branch_notes_repo_branch ON branch_notes(repo, branch, status);
+      `),
+  },
+  {
+    id: 7,
+    name: "agent_sessions: session-diff snapshot columns (start_sha, start_untracked, worktree_id)",
+    up: (db) => {
+      // SEQUENCING HAZARD: agent_sessions is NOT in db.ts's baseline — it's
+      // created at runtime.ts module load, which happens AFTER migrations run
+      // (db.ts → migrate() at import). So a DB that predates the agents feature
+      // has no agent_sessions table yet, and bare ALTERs would crash boot.
+      // Create the CURRENT (pre-change) shape first: a no-op when the table
+      // already exists (older agents DB), and the owner of its creation when it
+      // doesn't. Either way the ALTERs below then land on a real table with the
+      // new columns absent, so they succeed strictly (no duplicate-column
+      // tolerance needed — migrations 5+ are strict; see header).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          id TEXT PRIMARY KEY,
+          backend TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          cwd TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          acp_session_id TEXT,
+          stop_reason TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN start_sha TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN start_untracked TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN worktree_id TEXT");
+    },
+  },
+  {
+    id: 8,
+    name: "memory v1: observations + memories + FTS5, distill bookkeeping",
+    up: (db) => {
+      // Keep this schema IDENTICAL to the baseline block in db.ts (MEMORY_SCHEMA
+      // there) — fresh DBs are born from the baseline and skip this migration,
+      // so drift between the two would go unnoticed until an existing DB upgrades.
+      db.exec(MEMORY_SCHEMA);
+      db.exec(MEMORY_TRIGGERS);
+      // Idle-sweep bookkeeping: the highest transcript seq the distiller has
+      // already consumed for a session. NULL = never distilled.
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN last_distilled_seq INTEGER");
+    },
+  },
+  {
+    id: 9,
+    name: "memory v1: anchors join table (item ↔ graph node)",
+    up: (db) => {
+      // Keep byte-identical to ANCHORS_SCHEMA in db.ts (see migration 8 note).
+      db.exec(ANCHORS_SCHEMA);
+    },
+  },
+  {
+    id: 10,
+    name: "observations: citation source refs (source_id, source_url)",
+    up: (db) => {
+      // A DB below version 8 walks migration 8 first, which executes the
+      // SHARED MEMORY_SCHEMA string — already containing these columns — so a
+      // bare ALTER here would crash on "duplicate column". Guard on the actual
+      // table shape; anything else that fails still crashes boot loudly.
+      const cols = db.prepare(`SELECT name FROM pragma_table_info('observations')`).all() as Array<{ name: string }>;
+      const has = new Set(cols.map((c) => c.name));
+      if (!has.has("source_id")) db.exec("ALTER TABLE observations ADD COLUMN source_id TEXT");
+      if (!has.has("source_url")) db.exec("ALTER TABLE observations ADD COLUMN source_url TEXT");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source, source_id)");
+    },
+  },
+  {
+    id: 11,
+    name: "index_log: durable indexer lifecycle trail",
+    up: (db) => {
+      // Keep byte-identical to INDEX_LOG_SCHEMA in db.ts (see migration 8 note).
+      db.exec(INDEX_LOG_SCHEMA);
+    },
+  },
+  {
+    id: 12,
+    name: "work_folders: per-user agent work surfaces",
+    up: (db) => {
+      // Keep byte-identical to WORK_FOLDERS_SCHEMA in db.ts (see migration 8 note).
+      db.exec(WORK_FOLDERS_SCHEMA);
+    },
+  },
+  {
+    id: 13,
+    name: "drop branch_notes: the lane folded into distiller memory",
+    up: (db) => {
+      // Branch-scoped notes are distilled memory now — observations carry
+      // {repo, branch, session} mechanically, so a separate agent-authored
+      // note store is redundant. Content is dropped deliberately, not
+      // migrated (Samyak, 2026-07-18): working notes were transient by design.
+      db.exec(`
+        DROP INDEX IF EXISTS idx_branch_notes_repo_branch;
+        DROP TABLE IF EXISTS branch_notes;
+      `);
+    },
+  },
+  {
+    id: 14,
+    name: "orient docs: ambient nomination column + rendered doc cache",
+    up: (db) => {
+      // A DB below version 8 walks migration 8 first, which executes the
+      // SHARED MEMORY_SCHEMA string — already containing `ambient` — so a bare
+      // ALTER here would crash on "duplicate column". Same guard as migration 10.
+      const cols = db.prepare(`SELECT name FROM pragma_table_info('observations')`).all() as Array<{ name: string }>;
+      if (!new Set(cols.map((c) => c.name)).has("ambient")) {
+        db.exec("ALTER TABLE observations ADD COLUMN ambient INTEGER NOT NULL DEFAULT 0");
+      }
+      db.exec(ORIENT_DOCS_SCHEMA);
+    },
+  },
+  {
+    id: 15,
+    name: "agent_sessions: semantic session search (search_text, embedding, embedded_at)",
+    up: (db) => {
+      // Same sequencing hazard as migration 7: agent_sessions is created at
+      // runtime.ts module load, AFTER migrations. Any DB below 7 gets the table
+      // from migration 7 earlier in this walk; this guard covers a DB stamped
+      // 7-14 that somehow never materialized it. No-op when it exists.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          id TEXT PRIMARY KEY,
+          backend TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          cwd TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          acp_session_id TEXT,
+          stop_reason TEXT,
+          error TEXT,
+          start_sha TEXT,
+          start_untracked TEXT,
+          worktree_id TEXT,
+          last_distilled_seq INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      // search_text — the compact doc that was embedded (also serves lexical
+      // fallback); embedding — 768-dim Gemma BLOB (see embed.ts); embedded_at —
+      // ms stamp compared against updated_at to detect stale vectors.
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN search_text TEXT");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN embedding BLOB");
+      db.exec("ALTER TABLE agent_sessions ADD COLUMN embedded_at INTEGER");
+    },
+  },
+  {
+    id: 16,
+    name: "cloud worktree identity and retained checkpoints",
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS cloud_conversations (
+        conversation_key TEXT PRIMARY KEY, session_id TEXT,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()));
+        CREATE TABLE IF NOT EXISTS cloud_worktrees (
+          conversation_key TEXT NOT NULL REFERENCES cloud_conversations(conversation_key),
+          repo TEXT NOT NULL, path TEXT NOT NULL UNIQUE, branch TEXT NOT NULL,
+          base_commit TEXT NOT NULL, PRIMARY KEY (conversation_key, repo));`);
+      const columns = new Set((db.prepare("PRAGMA table_info(cloud_worktrees)").all() as { name: string }[]).map((r) => r.name));
+      for (const [name, type] of [["git_dir", "TEXT"], ["git_identity", "TEXT"], ["archived_at", "INTEGER"], ["checkpoint_commit", "TEXT"], ["cleanup_error", "TEXT"]]) {
+        if (!columns.has(name)) db.exec(`ALTER TABLE cloud_worktrees ADD COLUMN ${name} ${type}`);
+      }
+    },
+  },
+  {
+    id: 17,
+    name: "durable transcript distillation checkpoints and event evidence",
+    up: (db) => { db.exec(DISTILL_CHECKPOINT_SCHEMA); },
+  },
+  {
+    id: 18,
+    name: "Slack channel archive and resumable history/thread sync",
+    up: (db) => { db.exec(SLACK_ARCHIVE_SCHEMA); },
+  },
+];
+
+// Orient docs — the AMBIENT memory tier. One rendered document per scope
+// ('global' or 'repo:<name>'), returned verbatim and in full by orient() —
+// the auto-authored AGENTS.md. The doc is a DERIVED VIEW over memories:
+// membership is recomputed from the memories table on every rebuild
+// (ambient-nominated AND (user_stated OR strong tier); kind 'plan' never
+// qualifies), member_ids records the set for provenance, content is the
+// deterministic render. Rebuildable at any time — memories stay primary.
+export const ORIENT_DOCS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS orient_docs (
+    scope      TEXT PRIMARY KEY,   -- 'global' | 'repo:<name>'
+    content    TEXT NOT NULL,
+    member_ids TEXT NOT NULL,      -- JSON array of member memory ids (render provenance)
+    revision   INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+`;
+
+// Per-user WORK surfaces (where agent sessions run) — deliberately separate
+// from repos.json so one user's local paths never leak into a teammate's
+// dashboard on a shared deployment. owner = dashboard session user in prod,
+// "local" in local mode. UNIQUE keeps re-registration idempotent.
+export const WORK_FOLDERS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS work_folders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner      TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    repo       TEXT,
+    added_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(owner, path)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_folders_owner ON work_folders(owner);
+`;
+
+// Indexer lifecycle trail — one row per transition (enqueued, parked,
+// superseded, started, done, failed, recovered, watch, removed) so
+// self-deployers can reconstruct what the indexer did and why without
+// shell access to the orchestrator log. Rows are append-only; detail is
+// JSON (branch, commit, duration_ms, error, ...). Read via GET /v1/index-log.
+export const INDEX_LOG_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS index_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo       TEXT NOT NULL,
+    event      TEXT NOT NULL,
+    job_id     TEXT,
+    detail     TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_index_log_repo ON index_log(repo, id);
+`;
+
+// Anchors: the join between a memory/observation (flow.db PRIMARY) and a graph
+// node (a rebuildable projection). flow.db owns the edge; any graph
+// representation is derivable. item_type distinguishes distilled memories from
+// raw corpus observations (linear/slack) so a node's headline index can pull
+// the right kind. node_id is the graph node id string (e.g. 'svc:users',
+// 'api:dashboard:GET /agents'); source records HOW the edge was inferred
+// (deterministic file match vs. semantic). resolved_at is the epoch the edge
+// was last (re)resolved — re-resolution deletes+reinserts. Cap of 3 anchors per
+// item is enforced in code, not schema. UNIQUE keeps re-resolution idempotent.
+export const ANCHORS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS anchors (
+    id          TEXT PRIMARY KEY,
+    item_type   TEXT NOT NULL,   -- 'memory' | 'observation'
+    item_id     TEXT NOT NULL,
+    node_id     TEXT NOT NULL,   -- graph node id string
+    source      TEXT NOT NULL,   -- 'files' | 'semantic'
+    resolved_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(item_type, item_id, node_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_anchors_item ON anchors(item_type, item_id);
+  CREATE INDEX IF NOT EXISTS idx_anchors_node ON anchors(node_id);
+`;
+
+// Memory v1 storage. observations = raw per-session/corpus claims (the corpus,
+// FTS-mirrored); memories = consolidated canonical claims an observation attaches
+// to. Both carry a 768-dim Gemma embedding BLOB (see embed.ts). repo_family is
+// the normalized repo name (suffixes like -backend stripped) — the retrieval
+// hard gate keys on it. Kept in one exported string so db.ts's baseline and
+// migration 8 stay byte-identical.
+export const MEMORY_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS observations (
+    id             TEXT PRIMARY KEY,
+    source         TEXT NOT NULL,   -- session | slack | linear | meeting
+    repo           TEXT,
+    repo_family    TEXT,            -- normalized repo (e.g. foo-backend -> foo); NULL = match-all
+    branch         TEXT,
+    session_id     TEXT,
+    source_id      TEXT,            -- id of the source artifact (slack event id, linear issue id); citation + dedupe key
+    source_url     TEXT,            -- permalink back to the original (slack permalink, linear url)
+    claim          TEXT NOT NULL,
+    kind           TEXT NOT NULL,   -- decision|constraint|gotcha|how_to|preference|plan
+    source_weight  TEXT NOT NULL DEFAULT 'agent_inferred', -- user_stated|agent_inferred|error_proven
+    context_files  TEXT,            -- JSON array
+    retrieval_keys TEXT,            -- JSON array
+    ambient        INTEGER NOT NULL DEFAULT 0, -- distiller nomination: orient-doc tier ("every session here should see this")
+    embedding      BLOB,
+    memory_id      TEXT,            -- FK -> memories.id, nullable until consolidated
+    created_at     INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_observations_family ON observations(repo_family, memory_id);
+  CREATE INDEX IF NOT EXISTS idx_observations_memory ON observations(memory_id);
+
+  CREATE TABLE IF NOT EXISTS memories (
+    id                 TEXT PRIMARY KEY,
+    claim              TEXT NOT NULL,   -- canonical
+    kind               TEXT NOT NULL,
+    repo               TEXT,
+    repo_family        TEXT,
+    strength           REAL NOT NULL DEFAULT 0,
+    evidence_count     INTEGER NOT NULL DEFAULT 0,
+    people_count       INTEGER NOT NULL DEFAULT 0,
+    contradiction_count INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_at INTEGER,
+    status             TEXT NOT NULL DEFAULT 'active', -- active | sunk
+    embedding          BLOB,
+    retrieval_keys     TEXT,            -- JSON array (union of attached observations)
+    max_source_weight  TEXT NOT NULL DEFAULT 'agent_inferred',
+    created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at         INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_memories_family ON memories(repo_family, status);
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+    id UNINDEXED, claim, retrieval_keys,
+    content='observations', content_rowid='rowid'
+  );
+`;
+
+// FTS triggers mirroring the corpus.ts pattern — kept out of MEMORY_SCHEMA so
+// they can be created once (baseline + migration both call ensureMemoryTriggers).
+export const MEMORY_TRIGGERS = `
+  CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
+    INSERT INTO observations_fts(rowid, id, claim, retrieval_keys)
+      VALUES (new.rowid, new.id, new.claim, new.retrieval_keys);
+  END;
+  CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, id, claim, retrieval_keys)
+      VALUES ('delete', old.rowid, old.id, old.claim, old.retrieval_keys);
+  END;
+  CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, id, claim, retrieval_keys)
+      VALUES ('delete', old.rowid, old.id, old.claim, old.retrieval_keys);
+    INSERT INTO observations_fts(rowid, id, claim, retrieval_keys)
+      VALUES (new.rowid, new.id, new.claim, new.retrieval_keys);
+  END;
+`;
+
+export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);
+
+// Run pending migrations. `fresh` = the DB had no tables before the baseline
+// schema ran this boot (detected by db.ts), so it's already at latest shape.
+export function migrate(db: DB, opts: { fresh: boolean }): void {
+  const current = db.pragma("user_version", { simple: true }) as number;
+
+  if (opts.fresh) {
+    if (current < LATEST_VERSION) db.pragma(`user_version = ${LATEST_VERSION}`);
+    return;
+  }
+
+  for (const m of MIGRATIONS) {
+    if (m.id <= current) continue;
+    db.transaction(() => {
+      m.up(db);
+      db.pragma(`user_version = ${m.id}`);
+    })();
+    console.log(`[db] migration ${m.id} applied: ${m.name}`);
+  }
+}
+
+
+// Inputs and extraction outputs survive restarts; applied observations are
+// identified by stable job/item IDs. No FK to runtime-owned agent_sessions.
+export const DISTILL_CHECKPOINT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS memory_distill_jobs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    since_seq INTEGER NOT NULL,
+    through_seq INTEGER NOT NULL,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    UNIQUE(session_id, since_seq)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_distill_pending_session
+    ON memory_distill_jobs(session_id) WHERE status = 'pending';
+  CREATE TABLE IF NOT EXISTS observation_events (
+    observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    PRIMARY KEY(observation_id, session_id, event_seq)
+  );
+  CREATE INDEX IF NOT EXISTS idx_observation_events_source
+    ON observation_events(session_id, event_seq);
+`;
+
+
+export const SLACK_ARCHIVE_SCHEMA = `
+ CREATE TABLE IF NOT EXISTS slack_channels (
+   workspace TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
+   is_private INTEGER NOT NULL DEFAULT 0, is_ext_shared INTEGER NOT NULL DEFAULT 0,
+   is_member INTEGER NOT NULL DEFAULT 0, is_archived INTEGER NOT NULL DEFAULT 0,
+   oldest TEXT NOT NULL DEFAULT '0', latest TEXT NOT NULL DEFAULT '',
+   cursor TEXT NOT NULL DEFAULT '', synced_at INTEGER NOT NULL DEFAULT 0,
+   error TEXT, PRIMARY KEY(workspace, id)
+ );
+ CREATE TABLE IF NOT EXISTS slack_archive (
+   id TEXT PRIMARY KEY, workspace TEXT NOT NULL, channel TEXT NOT NULL,
+   ts TEXT NOT NULL, revision TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+   payload TEXT, captured_at INTEGER NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS slack_thread_sync (
+   workspace TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,
+   cursor TEXT NOT NULL DEFAULT '', requested TEXT NOT NULL DEFAULT '',
+   completed TEXT NOT NULL DEFAULT '', error TEXT,
+   PRIMARY KEY(workspace, channel, ts)
+ );
+`;

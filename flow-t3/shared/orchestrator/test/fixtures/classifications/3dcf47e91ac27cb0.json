@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.91,
+  "extracted": {
+    "claim": "AWS S3 with server-side encryption for user data storage",
+    "technology": "AWS S3",
+    "area": "storage"
+  }
+}

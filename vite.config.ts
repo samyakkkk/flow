@@ -12,6 +12,7 @@ export default defineConfig({
     environment: "node",
     exclude: [
       "**/.repos/**",
+      "**/.t3/**",
       "**/node_modules/**",
       "**/dist/**",
       "**/dist-electron/**",
@@ -33,6 +34,7 @@ export default defineConfig({
     ignorePatterns: [
       // Preserved Flow services retain their own formatting during integration.
       "flow/**",
+      "flow-t3/shared/**",
       ".repos/**",
       ".alchemy",
       "dist",

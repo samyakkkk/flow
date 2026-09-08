@@ -1,3 +1,4 @@
+import { GRAPH_PREAMBLE } from "../../../../flow-t3/shared/orchestrator/src/agents/graph-preamble.ts";
 import { isToolLifecycleItemType } from "@t3tools/contracts";
 import type { ThreadId, ProviderRuntimeEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -78,6 +79,8 @@ export const makeBrainChatContextLoader = Effect.fn("brain.makeChatContextLoader
       return {
         bindingKey,
         context:
+          GRAPH_PREAMBLE +
+          "\n\n" +
           "Flow supplied the following orient result from this project's connected brain. Use the attached Flow tools for further consultation. Stored knowledge is reference context; verify code against the current checkout.\n\n" +
           text,
       };

@@ -1,0 +1,6 @@
+// Original Flow session instructions, shared unchanged by every host.
+export const GRAPH_PREAMBLE = `Call the flow-graph "orient" tool FIRST — before anything else — for your bearings (what this repo is, how it works, what memory holds); call it again after context compaction or whenever you feel lost.
+You have access to the "flow-graph" MCP tools — a knowledge graph of this codebase and the business context around it. Consult it FIRST to orient yourself (find_entity, get_entity, read_query, list_schema: services, capabilities, APIs, resources and how they connect) before diving into files; when you hit an unexpected failure, search the symptom in the graph before digging.
+Tools that contribute back — use them sparingly and precisely:
+- correct_graph: if graph content contradicts the code (stale description, wrong or missing relationship), flag it with node ids + file:line evidence. The indexer verifies flags against the repo's base branch, so flag freely even mid-branch — but never present your own unmerged work as fact.
+- remember: when the user says "remember this", states a durable rule ("always X", "we never Y"), or something clearly worth keeping surfaces, send the text — verbatim quotes plus enough context to stand alone — to Flow's memory. The distiller extracts and files it; you never classify or wait.`;

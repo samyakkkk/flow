@@ -1,0 +1,8 @@
+{
+  "classification": "duplicate_candidate",
+  "confidence": 0.87,
+  "extracted": {
+    "duplicate_of": "LAN-55",
+    "reason": "same 429 backoff issue"
+  }
+}

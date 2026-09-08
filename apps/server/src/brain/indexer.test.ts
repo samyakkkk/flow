@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import { indexRepository, incrementalContext, type BuilderContext } from "./indexer.ts";
 import { builderAsset } from "./builder-assets.ts";
 import { run, runStreaming } from "./process.ts";
-import { indexRepoPrompt } from "../../../../flow/orchestrator/src/index-prompt.ts";
+import { indexRepoPrompt } from "../../../../flow-t3/shared/orchestrator/src/index-prompt.ts";
 vi.mock("./process.ts", async (original) => ({
   ...(await original<typeof import("./process.ts")>()),
   run: vi.fn(async (executable: string, args: string[], options: Parameters<typeof run>[2]) => {

@@ -1,0 +1,78 @@
+[
+  {
+    "name": "captured-21",
+    "transcript": "\n\n\n### USER PROMPT\nWe have decided that every coding-agent entry in our product needs an info option explaining required permissions, workspace trust, MCP enablement, and hook permissions. It must distinguish connected tools from captured transcripts and extracted memories, because a connected MCP server does not prove capture is working. This is a durable product requirement for future implementation. Acknowledge the decision and why it matters. Do not edit files, execute commands, delegate, or directly call memory-write tools.\n\n### AGENT (turn conclusion)\nI acknowledge the decision. \n\n### Decision Overview\nEvery coding-agent entry in the product will include an info option detailing:\n- **Required Permissions**\n- **Workspace Trust Level**\n- **MCP Enablement**\n- **Hook Permissions**\n- **Clear Distinction Between Connected Tools vs. Captured Transcripts & Extracted Memories**\n\n---\n\n### Why This Matters\n\n1. **Verification vs. Connectivity**: A connected MCP server merely confirms protocol connectivity and tool registration. It does **not** guarantee or prove that session transcripts are actively being recorded or that memories/conclusions are being extracted. Explicitly separating tool availability from capture/memory telemetry prevents silent failures in auditability and persistent context retention.\n\n2. **Security & Workspace Governance**: Coding agents execute actions inside sensitive developer environments. Clearly presenting required permissions, workspace trust requirements, and hook access ensures administrators and users can grant appropriate access levels with full transparency.\n\n3. **User Clarity & Predictability**: Providing a unified info option sets clear expectations regarding what an agent can access, what hooks it relies on, and whether session data and learnings are reliably captured for downstream team memory.\n",
+    "expected": [
+      "info option",
+      "capture"
+    ]
+  },
+  {
+    "name": "captured-26",
+    "transcript": "\n\n### SESSION META\nrepo: cloud-fixture\nbackend: ext:copilot\ntitle: /fixture/cloud-fixture\n\n\n### USER PROMPT\nAgreed architecture decision: when Flow graph references a repository not cloned on the coding client, provide project-authorized remote source read/search with exact commit SHA and line evidence. Never assume a cloud filesystem path exists on the client. These tools must read committed registered sources, not dirty or untracked files, and must not grant coding execution access. Acknowledge this durable requirement and its rationale. Do not edit files, execute commands, delegate, or directly write memory.\n\n### AGENT (turn conclusion)\nAcknowledged for this work:\n\n- Remote reads/searches are authorized only for registered, committed sources.\n- Results must include the exact commit SHA and line-level evidence.\n- Never assume a Flow-referenced repository exists at a local/cloud filesystem path.\n- These tools provide source inspection only, never coding execution access.\n- Dirty and untracked files must be excluded.\n\nRationale: this preserves source provenance and reproducibility while allowing useful inspection of repositories unavailable on the coding client, without expanding execution or uncommitted-code access. I did not edit files, run commands, delegate, or write memory.\n",
+    "expected": [
+      "commit",
+      "execution"
+    ]
+  },
+  {
+    "name": "captured-29",
+    "transcript": "\n\n### SESSION META\nrepo: cloud-fixture\nbackend: ext:copilot\ntitle: /fixture/cloud-fixture\n\n\n### USER PROMPT\nFor Flow, the agreed deployment architecture is to install only Flow and OpenCode on the cloud server. Claude, Codex, Gemini, Cursor, Antigravity, and VS Code Copilot remain on the developer computer and connect to cloud Flow. A shared Flow credential must not grant execution on another teammate\u2019s device. This is a standing product requirement because cloud knowledge access and personal device execution have different trust boundaries. Explain the requirement and rationale in prose only; no tool calls or file changes are needed.\n\n### AGENT (turn conclusion)\nFlow\u2019s cloud deployment must install only Flow and OpenCode on the cloud server. Claude, Codex, Gemini, Cursor, Antigravity, and VS Code Copilot remain on each developer\u2019s computer and connect to the shared cloud Flow service.\n\nA shared Flow credential must provide access to cloud knowledge and coordination only. It must never authorize code execution, filesystem access, or other actions on another teammate\u2019s device. Cloud knowledge access and personal-device execution have different trust boundaries: the former can be shared across the team, while the latter must remain explicitly local to the developer and their authenticated tools. This separation enforces least privilege, protects personal environments and credentials, and prevents one teammate from using shared Flow access to execute actions on another teammate\u2019s computer.\n",
+    "expected": [
+      "OpenCode",
+      "device"
+    ]
+  },
+  {
+    "name": "captured-34",
+    "transcript": "\n\n### SESSION META\nrepo: cloud-fixture\nbackend: ext:copilot\ntitle: /fixture/cloud-fixture\n\n\n### USER PROMPT\nIn this disposable harness fixture, implement agent-status.js exporting summarizeAgentStatus({connected, captured, extracted}). Each input is a boolean for a separately verified stage. Return an object preserving all three stages independently; never derive captured or extracted from connected. Include a tiny Node built-in assertion check in agent-status.test.js proving connected=true with captured=false and extracted=false remains that way, and run it. This is a standing requirement for this repository: onboarding must not turn a working MCP connection into a false claim that transcripts or memories exist. Use only this fixture, do not delegate, and do not call remember; let automatic hooks capture the work.\n\n### AGENT (turn conclusion)\nImplemented:\n\n- [agent-status.js](agent-status.js): exports `summarizeAgentStatus` preserving all three booleans independently.\n- [agent-status.test.js](agent-status.test.js): adds the required Node assertion for `true, false, false`.\n\nValidation passed with `node agent-status.test.js`, and diagnostics reported no errors.\n",
+    "expected": [
+      "independent",
+      "connected"
+    ]
+  },
+  {
+    "name": "cursor-requirement",
+    "transcript": "\n\n### SESSION META\nrepo: cloud-fixture\nbackend: ext:cursor\ntitle: /fixture/cloud-fixture\n\n\n### USER PROMPT\nFollow the installed Flow skill and orient to this repository using native MCP. Report the connected project and repository. Do not edit files or delegate. Stop after orientation.\n\n### AGENT (turn conclusion)\nOrientation completed via native Flow MCP (`flow-graph orient`).\n\n- **Connected project:** `harness-cloud`\n- **Repository:** `cloud-fixture` @ `main`\n\nThe repo is not indexed in the graph yet (0 nodes). Memory holds 4 distilled memories from 4 session observations. Stopping here as requested.\n\n### USER PROMPT\nOur standing Flow product requirement is that every coding-agent entry includes an info option explaining workspace trust, MCP enablement, hook permissions, and the selected executable version. Connection, captured transcripts, and extracted memories need separate statuses because a connected MCP server does not prove that capture works. Acknowledge the requirement and rationale in prose only, without tool calls.\n\n### AGENT (turn conclusion)\nThe standing requirement is that every coding-agent entry exposes an info option covering workspace trust, MCP enablement, hook permissions, and the selected executable version. Those are the gates that decide whether Flow can actually run in that agent, so they belong on the entry itself rather than being assumed from a successful connect.\n\nConnection, captured transcripts, and extracted memories also need separate statuses. A connected MCP server only shows that the agent can talk to Flow. It does not show that session capture is writing transcripts, or that those transcripts are being distilled into memories. Treating those as one green light would hide a broken capture path behind a working connection.\n",
+    "expected": [
+      "info option",
+      "capture"
+    ]
+  },
+  {
+    "name": "routine",
+    "transcript": "USER: What is 2+2?\nAGENT: 4.",
+    "empty": true
+  },
+  {
+    "name": "generic",
+    "transcript": "USER: Explain what a database index is.\nAGENT: An index speeds up lookups at the expense of storage and write cost.",
+    "empty": true
+  },
+  {
+    "name": "thanks",
+    "transcript": "USER: Thanks!\nAGENT: You are welcome.",
+    "empty": true
+  },
+  {
+    "name": "progress",
+    "transcript": "AGENT: Edited app.js. Two tests remain to be run; next I will run them and open a PR.",
+    "empty": true
+  },
+  {
+    "name": "correction",
+    "transcript": "USER: For the Quill cache, use a 10-minute TTL.\nAGENT: That loses offline updates.\nUSER: Correction: the settled Quill TTL is 90 minutes because offline retries can arrive that late. The 10-minute proposal is rejected.",
+    "expected": [
+      "90",
+      "offline"
+    ]
+  },
+  {
+    "name": "user-intent",
+    "transcript": "USER: For the Quill onboarding UI, our standing preference is to explain required permissions before asking the user to connect. We want users to understand what access they grant.\nAGENT: Understood.",
+    "expected": [
+      "permission",
+      "before"
+    ]
+  }
+]

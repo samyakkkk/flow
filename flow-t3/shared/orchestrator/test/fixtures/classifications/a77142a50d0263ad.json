@@ -1,0 +1,9 @@
+{
+  "classification": "needs_context",
+  "confidence": 0.90,
+  "extracted": {
+    "ticket_id": "LAN-501",
+    "topic": "OAuth2 login flow",
+    "area": "authentication"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "classification": "decision",
+  "confidence": 0.92,
+  "extracted": {
+    "decision": "migrate job queue to SQS",
+    "deadline": "end of Q3",
+    "system": "job queue"
+  }
+}

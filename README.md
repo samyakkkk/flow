@@ -15,21 +15,23 @@ links, and incremental Git updates. Builders write directly to FalkorDB as they
 explore; the graph and per-repository activity logs refresh every two seconds
 while the page is visible. The selected CLI uses its existing credentials and
 Flow's indexing model defaults (overridable with GRAPH_BUILDER_MODEL).
-Passive session memory, Linear/Fireflies/notes/Slack workers, and cloud Brain
-migration remain deferred. Older prototype graphs are retained for reference;
+Session capture feeds Flow's original checkpoint and memory pipeline.
+Linear/Fireflies/notes/Slack workers and cloud Brain migration remain deferred. Older prototype graphs are retained for reference;
 reindex their sources to build them with the full Flow pipeline.
 
 When adding a project in the web or desktop UI, choose its brain (or create one).
 The repository is registered as a source automatically. Change the connection
 in **Brain → Projects**; disconnecting a project retains the old brain's source.
-New agent sessions use the `brain_search` tool to read their connected brain with
-source citations, independently of browser-control permission. No per-turn
-memory injection is added. Mobile project creation does not yet have a Brain picker.
+Agent sessions receive Flow's original instructions and full `orient` result,
+then use the original graph, memory and source tools for retrieval. Session
+restart, compaction and Brain changes refresh orientation; no per-turn memory
+injection is added. Mobile project creation does not yet have a Brain picker.
 
 The root contains T3's web, desktop, mobile, and server applications. The existing
-Flow implementation is preserved under [`flow/`](flow/README.md), including its
-local brain, graph gateway, memory pipeline, connectors, and cloud modules. Its
-npm workspace remains separate from the root workspace.
+Flow implementation is preserved under [`flow/`](flow/README.md) as a migration
+reference. The active shared Brain packages live under
+[`flow-t3/shared/`](flow-t3/README.md); public cloud interfaces live under
+`flow-t3/cloud/`. T3 builds from the shared packages without requiring the Flow CLI.
 
 The first integration target is the complete free local developer setup. A
 workspace has one brain, initially running locally; a future cloud migration

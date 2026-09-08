@@ -1,0 +1,8 @@
+{
+  "classification": "feedback",
+  "confidence": 0.88,
+  "extracted": {
+    "correction": "session timeout is 60 seconds, not 30",
+    "area": "authentication"
+  }
+}

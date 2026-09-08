@@ -4,8 +4,8 @@ packages:
   - oxlint-plugin-t3code
   - packages/*
   - scripts
-  - flow/graph-gateway
-  - flow/orchestrator
+  - flow-t3/shared/*
+  - flow-t3/cloud
 
 # Successor to onlyBuiltDependencies/ignoredBuiltDependencies (pnpm 11).
 # true = allowed to run build scripts; false mirrors the pnpm 10 behavior

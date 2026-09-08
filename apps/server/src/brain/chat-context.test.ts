@@ -1,3 +1,4 @@
+import { GRAPH_PREAMBLE } from "../../../../flow-t3/shared/orchestrator/src/agents/graph-preamble.ts";
 import { expect, it } from "@effect/vitest";
 import {
   ProjectId,
@@ -62,7 +63,9 @@ it.effect(
       );
       expect(yield* load(threadId)).toEqual({ bindingKey: "" });
       binding = "team";
-      expect((yield* load(threadId, "")).context).toContain(orientText);
+      const initialContext = (yield* load(threadId, "")).context;
+      expect(initialContext).toContain(orientText);
+      expect(initialContext).toContain(GRAPH_PREAMBLE);
       expect(yield* load(threadId, "team")).toEqual({ bindingKey: "team" });
       expect(reads).toBe(1);
       yield* capture(

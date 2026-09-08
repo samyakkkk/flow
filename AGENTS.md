@@ -1,7 +1,10 @@
 # Flow fork context
 
 This is the existing Flow repository with T3 Code imported at the root. The
-original Flow implementation is preserved under `flow/`. The current task owner
+original Flow implementation is preserved under `flow/` as a historical reference.
+Active Brain code lives under `flow-t3/shared/`; cloud interfaces live under
+`flow-t3/cloud/`. Make Brain changes in shared, not the historical copy. Preserve
+T3's upstream file layout; connect it through the isolated Brain adapters. The current task owner
 is the Flow developer; references to T3 maintainers below describe upstream.
 
 Preserve both Git histories and license notices. Keep Flow's brain services and

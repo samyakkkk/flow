@@ -1,5 +1,7 @@
 // @effect-diagnostics globalTimers:off - Node child lifecycle timers must work outside an Effect runtime.
 // @effect-diagnostics nodeBuiltinImport:off - Owns the isolated original Flow runtime process.
+import { brainResourceEnvironment } from "@flow/brain-runtime";
+import type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -10,30 +12,25 @@ import { McpSchema } from "effect/unstable/ai";
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const decodeTools = Schema.decodeUnknownSync(Schema.Array(McpSchema.Tool));
 const decodeResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
-export interface BrainSessionContext {
-  repo?: string;
-  branch?: string;
-  session: string;
-  workspaceRoot?: string;
-}
-export interface BrainCapture {
-  context: BrainSessionContext;
-  receipt: string;
-  kind: "user_prompt" | "update" | "error" | "created";
-  data: unknown;
-  closed?: boolean;
-}
+export type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
 export async function startSessionWorker(
   environment: Record<string, string>,
   catalog = false,
   entry?: string,
 ) {
+  if (!catalog)
+    brainResourceEnvironment({
+      graphName: environment.GRAPH_NAME ?? "",
+      databaseSocket: environment.FALKOR_SOCKET ?? "",
+      embeddingUrl: environment.FLOW_EMBED_URL ?? "",
+      embeddingToken: environment.FLOW_EMBED_TOKEN ?? "",
+    });
   const packaged = NodePath.join(here, "brain-runtime.mjs");
   const filename =
     entry ??
     (NodeFS.existsSync(packaged)
       ? packaged
-      : NodePath.resolve(here, "../../../../flow/orchestrator/src/brain-runtime.ts"));
+      : NodePath.resolve(here, "../../../../flow-t3/shared/orchestrator/src/brain-runtime.ts"));
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>
@@ -46,7 +43,10 @@ export async function startSessionWorker(
     execArgv: filename.endsWith(".ts")
       ? [
           "--import",
-          NodePath.resolve(here, "../../../../flow/graph-gateway/node_modules/tsx/dist/loader.mjs"),
+          NodePath.resolve(
+            here,
+            "../../../../flow-t3/shared/graph-gateway/node_modules/tsx/dist/loader.mjs",
+          ),
         ]
       : [],
     env: {
@@ -54,7 +54,7 @@ export async function startSessionWorker(
       ...environment,
       FLOW_GATEWAY_MCP: NodeFS.existsSync(packaged)
         ? NodePath.join(here, "mcp.mjs")
-        : NodePath.resolve(here, "../../../../flow/graph-gateway/src/mcp.ts"),
+        : NodePath.resolve(here, "../../../../flow-t3/shared/graph-gateway/src/mcp.ts"),
       ELECTRON_RUN_AS_NODE: "1",
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],

@@ -1,0 +1,8 @@
+{
+  "classification": "open_question",
+  "confidence": 0.87,
+  "extracted": {
+    "question": "Datadog vs Prometheus for monitoring stack?",
+    "area": "observability"
+  }
+}

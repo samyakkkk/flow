@@ -18,13 +18,18 @@ const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Brai
 
 const { index, captureState } = vi.hoisted(() => ({
   index: vi.fn(),
-  captureState: { fail: false, receipts: [] as unknown[] },
+  captureState: {
+    fail: false,
+    receipts: [] as unknown[],
+    resources: [] as Record<string, string>[],
+  },
 }));
 vi.mock("./session-worker.ts", async (original) => {
   const module = await original<typeof import("./session-worker.ts")>();
   return {
     ...module,
     startSessionWorker: async (env: Record<string, string>, catalog?: boolean) => {
+      if (!catalog) captureState.resources.push(env);
       const worker = await module.startSessionWorker(
         { ...env, FLOW_DISTILLER: "0", FLOW_SESSION_SEARCH: "0" },
         catalog,
@@ -284,6 +289,7 @@ describe("native brain persistence", () => {
             repo: "octocat/Hello-World",
             branch: "main",
           };
+          captureState.resources.length = 0;
           const orient = await reopened.callProjectTool(project.id, "orient", {}, context);
           expect(orient.isError).not.toBe(true);
           expect(
@@ -365,6 +371,11 @@ describe("native brain persistence", () => {
             { query: "zebrapotato" },
             context,
           );
+          expect(new Set(captureState.resources.map((env) => env.GRAPH_NAME)).size).toBe(2);
+          expect(new Set(captureState.resources.map((env) => env.FALKOR_SOCKET)).size).toBe(1);
+          expect(new Set(captureState.resources.map((env) => env.FLOW_EMBED_URL)).size).toBe(1);
+          expect(new Set(captureState.resources.map((env) => env.FLOW_EMBED_TOKEN)).size).toBe(1);
+
           expect(
             isolated.content
               .flatMap((item) => (item.type === "text" ? [item.text] : []))

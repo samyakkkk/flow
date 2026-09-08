@@ -1,16 +1,17 @@
+import { brainResourceEnvironment } from "@flow/brain-runtime";
 // @effect-diagnostics nodeBuiltinImport:off - Native CLI boundary.
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { BrainCli } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { INDEXER_DEFAULT_MODELS } from "../../../../flow/orchestrator/src/indexer-defaults.ts";
-import { indexRepoPrompt } from "../../../../flow/orchestrator/src/index-prompt.ts";
+import { INDEXER_DEFAULT_MODELS } from "../../../../flow-t3/shared/orchestrator/src/indexer-defaults.ts";
+import { indexRepoPrompt } from "../../../../flow-t3/shared/orchestrator/src/index-prompt.ts";
 import {
   startActivity,
   recordActivityLine,
   finishActivity,
   activityForRepo,
-} from "../../../../flow/orchestrator/src/job-activity.ts";
+} from "../../../../flow-t3/shared/orchestrator/src/job-activity.ts";
 import { builderAsset, builderMcpCommand } from "./builder-assets.ts";
 import { run, runStreaming } from "./process.ts";
 
@@ -78,12 +79,14 @@ export async function indexRepository(
     FLOW_MAINTENANCE_GRAPH: "",
     GATEWAY_MCP_MODE: "builder",
     GATEWAY_MCP_READONLY: "0",
-    GRAPH_NAME: context.graph,
+    ...brainResourceEnvironment({
+      graphName: context.graph,
+      databaseSocket: context.socket,
+      embeddingUrl: `${context.embedUrl}/embed`,
+      embeddingToken: context.embedToken,
+    }),
     FLOW_FIXED_GRAPH: context.graph,
-    FALKOR_SOCKET: context.socket,
-    FLOW_EMBED_URL: `${context.embedUrl}/embed`,
     EMBEDDING_MODEL: "local:embeddinggemma-300M-Q8_0",
-    FLOW_EMBED_TOKEN: context.embedToken,
     FLOW_ACTOR: `${cli}:graph-builder:${jobId}`,
     JOURNAL_PATH: NodePath.join(context.workspace, "journal.jsonl"),
     WORKSPACE_DIR: context.workspace,

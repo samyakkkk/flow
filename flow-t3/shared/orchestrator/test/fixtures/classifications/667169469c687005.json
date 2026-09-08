@@ -1,0 +1,9 @@
+{
+  "classification": "needs_context",
+  "confidence": 0.91,
+  "extracted": {
+    "ticket_id": "LAN-201",
+    "topic": "auth token expiry",
+    "area": "authentication"
+  }
+}
