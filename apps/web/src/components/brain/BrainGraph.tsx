@@ -8,23 +8,28 @@ import { Button } from "../ui/button";
 import { XIcon } from "lucide-react";
 
 const colors = ["#d39c38", "#64a58a", "#8296d9", "#b28bc5", "#62a5bb", "#c48180"];
+const noHighlightedNodeIds: readonly string[] = [];
 export function BrainGraph({
   knowledge,
   compact = false,
+  highlightedNodeIds = noHighlightedNodeIds,
 }: {
   knowledge: Pick<BrainKnowledge, "entities" | "edges">;
   compact?: boolean;
+  highlightedNodeIds?: readonly string[];
 }) {
   const host = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<FalkorDBCanvas | null>(null);
   const numericIds = useRef(new Map<string, number>());
   const topology = useRef("");
   const signature = useRef("");
+  const highlightedIds = useRef(new Set<string>());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const { theme, resolvedTheme } = useTheme();
   const types = [...new Set(knowledge.entities.map((entry) => entry.kind))].sort();
   const selected = knowledge.entities.find((entry) => entry.id === selectedId);
+  const highlightSignature = [...new Set(highlightedNodeIds)].sort().join("\u0000");
   useEffect(() => {
     let cancelled = false;
     let fitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -45,13 +50,21 @@ export function BrainGraph({
           degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
         }
         const nodeTypes = [...new Set(knowledge.entities.map((entry) => entry.kind))].sort();
+        const highlighted = new Set(highlightSignature ? highlightSignature.split("\u0000") : []);
+        const hasHighlights = highlighted.size > 0;
+        highlightedIds.current = highlighted;
         const data = {
           nodes: knowledge.entities.map((entry) => ({
             id: numId(entry.id),
             labels: [entry.kind],
-            color: colors[nodeTypes.indexOf(entry.kind) % colors.length]!,
+            color: highlighted.has(entry.id)
+              ? "#f8cf54"
+              : colors[nodeTypes.indexOf(entry.kind) % colors.length]!,
             visible: true,
-            size: 8 + Math.min(degree.get(entry.id) ?? 0, 20) * 0.8,
+            size:
+              8 +
+              Math.min(degree.get(entry.id) ?? 0, 20) * 0.8 +
+              (highlighted.has(entry.id) ? 4 : 0),
             data: { name: entry.name, displayId: entry.id },
           })),
           links: knowledge.edges.map((edge, i) => ({
@@ -86,16 +99,19 @@ export function BrainGraph({
           captionsKeys: [["name", true]],
           showPropertyKeyPrefix: false,
           nodeStyle: { fontFamily: style.fontFamily },
+          isNodeDimmed: (node: GraphNode) =>
+            hasHighlights && !highlightedIds.current.has(String(node.data?.displayId ?? "")),
           eventHandlers: {
             onNodeClick: (node: GraphNode) => setSelectedId(String(node.data?.displayId ?? "")),
             onBackgroundClick: () => setSelectedId(null),
           },
         });
+        canvas.setDimmed(hasHighlights);
         const nextTopology = JSON.stringify([
           knowledge.entities.map((entry) => entry.id).sort(),
           knowledge.edges,
         ]);
-        const nextSignature = JSON.stringify([knowledge, theme, resolvedTheme]);
+        const nextSignature = JSON.stringify([knowledge, theme, resolvedTheme, highlightSignature]);
         if (firstPaint || topology.current !== nextTopology) canvas.setData(data);
         else if (signature.current !== nextSignature) canvas.setGraphData(data);
         topology.current = nextTopology;
@@ -116,7 +132,7 @@ export function BrainGraph({
       cancelled = true;
       clearTimeout(fitTimer);
     };
-  }, [knowledge, theme, resolvedTheme]);
+  }, [knowledge, theme, resolvedTheme, highlightSignature]);
   useEffect(
     () => () => {
       canvasRef.current?.remove();

@@ -1,5 +1,5 @@
 import { BrainIcon } from "./BrainIcon";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
   BrainCircuitIcon,
@@ -44,6 +44,7 @@ export function ChatBrainPanel({
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const autoExpandedThread = useRef<ThreadId | null>(null);
   async function connectBrain() {
     if (connecting) return;
     setConnecting(true);
@@ -145,6 +146,13 @@ export function ChatBrainPanel({
   const brain = response?.state.workspaces[0];
   const failedSources = brain?.sources.filter((source) => source.status === "error") ?? [];
   const notes = response?.chatMemories;
+  const consultedNodeIds = [...new Set(notes?.consultedNodeIds ?? [])];
+  const consultedNodeCount = consultedNodeIds.length;
+  useEffect(() => {
+    if (consultedNodeCount === 0 || autoExpandedThread.current === threadId) return;
+    autoExpandedThread.current = threadId;
+    setBrainExpanded(true);
+  }, [consultedNodeCount, threadId]);
   const selectedMemory = notes?.memories.find((memory) => view === `memory:${memory.id}`);
   const memoryStatus = !brain
     ? "Connect a brain to save memories."
@@ -218,6 +226,11 @@ export function ChatBrainPanel({
                         {brain?.name ?? "No brain connected"}
                       </span>
                     </span>
+                    {consultedNodeCount > 0 && (
+                      <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                        {consultedNodeCount} used
+                      </span>
+                    )}
                     <ChevronDownIcon
                       className={`size-4 shrink-0 text-muted-foreground ${brainExpanded ? "rotate-180" : ""}`}
                     />
@@ -276,12 +289,25 @@ export function ChatBrainPanel({
                         {response.state.database.message}
                       </p>
                     ) : brain?.knowledge.entities.length ? (
-                      <BrainGraph knowledge={brain.knowledge} compact />
+                      <BrainGraph
+                        knowledge={brain.knowledge}
+                        highlightedNodeIds={consultedNodeIds}
+                        compact
+                      />
                     ) : (
                       <p className="p-3 text-xs text-muted-foreground">
                         {brain
                           ? "Index sources to see your knowledge graph."
                           : "Connect a brain above to give this chat shared knowledge."}
+                      </p>
+                    )}
+                    {consultedNodeCount > 0 && (
+                      <p
+                        role="status"
+                        className="border-t border-border/50 px-3 py-2 text-[11px] text-muted-foreground"
+                      >
+                        Highlighting {consultedNodeCount}{" "}
+                        {consultedNodeCount === 1 ? "node" : "nodes"} used by this chat
                       </p>
                     )}
                     <Link
@@ -388,7 +414,7 @@ export function ChatBrainPanel({
           <DialogPanel>
             {view === "brain" ? (
               brain && response?.state.database.status === "ready" ? (
-                <BrainGraph knowledge={brain.knowledge} />
+                <BrainGraph knowledge={brain.knowledge} highlightedNodeIds={consultedNodeIds} />
               ) : (
                 <p className="text-sm text-muted-foreground">The brain is currently unavailable.</p>
               )

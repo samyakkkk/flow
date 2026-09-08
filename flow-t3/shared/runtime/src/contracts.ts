@@ -8,7 +8,7 @@ export interface BrainSessionContext {
 export interface BrainCapture {
   context: BrainSessionContext;
   receipt: string;
-  kind: "user_prompt" | "update" | "error" | "created";
+  kind: "user_prompt" | "update" | "error" | "created" | "graph";
   data: unknown;
   closed?: boolean;
 }

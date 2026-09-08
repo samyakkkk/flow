@@ -323,6 +323,9 @@ describe("native brain persistence", () => {
           expect(
             found.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
           ).toContain("Demo");
+          expect(found._meta?.["flow/nodeIds"]).toEqual(
+            expect.arrayContaining(["repo:octocat/Hello-World"]),
+          );
           const denied = await reopened.callProjectTool(
             project.id,
             "read_query",
@@ -350,7 +353,7 @@ describe("native brain persistence", () => {
             data: { text: "Preserve the complete Flow brain" },
           });
           await reopened.drainCapture();
-          expect(captureState.receipts[0]).toEqual(captureState.receipts[1]);
+          expect(captureState.receipts.at(-2)).toEqual(captureState.receipts.at(-1));
           const memory = await reopened.callProjectTool(
             project.id,
             "search_knowledge",
@@ -364,7 +367,11 @@ describe("native brain persistence", () => {
           await reopened.drain();
           const chatNotes = await reopened.chatMemories(project.id, context.session);
           expect(chatNotes.memories.some((note) => note.text.includes("zebrapotato"))).toBe(true);
+          expect(chatNotes.consultedNodeIds).toContain("repo:octocat/Hello-World");
           expect((await reopened.chatMemories(project.id, "another-chat")).memories).toEqual([]);
+          expect(
+            (await reopened.chatMemories(project.id, "another-chat")).consultedNodeIds,
+          ).toEqual([]);
           expect(chatNotes.revision).toBeTruthy();
           const changed = reopened.chatMemories(project.id, context.session, chatNotes.revision);
           await reopened.callProjectTool(
