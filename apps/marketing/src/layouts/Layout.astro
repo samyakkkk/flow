@@ -77,7 +77,13 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
       <nav class="nav">
         <div class="nav-inner">
           <a href="/" class="nav-brand" aria-label={`${BRAND.name} home`}>
-            <span class="nav-brand-name">{BRAND.name}</span>
+            <img
+              src="/brand-wordmark-on-dark.svg"
+              alt=""
+              width="886"
+              height="430"
+              aria-hidden="true"
+            />
           </a>
           <div class="nav-right">
             <a class="nav-link" href="/download">Download</a>
@@ -365,19 +371,16 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
   .nav-brand {
     display: inline-flex;
     align-items: center;
-    color: var(--fg);
-    transition: color 0.2s ease;
+    transition: opacity 0.2s ease;
   }
 
   .nav-brand:hover {
-    color: #fff;
+    opacity: 0.86;
   }
 
-  .nav-brand-name {
-    font-size: 16px;
-    font-weight: 650;
-    letter-spacing: -0.025em;
-    line-height: 1;
+  .nav-brand img {
+    width: auto;
+    height: 24px;
   }
 
   .nav-right {
