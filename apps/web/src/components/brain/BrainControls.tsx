@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { BrainCli, BrainState, BrainCommand, BrainResponse } from "@t3tools/contracts";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -29,10 +29,11 @@ export function BrainSelect({
 }: {
   label: string;
   value: string;
-  options: readonly { value: string; label: string; disabled?: boolean }[];
+  options: readonly { value: string; label: string; icon?: ReactNode; disabled?: boolean }[];
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const selected = options.find((option) => option.value === value);
   return (
     <Select
       value={value}
@@ -41,12 +42,22 @@ export function BrainSelect({
       disabled={disabled}
     >
       <SelectTrigger aria-label={label} className="w-auto min-w-40 max-w-full">
-        <SelectValue placeholder={label} />
+        <SelectValue placeholder={label}>
+          {selected?.icon ? (
+            <span className="flex min-w-0 items-center gap-2">
+              {selected.icon}
+              <span className="truncate">{selected.label}</span>
+            </span>
+          ) : undefined}
+        </SelectValue>
       </SelectTrigger>
       <SelectPopup>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
-            {option.label}
+            <span className="flex min-w-0 items-center gap-2">
+              {option.icon}
+              <span className="truncate">{option.label}</span>
+            </span>
           </SelectItem>
         ))}
       </SelectPopup>

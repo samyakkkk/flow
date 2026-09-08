@@ -1,3 +1,4 @@
+import { BrainIcon } from "./BrainIcon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrainCommand, BrainState, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { brainCommand } from "../../state/brain";
@@ -109,6 +110,7 @@ export function useProjectBrainChoice() {
                   ...(state?.workspaces ?? []).map((brain) => ({
                     value: brain.id,
                     label: brain.name,
+                    icon: <BrainIcon id={brain.id} />,
                   })),
                 ]}
                 onChange={setSelected}

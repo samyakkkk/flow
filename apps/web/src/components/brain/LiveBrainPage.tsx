@@ -1,3 +1,4 @@
+import { BrainIcon } from "./BrainIcon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BrainCommand,
@@ -202,6 +203,7 @@ function BrainController({
                 options={(state?.workspaces ?? []).map((item) => ({
                   value: item.id,
                   label: item.name,
+                  icon: <BrainIcon id={item.id} />,
                 }))}
                 onChange={(value) => onSelectionChange(value, environmentId)}
               />
@@ -293,6 +295,7 @@ function BrainController({
                           ...(state?.workspaces ?? []).map((brain) => ({
                             value: brain.id,
                             label: brain.name,
+                            icon: <BrainIcon id={brain.id} />,
                           })),
                         ]}
                         onChange={(value) =>

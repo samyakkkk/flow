@@ -1,3 +1,4 @@
+import { BrainIcon } from "./BrainIcon";
 import { useEffect, useState } from "react";
 import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
@@ -206,7 +207,11 @@ export function ChatBrainPanel({
                     onClick={() => setBrainExpanded((value) => !value)}
                     className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-muted/60"
                   >
-                    <BrainCircuitIcon className="size-4 shrink-0 text-muted-foreground" />
+                    {brain ? (
+                      <BrainIcon id={brain.id} />
+                    ) : (
+                      <BrainCircuitIcon className="size-4 shrink-0 text-muted-foreground" />
+                    )}
                     <span className="min-w-0 flex-1">
                       <span className="block text-xs text-muted-foreground">Brain</span>
                       <span className="block truncate text-sm">

@@ -1,3 +1,4 @@
+import { BrainIcon } from "../brain/BrainIcon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrainCommand, BrainState, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectGroupMember } from "../../sidebarProjectGrouping";
@@ -113,6 +114,7 @@ function EnvironmentBrainSettings({
                   ...(state?.workspaces ?? []).map((brain) => ({
                     value: brain.id,
                     label: brain.name,
+                    icon: <BrainIcon id={brain.id} />,
                   })),
                 ]}
                 disabled={!state || busy}
