@@ -181,18 +181,20 @@ export function BrainGraph({
           </article>
         )}
       </div>
-      <footer className="flex flex-wrap items-center gap-4 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-        {types.map((type, i) => (
-          <span key={type} className="flex items-center gap-1.5">
-            <span
-              className="size-2 rounded-full"
-              style={{ background: colors[i % colors.length] }}
-            />
-            {type}
-          </span>
-        ))}
-        <span className="ml-auto">Drag to explore · Scroll to zoom</span>
-      </footer>
+      {!compact && (
+        <footer className="flex flex-wrap items-center gap-4 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+          {types.map((type, i) => (
+            <span key={type} className="flex items-center gap-1.5">
+              <span
+                className="size-2 rounded-full"
+                style={{ background: colors[i % colors.length] }}
+              />
+              {type}
+            </span>
+          ))}
+          <span className="ml-auto">Drag to explore · Scroll to zoom</span>
+        </footer>
+      )}
     </div>
   );
 }
