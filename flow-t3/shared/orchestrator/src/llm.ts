@@ -75,7 +75,7 @@ async function completeCli(prompt: string, model: string, timeoutMs: number): Pr
   return await new Promise<string>((resolvePromise, reject) => {
     execFile(
       bin,
-      ["-p", prompt, "--model", model, "--output-format", "json"],
+      ["-p", prompt, "--model", model, "--output-format", "json", "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence"],
       { maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs },
       (err, stdout) => {
         if (err) return reject(err);

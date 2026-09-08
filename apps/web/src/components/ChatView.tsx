@@ -1,3 +1,4 @@
+import { ChatBrainPanel } from "./brain/ChatBrainPanel";
 import { BRAND } from "@t3tools/shared/branding";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
@@ -7887,8 +7888,8 @@ export default function ChatView(props: ChatViewProps) {
           />
         </WorkspacePageHeader>
 
-        {/* Main content area with optional plan sidebar */}
-        <div className="flex min-h-0 min-w-0 flex-1">
+        {/* Chat and its visible Flow context. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
           {/* Chat column */}
           <div
             className="relative flex min-h-0 min-w-0 flex-1 flex-col"
@@ -8280,6 +8281,13 @@ export default function ChatView(props: ChatViewProps) {
             ) : null}
           </div>
           {/* end chat column */}
+          {isServerThread && activeThreadRef ? (
+            <ChatBrainPanel
+              key={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
+              environmentId={activeThreadRef.environmentId}
+              threadId={activeThreadRef.threadId}
+            />
+          ) : null}
         </div>
         {/* end horizontal flex container */}
 

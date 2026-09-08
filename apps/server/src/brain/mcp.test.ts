@@ -43,6 +43,16 @@ it.effect(
       Effect.gen(function* () {
         const readProjects: string[] = [];
         const runtime = {
+          chatMemories: async (id: ProjectId, session: string) => {
+            expect(id).toBe(projectId);
+            expect(session).toBe(scope.threadId);
+            return {
+              memories: [
+                { id: "note-a", text: "Only this chat", createdAt: 1, origin: "user_stated" },
+              ],
+              status: "idle",
+            };
+          },
           callProjectTool: async (id: ProjectId) => {
             readProjects.push(id);
             return { content: [{ type: "text", text: "Only project A's brain" }] };
@@ -70,6 +80,24 @@ it.effect(
             );
           expect(result.isError).not.toBe(true);
           expect(readProjects).toEqual([projectId]);
+          const memories = yield* server
+            .callTool({ name: "get_chat_memories", arguments: { session: "other-chat" } })
+            .pipe(
+              Effect.provideService(McpSchema.McpServerClient, client),
+              Effect.provideService(McpInvocationContext, scope),
+            );
+          expect(memories.content).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("Only this chat"),
+              }),
+            ]),
+          );
+          const deniedMemories = yield* server
+            .callTool({ name: "get_chat_memories", arguments: {} })
+            .pipe(Effect.provideService(McpSchema.McpServerClient, client));
+          expect(deniedMemories.isError).toBe(true);
           const denied = yield* server.callTool({ name: "search_knowledge", arguments: {} }).pipe(
             Effect.provideService(McpSchema.McpServerClient, client),
             Effect.provideService(McpInvocationContext, {

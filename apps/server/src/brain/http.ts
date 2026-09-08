@@ -25,7 +25,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
       Effect.fn("environment.brain.request")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         yield* requireEnvironmentScope(
-          ["read", "listGithubRepositories", "listGithubBranches"].includes(
+          ["read", "readChat", "listGithubRepositories", "listGithubBranches"].includes(
             args.payload.command.action,
           )
             ? AuthOrchestrationReadScope
@@ -35,6 +35,23 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
           Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
         );
         const command = args.payload.command;
+        if (command.action === "readChat") {
+          const thread = yield* projections
+            .getThreadShellById(command.threadId)
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          if (Option.isNone(thread))
+            return yield* failEnvironmentInternal("internal_error", new Error("Chat not found."));
+          return yield* Effect.tryPromise(async () => ({
+            state: await runtime.state(thread.value.projectId),
+            chatMemories: await runtime.chatMemories(
+              thread.value.projectId,
+              command.threadId,
+              command.revision,
+            ),
+            error: null,
+            createdWorkspaceId: null,
+          })).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
         const project =
           command.action === "bindProject"
             ? yield* projections

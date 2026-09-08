@@ -371,7 +371,7 @@ export class BrainRuntime {
     }
     return combined;
   }
-  async state(): Promise<BrainState> {
+  async state(projectId?: ProjectId): Promise<BrainState> {
     if (this.db && !this.db.isRunning)
       this.database = {
         status: "error",
@@ -383,11 +383,15 @@ export class BrainRuntime {
       github: this.github,
       clis: this.clis,
       workspaces: await Promise.all(
-        this.workspaces.map(async (workspace) => ({
-          ...workspace,
-          sources: workspace.sources.map((source) => ({ ...source })),
-          knowledge: await this.readKnowledge(workspace),
-        })),
+        this.workspaces
+          .filter(
+            (workspace) => projectId === undefined || workspace.projectIds.includes(projectId),
+          )
+          .map(async (workspace) => ({
+            ...workspace,
+            sources: workspace.sources.map((source) => ({ ...source })),
+            knowledge: await this.readKnowledge(workspace),
+          })),
       ),
     };
   }
@@ -399,6 +403,7 @@ export class BrainRuntime {
   private async executeCommand(command: BrainCommand) {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "read") return null;
+    if (command.action === "readChat") throw new Error("Chat must be resolved by the server.");
     if (command.action === "listGithubRepositories" || command.action === "listGithubBranches")
       return null;
     if (command.action === "bindProject")
@@ -687,6 +692,19 @@ export class BrainRuntime {
             embeddingUrl: bridge.url,
             embeddingToken: bridge.token,
           }),
+          // Explicit LLM configuration is safe to share; resource ownership
+          // variables remain scoped to this brain worker.
+          ...Object.fromEntries(
+            [
+              "LLM_TRANSPORT",
+              "LLM_MODEL_FAST",
+              "LLM_BASE_URL",
+              "LLM_API_KEY",
+              "OPENROUTER_API_KEY",
+              "DISTILLER_MODEL",
+              "FLOW_DISTILLER",
+            ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]!]])),
+          ),
           FLOW_PROJECT_NAME: workspace.name,
           DB_PATH: NodePath.join(directory, "flow.db"),
           JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
@@ -720,6 +738,20 @@ export class BrainRuntime {
     const temp = `${file}.${NodeCrypto.randomUUID()}.tmp`;
     await NodeFSP.writeFile(temp, JSON.stringify(registry));
     await NodeFSP.rename(temp, file);
+  }
+  async chatMemories(projectId: ProjectId, session: string, revision?: string) {
+    const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
+    if (!workspace) return { memories: [], status: "disabled" as const };
+    const result = await this.brainMemories(workspace.id, session, revision);
+    if (this.projectBrainId(projectId) !== workspace.id)
+      throw new Error("The project's brain changed. Retry the request.");
+    return result;
+  }
+  async brainMemories(workspaceId: string, session: string, revision?: string) {
+    const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace) throw new Error("Brain is not available");
+    const worker = await this.sessionWorker(workspace);
+    return worker.memories(session, revision);
   }
   async callProjectTool(
     projectId: ProjectId,

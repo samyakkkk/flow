@@ -282,6 +282,9 @@ export const MIGRATIONS: Migration[] = [
     name: "Slack channel archive and resumable history/thread sync",
     up: (db) => { db.exec(SLACK_ARCHIVE_SCHEMA); },
   },
+  { id: 19, name: "Retain superseded chat observations as history", up: (db) => {
+    db.exec(CHAT_MEMORY_SCHEMA);
+  } },
 ];
 
 // Orient docs — the AMBIENT memory tier. One rendered document per scope
@@ -505,3 +508,5 @@ export const SLACK_ARCHIVE_SCHEMA = `
    PRIMARY KEY(workspace, channel, ts)
  );
 `;
+
+export const CHAT_MEMORY_SCHEMA = `CREATE TABLE IF NOT EXISTS chat_memory_retired (observation_id TEXT PRIMARY KEY, checkpoint_id TEXT NOT NULL)`;

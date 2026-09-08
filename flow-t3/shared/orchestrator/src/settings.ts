@@ -78,7 +78,7 @@ export const SETTINGS: SettingDef[] = [
     key: "LLM_MODEL_FAST",
     secret: false,
     description:
-      "Overrides the fast-tier model for single-shot LLM calls (judge). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
+      "Overrides the fast-tier model for single-shot LLM calls (hosted chat memory extraction and judge). Use an id valid for the active transport (CLI alias vs OpenRouter id)",
     appliesTo: "pipeline",
   },
   {

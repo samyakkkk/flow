@@ -80,7 +80,7 @@ export const makeBrainChatContextLoader = Effect.fn("brain.makeChatContextLoader
         bindingKey,
         context:
           GRAPH_PREAMBLE +
-          "\n\n" +
+          "\n\nUse get_chat_memories to retrieve notes saved from this chat, especially after context compaction.\n\n" +
           "Flow supplied the following orient result from this project's connected brain. Use the attached Flow tools for further consultation. Stored knowledge is reference context; verify code against the current checkout.\n\n" +
           text,
       };

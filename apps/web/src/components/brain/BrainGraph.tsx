@@ -10,8 +10,10 @@ import { XIcon } from "lucide-react";
 const colors = ["#d39c38", "#64a58a", "#8296d9", "#b28bc5", "#62a5bb", "#c48180"];
 export function BrainGraph({
   knowledge,
+  compact = false,
 }: {
   knowledge: Pick<BrainKnowledge, "entities" | "edges">;
+  compact?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<FalkorDBCanvas | null>(null);
@@ -124,7 +126,11 @@ export function BrainGraph({
   );
   return (
     <div>
-      <div className="relative h-[340px] overflow-hidden">
+      <div
+        className={
+          compact ? "relative h-[220px] overflow-hidden" : "relative h-[340px] overflow-hidden"
+        }
+      >
         <div ref={host} className="absolute inset-0 bg-card text-foreground" />
         {error && (
           <p role="alert" className="absolute inset-x-4 top-4 text-sm text-destructive">

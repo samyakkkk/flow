@@ -1389,6 +1389,32 @@ describe("incremental transcript checkpoints", () => {
     llm.setLlmTransport(async () => "[]");
   });
 
+  test("hosted chats use the fast tier and revise or retire only their own notes", async () => {
+    session("t3-live");
+    let events = [event(1, "Use a script installer")];
+    trigger.setTranscriptReader(() => events);
+    let tier = "";
+    let prompt = "";
+    llm.setLlmTransport(async (p, opts) => { tier = opts.tier; prompt = p; return JSON.stringify([claim([1], "Use a script installer")]); });
+    assert.equal(await trigger.maybeDistill("t3-live"), true);
+    assert.equal(tier, "fast");
+    const original = db.prepare("SELECT id FROM observations WHERE session_id = ?").get("t3-live").id;
+    events = [...events, event(2, "Correction: use a signed script installer")];
+    llm.setLlmTransport(async (p, opts) => { if (opts.feature === "distiller") prompt = p; return JSON.stringify([{ ...claim([2], "Use a signed script installer"), action: "update", memory_id: original }]); });
+    assert.equal(await trigger.maybeDistill("t3-live"), true);
+    assert.ok(prompt.includes(original));
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chat_memory_retired WHERE observation_id = ?").get(original).n, 1);
+    const replacement = db.prepare("SELECT id FROM observations WHERE session_id = ? AND id != ?").get("t3-live", original).id;
+    events = [...events, event(3, "Retract that installer decision")];
+    llm.setLlmTransport(async () => JSON.stringify([{ action: "remove", memory_id: "another-chat-note", evidence_seqs: [3] }]));
+    assert.equal(await trigger.maybeDistill("t3-live"), false);
+    assert.equal(cursor("t3-live"), 2);
+    llm.setLlmTransport(async () => JSON.stringify([{ action: "remove", memory_id: replacement, evidence_seqs: [3] }]));
+    assert.equal(await trigger.maybeDistill("t3-live"), true);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations WHERE session_id = ? AND id NOT IN (SELECT observation_id FROM chat_memory_retired)").get("t3-live").n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations WHERE session_id = ?").get("t3-live").n, 2, "retain history");
+  });
+
   test("keeps full earlier context, marks the new range and counts only new evidence", async () => {
     session("boundary", 120);
     let prompt = "";

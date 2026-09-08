@@ -49,3 +49,20 @@ Capture is stored locally before background processing and retried if the brain 
 Distillation uses Flow's existing LLM configuration; a usable transport is required to process
 checkpoints. Indexed sources may be older than the current checkout, and incomplete indexing
 can limit what the brain knows.
+
+The chat page's **Flow** panel shows the connected graph and a simple list of memories extracted
+from that conversation. Notes appear after turns and background checkpoints, not after every token.
+Memories start expanded in the floating Flow card. Expand the brain or any memory to read it in full. Your agent can call `get_chat_memories` to retrieve the same
+chat's saved notes, including after compaction. The list is read from the currently connected brain;
+changing brains changes which saved notes are available. Unavailable or disabled extraction is shown
+in the panel rather than presented as successful saving.
+
+### Live chat memories
+
+For chats with a connected brain, Flow extracts memories after the first completed response and each subsequent response (a two-second debounce). During longer responses it also schedules extraction after 30 seconds when at least 400 new text characters have accumulated. Tool traffic alone does not trigger that timer. One extraction runs per chat, with later arrivals coalesced into a follow-up. The five-minute checkpoint sweep remains the retry/recovery path.
+
+Hosted extraction uses the fast model tier: Claude Haiku for the Claude CLI, or the configured `LLM_MODEL_FAST` for the API transport. `DISTILLER_MODEL` overrides the extraction model. Extraction transport is independent of the chat provider and uses the existing `LLM_TRANSPORT` setting. `FLOW_DISTILLER=0` disables automatic extraction in the brain runtime.
+
+The extractor sees new transcript events, recent preceding context, and existing chat notes. It may add a note, replace a corrected note, retract a note, or return no changes. Every change requires new transcript evidence; replacements and retractions can only target notes in this chat. Prior observations remain in the brain's history; the chat memory tool and card show the current notes.
+
+The card receives changes through authenticated long polling (up to 20 seconds per request, returning early when memories/status change), displays extraction state, and briefly highlights saved changes. A completed extraction with no useful notes does not show a fake saved-memory notification.

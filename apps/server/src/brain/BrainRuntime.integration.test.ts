@@ -359,6 +359,22 @@ describe("native brain persistence", () => {
           ).toContain("zebrapotato");
 
           await reopened.drain();
+          const chatNotes = await reopened.chatMemories(project.id, context.session);
+          expect(chatNotes.memories.some((note) => note.text.includes("zebrapotato"))).toBe(true);
+          expect((await reopened.chatMemories(project.id, "another-chat")).memories).toEqual([]);
+          expect(chatNotes.revision).toBeTruthy();
+          const changed = reopened.chatMemories(project.id, context.session, chatNotes.revision);
+          await reopened.callProjectTool(
+            project.id,
+            "remember",
+            { text: "Live updates use another zebrapotato sentinel." },
+            context,
+          );
+          await reopened.drain();
+          const updatedNotes = await changed;
+          expect(updatedNotes.revision).not.toBe(chatNotes.revision);
+          expect(updatedNotes.memories.length).toBeGreaterThan(chatNotes.memories.length);
+
           const sourceCount = (await reopened.state()).workspaces[0]!.sources.length;
           await reopened.bindProject(project, first!.id);
           await reopened.bindProject(otherProject, first!.id);
@@ -513,6 +529,14 @@ describe("native brain persistence", () => {
               .flatMap((item) => (item.type === "text" ? [item.text] : []))
               .join("\n"),
           ).toContain("zebrapotato");
+          expect(
+            (await recovered.chatMemories(otherProject.id, context.session)).memories.some((note) =>
+              note.text.includes("zebrapotato"),
+            ),
+          ).toBe(true);
+          expect((await recovered.chatMemories(otherProject.id, "other-thread")).memories).toEqual(
+            [],
+          );
           expect(index.mock.calls.length - beforeRecovery).toBe(1);
           expect((await recovered.state()).workspaces[0]!.sources[0]!.status).toBe("ready");
         });

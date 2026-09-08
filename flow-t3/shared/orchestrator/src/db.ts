@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, SLACK_ARCHIVE_SCHEMA, DISTILL_CHECKPOINT_SCHEMA, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA, WORK_FOLDERS_SCHEMA, ORIENT_DOCS_SCHEMA } from "./migrations.js";
+import { CHAT_MEMORY_SCHEMA, migrate, SLACK_ARCHIVE_SCHEMA, DISTILL_CHECKPOINT_SCHEMA, MEMORY_SCHEMA, MEMORY_TRIGGERS, ANCHORS_SCHEMA, INDEX_LOG_SCHEMA, WORK_FOLDERS_SCHEMA, ORIENT_DOCS_SCHEMA } from "./migrations.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -342,6 +342,7 @@ db.exec(`
 // the latest shape by the baseline above and only get stamped; existing DBs
 // run everything pending. See migrations.ts for the rules.
 db.exec(DISTILL_CHECKPOINT_SCHEMA);
+db.exec(CHAT_MEMORY_SCHEMA);
 db.exec(SLACK_ARCHIVE_SCHEMA);
 migrate(db, { fresh: freshDb });
 

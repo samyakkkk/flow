@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ProjectId } from "./baseSchemas.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 
 export const BrainCli = Schema.Literals(["claude", "codex", "opencode"]);
 export type BrainCli = typeof BrainCli.Type;
@@ -96,8 +96,26 @@ export const BrainState = Schema.Struct({
   workspaces: Schema.Array(BrainWorkspace),
 });
 export type BrainState = typeof BrainState.Type;
+export const ChatMemoryList = Schema.Struct({
+  revision: Schema.optionalKey(Schema.String),
+  memories: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      text: Schema.String,
+      createdAt: Schema.Number,
+      origin: Schema.String,
+    }),
+  ),
+  status: Schema.Literals(["idle", "extracting", "error", "disabled"]),
+});
+export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainCommand = Schema.Union([
   Schema.Struct({ action: Schema.Literal("read") }),
+  Schema.Struct({
+    action: Schema.Literal("readChat"),
+    threadId: ThreadId,
+    revision: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({ action: Schema.Literal("refreshGithub") }),
   Schema.Struct({ action: Schema.Literal("listGithubRepositories") }),
@@ -139,6 +157,7 @@ export const BrainCommand = Schema.Union([
 export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
+  chatMemories: Schema.optional(ChatMemoryList),
   error: Schema.NullOr(Schema.String),
   createdWorkspaceId: Schema.NullOr(Schema.String),
   branches: Schema.optional(Schema.Array(Schema.String)),

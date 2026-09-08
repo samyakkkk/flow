@@ -1,5 +1,6 @@
 // @effect-diagnostics globalTimers:off - Node child lifecycle timers must work outside an Effect runtime.
 // @effect-diagnostics nodeBuiltinImport:off - Owns the isolated original Flow runtime process.
+import { ChatMemoryList } from "@t3tools/contracts";
 import { brainResourceEnvironment } from "@flow/brain-runtime";
 import type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
 import * as NodeChildProcess from "node:child_process";
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/unstable/ai";
 
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
+const decodeChatMemories = Schema.decodeUnknownSync(ChatMemoryList);
 const decodeTools = Schema.decodeUnknownSync(Schema.Array(McpSchema.Tool));
 const decodeResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
 export type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
@@ -153,6 +155,8 @@ export async function startSessionWorker(
     async call(name: string, args: Record<string, unknown>, context: BrainSessionContext) {
       return decodeResult(await request("call", { name, arguments: args, context }));
     },
+    memories: async (session: string, revision?: string) =>
+      decodeChatMemories(await request("chatMemories", { session, revision })),
     drain: () => request("drain", {}),
     capture: (input: BrainCapture) => request("capture", input),
     async close() {
