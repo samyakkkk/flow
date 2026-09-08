@@ -13,6 +13,7 @@ export function BrainPage({
   hasBrain,
   isIndexing,
   loading,
+  connectionNotice,
   error,
   toolbar,
   indexing,
@@ -23,6 +24,7 @@ export function BrainPage({
   hasBrain: boolean;
   isIndexing: boolean;
   loading: boolean;
+  connectionNotice: { title: string; description: string } | null;
   error: string | null;
   toolbar: ReactNode;
   indexing: ReactNode;
@@ -38,6 +40,14 @@ export function BrainPage({
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 px-5 py-6 md:px-8">
           {toolbar}
+          {snapshot.entities.length > 0 && connectionNotice && (
+            <p
+              role="status"
+              className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground"
+            >
+              {connectionNotice.title} {connectionNotice.description}
+            </p>
+          )}
           {error && (
             <p
               role="alert"
@@ -83,29 +93,42 @@ export function BrainPage({
               />
             ) : (
               <div className="brain-graph-surface">
-                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                <div
+                  role="status"
+                  className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
+                >
                   <BrainCircuit size={28} className="text-muted-foreground/60" />
                   <h3 className="text-sm font-medium">
-                    {loading
-                      ? "Opening brain…"
-                      : !hasBrain
-                        ? "Create your first brain"
-                        : isIndexing
-                          ? "Building your knowledge graph…"
-                          : snapshot.sources.length > 0
-                            ? "No knowledge indexed yet"
-                            : "Your brain starts with a source"}
+                    {connectionNotice
+                      ? connectionNotice.title
+                      : loading
+                        ? "Opening brain…"
+                        : error && !hasBrain
+                          ? "Brain unavailable"
+                          : !hasBrain
+                            ? "Create your first brain"
+                            : isIndexing
+                              ? "Building your knowledge graph…"
+                              : snapshot.sources.length > 0
+                                ? "No knowledge indexed yet"
+                                : "Your brain starts with a source"}
                   </h3>
                   <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-                    {hasBrain
-                      ? isIndexing
-                        ? "Nodes and connections appear here as the indexer discovers them."
-                        : snapshot.sources.length > 0
-                          ? "Check the connected sources below to start or retry indexing."
-                          : "Connect a GitHub repository or local folder below."
-                      : "Choose a name and the CLI that will build its knowledge."}
+                    {connectionNotice
+                      ? connectionNotice.description
+                      : loading
+                        ? "Loading your brains and their knowledge."
+                        : error && !hasBrain
+                          ? "Your brain could not be opened. Check the connection or choose another brain in Brain settings."
+                          : hasBrain
+                            ? isIndexing
+                              ? "Nodes and connections appear here as the indexer discovers them."
+                              : snapshot.sources.length > 0
+                                ? "Check the connected sources below to start or retry indexing."
+                                : "Connect a GitHub repository or local folder below."
+                            : "Choose a name and the CLI that will build its knowledge."}
                   </p>
-                  {!hasBrain && !loading && (
+                  {!hasBrain && !loading && !connectionNotice && !error && (
                     <Button variant="outline" onClick={onCreate}>
                       <PlusIcon size={14} />
                       New brain

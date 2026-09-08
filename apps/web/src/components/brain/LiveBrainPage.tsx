@@ -9,10 +9,13 @@ import type {
   EnvironmentId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import * as Option from "effect/Option";
 import { PlusIcon, SettingsIcon, Folder } from "lucide-react";
 import { brainCommand } from "../../state/brain";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { usePreparedConnection } from "../../state/session";
 import { useProjects } from "../../state/entities";
 import type { BrainSnapshot } from "../../brain/repository";
 import { BrainPage } from "./BrainPage";
@@ -63,7 +66,7 @@ export function LiveBrainPage({
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
 }) {
   const primary = usePrimaryEnvironmentId();
-  const { environments } = useEnvironments();
+  const { environments, isReady } = useEnvironments();
   // An explicit environment must never silently resolve to a different brain host.
   const environmentId = selectedEnvironmentId
     ? (environments.find((entry) => entry.environmentId === selectedEnvironmentId)?.environmentId ??
@@ -73,6 +76,10 @@ export function LiveBrainPage({
     <BrainController
       key={environmentId ?? "disconnected"}
       environmentId={environmentId}
+      environmentsReady={isReady}
+      connection={
+        environments.find((entry) => entry.environmentId === environmentId)?.connection ?? null
+      }
       selectedWorkspaceId={selectedWorkspaceId}
       onSelectionChange={onSelectionChange}
       environmentSelector={
@@ -92,16 +99,23 @@ export function LiveBrainPage({
 
 function BrainController({
   environmentId,
+  environmentsReady,
+  connection,
   selectedWorkspaceId,
   onSelectionChange,
   environmentSelector,
 }: {
   environmentId: EnvironmentId | null;
+  environmentsReady: boolean;
+  connection: EnvironmentConnectionPresentation | null;
   selectedWorkspaceId: string | null;
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
   environmentSelector: React.ReactNode;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
+  const prepared = usePreparedConnection(environmentId);
+  const canRequest =
+    environmentsReady && connection?.phase === "connected" && Option.isSome(prepared);
   const [state, setState] = useState<BrainState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,7 +132,7 @@ function BrainController({
 
   const send = useCallback(
     async (input: BrainCommand, background = false): Promise<BrainResponse | null> => {
-      if (!environmentId) return null;
+      if (!environmentId || !canRequest) return null;
       while (pending.current) {
         if (background && input.action === "read") return null;
         await pending.current.catch(() => {});
@@ -150,7 +164,7 @@ function BrainController({
         if (mounted.current && !background) setBusy(false);
       }
     },
-    [environmentId, execute],
+    [environmentId, execute, canRequest],
   );
 
   useEffect(() => {
@@ -174,11 +188,37 @@ function BrainController({
     if (!selectedWorkspaceId && workspace) onSelectionChange(workspace.id, environmentId);
   }, [environmentId, onSelectionChange, selectedWorkspaceId, workspace]);
 
-  const selectionError = !environmentId
-    ? "Connect to the computer that hosts this brain."
-    : state && selectedWorkspaceId && !workspace
+  const selectionError =
+    state && selectedWorkspaceId && !workspace
       ? "This brain is not available on the selected computer. Choose another brain."
       : null;
+  const connectionNotice = !environmentsReady
+    ? { title: "Opening brain…", description: "Getting your computer connection ready." }
+    : !environmentId
+      ? {
+          title: "Choose a brain computer",
+          description: "Open Brain settings to choose the computer that hosts your brain.",
+        }
+      : connection?.phase === "offline"
+        ? {
+            title: "Brain computer is offline",
+            description: "Your brain will be available when the computer reconnects.",
+          }
+        : connection?.phase === "error"
+          ? {
+              title: "Could not connect to your brain computer",
+              description:
+                connection.error ?? "Check the computer’s connection in Settings → Connections.",
+            }
+          : !canRequest
+            ? {
+                title:
+                  connection?.phase === "reconnecting"
+                    ? "Reconnecting to your brain…"
+                    : "Connecting to your brain…",
+                description: "Your knowledge graph will appear once the connection is ready.",
+              }
+            : null;
   const isIndexing =
     workspace?.sources.some((source) =>
       ["queued", "cloning", "indexing", "embedding"].includes(source.status),
@@ -190,7 +230,8 @@ function BrainController({
         hasBrain={Boolean(workspace)}
         isIndexing={isIndexing}
         loading={!state && Boolean(environmentId) && !error}
-        error={error ?? selectionError}
+        connectionNotice={connectionNotice}
+        error={connectionNotice ? null : (error ?? selectionError)}
         onCreate={() => setCreateOpen(true)}
         indexing={workspace && <BrainIndexing workspace={workspace} send={send} busy={busy} />}
         toolbar={
@@ -222,7 +263,7 @@ function BrainController({
               </Button>
               <Button
                 variant="outline"
-                disabled={!state || busy}
+                disabled={!state || !canRequest || busy}
                 onClick={() => setCreateOpen(true)}
               >
                 <PlusIcon size={14} />
