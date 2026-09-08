@@ -8,11 +8,12 @@ import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/unstable/ai";
-import { BrainCommand, BrainState, ProjectId } from "@t3tools/contracts";
+import { BrainCommand, BrainState, ChatMemoryList, ProjectId } from "@t3tools/contracts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
 import type { BrainCapture, BrainSessionContext } from "./session-worker.ts";
 export type BrainClient = Pick<
   BrainRuntime,
+  | "chatMemories"
   | "projectBrainId"
   | "callProjectTool"
   | "captureProjectEvent"
@@ -37,8 +38,17 @@ const Capture = Schema.Struct({
   closed: Schema.optionalKey(Schema.Boolean),
 });
 const Request = Schema.Struct({
-  method: Schema.Literals(["state", "command", "call", "capture", "repositories", "branches"]),
+  method: Schema.Literals([
+    "state",
+    "command",
+    "call",
+    "capture",
+    "memories",
+    "repositories",
+    "branches",
+  ]),
   instance: Schema.String,
+  revision: Schema.optionalKey(Schema.String),
   workspace: Schema.optionalKey(Schema.String),
   name: Schema.optionalKey(Schema.String),
   args: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -94,6 +104,14 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
             ...input.context,
             session: `${input.instance}:${input.context.session}`,
           });
+          break;
+        case "memories":
+          if (!input.workspace || !input.context) throw Error("Missing brain/context");
+          result = await runtime.brainMemories(
+            input.workspace,
+            `${input.instance}:${input.context.session}`,
+            input.revision,
+          );
           break;
         case "capture":
           if (!input.workspace || !input.capture) throw Error("Missing brain/capture");
@@ -205,16 +223,28 @@ export class SharedBrainRuntime implements BrainClient {
   projectBrainId(project: ProjectId) {
     return this.bindings[project];
   }
-  async state() {
+  async chatMemories(projectId: ProjectId, session: string, revision?: string) {
+    const workspace = this.projectBrainId(projectId);
+    if (!workspace) return { memories: [], status: "disabled" as const };
+    const result = Schema.decodeUnknownSync(ChatMemoryList)(
+      await this.request("memories", { workspace, context: { session }, revision }),
+    );
+    if (this.projectBrainId(projectId) !== workspace)
+      throw Error("The project’s brain changed. Retry the request.");
+    return result;
+  }
+  async state(projectId?: ProjectId) {
     const state = decodeState(await this.request("state"));
     return {
       ...state,
-      workspaces: state.workspaces.map((w) => ({
-        ...w,
-        projectIds: Object.entries(this.bindings)
-          .filter(([, id]) => id === w.id)
-          .map(([id]) => decodeProjectId(id)),
-      })),
+      workspaces: state.workspaces
+        .filter((w) => !projectId || this.bindings[projectId] === w.id)
+        .map((w) => ({
+          ...w,
+          projectIds: Object.entries(this.bindings)
+            .filter(([, id]) => id === w.id)
+            .map(([id]) => decodeProjectId(id)),
+        })),
     };
   }
   bindProject(project: { id: ProjectId; workspaceRoot: string }, workspace: string | null) {

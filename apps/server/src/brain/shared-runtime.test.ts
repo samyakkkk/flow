@@ -38,6 +38,10 @@ it("shares tools and capture over authenticated transport while isolating projec
   };
   const runtime = {
     state: async () => state,
+    brainMemories: async (_id: string, session: string) => ({
+      memories: [{ id: session, text: session, createdAt: 1788825600000, origin: "user" }],
+      status: "idle",
+    }),
     callBrainTool: async (
       _id: string,
       _name: string,
@@ -66,6 +70,13 @@ it("shares tools and capture over authenticated transport while isolating projec
     await a.callProjectTool(project, "orient", {}, { session: "same-thread" });
     await b.callProjectTool(project, "orient", {}, { session: "same-thread" });
     expect(sessions).toEqual(["instance-a:same-thread", "instance-b:same-thread"]);
+    expect((await a.chatMemories(project, "same-thread")).memories[0]?.text).toBe(
+      "instance-a:same-thread",
+    );
+    expect((await b.chatMemories(project, "same-thread")).memories[0]?.text).toBe(
+      "instance-b:same-thread",
+    );
+    expect((await a.state(decodeProjectId("unbound"))).workspaces).toEqual([]);
     await close();
     await a.captureProjectEvent(project, {
       context: { session: "same-thread" },
