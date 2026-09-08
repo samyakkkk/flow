@@ -41,6 +41,11 @@ import { getOrientDocs } from "./orient-doc.js";
 import { listKnowledge, deleteMemory, deleteObservation } from "./knowledge.js";
 import { bumpCounter } from "../telemetry.js";
 
+const pendingRemembers = new Set<Promise<unknown>>();
+export async function drainRemembers(): Promise<void> {
+  while (pendingRemembers.size) await Promise.allSettled([...pendingRemembers]);
+}
+
 export interface MemoryStats {
   memories: number;
   observations: number;
@@ -164,11 +169,11 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
         branch: b.branch ? String(b.branch) : null,
         sessionId: b.session ? String(b.session) : null,
       };
-      setImmediate(() => {
-        rememberText(ctx)
-          .then((out) => console.log(`[memory] remember distilled: ${out.observations} observation(s)${out.reason ? ` (${out.reason})` : ""}`))
-          .catch((err) => console.warn(`[memory] remember failed: ${err instanceof Error ? err.message : String(err)}`));
-      });
+      const pending = Promise.resolve().then(() => rememberText(ctx))
+        .then((out) => console.log(`[memory] remember distilled: ${out.observations} observation(s)${out.reason ? ` (${out.reason})` : ""}`))
+        .catch((err) => console.warn(`[memory] remember failed: ${err instanceof Error ? err.message : String(err)}`));
+      pendingRemembers.add(pending);
+      void pending.finally(() => pendingRemembers.delete(pending));
       return reply.code(202).send({ status: "queued" });
     },
   );

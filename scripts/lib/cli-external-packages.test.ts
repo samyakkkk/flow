@@ -94,6 +94,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
       Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
       [
         "@ff-labs/fff-node",
+        "better-sqlite3",
         "falkordb",
         "falkordblite",
         "msgpackr-extract",

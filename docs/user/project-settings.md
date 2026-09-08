@@ -33,3 +33,19 @@ upstream.
 T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.
+
+## Connected Flow brain
+
+Choose a brain for the project to give its chats Flow's graph, memory, and committed-source
+access. The next regular message automatically supplies Flow's orientation, including in an
+existing chat. Chats receive the original Flow tools without a separate skill or MCP installation.
+
+Orientation refreshes after an agent session restarts, after compaction, or when you change the
+connected brain. It is not repeated on every message. Disconnecting stops further reads and
+capture, but cannot erase knowledge already in the conversation; start a new chat for a clean context.
+
+Flow captures user messages, assistant output, and tool activity for its existing memory pipeline.
+Capture is stored locally before background processing and retried if the brain worker is unavailable.
+Distillation uses Flow's existing LLM configuration; a usable transport is required to process
+checkpoints. Indexed sources may be older than the current checkout, and incomplete indexing
+can limit what the brain knows.

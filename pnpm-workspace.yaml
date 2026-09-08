@@ -5,11 +5,13 @@ packages:
   - packages/*
   - scripts
   - flow/graph-gateway
+  - flow/orchestrator
 
 # Successor to onlyBuiltDependencies/ignoredBuiltDependencies (pnpm 11).
 # true = allowed to run build scripts; false mirrors the pnpm 10 behavior
 # where anything outside onlyBuiltDependencies was silently not built.
 allowBuilds:
+  better-sqlite3: true
   browser-tabs-lock: false
   bufferutil: false
   core-js: false
