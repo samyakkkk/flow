@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -160,8 +161,9 @@ function ActiveSshPasswordPrompt({
         <DialogHeader>
           <DialogTitle>SSH Password Required</DialogTitle>
           <DialogDescription>
-            T3 needs your SSH password to connect to <code>{target}</code>. The password is passed
-            to the local SSH process for this connection attempt and is not saved by T3 Code.
+            {BRAND.shortName} needs your SSH password to connect to <code>{target}</code>. The
+            password is passed to the local SSH process for this connection attempt and is not saved
+            by {BRAND.name}.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3" scrollFade={false}>

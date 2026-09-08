@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { type LiveActivity } from "expo-widgets";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
@@ -492,7 +493,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     }
     const nowIso = new Date(Date.now()).toISOString();
     const activity = AgentActivity.start({
-      title: "T3 Code",
+      title: BRAND.name,
       subtitle: "Agent work in progress",
       activeCount: 1,
       updatedAt: nowIso,

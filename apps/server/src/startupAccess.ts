@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as NodeOS from "node:os";
 
 import { QrCode } from "@t3tools/shared/qrCode";
@@ -121,7 +122,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
-    "T3 Code server is ready.",
+    `${BRAND.name} server is ready.`,
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,

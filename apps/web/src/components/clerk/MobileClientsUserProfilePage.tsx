@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import type { RelayClientDeviceRecord } from "@t3tools/contracts/relay";
 import { SmartphoneIcon } from "lucide-react";
 
@@ -94,7 +95,7 @@ function EmptyMobileClients() {
       <EmptyHeader>
         <EmptyTitle className="text-[1.0625rem] leading-6">No mobile clients</EmptyTitle>
         <EmptyDescription className="text-[0.8125rem] leading-[1.125rem]">
-          Sign in to T3 Code on your iPhone to register it for push notifications and Live
+          Sign in to {BRAND.name} on your iPhone to register it for push notifications and Live
           Activities.
         </EmptyDescription>
       </EmptyHeader>
@@ -112,7 +113,7 @@ export function MobileClientsUserProfilePage() {
   return (
     <ClerkUserProfilePage
       title="Mobile clients"
-      description="Devices registered to receive T3 Connect activity from your environments."
+      description={`Devices registered to receive ${BRAND.connectName} activity from your environments.`}
       action={
         <ClerkUserProfileRefreshButton
           isPending={devicesState.isPending}

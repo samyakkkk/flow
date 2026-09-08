@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   ServerSelfUpdateError,
   type ServerSelfUpdateCapability,
@@ -191,12 +192,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         return yield* desktopAppUpdate.run(reportProgress);
       }
       return yield* failWith(
-        "This server is managed by the T3 Code desktop app on its machine; update the desktop app to update it.",
+        `This server is managed by the ${BRAND.name} desktop app on its machine; update the desktop app to update it.`,
       );
     }
     if (capability === null) {
       return yield* failWith(
-        "Remote updates require the T3 Code background service. Run `t3 service install` on the server machine.",
+        `Remote updates require the ${BRAND.name} background service. Run \`t3 service install\` on the server machine.`,
       );
     }
 

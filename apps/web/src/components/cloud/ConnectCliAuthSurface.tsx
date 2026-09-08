@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { useAuth, useClerk, useUser } from "@clerk/react";
 import { encodeConnectAuthCode, readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -111,8 +112,8 @@ export function ConnectCliAuthorizeSurface() {
         title="Connecting your terminal"
         description={
           isSignedIn
-            ? "Redirecting to authorize T3 Connect for your CLI…"
-            : "Sign in to continue authorizing T3 Connect for your CLI."
+            ? `Redirecting to authorize ${BRAND.connectName} for your CLI…`
+            : `Sign in to continue authorizing ${BRAND.connectName} for your CLI.`
         }
       />
       {isLoaded && !isSignedIn ? (
@@ -202,7 +203,7 @@ export function ConnectCliCallbackSurface() {
 
       <p className="mt-6 text-xs leading-relaxed text-muted-foreground">
         Only enter this code in a terminal session you started yourself. Anyone holding it can link
-        their machine to your T3 Connect account while it is valid.
+        their machine to your {BRAND.connectName} account while it is valid.
       </p>
     </AuthSurfaceShell>
   );

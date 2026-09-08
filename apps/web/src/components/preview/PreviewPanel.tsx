@@ -1,4 +1,5 @@
-"use client";
+import { BRAND } from "@t3tools/shared/branding";
+("use client");
 
 import type { PreviewAnnotationPayload, ScopedThreadRef } from "@t3tools/contracts";
 
@@ -33,7 +34,7 @@ export function PreviewPanel({
       <PreviewPanelShell mode={mode}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
-            Preview is only available in the T3 Code desktop app.
+            Preview is only available in the {BRAND.name} desktop app.
           </p>
         </div>
       </PreviewPanelShell>

@@ -1,3 +1,4 @@
+import { checkBranding } from "../../scripts/lib/check-branding.ts";
 import "vite-plus/test/config";
 import { defineConfig, mergeConfig } from "vite-plus";
 
@@ -20,6 +21,7 @@ import {
 
 export { shouldBundleCliDependency };
 
+checkBranding();
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
 

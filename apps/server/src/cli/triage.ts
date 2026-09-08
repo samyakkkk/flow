@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 /**
  * `t3 triage` - hand a misbehaving install to the user's own coding agent.
  *
@@ -158,7 +159,7 @@ export const triageCommand = Command.make("triage", {
   model: modelFlag,
 }).pipe(
   Command.withDescription(
-    "Investigate a T3 Code problem on this machine with claude or codex, and help file a good issue.",
+    `Investigate a ${BRAND.name} problem on this machine with claude or codex, and help file a good issue.`,
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {

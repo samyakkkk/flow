@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import type { ServerProvider, ServerProviderVersionAdvisory } from "@t3tools/contracts";
 
 /**
@@ -40,7 +41,8 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: "Disabled",
       detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in T3 Code.",
+        provider.message ??
+        `This provider is installed but disabled for new sessions in ${BRAND.name}.`,
     };
   }
   if (!provider.installed) {

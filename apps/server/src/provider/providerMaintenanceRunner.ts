@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
@@ -416,9 +417,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 startedAt,
                 finishedAt,
                 message: couldNotVerify
-                  ? "Update command completed, but T3 Code could not verify the provider version."
+                  ? `Update command completed, but ${BRAND.name} could not verify the provider version.`
                   : stillOutdated
-                    ? "Update command completed, but T3 Code still detects an outdated provider version."
+                    ? `Update command completed, but ${BRAND.name} still detects an outdated provider version.`
                     : "Provider updated.",
                 output: commandOutput(result),
               }),

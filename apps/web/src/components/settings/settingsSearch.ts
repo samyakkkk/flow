@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 
@@ -483,7 +484,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "t3-connect",
-    title: "T3 Connect",
+    title: BRAND.connectName,
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["managed tunnel cloud other devices remote"],

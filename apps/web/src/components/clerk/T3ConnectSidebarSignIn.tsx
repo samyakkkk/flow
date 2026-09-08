@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { UserButton, useAuth } from "@clerk/react";
 import { LogInIcon, ServerIcon, SmartphoneIcon } from "lucide-react";
 
@@ -41,7 +42,7 @@ function ConfiguredT3ConnectSidebarAvatar() {
         <MobileClientsUserProfilePage />
       </UserButton.UserProfilePage>
       <UserButton.UserProfilePage
-        label="T3 Connect"
+        label={BRAND.connectName}
         labelIcon={<ServerIcon className="size-4" />}
         url="t3-connect"
       >
@@ -63,7 +64,7 @@ function ConfiguredT3ConnectSidebarSignIn() {
         <SidebarMenuItem>
           <SidebarMenuButton onClick={openAuthPrompt}>
             <LogInIcon />
-            <span>Sign in to T3 Connect</span>
+            <span>Sign in to {BRAND.connectName}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

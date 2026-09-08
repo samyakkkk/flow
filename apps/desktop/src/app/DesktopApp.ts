@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -130,7 +131,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      `${BRAND.name} failed to start`,
       `Stage: ${stage}\n${message}${detail}`,
     );
   }

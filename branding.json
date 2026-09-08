@@ -1,0 +1,23 @@
+{
+  "name": "Flow",
+  "shortName": "Flow",
+  "connectName": "Flow Connect",
+  "description": "Your workspace for coding agents.",
+  "links": {
+    "website": "https://github.com/samyakkkk/flow",
+    "releases": "https://github.com/samyakkkk/flow/releases",
+    "support": "https://github.com/samyakkkk/flow/issues",
+    "legalWebsite": "https://t3.codes",
+    "repository": "https://github.com/samyakkkk/flow",
+    "iosDownload": "https://github.com/samyakkkk/flow/releases",
+    "androidDownload": "https://github.com/samyakkkk/flow/releases"
+  },
+  "mark": {
+    "viewBox": "0 0 24 24",
+    "path": "M5 3H21V7H9V11H18V15H9V21H5Z"
+  },
+  "colors": {
+    "background": "#161616",
+    "foreground": "#FFFFFF"
+  }
+}

@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as NodeCrypto from "node:crypto";
 
 import * as Context from "effect/Context";
@@ -722,9 +723,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const commitEnv: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_INDEX_FILE: tempIndexPath,
-        GIT_AUTHOR_NAME: "T3 Code",
+        GIT_AUTHOR_NAME: BRAND.name,
         GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
-        GIT_COMMITTER_NAME: "T3 Code",
+        GIT_COMMITTER_NAME: BRAND.name,
         GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
       };
 

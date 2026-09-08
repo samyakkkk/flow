@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { brainHttpApiLayer } from "./brain/http.ts";
 import { EnvironmentHttpApi, ProviderDriverKind } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -729,11 +730,16 @@ export const makeServerLayer = Layer.unwrap(
                   Schedule.upTo({ duration: "10 minutes" }),
                 ),
               }),
-              Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+              Effect.tap(() =>
+                Effect.logInfo(`${BRAND.connectName} desired link reconciled on startup`),
+              ),
               Effect.catch((cause) =>
-                Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
-                  message: cause.message,
-                }),
+                Effect.logWarning(
+                  `Failed to reconcile ${BRAND.connectName} desired link on startup`,
+                  {
+                    message: cause.message,
+                  },
+                ),
               ),
             );
           }),

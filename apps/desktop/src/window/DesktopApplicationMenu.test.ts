@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -30,7 +31,7 @@ const environmentInput = {
 
 const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
   metadata: Effect.die("unexpected metadata read"),
-  name: Effect.succeed("T3 Code"),
+  name: Effect.succeed(`${BRAND.name}`),
   systemLocale: Effect.succeed("en-US"),
   whenReady: Effect.void,
   quit: Effect.void,

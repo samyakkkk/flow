@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import packageJson from "../../package.json" with { type: "json" };
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
@@ -24,8 +25,7 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      reason:
-        "This release requires a newer T3 Code service launcher. Update it on the server machine.",
+      reason: `This release requires a newer ${BRAND.name} service launcher. Update it on the server machine.`,
     };
   }
 
