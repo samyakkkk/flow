@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { useAuth, useUser } from "@clerk/expo";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import Constants from "expo-constants";
@@ -253,7 +254,7 @@ function ConfiguredSettingsRouteScreen() {
       } else {
         Alert.alert(
           "Couldn't finish enabling notifications",
-          "Notification access was granted, but this device could not be registered with T3 Connect. Notifications will start once registration succeeds.",
+          `Notification access was granted, but this device could not be registered with ${BRAND.connectName}. Notifications will start once registration succeeds.`,
         );
       }
       return;
@@ -283,8 +284,8 @@ function ConfiguredSettingsRouteScreen() {
 
   const promptSignIn = useCallback(() => {
     Alert.alert(
-      "Sign in to T3 Connect",
-      "Live Activity updates require T3 Connect so relay can deliver updates to this device.",
+      `Sign in to ${BRAND.connectName}`,
+      `Live Activity updates require ${BRAND.connectName} so relay can deliver updates to this device.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -356,7 +357,7 @@ function ConfiguredSettingsRouteScreen() {
     } else {
       Alert.alert(
         "Couldn't finish enabling Live Activities",
-        "This device could not be registered with T3 Connect, so Live Activities won't appear yet. They'll start once registration succeeds.",
+        `This device could not be registered with ${BRAND.connectName}, so Live Activities won't appear yet. They'll start once registration succeeds.`,
       );
     }
   }, [
@@ -378,7 +379,7 @@ function ConfiguredSettingsRouteScreen() {
 
       Alert.alert(
         "Disable notifications",
-        "Notification permission is controlled by iOS. Open Settings to disable notifications for T3 Code.",
+        `Notification permission is controlled by iOS. Open Settings to disable notifications for ${BRAND.name}.`,
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },
@@ -468,13 +469,13 @@ function ConfiguredSettingsRouteScreen() {
           <SettingsSection title="Account">
             <SettingsRow
               icon="person.crop.circle"
-              label="T3 Account"
+              label={`${BRAND.shortName} Account`}
               value={accountLabel}
               onPress={openAccount}
             />
           </SettingsSection>
           <Text className="px-2 text-sm text-foreground-muted">
-            T3 Code works locally without signing in. Cloud features are optional.
+            {BRAND.name} works locally without signing in. Cloud features are optional.
           </Text>
         </View>
 

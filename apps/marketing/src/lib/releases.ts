@@ -1,6 +1,7 @@
-const REPO = "pingdotgg/t3code";
+import { BRAND } from "@t3tools/shared/branding";
+const REPO = new URL(BRAND.links.repository).pathname.replace(/^\/|\/$/g, "");
 
-export const RELEASES_URL = `https://github.com/${REPO}/releases`;
+export const RELEASES_URL = BRAND.links.releases;
 export const NIGHTLY_RELEASES_URL = `${RELEASES_URL}?q=nightly&expanded=true`;
 
 const LATEST_API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;

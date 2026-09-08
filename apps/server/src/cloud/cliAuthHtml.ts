@@ -1,3 +1,4 @@
+import { BRAND, escapeBrandHtml } from "@t3tools/shared/branding";
 export type LoopbackAuthorizationStage = "dev" | "nightly" | "latest";
 
 declare const __T3CODE_BUILD_CHANNEL__: "nightly" | "latest" | undefined;
@@ -7,15 +8,15 @@ function resolveLoopbackAuthorizationStage(): LoopbackAuthorizationStage {
 }
 
 const stageBrands = {
-  dev: "T3 Code (Dev)",
-  nightly: "T3 Code (Nightly)",
-  latest: "T3 Code",
+  dev: `${BRAND.name} (Dev)`,
+  nightly: `${BRAND.name} (Nightly)`,
+  latest: BRAND.name,
 } as const satisfies Record<LoopbackAuthorizationStage, string>;
 
 export function renderLoopbackAuthorizationCompleteHtml(
   stage: LoopbackAuthorizationStage = resolveLoopbackAuthorizationStage(),
 ): string {
-  const stageBrand = stageBrands[stage];
+  const stageBrand = escapeBrandHtml(stageBrands[stage]);
 
   return `<!doctype html>
 <html lang="en">
@@ -23,7 +24,7 @@ export function renderLoopbackAuthorizationCompleteHtml(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>T3 Connect authorization complete</title>
+    <title>${escapeBrandHtml(BRAND.connectName)} authorization complete</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -147,7 +148,7 @@ export function renderLoopbackAuthorizationCompleteHtml(
       <section class="content">
         <p class="eyebrow">Browser authorization complete</p>
         <h1>You're connected</h1>
-        <p class="description">Return to your terminal to finish setting up T3 Connect. You can close this window.</p>
+        <p class="description">Return to your terminal to finish setting up ${escapeBrandHtml(BRAND.connectName)}. You can close this window.</p>
       </section>
     </main>
   </body>

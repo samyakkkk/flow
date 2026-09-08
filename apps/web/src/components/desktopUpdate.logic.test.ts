@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { describe, expect, it } from "vite-plus/test";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
@@ -181,14 +182,12 @@ describe("getDesktopUpdateActionError", () => {
 
 describe("desktop update UI helpers", () => {
   it("builds the stable release URL for a downloaded version", () => {
-    expect(getDesktopUpdateReleaseUrl("0.0.30")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-    );
+    expect(getDesktopUpdateReleaseUrl("0.0.30")).toBe(`${BRAND.links.releases}/tag/v0.0.30`);
   });
 
   it("builds the nightly release URL without dropping its version suffix", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30-nightly.20260728.931",
+      `${BRAND.links.releases}/tag/v0.0.30-nightly.20260728.931`,
     );
   });
 
@@ -198,9 +197,7 @@ describe("desktop update UI helpers", () => {
   });
 
   it("builds the release history URL", () => {
-    expect(getDesktopUpdateReleaseHistoryUrl()).toBe(
-      "https://github.com/pingdotgg/t3code/releases",
-    );
+    expect(getDesktopUpdateReleaseHistoryUrl()).toBe(`${BRAND.links.releases}`);
   });
 
   it("toasts only for actionable updater errors", () => {
@@ -259,7 +256,7 @@ describe("desktop update UI helpers", () => {
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.1",
       }),
-    ).toContain("Install update 1.1.1 and restart T3 Code?");
+    ).toContain(`Install update 1.1.1 and restart ${BRAND.name}?`);
   });
 
   it("falls back to generic install confirmation copy when no version is available", () => {
@@ -268,7 +265,7 @@ describe("desktop update UI helpers", () => {
         availableVersion: null,
         downloadedVersion: null,
       }),
-    ).toContain("Install update and restart T3 Code?");
+    ).toContain(`Install update and restart ${BRAND.name}?`);
   });
 
   it("keeps the same install confirmation copy across desktop platforms", () => {
@@ -278,7 +275,9 @@ describe("desktop update UI helpers", () => {
         downloadedVersion: "1.1.0",
       }),
     ).toBe(
-      "Install update 1.1.0 and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.",
+      `Install update 1.1.0 and restart ${BRAND.name}?
+
+Any running tasks will be interrupted. Make sure you're ready before continuing.`,
     );
   });
 });

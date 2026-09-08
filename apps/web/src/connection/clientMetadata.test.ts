@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -80,7 +81,7 @@ describe("client telemetry metadata", () => {
         desktopBridge: { getClientPlatform: () => "darwin" },
       }),
     ).toEqual({
-      label: "T3 Code Desktop",
+      label: `${BRAND.name} Desktop`,
       deviceType: "desktop",
       os: "macOS",
       surface: "desktop",

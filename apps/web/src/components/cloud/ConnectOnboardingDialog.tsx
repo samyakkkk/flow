@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { useAuth } from "@clerk/react";
 import { AuthAdministrativeScopes, AuthRelayWriteScope } from "@t3tools/contracts";
 import { CheckIcon } from "lucide-react";
@@ -200,9 +201,9 @@ function ConfiguredConnectOnboardingDialog() {
     if (!ok) return;
     toastManager.add({
       type: "success",
-      title: "T3 Connect enabled",
+      title: `${BRAND.connectName} enabled`,
       description: exposeEnvironment
-        ? "This environment is available to your other devices through T3 Connect."
+        ? `This environment is available to your other devices through ${BRAND.connectName}.`
         : "This environment publishes agent activity to your mobile clients.",
     });
     setStep("devices");
@@ -219,7 +220,7 @@ function ConfiguredConnectOnboardingDialog() {
     >
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Set up T3 Connect</DialogTitle>
+          <DialogTitle>Set up {BRAND.connectName}</DialogTitle>
           <DialogDescription>
             Mesh your devices together — publish this environment and connect the rest, all in one
             place.
@@ -361,7 +362,7 @@ function PublishStep({
       <div className="rounded-lg border">
         <OnboardingToggleRow
           title="Publish this environment"
-          description="Make this environment available to your other devices through T3 Connect."
+          description={`Make this environment available to your other devices through ${BRAND.connectName}.`}
           checked={exposeEnvironment}
           disabled={disabled}
           onCheckedChange={onExposeEnvironmentChange}

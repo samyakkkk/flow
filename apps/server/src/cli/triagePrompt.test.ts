@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -26,7 +27,8 @@ it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
 it("seed prompt names the context file and embeds the playbook", () => {
   const prompt = buildTriageSeedPrompt("/tmp/triage-run/context.md");
   assert.include(prompt, "/tmp/triage-run/context.md");
-  assert.include(prompt, TRIAGE_PLAYBOOK);
+  assert.include(prompt, `${BRAND.name} triage playbook`);
+  assert.include(prompt, BRAND.links.repository);
 });
 
 it("launch prompt stays a single argv-safe line naming the prompt file", () => {

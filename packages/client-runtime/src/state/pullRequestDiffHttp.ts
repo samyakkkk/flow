@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   EnvironmentAuthInvalidError,
   type PullRequestDiffInput,
@@ -31,7 +32,7 @@ export class PullRequestDiffCredentialRejectedError extends Schema.TaggedErrorCl
   },
 ) {
   override get message(): string {
-    return "This environment session is no longer valid (invalid_credential). Refresh the page or quit and reopen T3 Code.";
+    return `This environment session is no longer valid (invalid_credential). Refresh the page or quit and reopen ${BRAND.name}.`;
   }
 }
 

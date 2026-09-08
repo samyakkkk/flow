@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 // @effect-diagnostics globalTimers:off -- This protocol broker owns cancellable request deadlines outside the Effect runtime.
 import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
@@ -45,7 +46,7 @@ export class DesktopAppActivationBroker {
   request(request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> {
     if (this.#closed) {
       return Promise.resolve(
-        failure(request.requestId, "renderer-unavailable", "T3 Code is shutting down."),
+        failure(request.requestId, "renderer-unavailable", `${BRAND.name} is shutting down.`),
       );
     }
     if (this.#pending.has(request.requestId)) {
@@ -90,7 +91,7 @@ export class DesktopAppActivationBroker {
           failure(
             pending.request.requestId,
             "renderer-unavailable",
-            "The T3 Code window closed before it opened the project.",
+            `The ${BRAND.name} window closed before it opened the project.`,
           ),
         );
       }
@@ -103,7 +104,11 @@ export class DesktopAppActivationBroker {
 
   cancel(requestId: string): void {
     this.#settle(
-      failure(requestId, "renderer-unavailable", "The command closed before T3 Code was ready."),
+      failure(
+        requestId,
+        "renderer-unavailable",
+        `The command closed before ${BRAND.name} was ready.`,
+      ),
     );
   }
 
@@ -112,7 +117,11 @@ export class DesktopAppActivationBroker {
     this.#renderer = null;
     for (const pending of this.#pending.values()) {
       this.#settle(
-        failure(pending.request.requestId, "renderer-unavailable", "T3 Code is shutting down."),
+        failure(
+          pending.request.requestId,
+          "renderer-unavailable",
+          `${BRAND.name} is shutting down.`,
+        ),
       );
     }
   }

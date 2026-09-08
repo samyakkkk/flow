@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { EnvironmentId } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -21,8 +22,7 @@ import {
   supportsDesktopAppUpdate,
 } from "./versionSkew";
 
-const MISMATCH_HINT =
-  "Version mismatch. Try syncing the client and server to the same T3 Code version.";
+const MISMATCH_HINT = `Version mismatch. Try syncing the client and server to the same ${BRAND.name} version.`;
 
 describe("versionSkew", () => {
   beforeEach(() => {

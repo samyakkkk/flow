@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { BRAND } from "@t3tools/shared/branding";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -108,7 +109,7 @@ export const resolveNightlyReleaseMetadata = (
     baseVersion,
     version,
     tag: `v${version}`,
-    name: `T3 Code Nightly ${version} (${shortSha})`,
+    name: `${BRAND.name} Nightly ${version} (${shortSha})`,
     shortSha,
   };
 };

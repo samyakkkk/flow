@@ -16,8 +16,8 @@
     "start:marketing": "vp run --filter @t3tools/marketing preview",
     "start:mock-update-server": "node scripts/mock-update-server.ts",
     "screenshots:mobile": "node scripts/mobile-showcase.ts",
-    "icons:export": "node scripts/export-brand-icons.ts",
-    "icons:check": "node scripts/export-brand-icons.ts --check",
+    "icons:export": "node scripts/configure-branding.mjs",
+    "icons:check": "node scripts/configure-branding.mjs --check",
     "build": "vp run --filter './apps/*' build",
     "build:marketing": "vp run --filter @t3tools/marketing build",
     "build:desktop": "vp run --filter @t3tools/desktop --filter t3 build",
@@ -44,7 +44,9 @@
     "dist:desktop:win:x64": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
     "release:smoke": "node scripts/release-smoke.ts",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
-    "sync:repos": "node scripts/sync-reference-repos.ts"
+    "sync:repos": "node scripts/sync-reference-repos.ts",
+    "branding:generate": "node scripts/configure-branding.mjs",
+    "branding:check": "node scripts/configure-branding.mjs --check"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { BRAND } from "@t3tools/shared/branding";
 
 import * as NodeOS from "node:os";
 
@@ -860,7 +861,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   t3Home: Flag.string("home-dir").pipe(
     Flag.withDescription(
-      "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME). Inside a git worktree this defaults to that worktree's own .t3 so dev state stays off the shared home.",
+      `Explicit ${BRAND.name} data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME). Inside a git worktree this defaults to that worktree's own .t3 so dev state stays off the shared home.`,
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),

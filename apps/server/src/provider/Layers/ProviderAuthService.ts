@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { ProviderSetupError, type ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,7 +24,7 @@ export const makeProviderAuthService = Effect.gen(function* () {
         instanceId,
         operation,
         detail: instance
-          ? "This provider does not support sign-in in T3 Code."
+          ? `This provider does not support sign-in in ${BRAND.name}.`
           : "This provider instance is no longer available.",
       });
     }

@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import type {
   ResourceTelemetryProcessCategory,
   ServerProcessDiagnosticsEntry,
@@ -93,7 +94,7 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
           pid: input.pid,
           signal: input.signal,
           signaled: false,
-          message: Option.some("Refusing to signal the T3 server process."),
+          message: Option.some(`Refusing to signal the ${BRAND.shortName} server process.`),
         };
       }
       const current = yield* telemetry.refresh.pipe(Effect.option);
@@ -126,7 +127,9 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
           pid: input.pid,
           signal: input.signal,
           signaled: false,
-          message: Option.some(`Process ${input.pid} is not a signalable T3 backend descendant.`),
+          message: Option.some(
+            `Process ${input.pid} is not a signalable ${BRAND.shortName} backend descendant.`,
+          ),
         };
       }
       return yield* Effect.try({

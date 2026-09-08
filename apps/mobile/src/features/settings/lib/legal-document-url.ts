@@ -1,4 +1,5 @@
-const DEFAULT_MARKETING_SITE_URL = "https://t3.codes";
+import { BRAND } from "@t3tools/shared/branding";
+const DEFAULT_MARKETING_SITE_URL = BRAND.links.legalWebsite;
 
 function resolveMarketingSiteUrl(override: string | undefined): URL {
   try {

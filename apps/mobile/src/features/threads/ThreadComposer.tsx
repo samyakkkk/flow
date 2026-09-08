@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
@@ -424,7 +425,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       armAgentAwarenessLiveActivityForLocalWork({
         environmentId: props.environmentId,
         threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
+        projectTitle: props.environmentLabel ?? BRAND.name,
       });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);

@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 // @effect-diagnostics nodeBuiltinImport:off - publish commits and rollbacks
 // move exact directory entries with rename, which the FileSystem service does
 // not expose atomically.
@@ -107,7 +108,7 @@ export class ThemeFileInvalidError extends Schema.TaggedErrorClass<ThemeFileInva
   { filePath: Schema.String, cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return `${this.filePath} is not a valid theme file. Use a theme exported from T3 Code, or a seeded file with name, appearance, canvas, and accent.`;
+    return `${this.filePath} is not a valid theme file. Use a theme exported from ${BRAND.name}, or a seeded file with name, appearance, canvas, and accent.`;
   }
 }
 

@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   EventId,
   type OpenCodeSettings,
@@ -1281,8 +1282,7 @@ export function makeOpenCodeAdapter(
       ) {
         return;
       }
-      const detail =
-        "OpenCode accepted the prompt, but T3 Code could not confirm its message or session status.";
+      const detail = `OpenCode accepted the prompt, but ${BRAND.name} could not confirm its message or session status.`;
       const abortExit = yield* Effect.exit(
         runOpenCodeSdk("session.abort", (signal) =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),

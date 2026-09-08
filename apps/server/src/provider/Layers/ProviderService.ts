@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as Random from "effect/Random";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
@@ -1245,7 +1246,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
             "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' is disabled in T3 Code settings.`,
+            `Provider instance '${resolvedInstanceId}' is disabled in ${BRAND.name} settings.`,
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
