@@ -47,6 +47,7 @@ import {
 } from "../../hooks/useSettings";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { ProjectActionsList } from "./ProjectActionsList";
+import { ProjectBrainSettings } from "./ProjectBrainSettings";
 import { isElectron } from "../../env";
 import {
   decodeProjectScriptKeybindingRule,
@@ -907,6 +908,7 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
+        <ProjectBrainSettings members={group.memberProjects} />
         <SettingsSection title="Project" hideTitle>
           <SettingsRow
             title="Name"

@@ -36,6 +36,11 @@ local work, resolve it yourself before automatic pulls can resume.
 
 ## Connected Flow brain
 
+Select a project in **Settings → Projects**. The **Brain** section at the top shows its current
+brain. Choose another brain, use **New brain** to create and connect one, or select **No brain**
+to disconnect. Projects with multiple checkouts show a separate choice for each checkout on its
+machine.
+
 Choose a brain for the project to give its chats Flow's graph, memory, and committed-source
 access. The next regular message automatically supplies Flow's orientation, including in an
 existing chat. Chats receive the original Flow tools without a separate skill or MCP installation.
