@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { BrainCircuitIcon, ChevronDownIcon, SparklesIcon, Maximize2Icon } from "lucide-react";
+import {
+  BrainCircuitIcon,
+  ChevronDownIcon,
+  SparklesIcon,
+  Maximize2Icon,
+  AlertCircleIcon,
+} from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { brainCommand } from "../../state/brain";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -136,6 +142,7 @@ export function ChatBrainPanel({
     };
   }, [environmentId, threadId, execute, refreshKey]);
   const brain = response?.state.workspaces[0];
+  const failedSources = brain?.sources.filter((source) => source.status === "error") ?? [];
   const notes = response?.chatMemories;
   const selectedMemory = notes?.memories.find((memory) => view === `memory:${memory.id}`);
   const memoryStatus = !brain
@@ -221,6 +228,42 @@ export function ChatBrainPanel({
                     </button>
                   )}
                 </div>
+                {brain && failedSources.length > 0 && (
+                  <div
+                    role="alert"
+                    className="mt-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertCircleIcon className="size-4 shrink-0" />
+                      <span>
+                        Indexing failed for {failedSources.length}{" "}
+                        {failedSources.length === 1 ? "source" : "sources"}
+                      </span>
+                    </div>
+                    <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+                      {failedSources.map((source) => (
+                        <li key={source.id}>
+                          <details>
+                            <summary className="cursor-pointer break-words font-medium">
+                              {source.repository || source.localPath || "Source"}
+                            </summary>
+                            <p className="mt-1 whitespace-pre-wrap break-words">
+                              {source.message ||
+                                "Indexing did not complete. Open the brain to retry this source."}
+                            </p>
+                          </details>
+                        </li>
+                      ))}
+                    </ul>
+                    <Link
+                      to="/brain"
+                      search={{ brain: brain.id, environment: environmentId }}
+                      className="mt-3 inline-block font-medium underline underline-offset-2"
+                    >
+                      Manage sources and retry →
+                    </Link>
+                  </div>
+                )}
                 {brainExpanded && (
                   <div className="mt-2 overflow-hidden rounded-xl border border-border/50">
                     {brain && response.state.database.status !== "ready" ? (
