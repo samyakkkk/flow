@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BrainResponse, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { BrainCircuitIcon, ChevronDownIcon, SparklesIcon, Maximize2Icon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { brainCommand } from "../../state/brain";
@@ -13,13 +13,17 @@ import {
   DialogPanel,
 } from "../ui/dialog";
 import { BrainGraph } from "./BrainGraph";
+import { useProjectBrainChoice } from "./useProjectBrainChoice";
+import { Button } from "../ui/button";
 
 export function ChatBrainPanel({
   environmentId,
   threadId,
+  projectId,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  projectId: ProjectId;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const [response, setResponse] = useState<BrainResponse | null>(null);
@@ -29,6 +33,34 @@ export function ChatBrainPanel({
   const [memoriesExpanded, setMemoriesExpanded] = useState(true);
   const [brainExpanded, setBrainExpanded] = useState(false);
   const [view, setView] = useState<string | null>(null);
+  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  async function connectBrain() {
+    if (connecting) return;
+    setConnecting(true);
+    setConnectionError("");
+    try {
+      const choice = await chooseBrain(environmentId, "This project", projectId);
+      if (!choice?.workspaceId) return;
+      const result = await execute({
+        environmentId,
+        input: { action: "bindProject", projectId, workspaceId: choice.workspaceId },
+      });
+      if (result._tag === "Failure" || result.value.error) {
+        setConnectionError(
+          result._tag === "Success"
+            ? result.value.error!
+            : "Could not connect the brain. Please retry.",
+        );
+        return;
+      }
+      setRefreshKey((value) => value + 1);
+    } finally {
+      setConnecting(false);
+    }
+  }
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -102,7 +134,7 @@ export function ChatBrainPanel({
       clearTimeout(highlightTimer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [environmentId, threadId, execute]);
+  }, [environmentId, threadId, execute, refreshKey]);
   const brain = response?.state.workspaces[0];
   const notes = response?.chatMemories;
   const selectedMemory = notes?.memories.find((memory) => view === `memory:${memory.id}`);
@@ -171,6 +203,27 @@ export function ChatBrainPanel({
                     </button>
                   )}
                 </div>
+                {!brain && (
+                  <div className="px-2 pt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      disabled={connecting}
+                      onClick={() => void connectBrain()}
+                    >
+                      {connecting ? "Connecting…" : "Connect brain"}
+                    </Button>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Choose an existing brain or create one for this project.
+                    </p>
+                  </div>
+                )}
+                {connectionError && (
+                  <p role="alert" className="px-2 pt-2 text-xs text-destructive">
+                    {connectionError}
+                  </p>
+                )}
                 {brainExpanded && (
                   <div className="mt-2 overflow-hidden rounded-xl border border-border/50">
                     {brain && response.state.database.status !== "ready" ? (
@@ -183,7 +236,7 @@ export function ChatBrainPanel({
                       <p className="p-3 text-xs text-muted-foreground">
                         {brain
                           ? "Index sources to see your knowledge graph."
-                          : "Choose a brain in project settings to connect this chat."}
+                          : "Connect a brain above to give this chat shared knowledge."}
                       </p>
                     )}
                     <Link
@@ -265,6 +318,7 @@ export function ChatBrainPanel({
           )}
         </div>
       </aside>
+      {brainChoiceDialog}
       <Dialog
         open={view !== null}
         onOpenChange={(open) => {

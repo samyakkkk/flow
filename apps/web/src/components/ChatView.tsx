@@ -8281,11 +8281,12 @@ export default function ChatView(props: ChatViewProps) {
             ) : null}
           </div>
           {/* end chat column */}
-          {isServerThread && activeThreadRef ? (
+          {isServerThread && activeThreadRef && activeProjectRef ? (
             <ChatBrainPanel
               key={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
               environmentId={activeThreadRef.environmentId}
               threadId={activeThreadRef.threadId}
+              projectId={activeProjectRef.projectId}
             />
           ) : null}
         </div>

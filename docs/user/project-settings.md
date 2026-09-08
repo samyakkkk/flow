@@ -41,6 +41,9 @@ brain. Choose another brain, use **New brain** to create and connect one, or sel
 to disconnect. Projects with multiple checkouts show a separate choice for each checkout on its
 machine.
 
+In a chat with no connected brain, you can also use **Connect brain** in the Flow side panel
+to choose or create one for the project.
+
 Choose a brain for the project to give its chats Flow's graph, memory, and committed-source
 access. The next regular message automatically supplies Flow's orientation, including in an
 existing chat. Chats receive the original Flow tools without a separate skill or MCP installation.
