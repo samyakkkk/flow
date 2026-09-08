@@ -60,8 +60,8 @@ export const makeBrainChatContextLoader = Effect.fn("brain.makeChatContextLoader
               ...(thread.value.branch ? { branch: thread.value.branch } : {}),
             },
           ),
-        catch: () =>
-          "Could not orient against the project's connected Flow brain. Retry when it is available.",
+        catch: (cause) =>
+          `Could not orient against the project's connected Flow brain: ${cause instanceof Error ? cause.message : "brain unavailable"}`,
       });
       if (result.isError)
         return yield* Effect.fail(
