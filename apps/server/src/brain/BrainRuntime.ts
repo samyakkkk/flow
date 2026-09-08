@@ -375,7 +375,7 @@ export class BrainRuntime {
     }
     return combined;
   }
-  async state(projectId?: ProjectId): Promise<BrainState> {
+  async state(projectId?: ProjectId, metadataOnly = false): Promise<BrainState> {
     if (this.db && !this.db.isRunning)
       this.database = {
         status: "error",
@@ -394,7 +394,7 @@ export class BrainRuntime {
           .map(async (workspace) => ({
             ...workspace,
             sources: workspace.sources.map((source) => ({ ...source })),
-            knowledge: await this.readKnowledge(workspace),
+            knowledge: metadataOnly ? emptyKnowledge() : await this.readKnowledge(workspace),
           })),
       ),
     };

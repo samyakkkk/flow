@@ -11,6 +11,7 @@ import {
   requireEnvironmentScope,
   failEnvironmentInternal,
 } from "../auth/http.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { BrainService } from "./BrainService.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 
@@ -20,6 +21,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const service = yield* BrainService;
     const projections = yield* ProjectionSnapshotQuery;
+    const settings = yield* ServerSettingsService;
     return handlers.handle(
       "request",
       Effect.fn("environment.brain.request")(function* (args) {
@@ -41,16 +43,26 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
           if (Option.isNone(thread))
             return yield* failEnvironmentInternal("internal_error", new Error("Chat not found."));
-          return yield* Effect.tryPromise(async () => ({
-            state: await runtime.state(thread.value.projectId),
-            chatMemories: await runtime.chatMemories(
-              thread.value.projectId,
-              command.threadId,
-              command.revision,
-            ),
-            error: null,
-            createdWorkspaceId: null,
-          })).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          return yield* Effect.tryPromise(async () => {
+            try {
+              return {
+                state: await runtime.state(thread.value.projectId),
+                chatMemories: await runtime.chatMemories(
+                  thread.value.projectId,
+                  command.threadId,
+                  command.revision,
+                ),
+                error: null,
+                createdWorkspaceId: null,
+              };
+            } catch (cause) {
+              return {
+                state: await runtime.state(thread.value.projectId, true),
+                error: cause instanceof Error ? cause.message : "Could not load brain context.",
+                createdWorkspaceId: null,
+              };
+            }
+          }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         }
         const project =
           command.action === "bindProject"
@@ -58,7 +70,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
                 .getProjectShellById(command.projectId)
                 .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)))
             : Option.none();
-        return yield* Effect.tryPromise(async () => {
+        const response = yield* Effect.tryPromise(async () => {
           let error: string | null = null;
           let createdWorkspaceId: string | null = null;
           let branches: string[] | undefined;
@@ -79,13 +91,23 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
             error = cause instanceof Error ? cause.message : "Brain operation failed.";
           }
           return {
-            state: await runtime.state(),
+            state: await runtime.state(
+              undefined,
+              command.action === "bindProject" ||
+                (command.action === "read" && command.metadataOnly === true),
+            ),
             error,
             createdWorkspaceId,
             ...(branches ? { branches } : {}),
             ...(repositories ? { repositories } : {}),
           };
         }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        if (command.action === "bindProject" && !response.error) {
+          yield* settings
+            .updateSettings({ projectBrainSetupComplete: { [command.projectId]: true } })
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
+        return response;
       }),
     );
   }),

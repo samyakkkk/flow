@@ -1,3 +1,4 @@
+import { useProjectBrainSetup } from "./brain/useProjectBrainSetup";
 import { ChatBrainPanel } from "./brain/ChatBrainPanel";
 import { BRAND } from "@t3tools/shared/branding";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
@@ -6181,6 +6182,9 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
+  const { ensureBrainChoice, brainSetupDialog } = useProjectBrainSetup();
+  const brainSetupRouteRef = useRef(routeThreadKey);
+  brainSetupRouteRef.current = routeThreadKey;
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -6527,6 +6531,13 @@ export default function ChatView(props: ChatViewProps) {
     };
 
     sendInFlightRef.current = true;
+    if (
+      !(await ensureBrainChoice(environmentId, activeProject.id, activeProject.workspaceRoot)) ||
+      brainSetupRouteRef.current !== routeThreadKey
+    ) {
+      sendInFlightRef.current = false;
+      return;
+    }
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
     if (attachmentCapabilitiesBeforeUpload.fileBlockReason !== null) {
       sendInFlightRef.current = false;
@@ -7170,6 +7181,7 @@ export default function ChatView(props: ChatViewProps) {
     }) => {
       if (
         !activeThread ||
+        !activeProject ||
         !isServerThread ||
         isSendBusy ||
         isConnecting ||
@@ -7207,6 +7219,13 @@ export default function ChatView(props: ChatViewProps) {
       });
 
       sendInFlightRef.current = true;
+      if (
+        !(await ensureBrainChoice(environmentId, activeProject.id, activeProject.workspaceRoot)) ||
+        brainSetupRouteRef.current !== routeThreadKey
+      ) {
+        sendInFlightRef.current = false;
+        return;
+      }
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(threadIdForSend, null);
 
@@ -7296,6 +7315,8 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      activeProject,
+      ensureBrainChoice,
       activeProposedPlan,
       acknowledgeActiveThreadWoke,
       beginLocalDispatch,
@@ -7361,6 +7382,13 @@ export default function ChatView(props: ChatViewProps) {
     const nextThreadModelSelection: ModelSelection = ctxSelectedModelSelection;
 
     sendInFlightRef.current = true;
+    if (
+      !(await ensureBrainChoice(environmentId, activeProject.id, activeProject.workspaceRoot)) ||
+      brainSetupRouteRef.current !== routeThreadKey
+    ) {
+      sendInFlightRef.current = false;
+      return;
+    }
     beginLocalDispatch({ preparingWorktree: false });
     const finish = () => {
       sendInFlightRef.current = false;
@@ -7459,6 +7487,7 @@ export default function ChatView(props: ChatViewProps) {
     finish();
   }, [
     activeProject,
+    ensureBrainChoice,
     activeProposedPlan,
     activeThreadBranch,
     activeThread,
@@ -7833,6 +7862,7 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      {brainSetupDialog}
       {rightPanelControlsAtRoot ? panelLayoutControls : null}
       <div
         className={cn(

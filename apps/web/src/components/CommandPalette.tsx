@@ -1935,7 +1935,7 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
-      if (brainChoice.workspaceId && !(await bindBrain(projectId))) return;
+      if (!(await bindBrain(projectId))) return;
 
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),

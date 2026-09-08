@@ -36,8 +36,12 @@ it("shares tools and capture over authenticated transport while isolating projec
       },
     ],
   };
+  const metadataRequests: boolean[] = [];
   const runtime = {
-    state: async () => state,
+    state: async (_project?: ProjectId, metadataOnly = false) => {
+      metadataRequests.push(metadataOnly);
+      return state;
+    },
     brainMemories: async (_id: string, session: string) => ({
       memories: [{ id: session, text: session, createdAt: 1788825600000, origin: "user" }],
       status: "idle",
@@ -64,6 +68,8 @@ it("shares tools and capture over authenticated transport while isolating projec
     await a.initialize();
     await b.initialize();
     expect((await a.state()).workspaces[0]!.projectIds).toEqual([]);
+    await a.state(undefined, true);
+    expect(metadataRequests.at(-1)).toBe(true);
     await a.bindProject({ id: project, workspaceRoot: root }, "brain");
     expect(b.projectBrainId(project)).toBeUndefined();
     await b.bindProject({ id: project, workspaceRoot: root }, "brain");

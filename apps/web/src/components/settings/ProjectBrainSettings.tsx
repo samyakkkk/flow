@@ -75,7 +75,7 @@ function EnvironmentBrainSettings({
   );
 
   useEffect(() => {
-    void send({ action: "read" });
+    void send({ action: "read", metadataOnly: true });
     return () => {
       generation.current++;
       pending.current = false;
@@ -148,7 +148,7 @@ function EnvironmentBrainSettings({
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => void send({ action: "read" })}
+            onClick={() => void send({ action: "read", metadataOnly: true })}
           >
             Retry
           </Button>

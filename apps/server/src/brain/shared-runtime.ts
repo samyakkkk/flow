@@ -48,6 +48,7 @@ const Request = Schema.Struct({
     "branches",
   ]),
   instance: Schema.String,
+  metadataOnly: Schema.optional(Schema.Boolean),
   revision: Schema.optionalKey(Schema.String),
   workspace: Schema.optionalKey(Schema.String),
   name: Schema.optionalKey(Schema.String),
@@ -83,7 +84,7 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
       let result: unknown;
       switch (input.method) {
         case "state":
-          result = await runtime.state();
+          result = await runtime.state(undefined, input.metadataOnly);
           break;
         case "repositories":
           result = await runtime.listGithubRepositories();
@@ -233,8 +234,8 @@ export class SharedBrainRuntime implements BrainClient {
       throw Error("The project’s brain changed. Retry the request.");
     return result;
   }
-  async state(projectId?: ProjectId) {
-    const state = decodeState(await this.request("state"));
+  async state(projectId?: ProjectId, metadataOnly = false) {
+    const state = decodeState(await this.request("state", { metadataOnly }));
     return {
       ...state,
       workspaces: state.workspaces

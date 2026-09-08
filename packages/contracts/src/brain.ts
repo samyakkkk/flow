@@ -110,7 +110,7 @@ export const ChatMemoryList = Schema.Struct({
 });
 export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainCommand = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("read") }),
+  Schema.Struct({ action: Schema.Literal("read"), metadataOnly: Schema.optional(Schema.Boolean) }),
   Schema.Struct({
     action: Schema.Literal("readChat"),
     threadId: ThreadId,

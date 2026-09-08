@@ -174,6 +174,7 @@ export function applyServerSettingsPatch(
     usageLimitSources: usageLimitSourcesPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     projectAgentBrowserAccessOverrides: projectAgentBrowserAccessOverridesPatch,
+    projectBrainSetupComplete: projectBrainSetupCompletePatch,
     projectAutoPullOverrides: projectAutoPullOverridesPatch,
     ...patchForMerge
   } = patch;
@@ -236,6 +237,14 @@ export function applyServerSettingsPatch(
           projectAgentBrowserAccessOverrides: mergeSettingsEntries(
             current.projectAgentBrowserAccessOverrides,
             projectAgentBrowserAccessOverridesPatch,
+          ),
+        }
+      : {}),
+    ...(projectBrainSetupCompletePatch !== undefined
+      ? {
+          projectBrainSetupComplete: mergeSettingsEntries(
+            current.projectBrainSetupComplete,
+            projectBrainSetupCompletePatch,
           ),
         }
       : {}),

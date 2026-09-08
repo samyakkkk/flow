@@ -106,6 +106,7 @@ export const makeBrainChatCapture = Effect.fn("brain.makeChatCapture")(function*
         .pipe(Effect.mapError(() => "Could not resolve the project's work folder."));
       const workspaceRoot = Option.isSome(project) ? project.value.workspaceRoot : undefined;
       const runtime = yield* service.ready.pipe(Effect.mapError((error) => error.message));
+      if (!runtime.projectBrainId(thread.value.projectId)) return;
       if (
         expectedBinding !== undefined &&
         (runtime.projectBrainId(thread.value.projectId) ?? "") !== expectedBinding

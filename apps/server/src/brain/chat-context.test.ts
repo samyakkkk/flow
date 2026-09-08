@@ -62,6 +62,13 @@ it.effect(
         Effect.provideService(ProjectionSnapshotQuery, projections),
       );
       expect(yield* load(threadId)).toEqual({ bindingKey: "" });
+      yield* capture(threadId, {
+        receipt: "unconnected",
+        kind: "user_prompt",
+        data: { text: "hello" },
+      });
+      expect(reads).toBe(0);
+      expect(captures).toBe(0);
       binding = "team";
       const initialContext = (yield* load(threadId, "")).context;
       expect(initialContext).toContain(orientText);

@@ -45,21 +45,23 @@ export function useProjectBrainChoice() {
       setState(null);
       setError("");
       setLoading(true);
-      void execute({ environmentId, input: { action: "read" } }).then((result) => {
-        if (generation.current !== request) return;
-        setLoading(false);
-        if (result._tag === "Success" && !result.value.error) {
-          setState(result.value.state);
-          if (projectId)
-            setSelected(
-              result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
-                ?.id ?? "none",
+      void execute({ environmentId, input: { action: "read", metadataOnly: true } }).then(
+        (result) => {
+          if (generation.current !== request) return;
+          setLoading(false);
+          if (result._tag === "Success" && !result.value.error) {
+            setState(result.value.state);
+            if (projectId)
+              setSelected(
+                result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
+                  ?.id ?? "none",
+              );
+          } else
+            setError(
+              "Could not load brains from this computer. You can retry, or continue without a brain.",
             );
-        } else
-          setError(
-            "Could not load brains from this computer. You can retry, or continue without a brain.",
-          );
-      });
+        },
+      );
       return new Promise((resolve) => {
         resolver.current = resolve;
       });
@@ -93,7 +95,7 @@ export function useProjectBrainChoice() {
             <DialogTitle>Connect project to a brain</DialogTitle>
             <DialogDescription>
               {target?.title} will use the selected brain for knowledge, and its repository will be
-              added as a source.
+              added as a source. You can also continue without a brain and connect one later.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
@@ -128,7 +130,7 @@ export function useProjectBrainChoice() {
                   size="sm"
                   onClick={() => {
                     setLoading(true);
-                    void send({ action: "read" }).then((result) => {
+                    void send({ action: "read", metadataOnly: true }).then((result) => {
                       setLoading(false);
                       if (result && !result.error) setError("");
                     });
@@ -147,7 +149,7 @@ export function useProjectBrainChoice() {
               disabled={loading}
               onClick={() => finish({ workspaceId: selected === "none" ? null : selected })}
             >
-              Continue
+              {selected === "none" ? "Continue without a brain" : "Connect brain"}
             </Button>
           </DialogFooter>
         </DialogPopup>

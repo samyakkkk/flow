@@ -42,7 +42,10 @@ to disconnect. Projects with multiple checkouts show a separate choice for each 
 machine.
 
 In a chat with no connected brain, you can also use **Connect brain** in the Flow side panel
-to choose or create one for the project.
+to choose or create one for the project. Before the first message in an unconfigured project,
+Flow offers the same choice. **Continue without a brain** is remembered for the project across
+chats and devices. Chats then run without Flow orientation or memory capture; you can connect
+a brain later from the side panel or project settings.
 
 Choose a brain for the project to give its chats Flow's graph, memory, and committed-source
 access. The next regular message automatically supplies Flow's orientation, including in an

@@ -21,6 +21,22 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("remembers brain setup independently for each project across serialized settings", () => {
+    const first = ProjectId.make("first");
+    const second = ProjectId.make("second");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectBrainSetupComplete: { [first]: true },
+    });
+    const restored = JSON.parse(JSON.stringify(initial));
+    const updated = applyServerSettingsPatch(restored, {
+      projectBrainSetupComplete: { [second]: true },
+    });
+    expect(updated.projectBrainSetupComplete).toEqual({ [first]: true, [second]: true });
+    const reset = applyServerSettingsPatch(updated, {
+      projectBrainSetupComplete: { [first]: null },
+    });
+    expect(reset.projectBrainSetupComplete).toEqual({ [second]: true });
+  });
   it("inherits actions, preserves existing actions, and supports empty overrides and reset", () => {
     const project = { id: ProjectId.make("project-actions"), scripts: [] };
     const action = {

@@ -43,7 +43,7 @@ export function ChatBrainPanel({
     setConnectionError("");
     try {
       const choice = await chooseBrain(environmentId, "This project", projectId);
-      if (!choice?.workspaceId) return;
+      if (!choice) return;
       const result = await execute({
         environmentId,
         input: { action: "bindProject", projectId, workspaceId: choice.workspaceId },
@@ -171,6 +171,22 @@ export function ChatBrainPanel({
               Loading your brain…
             </p>
           )}
+          <div className="px-2 py-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={connecting}
+              onClick={() => void connectBrain()}
+            >
+              {connecting ? "Saving brain choice…" : brain ? "Change brain" : "Connect brain"}
+            </Button>
+            {connectionError && (
+              <p role="alert" className="pt-2 text-xs text-destructive">
+                {connectionError}
+              </p>
+            )}
+          </div>
           {response && (
             <>
               <section aria-label="Connected brain">
@@ -203,27 +219,6 @@ export function ChatBrainPanel({
                     </button>
                   )}
                 </div>
-                {!brain && (
-                  <div className="px-2 pt-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full"
-                      disabled={connecting}
-                      onClick={() => void connectBrain()}
-                    >
-                      {connecting ? "Connecting…" : "Connect brain"}
-                    </Button>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Choose an existing brain or create one for this project.
-                    </p>
-                  </div>
-                )}
-                {connectionError && (
-                  <p role="alert" className="px-2 pt-2 text-xs text-destructive">
-                    {connectionError}
-                  </p>
-                )}
                 {brainExpanded && (
                   <div className="mt-2 overflow-hidden rounded-xl border border-border/50">
                     {brain && response.state.database.status !== "ready" ? (
