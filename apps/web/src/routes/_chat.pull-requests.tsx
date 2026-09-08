@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -1576,7 +1577,7 @@ function PullRequestsRouteView() {
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
-          error="Update your T3 Code servers to browse pull requests."
+          error={`Update your ${BRAND.name} servers to browse pull requests.`}
         />
       ) : firstLoad ? (
         <PullRequestListGhost rows={7} />

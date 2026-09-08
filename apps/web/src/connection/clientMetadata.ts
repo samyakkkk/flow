@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import type {
   AuthClientMetadataDeviceType,
   AuthClientPresentationMetadata,
@@ -77,7 +78,7 @@ export function clientPresentationMetadata(input: {
 }): AuthClientPresentationMetadata {
   if (input.desktopBridge !== undefined) {
     return {
-      label: "T3 Code Desktop",
+      label: `${BRAND.name} Desktop`,
       deviceType: "desktop",
       os: clientOsFromElectronPlatform(input.desktopBridge.getClientPlatform?.()),
       surface: "desktop",
@@ -86,7 +87,7 @@ export function clientPresentationMetadata(input: {
   }
 
   return {
-    label: "T3 Code Web",
+    label: `${BRAND.name} Web`,
     deviceType: browserDeviceType(input.identity),
     os: browserClientOs(input.identity),
     surface: "web",

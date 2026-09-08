@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -183,7 +184,7 @@ describe("buildThreadTitlePrompt", () => {
     });
 
     expect(result.prompt).toContain(
-      "Regenerate the title for an existing T3 Code thread so the user can recognize it weeks later.",
+      `Regenerate the title for an existing ${BRAND.name} thread so the user can recognize it weeks later.`,
     );
     expect(result.prompt).toContain('The previous title was "Investigate reconnect regressions".');
     expect(result.prompt).toContain("Thread contents:");

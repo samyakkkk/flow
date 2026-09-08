@@ -32,6 +32,10 @@
     "vercel.ts",
     "test",
     "scripts/warm-dep-cache.ts",
-    "../../scripts/lib/public-config.ts"
+    "../../scripts/lib/public-config.ts",
+    "../../scripts/lib/check-branding.ts",
+    "../../scripts/lib/branding-config.ts",
+    "../../packages/shared/src/branding.ts",
+    "../../branding.json"
   ]
 }

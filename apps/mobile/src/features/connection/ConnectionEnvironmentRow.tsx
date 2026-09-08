@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { SymbolView } from "../../components/AppSymbol";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -144,7 +145,7 @@ export function ConnectionEnvironmentRow(props: {
         >
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
-              Managed by T3 Connect. Tunnel details update automatically.
+              Managed by {BRAND.connectName}. Tunnel details update automatically.
             </Text>
           ) : (
             <>

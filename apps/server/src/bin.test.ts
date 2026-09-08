@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
 import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
@@ -448,11 +449,14 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
       assert.deepEqual(error.commandPath, ["t3", "connect"]);
-      assert.include(error.errors[0]?.message ?? "", "missing T3 Connect public configuration");
+      assert.include(
+        error.errors[0]?.message ?? "",
+        `missing ${BRAND.connectName} public configuration`,
+      );
 
       const output = (yield* TestConsole.errorLines).join("\n");
       assert.include(output, "ERROR");
-      assert.include(output, "missing T3 Connect public configuration");
+      assert.include(output, `missing ${BRAND.connectName} public configuration`);
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
   );
 
@@ -460,7 +464,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     Effect.gen(function* () {
       const { output } = yield* captureStdout(runCli(["service", "--help"], noConnectCli));
 
-      assert.include(output, "Manage the T3 Code background service.");
+      assert.include(output, `Manage the ${BRAND.name} background service.`);
       assert.include(output, "install");
       assert.include(output, "uninstall");
       assert.include(output, "update");
@@ -502,10 +506,17 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "status", "--base-dir", baseDir]),
       );
 
-      assert.include(output, "T3 Connect\n  Exposure: disabled");
+      assert.include(
+        output,
+        `${BRAND.connectName}
+  Exposure: disabled`,
+      );
       assert.include(output, "  Authorization: missing");
       assert.include(output, "  Environment link: not provisioned");
-      assert.include(output, "Next: Run `t3 connect link` to authorize and enable T3 Connect.");
+      assert.include(
+        output,
+        `Next: Run \`t3 connect link\` to authorize and enable ${BRAND.connectName}.`,
+      );
     }),
   );
 
@@ -553,7 +564,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "unlink", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "T3 Connect is disabled locally.");
+      assert.equal(output, `${BRAND.connectName} is disabled locally.`);
     }),
   );
 
@@ -573,7 +584,8 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
       assert.equal(
         output,
-        "Signed out of T3 Connect locally.\nThe background service is managed separately with `t3 service`.",
+        `Signed out of ${BRAND.connectName} locally.
+The background service is managed separately with \`t3 service\`.`,
       );
       assert.isFalse(NodeFS.existsSync(tokenPath));
     }),

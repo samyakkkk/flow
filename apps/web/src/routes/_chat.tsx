@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
@@ -117,7 +118,7 @@ function ChatRouteGlobalShortcuts() {
             stackedThreadToast({
               type: "info",
               title: "Preview is desktop-only",
-              description: "Open T3 Code in the desktop app to use the in-app preview.",
+              description: `Open ${BRAND.name} in the desktop app to use the in-app preview.`,
             }),
           );
           return;

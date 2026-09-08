@@ -1,8 +1,10 @@
+import { checkBranding } from "../../scripts/lib/check-branding.ts";
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
+checkBranding();
 const repoEnv = loadRepoEnv();
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
 const publicConfigDefine = {

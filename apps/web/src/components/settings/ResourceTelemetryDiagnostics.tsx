@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   ActivityIcon,
@@ -136,7 +137,7 @@ function categoryLabel(category: ResourceTelemetryProcessCategory): string {
     case "resource-monitor":
       return "Monitor";
     case "unknown-t3":
-      return "T3 process";
+      return `${BRAND.shortName} process`;
   }
 }
 
@@ -994,7 +995,7 @@ export function ResourceTelemetryDiagnostics() {
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
-                T3 system footprint
+                {BRAND.shortName} system footprint
               </div>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 Live native counters for the server, providers, terminals, desktop processes, and
@@ -1277,8 +1278,8 @@ export function ResourceTelemetryDiagnostics() {
         <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.03)]">
           <div className="bg-muted/15 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground sm:px-5">
             Native counters identify which process is reading or writing. These application-level
-            counters identify known T3 operations so process spikes can be correlated with specific
-            persistence and logging paths.
+            counters identify known {BRAND.shortName} operations so process spikes can be correlated
+            with specific persistence and logging paths.
           </div>
           <AttributionTable entries={snapshot?.attribution.entries ?? []} />
         </div>

@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 // @effect-diagnostics nodeBuiltinImport:off -- The integration fixture binds the same platform socket or named pipe as the CLI.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
@@ -178,7 +179,7 @@ describe("t3 app", () => {
           _tag: "DesktopAppUnreachableError",
           candidateAddresses: [expect.any(String)],
           workspaceRoot: yield* HostProcessWorkingDirectory,
-          message: expect.stringContaining("Could not reach the T3 Code desktop app."),
+          message: expect.stringContaining(`Could not reach the ${BRAND.name} desktop app.`),
           cause: { code: "ENOENT" },
         });
         expect(yield* pathExists(baseDir)).toBe(false);

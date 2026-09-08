@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   type CustomModelSetting,
   type GrokSettings,
@@ -83,7 +84,7 @@ export function buildInitialGrokProviderSnapshot(
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Grok is disabled in T3 Code settings.",
+          message: `Grok is disabled in ${BRAND.name} settings.`,
         },
       });
     }
@@ -350,7 +351,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Grok is disabled in T3 Code settings.",
+        message: `Grok is disabled in ${BRAND.name} settings.`,
       },
     });
   }

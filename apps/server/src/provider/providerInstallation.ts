@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import {
   AntigravitySettings,
   ProviderDriverKind,
@@ -78,8 +79,7 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
       return yield* new ProviderSetupError({
         instanceId,
         operation,
-        detail:
-          "This instance uses a custom executable. Clear its binary path to manage installation in T3 Code.",
+        detail: `This instance uses a custom executable. Clear its binary path to manage installation in ${BRAND.name}.`,
       });
     }
   });

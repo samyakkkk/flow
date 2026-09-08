@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import * as Effect from "effect/Effect";
 import { Command, GlobalFlag } from "effect/unstable/cli";
 
@@ -19,13 +20,13 @@ export const runServerCommand = (
   });
 
 export const startCommand = Command.make("start", { ...sharedServerCommandFlags }).pipe(
-  Command.withDescription("Run the T3 Code server."),
+  Command.withDescription(`Run the ${BRAND.name} server.`),
   Command.withHandler((flags) => runServerCommand(flags)),
 );
 
 export const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription(
-    "Run the T3 Code server without opening a browser and print headless pairing details.",
+    `Run the ${BRAND.name} server without opening a browser and print headless pairing details.`,
   ),
   Command.withHandler((flags) =>
     runServerCommand(flags, {

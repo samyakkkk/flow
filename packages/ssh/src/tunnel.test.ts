@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
@@ -189,7 +190,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteLaunchScript(), '"$RUNNER_FILE" serve --host 127.0.0.1');
     assert.include(buildRemoteLaunchScript(), '--base-dir "$DEFAULT_SERVER_HOME"');
     assert.notInclude(buildRemoteLaunchScript(), "server-home");
-    assert.include(buildRemoteLaunchScript(), "Remote T3 server did not become ready");
+    assert.include(buildRemoteLaunchScript(), "Remote server did not become ready");
     assert.include(buildRemoteLaunchScript(), 'wait_ready "60000"');
     assert.include(buildRemoteLaunchScript(), 'if [ -s "$LOG_FILE" ]; then');
     assert.include(buildRemoteLaunchScript(), "It wrote nothing to %s");
@@ -411,7 +412,9 @@ describe("ssh tunnel scripts", () => {
                 ...makeSuccessfulProcess(""),
                 exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
                 stderr: Stream.make(
-                  new TextEncoder().encode("Remote T3 server did not stop within 2 seconds.\n"),
+                  new TextEncoder()
+                    .encode(`Remote ${BRAND.shortName} server did not stop within 2 seconds.
+`),
                 ),
               };
             }
@@ -453,7 +456,7 @@ describe("ssh tunnel scripts", () => {
             assert.instanceOf(disconnected.failure, SshCommandError);
             assert.equal(
               disconnected.failure.message,
-              "Remote T3 server did not stop within 2 seconds.",
+              `Remote ${BRAND.shortName} server did not stop within 2 seconds.`,
             );
           }
         } else {

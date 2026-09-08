@@ -1,3 +1,4 @@
+import { BRAND } from "@t3tools/shared/branding";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentCloudLinkStateResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -72,7 +73,8 @@ export function usePrimaryCloudLinkState() {
   let error: string | null = null;
   if (result._tag === "Failure") {
     const cause = Cause.squash(result.cause);
-    error = cause instanceof Error ? cause.message : "Could not read T3 Connect link state.";
+    error =
+      cause instanceof Error ? cause.message : `Could not read ${BRAND.connectName} link state.`;
   }
 
   return {
