@@ -16,8 +16,7 @@ import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
-  resolveSidebarStageFocusRingOffsetClass,
-  SidebarStageBackdrop,
+  StageBackdropButtonArt,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
@@ -42,10 +41,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode === "artwork",
-  );
   const pillLabel =
     environmentIdentificationMode === "pill"
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
@@ -58,16 +53,8 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         isElectron && "drag-region",
       )}
     >
-      {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      <SidebarTrigger
-        className={cn(
-          "relative z-10 md:hidden",
-          backdropVariant &&
-            "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
-          backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
-        )}
-      />
-      <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <SidebarTrigger className="relative z-10 md:hidden" />
+      <SidebarBrand onBackdrop={false} />
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
@@ -233,22 +220,38 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 });
 
 export function SidebarBrainLink() {
+  const stageLabel = useEnvironmentStageLabel();
+  const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const backdropVariant = resolveSidebarStageBackdropVariant(
+    stageLabel,
+    environmentIdentificationMode === "artwork",
+  );
   const active = useLocation({ select: (location) => location.pathname === "/brain" });
   const { isMobile, setOpenMobile } = useSidebar();
   return (
     <div className="px-3 pb-2">
       <Link
+        aria-current={active ? "page" : undefined}
         to="/brain"
         search={{ brain: undefined, environment: undefined }}
         onClick={() => {
           if (isMobile) setOpenMobile(false);
         }}
         className={cn(
-          "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          active && "bg-sidebar-accent text-sidebar-accent-foreground",
+          "relative isolate flex items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          backdropVariant
+            ? "text-white hover:brightness-110"
+            : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          active && !backdropVariant && "bg-sidebar-accent text-sidebar-accent-foreground",
         )}
       >
-        <BrainCircuit size={15} />
+        {backdropVariant && (
+          <span aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+            <StageBackdropButtonArt variant={backdropVariant} />
+            <span className="absolute inset-0 bg-black/15" />
+          </span>
+        )}
+        <BrainCircuit size={16} />
         <span>Brain</span>
       </Link>
     </div>
