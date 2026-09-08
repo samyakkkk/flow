@@ -16,11 +16,13 @@ import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
   extractWorkLogToolLifecycleStatus,
+  formatFlowBrainToolCallValue,
   isWorktreeSetupActivity,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   omitSupersededLifecycleMarkers,
   resolveWorkEntryToolPresentation,
+  resolveFlowBrainToolCallDetails,
   summarizeToolGroup,
   toolGroupAction,
   toolGroupSummaryKind,
@@ -56,6 +58,7 @@ export interface ThreadFeedActivity {
     | "agent"
     | "alert"
     | "browser"
+    | "brain"
     | "check"
     | "command"
     | "computer"
@@ -162,7 +165,7 @@ export type ThreadFeedEntry =
       readonly summaryKind: ToolGroupSummaryKind;
       readonly toolSurface?: WorkLogEntry["toolSurface"];
       readonly toolIcon?: WorkLogEntry["toolIcon"];
-      readonly summaryToolIcon?: "browser" | "t3-code";
+      readonly summaryToolIcon?: "brain" | "browser" | "t3-code";
       readonly hasFailure: boolean;
       readonly live: boolean;
       readonly shimmer: boolean;
@@ -922,6 +925,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.sourceActivityKind === "runtime.warning") return "warning";
+  if (resolveWorkEntryToolPresentation(entry)?.icon === "brain") return "brain";
   if (entry.toolSurface) return entry.toolSurface;
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
@@ -942,6 +946,17 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
 
 function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
   if (entry.agentSpawn) return agentSpawnExpandedBody(entry.agentSpawn);
+  const brainDetails = resolveFlowBrainToolCallDetails(entry);
+  if (brainDetails) {
+    return [
+      `Brain consultation · ${brainDetails.toolLabel}`,
+      `Request\n${formatFlowBrainToolCallValue(brainDetails.request, "No parameters")}`,
+      `Response\n${formatFlowBrainToolCallValue(
+        brainDetails.response,
+        entry.toolLifecycleStatus === "inProgress" ? "Waiting for response…" : "No response body",
+      )}`,
+    ].join("\n\n");
+  }
   const blocks: string[] = [];
   const visibleLabel = workEntryRowLabel(entry, true).trim();
   const appendBlock = (value: string | null | undefined) => {

@@ -10,6 +10,10 @@ import {
 import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
 import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  flowBrainMcpToolNameFromData,
+  flowBrainMcpToolNameFromLabel,
+} from "@t3tools/shared/flowBrainMcp";
 
 export function isWorktreeSetupActivity(kind: string): boolean {
   return kind === "setup-script.requested" || kind === "setup-script.started";
@@ -40,6 +44,7 @@ export type ToolGroupAction =
   | "read"
   | "edit"
   | "command"
+  | "brain"
   | "browser"
   | "code-search"
   | "search"
@@ -99,6 +104,35 @@ const T3_MCP_TOOL_LABELS: Record<
   preview_recording_stop: ["Stop", "Stopping", "Stopped", "recording the preview browser"],
 };
 
+export interface FlowBrainToolCallDetails {
+  readonly tool: string;
+  readonly toolLabel: string;
+  readonly request: unknown;
+  readonly response: unknown;
+}
+
+function flowBrainToolLabel(tool: string): string {
+  const words = tool.replace(/[-_]+/g, " ").trim();
+  return words.length > 0 ? `${words.charAt(0).toUpperCase()}${words.slice(1)}` : "Brain query";
+}
+
+function resolveFlowBrainMcpToolPresentation(tool: string, status: string | undefined) {
+  const verb =
+    status === undefined || status === "inProgress"
+      ? "Consulting the brain"
+      : status === "failed"
+        ? "Couldn't consult the brain"
+        : status === "declined"
+          ? "Declined to consult the brain"
+          : status === "stopped"
+            ? "Stopped consulting the brain"
+            : "Consulted the brain";
+  return {
+    displayName: `${verb} · ${flowBrainToolLabel(tool)}`,
+    icon: "brain" as const,
+  };
+}
+
 function resolveT3McpToolPresentation(value: string | undefined, status: string | undefined) {
   if (!value) return null;
   const name = normalizeCompactToolLabel(value).replace(
@@ -141,6 +175,10 @@ export function resolveWorkEntryToolPresentation(
 ) {
   const status = entry.toolLifecycleStatus ?? fallbackStatus;
   const data = entry.toolData;
+  const structuredBrainTool = flowBrainMcpToolNameFromData(data);
+  if (structuredBrainTool) {
+    return resolveFlowBrainMcpToolPresentation(structuredBrainTool, status);
+  }
   if (data !== null && typeof data === "object") {
     if (
       "server" in data &&
@@ -153,6 +191,15 @@ export function resolveWorkEntryToolPresentation(
     if ("toolName" in data && typeof data.toolName === "string") {
       return resolveT3McpToolPresentation(data.toolName, status);
     }
+  }
+
+  const titledBrainTool = flowBrainMcpToolNameFromLabel(entry.toolTitle);
+  if (titledBrainTool) {
+    return resolveFlowBrainMcpToolPresentation(titledBrainTool, status);
+  }
+  const labeledBrainTool = flowBrainMcpToolNameFromLabel(entry.label);
+  if (labeledBrainTool) {
+    return resolveFlowBrainMcpToolPresentation(labeledBrainTool, status);
   }
 
   return (
@@ -169,6 +216,58 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function unwrapMcpResult(value: unknown): unknown {
+  const record = asRecord(value);
+  if (!record) return value;
+  const keys = Object.keys(record);
+  return keys.length === 1 && keys[0] === "content" ? record.content : value;
+}
+
+/** Extracts the user-relevant request/response from provider-specific Flow MCP payloads. */
+export function resolveFlowBrainToolCallDetails(
+  entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "detail">,
+): FlowBrainToolCallDetails | null {
+  const data = asRecord(entry.toolData);
+  const item = asRecord(data?.item) ?? data;
+  const tool =
+    flowBrainMcpToolNameFromData(entry.toolData) ??
+    flowBrainMcpToolNameFromLabel(entry.toolTitle) ??
+    flowBrainMcpToolNameFromLabel(entry.label);
+  if (!tool) return null;
+
+  const request = item?.arguments ?? item?.input ?? data?.input;
+  const result = item?.result ?? data?.result;
+  const error = item?.error ?? data?.error;
+  return {
+    tool,
+    toolLabel: flowBrainToolLabel(tool),
+    request,
+    response: unwrapMcpResult(result ?? error ?? entry.detail),
+  };
+}
+
+/** Pretty-prints structured MCP values while leaving prose responses readable. */
+export function formatFlowBrainToolCallValue(value: unknown, emptyLabel: string): string {
+  if (value === undefined || value === null) return emptyLabel;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return emptyLabel;
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return trimmed;
+      }
+    }
+    return trimmed;
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function commandResultContent(value: unknown): string | null {
@@ -411,7 +510,9 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   ) {
     return "update";
   }
-  if (resolveWorkEntryToolPresentation(entry)?.icon === "browser") return "browser";
+  const toolPresentationIcon = resolveWorkEntryToolPresentation(entry)?.icon;
+  if (toolPresentationIcon === "brain") return "brain";
+  if (toolPresentationIcon === "browser") return "browser";
   if (
     entry.requestKind === "file-read" ||
     entry.itemType === "image_view" ||
@@ -511,6 +612,8 @@ function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
       return `Changed ${count} ${count === 1 ? "file" : "files"}`;
     case "command":
       return `Ran ${count} ${count === 1 ? "command" : "commands"}`;
+    case "brain":
+      return count === 1 ? "Consulted the brain" : `Consulted the brain ${count} times`;
     case "browser":
       return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
     case "search":
@@ -529,11 +632,11 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   const sources = new Map<string, ToolActivitySource>();
   const groupedEntries = new Map<ToolGroupAction, WorkLogPresentationEntry[]>();
   for (const entry of summaryEntries) {
-    if (entry.toolSource) {
+    const action = toolGroupAction(entry);
+    if (entry.toolSource && action !== "brain") {
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
-    const action = toolGroupAction(entry);
     const group = groupedEntries.get(action);
     if (group) group.push(entry);
     else groupedEntries.set(action, [entry]);

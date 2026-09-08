@@ -3,6 +3,7 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
+import { flowBrainMcpToolNameFromData } from "@t3tools/shared/flowBrainMcp";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -248,6 +249,7 @@ function summarizeMcpResult(result: unknown): Record<string, unknown> | undefine
  */
 function projectMcpToolCallData(data: Record<string, unknown>): Record<string, unknown> {
   const projectedData: Record<string, unknown> = {};
+  const isFlowBrainCall = flowBrainMcpToolNameFromData(data) !== null;
 
   const item = asRecord(data.item);
   if (item) {
@@ -257,9 +259,13 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
         projectedItem[key] = item[key];
       }
     }
-    const result = summarizeMcpResult(item.result);
-    if (result) {
-      projectedItem.result = result;
+    if (isFlowBrainCall && "result" in item) {
+      projectedItem.result = item.result;
+    } else {
+      const result = summarizeMcpResult(item.result);
+      if (result) {
+        projectedItem.result = result;
+      }
     }
     projectedData.item = projectedItem;
   }
@@ -271,9 +277,16 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
     projectedData.input = data.input;
   }
   if (!item) {
-    const result = summarizeMcpResult(data.result);
-    if (result) {
-      projectedData.result = result;
+    if (isFlowBrainCall && "result" in data) {
+      projectedData.result = data.result;
+    } else {
+      const result = summarizeMcpResult(data.result);
+      if (result) {
+        projectedData.result = result;
+      }
+    }
+    if (isFlowBrainCall && "error" in data) {
+      projectedData.error = data.error;
     }
   }
 

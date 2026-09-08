@@ -79,6 +79,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./flowBrainMcp": {
+      "types": "./src/flowBrainMcp.ts",
+      "import": "./src/flowBrainMcp.ts"
+    },
     "./favicon": {
       "types": "./src/favicon.ts",
       "import": "./src/favicon.ts"

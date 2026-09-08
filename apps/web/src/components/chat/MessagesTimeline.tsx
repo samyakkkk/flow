@@ -10,6 +10,8 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
+  formatFlowBrainToolCallValue,
+  resolveFlowBrainToolCallDetails,
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
   workEntryViewedImagePath,
@@ -2137,6 +2139,8 @@ function toolGroupSummaryIconName(
       return "square-pen";
     case "command":
       return "terminal";
+    case "brain":
+      return "brain";
     case "browser":
       return "browser";
     case "search":
@@ -3000,7 +3004,11 @@ function buildToolCallExpandedBody(
     seen.add(text);
     blocks.push(text);
   };
-  if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
+  if (
+    workEntry.itemType === "mcp_tool_call" &&
+    workEntry.toolData !== undefined &&
+    resolveFlowBrainToolCallDetails(workEntry) === null
+  ) {
     addBlock(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
   }
   const command = workEntry.command?.trim();
@@ -3036,6 +3044,49 @@ function buildToolCallExpandedBody(
 
 const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
+
+function FlowBrainCallExpandedDetails({ workEntry }: { workEntry: TimelineWorkEntry }) {
+  const details = resolveFlowBrainToolCallDetails(workEntry);
+  if (!details) return null;
+  const waiting = workEntry.toolLifecycleStatus === "inProgress";
+
+  return (
+    <div
+      className="mt-1 ms-7 cursor-default overflow-hidden rounded-lg border border-border/60 bg-card/40"
+      onClick={stopRowToggle}
+      onPointerDown={stopRowToggle}
+    >
+      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
+        <BrainIcon aria-hidden className="size-3.5 text-icon-muted" />
+        <span className="text-xs font-medium text-foreground/85">Brain consultation</span>
+        <code className="ml-auto rounded bg-muted/60 px-1.5 py-0.5 text-[.625rem] text-secondary-label">
+          {details.tool}
+        </code>
+      </div>
+      <div className="grid gap-px bg-border/40 sm:grid-cols-2">
+        <section className="min-w-0 bg-background/70 px-3 py-2.5" aria-label="Brain request">
+          <p className="mb-1.5 text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
+            Request
+          </p>
+          <pre className={toolCallExpandedBodyClassName}>
+            {formatFlowBrainToolCallValue(details.request, "No parameters")}
+          </pre>
+        </section>
+        <section className="min-w-0 bg-background/70 px-3 py-2.5" aria-label="Brain response">
+          <p className="mb-1.5 text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
+            Response
+          </p>
+          <pre className={toolCallExpandedBodyClassName}>
+            {formatFlowBrainToolCallValue(
+              details.response,
+              waiting ? "Waiting for response…" : "No response body",
+            )}
+          </pre>
+        </section>
+      </div>
+    </div>
+  );
+}
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (
@@ -3214,6 +3265,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
         })
       : null;
   const commandMatchesVisibleLabel = workEntry.command?.trim() === previewText.trim();
+  const brainCallDetails = resolveFlowBrainToolCallDetails(workEntry);
   const canExpand =
     (showFailedIndicator && previewText.trim().length > 0) ||
     (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||
@@ -3350,7 +3402,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           />
         </div>
       ) : null}
-      {expanded && canExpand && expandedBody ? (
+      {expanded && brainCallDetails ? (
+        <FlowBrainCallExpandedDetails workEntry={workEntry} />
+      ) : expanded && canExpand && expandedBody ? (
         <div
           className="mt-1 ms-7 cursor-default rounded-md bg-muted/40 px-3 py-2"
           onClick={stopRowToggle}

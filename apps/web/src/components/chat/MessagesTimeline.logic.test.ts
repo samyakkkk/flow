@@ -2621,6 +2621,60 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("surfaces Flow MCP calls as a distinct brain consultation in mixed work", () => {
+    const timelineEntries = [
+      {
+        id: "brain-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "brain",
+          createdAt: "2026-01-01T00:00:01Z",
+          label: "MCP tool call",
+          tone: "tool" as const,
+          itemType: "mcp_tool_call" as const,
+          toolLifecycleStatus: "completed" as const,
+          toolData: {
+            server: "flow-graph",
+            tool: "find_entity",
+            arguments: { q: "tool activity rendering" },
+            result: { content: '{"status":"ok"}' },
+          },
+        },
+      },
+      {
+        id: "command-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "command",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "Ran command",
+          tone: "tool" as const,
+          itemType: "command_execution" as const,
+          toolLifecycleStatus: "completed" as const,
+          command: "git status",
+        },
+      },
+    ];
+
+    expect(
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      }),
+    ).toMatchObject([
+      {
+        kind: "work-toggle",
+        summary: "Consulted the brain and ran 1 command",
+        summaryKind: "mixed",
+      },
+    ]);
+  });
+
   it("deduplicates integration sources and uses the first source icon for the group", () => {
     const chromeSource = {
       key: "browser-use:chrome",
