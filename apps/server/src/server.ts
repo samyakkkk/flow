@@ -1,4 +1,5 @@
 import { BRAND } from "@t3tools/shared/branding";
+import { ownInstance } from "./instanceOwnership.ts";
 import { brainHttpApiLayer } from "./brain/http.ts";
 import { EnvironmentHttpApi, ProviderDriverKind } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -573,6 +574,9 @@ export const makeRoutesLayer = Layer.mergeAll(
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    // Acquire before building any persistence, provider, or brain layers. The
+    // enclosing scope releases ownership after those services have shut down.
+    yield* ownInstance(config.stateDir);
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const activationLayer = Layer.succeed(ServerActivation, awaitActivation);

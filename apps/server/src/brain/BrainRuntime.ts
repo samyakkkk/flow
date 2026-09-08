@@ -278,6 +278,10 @@ export class BrainRuntime {
   private flowGraph(workspace: Workspace) {
     return this.db!.selectGraph(`flow_brain_${workspace.id.replaceAll("-", "")}`);
   }
+  assertAvailable() {
+    if (!this.db?.isRunning || this.closed)
+      throw new Error(this.database.message || "The app's brain runtime is unavailable.");
+  }
   private async readKnowledge(workspace: Workspace): Promise<BrainKnowledge> {
     if (this.db?.isRunning && workspace.sources.some((source) => source.pipeline === "flow")) {
       const graph = this.flowGraph(workspace);
@@ -761,6 +765,18 @@ export class BrainRuntime {
   ) {
     const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
     if (!workspace) throw new Error("This project has no connected brain");
+    const result = await this.callBrainTool(workspace.id, name, args, context);
+    if (this.projectBrainId(projectId) !== workspace.id)
+      throw new Error("The project's brain changed.");
+    return result;
+  }
+  async callBrainTool(
+    workspaceId: string,
+    name: string,
+    args: Record<string, unknown>,
+    context: BrainSessionContext,
+  ) {
+    const workspace = this.workspace(workspaceId);
     if (
       (name === "source_read" || name === "source_search") &&
       !workspace.sources.some((source) => source.repository === args.repo)
@@ -768,8 +784,6 @@ export class BrainRuntime {
       throw new Error("Repository is not a source of the connected brain");
     await this.writeSessionSources(workspace);
     const worker = await this.sessionWorker(workspace);
-    if (this.projectBrainId(projectId) !== workspace.id)
-      throw new Error("The project's brain changed. Retry the tool call.");
     const repo = context.workspaceRoot
       ? await this.sessionRepository(context.workspaceRoot)
       : context.repo;
@@ -778,6 +792,10 @@ export class BrainRuntime {
   async captureProjectEvent(projectId: ProjectId, input: BrainCapture) {
     const workspace = this.workspaces.find((entry) => entry.projectIds.includes(projectId));
     if (!workspace) return;
+    return this.captureBrainEvent(workspace.id, input);
+  }
+  async captureBrainEvent(workspaceId: string, input: BrainCapture) {
+    const workspace = this.workspace(workspaceId);
     const repo = input.context.workspaceRoot
       ? await this.sessionRepository(input.context.workspaceRoot)
       : input.context.repo;
