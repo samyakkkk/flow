@@ -142,6 +142,7 @@ export default defineConfig({
       {
         // Reviewed native and third-party interop boundaries that cannot consume a className.
         files: [
+          "apps/mobile/src/components/BrandWordmark.tsx",
           "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
           "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
           "apps/mobile/src/features/files/FileMarkdownPreview.tsx",

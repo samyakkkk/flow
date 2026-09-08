@@ -27,11 +27,22 @@ const config =
   args[0] === "--config"
     ? mergeBranding(original, JSON.parse(await NodeFSP.readFile(NodePath.resolve(args[1]), "utf8")))
     : validateBranding(original);
+const readArtwork = async (source) =>
+  NodeFSP.readFile(NodePath.join(root, source)).catch((error) => {
+    if (error.code === "ENOENT") {
+      throw new Error(`Brand artwork source is missing: ${source}`);
+    }
+    throw error;
+  });
+const iconSource = await readArtwork(config.icon.source);
+const wordmarkOnLightSource = await readArtwork(config.wordmark.onLightSource);
+const wordmarkOnDarkSource = await readArtwork(config.wordmark.onDarkSource);
 const outputs = new Map();
-const svg = renderBrandSvg(config);
-outputs.set("assets/brand/logo.svg", svg);
-const png = async (size, source = svg) =>
-  sharp(Buffer.from(source)).resize(size, size).png().toBuffer();
+const png = async (size, source = iconSource) =>
+  sharp(typeof source === "string" ? Buffer.from(source) : source)
+    .resize(size, size, { fit: "cover" })
+    .png()
+    .toBuffer();
 const icon = await png(1024);
 outputs.set("assets/brand/icon.png", icon);
 for (const name of ["icon", "icon-nightly"])
@@ -46,6 +57,19 @@ for (const dir of ["assets/brand", "apps/web/public", "apps/marketing/public"]) 
   outputs.set(`${dir}/favicon-32x32.png`, await png(32));
   outputs.set(`${dir}/apple-touch-icon.png`, await png(180));
 }
+for (const dir of ["apps/web/public", "apps/marketing/public"]) {
+  outputs.set(`${dir}/brand-wordmark-on-light.svg`, wordmarkOnLightSource);
+  outputs.set(`${dir}/brand-wordmark-on-dark.svg`, wordmarkOnDarkSource);
+}
+const wordmarkPng = async (source) => sharp(source).resize({ height: 256 }).png().toBuffer();
+outputs.set(
+  "apps/mobile/assets/brand-wordmark-on-light.png",
+  await wordmarkPng(wordmarkOnLightSource),
+);
+outputs.set(
+  "apps/mobile/assets/brand-wordmark-on-dark.png",
+  await wordmarkPng(wordmarkOnDarkSource),
+);
 outputs.set(
   "apps/web/public/manifest.webmanifest",
   JSON.stringify(
@@ -86,7 +110,10 @@ outputs.set(
   "apps/desktop/package.json",
   JSON.stringify({ ...desktopPackage, productName: `${config.name} (Alpha)` }, null, 2) + "\n",
 );
-outputs.set("assets/brand/fingerprint", brandingFingerprint(config) + "\n");
+outputs.set(
+  "assets/brand/fingerprint",
+  brandingFingerprint(config, [iconSource, wordmarkOnLightSource, wordmarkOnDarkSource]) + "\n",
+);
 const stale = [];
 for (const [relative, contents] of outputs) {
   const target = NodePath.join(root, relative);
