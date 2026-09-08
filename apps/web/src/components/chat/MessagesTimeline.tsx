@@ -10,8 +10,9 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
-  formatFlowBrainToolCallValue,
-  resolveFlowBrainToolCallDetails,
+  resolveFlowBrainConsultationDisplay,
+  type FlowBrainDisplayField,
+  type FlowBrainDisplayItem,
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
   workEntryViewedImagePath,
@@ -3007,7 +3008,7 @@ function buildToolCallExpandedBody(
   if (
     workEntry.itemType === "mcp_tool_call" &&
     workEntry.toolData !== undefined &&
-    resolveFlowBrainToolCallDetails(workEntry) === null
+    resolveFlowBrainConsultationDisplay(workEntry) === null
   ) {
     addBlock(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
   }
@@ -3045,10 +3046,93 @@ function buildToolCallExpandedBody(
 const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
+function FlowBrainField({ field }: { field: FlowBrainDisplayField }) {
+  const values = Array.isArray(field.value) ? field.value : null;
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 text-[.625rem] font-medium tracking-[.1em] text-secondary-label/65 uppercase">
+        {field.label}
+      </p>
+      {values ? (
+        <div className="flex flex-wrap gap-1.5">
+          {values.map((value) => (
+            <span
+              key={value}
+              className="rounded-md border border-border/50 bg-muted/35 px-2 py-1 text-xs leading-snug text-foreground/85"
+            >
+              {value}
+            </span>
+          ))}
+        </div>
+      ) : field.code ? (
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/35 px-2.5 py-2 font-mono text-[.6875rem] leading-relaxed text-secondary-label select-text">
+          {field.value}
+        </pre>
+      ) : (
+        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/85 select-text">
+          {field.value}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FlowBrainItem({ item }: { item: FlowBrainDisplayItem }) {
+  return (
+    <article
+      className={cn(
+        "rounded-md border px-2.5 py-2",
+        item.tone === "danger"
+          ? "border-destructive/25 bg-destructive/5"
+          : item.tone === "warning"
+            ? "border-warning/25 bg-warning/5"
+            : "border-border/45 bg-background/55",
+      )}
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {item.eyebrow ? (
+          <span className="text-[.625rem] font-medium tracking-[.08em] text-secondary-label/70 uppercase">
+            {item.eyebrow}
+          </span>
+        ) : null}
+        {item.id ? (
+          <code className="truncate text-[.625rem] text-secondary-label/60">{item.id}</code>
+        ) : null}
+      </div>
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground/90 select-text">
+        {item.title}
+      </p>
+      {item.description ? (
+        <p className="mt-1 whitespace-pre-wrap break-words text-[.6875rem] leading-relaxed text-secondary-label select-text">
+          {item.description}
+        </p>
+      ) : null}
+      {(item.fields?.length ?? 0) > 0 ? (
+        <div className="mt-2 grid gap-2 border-t border-border/35 pt-2 sm:grid-cols-2">
+          {item.fields!.map((field) => (
+            <FlowBrainField key={field.label} field={field} />
+          ))}
+        </div>
+      ) : null}
+      {(item.tags?.length ?? 0) > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {item.tags!.map((tag) => (
+            <span
+              key={tag}
+              className="rounded bg-muted/50 px-1.5 py-0.5 text-[.625rem] text-secondary-label"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function FlowBrainCallExpandedDetails({ workEntry }: { workEntry: TimelineWorkEntry }) {
-  const details = resolveFlowBrainToolCallDetails(workEntry);
-  if (!details) return null;
-  const waiting = workEntry.toolLifecycleStatus === "inProgress";
+  const display = resolveFlowBrainConsultationDisplay(workEntry);
+  if (!display) return null;
 
   return (
     <div
@@ -3056,32 +3140,109 @@ function FlowBrainCallExpandedDetails({ workEntry }: { workEntry: TimelineWorkEn
       onClick={stopRowToggle}
       onPointerDown={stopRowToggle}
     >
-      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
-        <BrainIcon aria-hidden className="size-3.5 text-icon-muted" />
-        <span className="text-xs font-medium text-foreground/85">Brain consultation</span>
-        <code className="ml-auto rounded bg-muted/60 px-1.5 py-0.5 text-[.625rem] text-secondary-label">
-          {details.tool}
-        </code>
+      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
+        <span className="flex size-6 items-center justify-center rounded-md bg-warning/10 text-warning">
+          <BrainIcon aria-hidden className="size-3.5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground/90">Brain consultation</p>
+          <p className="text-[.625rem] text-secondary-label">{display.toolLabel}</p>
+        </div>
+        <span className="ml-auto rounded-full border border-border/50 bg-muted/35 px-2 py-0.5 text-[.625rem] text-secondary-label">
+          {display.responseSummary}
+        </span>
       </div>
-      <div className="grid gap-px bg-border/40 sm:grid-cols-2">
-        <section className="min-w-0 bg-background/70 px-3 py-2.5" aria-label="Brain request">
-          <p className="mb-1.5 text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
+      <div className="max-h-[32rem] overflow-y-auto bg-background/45">
+        <section className="min-w-0 px-3 py-3" aria-label="Brain request">
+          <p className="mb-2 text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
             Request
           </p>
-          <pre className={toolCallExpandedBodyClassName}>
-            {formatFlowBrainToolCallValue(details.request, "No parameters")}
-          </pre>
+          {display.requestFields.length > 0 ? (
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              {display.requestFields.map((field) => (
+                <FlowBrainField key={field.label} field={field} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-secondary-label">No parameters</p>
+          )}
         </section>
-        <section className="min-w-0 bg-background/70 px-3 py-2.5" aria-label="Brain response">
-          <p className="mb-1.5 text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
-            Response
-          </p>
-          <pre className={toolCallExpandedBodyClassName}>
-            {formatFlowBrainToolCallValue(
-              details.response,
-              waiting ? "Waiting for response…" : "No response body",
-            )}
-          </pre>
+        <section
+          className="min-w-0 border-t border-border/45 px-3 py-3"
+          aria-label="Brain response"
+        >
+          <div className="mb-2 flex items-center gap-2">
+            <p className="text-[.625rem] font-medium tracking-[.12em] text-secondary-label/70 uppercase">
+              Response
+            </p>
+            <span className="h-px flex-1 bg-border/35" />
+          </div>
+          {display.responseSections.length > 0 ? (
+            <div className="space-y-2.5">
+              {display.responseSections.map((section) => (
+                <div
+                  key={section.title}
+                  className={cn(
+                    "rounded-lg border border-border/45 bg-card/30 p-2.5",
+                    section.tone === "danger" && "border-destructive/25 bg-destructive/5",
+                    section.tone === "warning" && "border-warning/25 bg-warning/5",
+                  )}
+                >
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <h4 className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90">
+                      {section.title}
+                    </h4>
+                    {section.subtitle ? (
+                      <span className="shrink-0 text-[.625rem] text-secondary-label/65">
+                        {section.subtitle}
+                      </span>
+                    ) : null}
+                  </div>
+                  {section.text ? (
+                    section.code ? (
+                      <pre className="mt-2 overflow-x-auto whitespace-pre font-mono text-[.6875rem] leading-relaxed text-secondary-label select-text">
+                        {section.text}
+                      </pre>
+                    ) : (
+                      <p className="mt-1.5 whitespace-pre-wrap break-words text-[.6875rem] leading-relaxed text-secondary-label select-text">
+                        {section.text}
+                      </p>
+                    )
+                  ) : null}
+                  {(section.fields?.length ?? 0) > 0 ? (
+                    <div className="mt-2 grid gap-2.5 sm:grid-cols-2">
+                      {section.fields!.map((field) => (
+                        <FlowBrainField key={field.label} field={field} />
+                      ))}
+                    </div>
+                  ) : null}
+                  {(section.tags?.length ?? 0) > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {section.tags!.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-md border border-border/45 bg-muted/35 px-2 py-1 font-mono text-[.625rem] text-secondary-label"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {(section.items?.length ?? 0) > 0 ? (
+                    <div className="mt-2 grid gap-1.5">
+                      {section.items!.map((item) => (
+                        <FlowBrainItem key={item.id ?? item.title} item={item} />
+                      ))}
+                    </div>
+                  ) : section.text || section.fields?.length || section.tags?.length ? null : (
+                    <p className="mt-1.5 text-[.6875rem] text-secondary-label">No results</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-secondary-label">{display.responseSummary}</p>
+          )}
         </section>
       </div>
     </div>
@@ -3265,7 +3426,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
         })
       : null;
   const commandMatchesVisibleLabel = workEntry.command?.trim() === previewText.trim();
-  const brainCallDetails = resolveFlowBrainToolCallDetails(workEntry);
+  const brainCallDetails = resolveFlowBrainConsultationDisplay(workEntry);
   const canExpand =
     (showFailedIndicator && previewText.trim().length > 0) ||
     (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||

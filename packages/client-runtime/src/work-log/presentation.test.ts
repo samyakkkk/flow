@@ -7,6 +7,7 @@ import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
   formatFlowBrainToolCallValue,
+  resolveFlowBrainConsultationDisplay,
   resolveFlowBrainToolCallDetails,
   resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
@@ -388,7 +389,7 @@ describe("Flow brain MCP presentation", () => {
       tool: "find_entity",
       toolLabel: "Find entity",
       request: { qs: ["tool activity rendering"] },
-      response: '{"status":"batch","count":1}',
+      response: { status: "batch", count: 1 },
     });
     expect(formatFlowBrainToolCallValue(details?.request, "No parameters")).toBe(
       '{\n  "qs": [\n    "tool activity rendering"\n  ]\n}',
@@ -396,6 +397,144 @@ describe("Flow brain MCP presentation", () => {
     expect(formatFlowBrainToolCallValue(details?.response, "No response body")).toBe(
       '{\n  "status": "batch",\n  "count": 1\n}',
     );
+  });
+
+  it("falls back to text content when MCP structured content is null", () => {
+    const details = resolveFlowBrainToolCallDetails({
+      ...brainEntry,
+      toolData: {
+        type: "mcpToolCall",
+        server: "flow-graph",
+        tool: "orient",
+        arguments: { repo: "flow" },
+        result: {
+          _meta: null,
+          content: [
+            {
+              type: "text",
+              text: 'CONNECTED PROJECT: "Flow"\n[flow orient — repo "flow" @ main-v2]',
+            },
+          ],
+          structuredContent: null,
+        },
+      },
+    });
+
+    expect(details?.response).toBe(
+      'CONNECTED PROJECT: "Flow"\n[flow orient — repo "flow" @ main-v2]',
+    );
+  });
+
+  it("projects batched entity searches into query groups and readable result cards", () => {
+    const display = resolveFlowBrainConsultationDisplay({
+      ...brainEntry,
+      toolData: {
+        ...brainEntry.toolData,
+        arguments: { qs: ["auth middleware", "personal access tokens"], limit: 5 },
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "batch",
+                count: 2,
+                groups: [
+                  {
+                    query: "auth middleware",
+                    status: "similar",
+                    matches: [
+                      {
+                        type: "Handler",
+                        id: "handler:auth",
+                        name: "Authentication middleware",
+                        description: "Checks the session before routing.",
+                        anchor: "apps/server/src/auth.ts:12",
+                        via: "vector",
+                      },
+                    ],
+                    memory_hits: [
+                      "[Memory:decision] Sessions are checked on every request. (strong) [mem:abc]",
+                    ],
+                  },
+                  {
+                    query: "personal access tokens",
+                    status: "none",
+                    matches: [],
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+    });
+
+    expect(display).toMatchObject({
+      toolLabel: "Find entity",
+      requestFields: [
+        { label: "Queries", value: ["auth middleware", "personal access tokens"] },
+        { label: "Result limit", value: "5" },
+      ],
+      responseSummary: "1 entity · 1 memory · 2 queries",
+      responseSections: [
+        {
+          title: "auth middleware",
+          subtitle: "Similar",
+          items: [
+            {
+              eyebrow: "Handler",
+              title: "Authentication middleware",
+              id: "handler:auth",
+              description: "Checks the session before routing.",
+              fields: [{ label: "Code", value: "apps/server/src/auth.ts:12", code: true }],
+              tags: ["Semantic match"],
+            },
+            {
+              eyebrow: "Memory · Decision · Strong",
+              title: "Sessions are checked on every request.",
+              id: "mem:abc",
+            },
+          ],
+        },
+        { title: "personal access tokens", subtitle: "None", items: [] },
+      ],
+    });
+  });
+
+  it("turns knowledge-search prose into one card per memory", () => {
+    const display = resolveFlowBrainConsultationDisplay({
+      ...brainEntry,
+      toolData: {
+        server: "flow-graph",
+        tool: "search_knowledge",
+        arguments: { query: "auth sessions" },
+        result: {
+          content: JSON.stringify({
+            status: "ok",
+            results:
+              "MEMORY:\n- Auth uses signed cookies. [decision/strong] (memory 123)\n- Local mode is open. [gotcha/medium] (memory 456)",
+          }),
+        },
+      },
+    });
+
+    expect(display).toMatchObject({
+      requestFields: [{ label: "Query", value: "auth sessions" }],
+      responseSummary: "2 memories",
+      responseSections: [
+        {
+          title: "Matches",
+          items: [
+            {
+              eyebrow: "Memory · Decision · Strong",
+              title: "Auth uses signed cookies.",
+              id: "123",
+            },
+            { eyebrow: "Memory · Gotcha · Medium", title: "Local mode is open.", id: "456" },
+          ],
+        },
+      ],
+    });
   });
 
   it("counts brain consultations separately from commands and generic tools", () => {
