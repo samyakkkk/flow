@@ -6,6 +6,8 @@ import { ThreadId } from "@t3tools/contracts";
 import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
+  formatFlowBrainToolCallValue,
+  resolveFlowBrainToolCallDetails,
   resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
@@ -329,6 +331,86 @@ describe("resolveWorkEntryToolPresentation", () => {
         toolData: { server: "another-server", tool: "preview_click" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("Flow brain MCP presentation", () => {
+  const brainEntry = {
+    label: "MCP tool call",
+    tone: "tool",
+    itemType: "mcp_tool_call",
+    toolLifecycleStatus: "completed",
+    toolData: {
+      type: "mcpToolCall",
+      server: "flow-graph",
+      tool: "find_entity",
+      arguments: { qs: ["tool activity rendering"] },
+      result: { content: '{"status":"batch","count":1}' },
+    },
+  } satisfies WorkLogPresentationEntry;
+
+  it("presents Flow MCP calls as brain consultations", () => {
+    expect(resolveWorkEntryToolPresentation(brainEntry)).toEqual({
+      displayName: "Consulted the brain · Find entity",
+      icon: "brain",
+    });
+    expect(
+      resolveWorkEntryToolPresentation({ ...brainEntry, toolLifecycleStatus: "inProgress" }),
+    ).toEqual({
+      displayName: "Consulting the brain · Find entity",
+      icon: "brain",
+    });
+    expect(toolGroupAction(brainEntry)).toBe("brain");
+    expect(toolGroupSummaryKind([brainEntry])).toBe("brain");
+  });
+
+  it("recognizes Flow verbs exposed through the t3-code MCP server", () => {
+    expect(
+      resolveWorkEntryToolPresentation({
+        label: "MCP tool call",
+        toolData: { toolName: "mcp__t3_code__orient", input: { repo: "flow" } },
+      }),
+    ).toEqual({
+      displayName: "Consulting the brain · Orient",
+      icon: "brain",
+    });
+    expect(
+      resolveWorkEntryToolPresentation({
+        label: "MCP tool call",
+        toolData: { server: "github", tool: "find_entity" },
+      }),
+    ).toBeNull();
+  });
+
+  it("extracts and formats the request and response without provider metadata", () => {
+    const details = resolveFlowBrainToolCallDetails(brainEntry);
+    expect(details).toEqual({
+      tool: "find_entity",
+      toolLabel: "Find entity",
+      request: { qs: ["tool activity rendering"] },
+      response: '{"status":"batch","count":1}',
+    });
+    expect(formatFlowBrainToolCallValue(details?.request, "No parameters")).toBe(
+      '{\n  "qs": [\n    "tool activity rendering"\n  ]\n}',
+    );
+    expect(formatFlowBrainToolCallValue(details?.response, "No response body")).toBe(
+      '{\n  "status": "batch",\n  "count": 1\n}',
+    );
+  });
+
+  it("counts brain consultations separately from commands and generic tools", () => {
+    expect(
+      summarizeToolGroup([
+        brainEntry,
+        { ...brainEntry, toolCallId: "brain-2" },
+        {
+          label: "Ran command",
+          tone: "tool",
+          itemType: "command_execution",
+          command: "git status",
+        },
+      ]),
+    ).toBe("Consulted the brain 2 times and ran 1 command");
   });
 });
 

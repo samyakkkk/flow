@@ -45,6 +45,8 @@ import {
   type ThreadWorkGroupScrollPosition,
 } from "./thread-feed-live-follow";
 import {
+  formatFlowBrainToolCallValue,
+  resolveFlowBrainToolCallDetails,
   resolveWorkEntryToolPresentation,
   type ToolGroupSummaryKind,
   workEntryViewedImagePath,
@@ -336,6 +338,8 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): AppSymbolName {
       return { ios: "exclamationmark.triangle", android: "error" };
     case "browser":
       return { ios: "safari", android: "public" };
+    case "brain":
+      return "brain";
     case "check":
       return { ios: "checkmark", android: "check" };
     case "command":
@@ -734,6 +738,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   const canExpand = row.canExpand;
   const fullDetail = expanded ? row.getFullDetail() : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
+  const brainDetails = resolveFlowBrainToolCallDetails(row.workEntry);
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
   const previewText = workEntryRowLabel(row.workEntry);
   const displayText = workEntryRowLabel(row.workEntry, expanded);
@@ -861,17 +866,69 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
             </View>
           ) : null}
-          <ScrollView
-            nestedScrollEnabled
-            directionalLockEnabled
-            showsVerticalScrollIndicator
-            className="max-h-60"
-            contentContainerStyle={{ paddingRight: 8 }}
-          >
-            <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
-              {fullDetail}
-            </Text>
-          </ScrollView>
+          {brainDetails ? (
+            <ScrollView
+              nestedScrollEnabled
+              directionalLockEnabled
+              showsVerticalScrollIndicator
+              className="max-h-72"
+              contentContainerStyle={{ paddingRight: 8, gap: 12 }}
+            >
+              <View className="flex-row items-center gap-1.5">
+                <SymbolView
+                  name="brain"
+                  size={12}
+                  tintColor={props.iconSubtleColor}
+                  type="monochrome"
+                />
+                <Text className="font-t3-medium text-xs text-foreground-muted">
+                  Brain consultation
+                </Text>
+                <Text className="ml-auto rounded bg-subtle px-1.5 py-0.5 font-mono text-3xs text-foreground-muted">
+                  {brainDetails.tool}
+                </Text>
+              </View>
+              <View className="gap-1.5">
+                <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
+                  Request
+                </Text>
+                <Text
+                  selectable
+                  className="font-mono text-2xs leading-normal text-foreground-muted"
+                >
+                  {formatFlowBrainToolCallValue(brainDetails.request, "No parameters")}
+                </Text>
+              </View>
+              <View className="gap-1.5 border-t border-adaptive-neutral-300-a60-white-a12 pt-2.5">
+                <Text className="font-t3-medium text-3xs uppercase tracking-wider text-foreground-muted opacity-70">
+                  Response
+                </Text>
+                <Text
+                  selectable
+                  className="font-mono text-2xs leading-normal text-foreground-muted"
+                >
+                  {formatFlowBrainToolCallValue(
+                    brainDetails.response,
+                    row.lifecycleStatus === "inProgress"
+                      ? "Waiting for response…"
+                      : "No response body",
+                  )}
+                </Text>
+              </View>
+            </ScrollView>
+          ) : (
+            <ScrollView
+              nestedScrollEnabled
+              directionalLockEnabled
+              showsVerticalScrollIndicator
+              className="max-h-60"
+              contentContainerStyle={{ paddingRight: 8 }}
+            >
+              <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
+                {fullDetail}
+              </Text>
+            </ScrollView>
+          )}
         </Animated.View>
       ) : null}
     </Animated.View>
@@ -886,7 +943,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly summary: string;
   readonly summaryKind: ToolGroupSummaryKind;
-  readonly summaryToolIcon?: "browser" | "t3-code";
+  readonly summaryToolIcon?: "brain" | "browser" | "t3-code";
   readonly themeAppearance: "light" | "dark";
   readonly toolSurface?: import("@t3tools/contracts").ToolActivitySurface;
   readonly toolIcon?: ToolActivityIcon;
@@ -1230,6 +1287,8 @@ function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName {
       return { ios: "square.and.pencil", android: "edit" };
     case "command":
       return { ios: "terminal", android: "terminal" };
+    case "brain":
+      return "brain";
     case "browser":
     case "search":
       return { ios: "globe", android: "public" };

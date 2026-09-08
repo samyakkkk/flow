@@ -1246,6 +1246,61 @@ describe("buildThreadFeed", () => {
     expect(group.activities[0]?.getFullDetail()).not.toContain("repository.search");
   });
 
+  it("formats Flow MCP request and response details as a brain consultation", () => {
+    const turnId = TurnId.make("turn-brain");
+    const thread = makeThread({
+      id: ThreadId.make("thread-brain"),
+      projectId: ProjectId.make("project-1"),
+      title: "Brain consultation",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:03.000Z",
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("brain-completed"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "MCP tool call",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId,
+          payload: {
+            title: "flow-graph · find_entity",
+            itemType: "mcp_tool_call",
+            status: "completed",
+            data: {
+              item: {
+                server: "flow-graph",
+                tool: "find_entity",
+                arguments: { q: "tool activity rendering" },
+                result: { content: '{"status":"ok"}' },
+              },
+            },
+          },
+        }),
+      ],
+    });
+
+    const group = buildThreadFeed(thread)[0];
+    expect(group).toMatchObject({
+      type: "activity-group",
+      activities: [
+        {
+          summary: "Consulted the brain · Find entity",
+          icon: "brain",
+        },
+      ],
+    });
+    if (group?.type !== "activity-group") return;
+    expect(group.activities[0]?.getFullDetail()).toBe(
+      'Brain consultation · Find entity\n\nRequest\n{\n  "q": "tool activity rendering"\n}\n\nResponse\n{\n  "status": "ok"\n}',
+    );
+  });
+
   it.each([
     {
       source: "raw MCP browser identity",

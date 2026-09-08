@@ -249,6 +249,55 @@ describe("projectActivityPayload", () => {
     expect(JSON.stringify(projected.payload).length).toBeLessThan(500);
   });
 
+  it("preserves the full response payload for Codex-shaped Flow brain calls", () => {
+    const result = {
+      content: [{ type: "text", text: `brain response\n${"x".repeat(5000)}` }],
+      structuredContent: { entities: Array.from({ length: 100 }, (_, index) => ({ index })) },
+    };
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            id: "brain-item-1",
+            tool: "find_entity",
+            server: "flow-graph",
+            status: "completed",
+            arguments: { q: "tool activity rendering" },
+            result,
+            _meta: { internal: true },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const item = data.item as Record<string, unknown>;
+
+    expect(item.result).toEqual(result);
+    expect(item._meta).toBeUndefined();
+  });
+
+  it("preserves the full response payload for Flow verbs exposed by t3-code", () => {
+    const result = {
+      type: "tool_result",
+      content: [{ type: "text", text: `orientation\n${"z".repeat(5000)}` }],
+    };
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          toolName: "mcp__t3_code__orient",
+          input: { repo: "flow" },
+          result,
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+
+    expect(data.result).toEqual(result);
+  });
+
   it("passes task lifecycle payloads (no data field) through untouched", () => {
     const source = activity({
       taskId: "task-9",

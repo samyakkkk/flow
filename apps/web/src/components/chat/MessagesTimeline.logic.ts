@@ -309,7 +309,7 @@ export type MessagesTimelineRow =
       summaryKind: ToolGroupSummaryKind;
       toolSurface?: WorkLogEntry["toolSurface"];
       toolIcon?: WorkLogEntry["toolIcon"];
-      summaryToolIcon?: "browser" | "t3-code";
+      summaryToolIcon?: "brain" | "browser" | "t3-code";
       hasFailure: boolean;
     }
   | {
