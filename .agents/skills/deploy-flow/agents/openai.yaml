@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy Flow"
+  short_description: "Publish and verify Flow browser app releases"
+  default_prompt: "Use $deploy-flow to prepare and publish a Flow browser release."

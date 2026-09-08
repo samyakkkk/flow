@@ -1,0 +1,104 @@
+name: Flow browser release
+
+on:
+  push:
+    tags:
+      - "flow-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable Flow version (X.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flow-browser-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || 'main-v2' }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+      - name: Validate version and pin source
+        id: version
+        env:
+          FLOW_VERSION: ${{ inputs.version }}
+          FLOW_REF: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main-v2
+          node --input-type=module - <<'JS'
+          import { appendFileSync } from 'node:fs';
+          const version = process.env.GITHUB_EVENT_NAME === 'push'
+            ? process.env.FLOW_REF.replace(/^flow-v/, '') : process.env.FLOW_VERSION;
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+            throw new Error('Use a stable X.Y.Z version.');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=flow-v${version}\nversion=${version}\n`);
+          JS
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Test installer and launcher
+        run: node --test scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+      - name: Prepare release source
+        env:
+          FLOW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/flow-source"
+          git archive HEAD -- . ':(exclude).repos' | tar -xf - -C "$RUNNER_TEMP/flow-source"
+          node --input-type=module - <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          for (const relative of ['apps/server/package.json', 'apps/desktop/package.json', 'apps/web/package.json', 'packages/contracts/package.json']) {
+            const file = join(process.env.RUNNER_TEMP, 'flow-source', relative);
+            const pkg = JSON.parse(readFileSync(file, 'utf8'));
+            writeFileSync(file, JSON.stringify({...pkg, version: process.env.FLOW_VERSION}, null, 2) + '\n');
+          }
+          JS
+          mkdir -p release-browser
+          cp "$RUNNER_TEMP/flow-source/scripts/flow-release.mjs" release-browser/flow-release.mjs
+          tar -czf release-browser/flow-source.tar.gz -C "$RUNNER_TEMP/flow-source" .
+          (cd release-browser && sha256sum flow-source.tar.gz > flow-source.tar.gz.sha256)
+      - name: Verify source installation
+        working-directory: ${{ runner.temp }}/flow-source
+        run: |
+          bash scripts/install-flow.sh --prefix "$RUNNER_TEMP/flow-install"
+          node_modules/.bin/vp test run apps/server/src/flowBrowserUpdate.test.ts apps/web/src/components/sidebar/flowBrowserUpdate.test.ts
+          node apps/server/src/bin.ts --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flow-browser-release
+          path: release-browser/*
+          if-no-files-found: error
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flow-browser-release
+          path: release-browser
+      - name: Publish stable browser release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FLOW_TAG: ${{ needs.package.outputs.tag }}
+          FLOW_COMMIT: ${{ needs.package.outputs.commit }}
+        run: |
+          gh release create "$FLOW_TAG" release-browser/* \
+            --target "$FLOW_COMMIT" --title "Flow ${FLOW_TAG#flow-v}" \
+            --generate-notes --latest

@@ -19,12 +19,26 @@ const { rm } = NodeFSP;
 import * as NodeTimersPromises from "node:timers/promises";
 const { setTimeout: delay } = NodeTimersPromises;
 import { atomic, json, registryRoot, control, sourceRoot } from "./launcher.mjs";
+import { releaseController } from "./release-control.mjs";
+import { prepareAutomaticUpdate, spawnReleaseCommand } from "../flow-release.mjs";
 export async function freePort() {
   const server = tcpServer();
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
   await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+export async function releaseServerPort(directory, allocate = freePort) {
+  const file = join(directory, "release-port.json");
+  const saved = await json(file);
+  if (saved) {
+    if (!Number.isInteger(saved.port) || saved.port < 1 || saved.port > 65535)
+      throw Error("Invalid saved Flow server port.");
+    return saved.port;
+  }
+  const port = await allocate();
+  await atomic(file, { port });
   return port;
 }
 export function cleanEnvironment(env) {
@@ -46,6 +60,13 @@ export async function supervise(directory) {
     return;
   }
   const config = await json(join(directory, "config.json"));
+  const releaseHome = config.dev ? undefined : process.env.FLOW_RELEASE_HOME;
+  const updates = releaseController({
+    home: releaseHome,
+    code: config.code,
+    restart: (onFailure) => spawnReleaseCommand(releaseHome, ["restart", "--no-open"], onFailure),
+  });
+  let updateTimer;
   const generation = randomUUID();
   const token = randomBytes(32).toString("hex");
   const state = {
@@ -70,6 +91,7 @@ export async function supervise(directory) {
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    clearInterval(updateTimer);
     state.phase = "stopping";
     for (const child of children) signalChild(child, "SIGTERM");
     const force = setTimeout(() => {
@@ -93,6 +115,19 @@ export async function supervise(directory) {
   const server = createServer((request, response) => {
     if (request.headers.authorization !== `Bearer ${token}` || request.method !== "POST") {
       response.writeHead(401).end();
+      return;
+    }
+    if (request.url === "/update-status" || request.url === "/apply-update") {
+      const operation = request.url === "/apply-update" ? updates.apply : updates.read;
+      void operation()
+        .then((value) => {
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify(value));
+        })
+        .catch((error) => {
+          response.writeHead(409, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: error.message }));
+        });
       return;
     }
     if (!["/status", "/stop"].includes(request.url)) {
@@ -153,7 +188,11 @@ export async function supervise(directory) {
       relay = await (
         await import("./ui-proxy.mjs")
       ).uiProxy(join(registryRoot(), "instances", config.from));
-    const serverPort = relay ? relay.port : await freePort();
+    const serverPort = relay
+      ? relay.port
+      : releaseHome
+        ? await releaseServerPort(directory)
+        : await freePort();
     const webUrl = `http://localhost:${config.dev ? webPort : serverPort}`;
     let origin;
     if (config.mode !== "ui-only") {
@@ -164,6 +203,10 @@ export async function supervise(directory) {
         env.FLOW_SHARED_BRAIN_HOME = join(sourceConfig.home, "userdata");
       }
       env.FLOW_MANAGED_INSTANCE_ID = config.id;
+      if (releaseHome) {
+        env.FLOW_RELEASE_CONTROL_URL = `http://127.0.0.1:${server.address().port}`;
+        env.FLOW_RELEASE_CONTROL_TOKEN = token;
+      }
       env.T3CODE_HOME = config.home;
       env.T3CODE_DEV_ALLOWED_ORIGINS = webUrl;
       await launch(
@@ -231,6 +274,12 @@ export async function supervise(directory) {
     }
     if (!stopping && state.phase !== "ready")
       throw Error("Chat and brain did not become ready before the startup deadline.");
+    if (!stopping && releaseHome) {
+      const check = () => void prepareAutomaticUpdate(releaseHome).catch(console.error);
+      check();
+      updateTimer = setInterval(check, 6 * 60 * 60 * 1000);
+      updateTimer.unref();
+    }
   } catch (error) {
     state.phase = "failed";
     state.error = error.message;

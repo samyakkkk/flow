@@ -2,7 +2,65 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+## Flow browser releases
+
+The local browser installer uses `.github/workflows/flow-browser-release.yml`,
+independently of the upstream desktop/npm/hosted release pipeline below.
+
+For an agent-guided release, use the repository's
+[$deploy-flow skill](../../.agents/skills/deploy-flow/SKILL.md). It covers preparing
+the exact commit, publishing, and verifying installation and update delivery.
+
+1. Merge the installer and desired changes to `main-v2`.
+2. Tag a commit on `main-v2` as `flow-vX.Y.Z` and push that tag. The workflow
+   builds that exact commit and checks that it belongs to `main-v2`. Alternatively,
+   dispatch **Flow browser release** with a new stable `X.Y.Z` version once the
+   workflow is available for manual dispatch; that path builds `main-v2` HEAD.
+3. The workflow tests the installer and launcher, builds a disposable source
+   installation on Linux, and verifies the server version command.
+4. It publishes a `flow-vX.Y.Z` GitHub release with `flow-source.tar.gz`,
+   `flow-source.tar.gz.sha256`, and its matching `flow-release.mjs` bootstrap,
+   marked as the latest release.
+5. Verify installation on the supported target platforms and the transition
+   from the preceding release before broadly sharing the installer.
+
+The archive excludes vendored `.repos` references and contains version-aligned
+source plus the frozen dependency lockfile. Recipients build dependencies and
+the web app locally; there is no npm publication or hosted-service deployment.
+The workflow does not publish desktop artifacts or use the inherited `v*` tags.
+Keep the repository's latest stable release on this browser channel: the
+installer rejects releases without a stable `flow-vX.Y.Z` tag and both assets.
+
+Pushing a matching tag or dispatching this workflow publishes a real release.
+Neither path is a dry run.
+No release is published merely by merging the workflow. Remote servers using
+upstream T3 service management still use their existing update mechanism; this
+installer manages its own local primary and does not replace that protocol.
+
+## Flow desktop release readiness
+
+The workflow below is inherited from upstream T3. It is not yet a standalone
+Flow release pipeline. Before using it to distribute Flow from `main-v2`:
+
+- Adapt branch selection and version finalization to `main-v2`. Scheduled runs
+  use the repository's default branch; the inherited finalizer writes to `main`.
+- Separate Flow publication from upstream `t3` npm publishing and T3's relay,
+  Clerk, Vercel, and marketing deployment requirements. Remote server updates
+  currently depend on an exact matching `t3` package, so desktop-only publication
+  also needs an explicit decision about remote server update support.
+- Build with `T3CODE_DESKTOP_UPDATE_REPOSITORY=samyakkkk/flow` and publish the
+  installers, macOS ZIP payload, channel YAML, and blockmaps to that repository.
+  Configure Flow's application identity and signing before distributing desktop
+  builds; the packager still uses the upstream `com.t3tools.t3code` app ID.
+- Verify an installed Flow release can discover, download, and install a newer
+  Flow release while retaining its data before promising update delivery.
+
+The browser release manager and source-checkout launcher do not use Electron's
+updater. See [Updating Flow](../user/updating.md) for their separate update paths.
+
+## Upstream release workflow
+
+The following describes the inherited unified stable/nightly release workflow.
 
 ## What the workflow does
 

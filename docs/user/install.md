@@ -1,64 +1,70 @@
-# Install T3 Code
+# Install Flow
 
-T3 Code runs coding agents on your computer and lets you control them from its
-desktop, web, or mobile app. Set up the machine where the agents will work first.
+Flow runs coding agents and a local Brain on your computer. The bash installer
+sets up the local browser app from stable GitHub Releases.
 
 ## Requirements
 
-Command-line use, SSH hosts, and WSL backends need Node.js 22.16+ (22.x), 23.11+
-(23.x), or 24.10 and later. The native desktop app includes its server runtime.
+- Node.js 24.13.1 or later in the 24.x line, with npm on PATH.
+- curl and tar for downloading and extracting the release.
+- Apple Silicon macOS 15+ or Linux x64 for the native local Brain.
+- An installed, authenticated provider to start a thread; configure it after launch if needed.
 
-You need an installed, authenticated provider before starting a thread. You can
-launch T3 Code and configure providers afterwards.
-
-## Run without installing
-
-```bash
-npx t3@latest
-```
-
-This starts the server and opens the local web app. Run
-`npx t3@latest --help` for command-line options.
-
-## Desktop app
-
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
-or use a package manager:
-
-| Platform           | Install                         |
-| ------------------ | ------------------------------- |
-| Windows            | `winget install T3Tools.T3Code` |
-| macOS              | `brew install --cask t3-code`   |
-| Arch Linux         | `yay -S t3code-bin`             |
-| Arch Linux nightly | `yay -S t3code-nightly-bin`     |
-
-### Windows Subsystem for Linux
-
-Choose a WSL distro in **Settings → Connections** to run agents and projects
-there. Install Node.js and provider CLIs inside that distro. T3 Code installs its
-matching server runtime there automatically; the first launch after an app
-update can take longer.
-
-### Open a project from a terminal
-
-With the desktop app already running on the same machine:
+## Install with bash
 
 ```bash
-npx t3 app
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/main-v2/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+flow
 ```
 
-This opens a new thread for the current directory, adding the project if needed.
-Pass a path, such as `npx t3 app ../my-project`, to open another directory. It requires
-the desktop app, so a standalone server or an SSH session is not enough. If the
-command cannot reach the app, start or update the desktop app and try again.
+This command needs a published stable Flow browser release and the installer on
+`main-v2`. Until the first release is published, use the checkout instructions below.
 
-## Mobile app
+The installer verifies the release archive's SHA-256 checksum, installs the
+release's locked dependencies, and builds the web app. Node.js must already be
+installed; native dependencies may require your platform's build tools if a
+prebuilt binary is unavailable. Installation can take a few minutes.
 
-Install T3 Code from the
-[App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code).
-The phone connects to a server on another machine. Follow
-[remote access](./remote-access.md) to link it through T3 Connect or a pairing URL.
+The launcher is installed in `~/.local/bin`. Add that directory to your shell's
+PATH for future terminals. To choose another prefix, append `-s -- --prefix
+/your/prefix` to the `bash` command above. The installer refuses to overwrite an
+unrelated command; `command -v flow` shows which command your shell finds.
+
+Release files live in `~/.local/share/flow-browser/releases`. Application data
+lives separately under `~/.local/share/flow-browser/instance-home`. Existing
+source-checkout, legacy Flow, and T3 application data are not migrated. Set
+`FLOW_RELEASE_HOME` during installation to choose another installation directory;
+the installed launcher remembers it. `FLOW_INSTANCE_HOME` overrides the instance
+registry when launching, but do not point it at a running source installation.
+
+`flow` starts the local server in the background and opens a pairing link in
+your browser. Closing the browser or terminal leaves the server running.
+Create projects in the app and choose their Brain. See
+[updating Flow](./updating.md) for automatic release preparation and
+[local instances](./local-instances.md) for stop, restart, and development commands.
+
+## Install from a checkout
+
+For development or before the first GitHub release, use Git and run:
+
+```bash
+git clone --branch main-v2 --single-branch https://github.com/samyakkkk/flow.git
+cd flow
+bash scripts/install-flow.sh
+export PATH="$HOME/.local/bin:$PATH"
+flow
+```
+
+Keep this checkout in place: its installed launcher uses it directly. This
+installation uses the existing `~/.local/share/flow-app` instance registry and
+requires manual source updates. It does not participate in release auto-updates.
+Use a different `--prefix` if you want to retain both launchers.
+
+## Desktop
+
+These scripts install the local browser app. T3 Code's npm package and desktop
+package-manager installs are upstream T3 releases and do not install Flow.
 
 ## Providers
 
@@ -74,15 +80,15 @@ computer.
 | Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                        |
 | Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                           |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                     |
-| Antigravity | Install and sign in with Google from T3 Code's provider settings.                            |
+| Antigravity | Install and sign in with Google from Flow's provider settings.                               |
 
-Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
+Provider CLIs must be on the server's `PATH`. If Flow cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
 Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Antigravity can use its managed runtime without a `PATH` entry.
 
 When a provider CLI is behind its latest release, its provider card shows the
-available version. **Update now** appears only when T3 Code can tell which
+available version. **Update now** appears only when Flow can tell which
 installer owns the CLI (its own update command, Homebrew, or a global npm, pnpm,
 bun, or Vite+ install) and runs that installer. Otherwise update the CLI the same
 way you installed it. Homebrew installs compare against the version Homebrew
@@ -90,7 +96,7 @@ offers, which can trail the npm release by a few hours.
 
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
-base URL. Mark secret values as sensitive; after saving, T3 Code does not display
+base URL. Mark secret values as sensitive; after saving, Flow does not display
 their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
@@ -102,5 +108,5 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 - [Working with threads](./thread-sidebar.md): start tasks and organize parallel work.
 - [Permission modes](./permission-modes.md): choose when agents ask before acting.
 - [Remote access](./remote-access.md): connect from another device.
-- [Running in the background](./background-service.md): keep a Linux or macOS host available.
-- [Updating T3 Code](./updating.md): update the app and connected servers.
+- [Local instances](./local-instances.md): manage the background server.
+- [Updating Flow](./updating.md): update your installation.
