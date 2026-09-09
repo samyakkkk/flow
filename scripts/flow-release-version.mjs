@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
 
 const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const compare = (a, b) => {
@@ -42,9 +42,9 @@ export function validateEvent(event, ref) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === NodeURL.pathToFileURL(process.argv[1]).href) {
   validateEvent(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_REF);
-  const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+  const git = (...args) => NodeChildProcess.execFileSync("git", args, { encoding: "utf8" }).trim();
   const commit = git("rev-parse", "HEAD");
   if (commit !== process.env.GITHUB_SHA)
     throw new Error("Checkout must match the triggering commit.");
@@ -58,7 +58,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (selected.latest) git("merge-base", "--is-ancestor", `flow-v${selected.latest}`, commit);
     version = selected.version;
   }
-  appendFileSync(
+  NodeFS.appendFileSync(
     process.env.GITHUB_OUTPUT,
     `tag=flow-v${version}\nversion=${version}\ncommit=${commit}\n`,
   );
