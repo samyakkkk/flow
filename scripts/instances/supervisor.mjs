@@ -214,6 +214,8 @@ export async function supervise(directory) {
         [
           "--experimental-strip-types",
           join(config.code, "apps/server/src/bin.ts"),
+          // Release directories are application code, never user projects.
+          ...(releaseHome ? ["serve"] : []),
           "--base-dir",
           config.home,
           "--port",
