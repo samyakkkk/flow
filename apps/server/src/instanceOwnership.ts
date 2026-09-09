@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { PersistedServerRuntimeState, isProcessAlive } from "./serverRuntimeState.ts";
 
-export class InstanceOwnershipError extends Schema.TaggedErrorClass<InstanceOwnershipError>()(
+export class InstanceOwnershipError extends Schema.TaggedError<InstanceOwnershipError>()(
   "InstanceOwnershipError",
   { message: Schema.String },
 ) {}

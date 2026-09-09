@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-export class FlowBrowserUpdateError extends Schema.TaggedErrorClass<FlowBrowserUpdateError>()(
+export class FlowBrowserUpdateError extends Schema.TaggedError<FlowBrowserUpdateError>()(
   "FlowBrowserUpdateError",
   { cause: Schema.Defect() },
 ) {}

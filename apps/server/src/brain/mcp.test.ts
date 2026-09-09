@@ -20,6 +20,8 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 const encodeToolResult = Schema.encodeEffect(McpSchema.CallToolResult);
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "brain-test", version: "1" },
   protocolVersion: "2025-06-18",
   initializePayload: {
     protocolVersion: "2025-06-18",
