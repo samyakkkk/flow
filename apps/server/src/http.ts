@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  FLOW_BROWSER_UPDATE_PATH,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -47,6 +48,7 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import { requestFlowBrowserUpdate } from "./flowBrowserUpdate.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -289,6 +291,35 @@ const authenticateRawRouteWithScope = (
       return yield* failEnvironmentScopeRequired(scope);
     }
   });
+
+export const flowBrowserUpdateRoute = Effect.fn("flowBrowserUpdateRoute")(
+  function* (apply: boolean) {
+    yield* authenticateRawRouteWithScope(
+      apply ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
+    );
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    if (apply && !request.headers["content-type"]?.startsWith("application/json"))
+      return HttpServerResponse.text("Expected application/json.", { status: 415 });
+    const state = yield* requestFlowBrowserUpdate(apply);
+    return HttpServerResponse.jsonUnsafe(state, { headers: { "cache-control": "no-store" } });
+  },
+  Effect.catchTags({
+    EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+    EnvironmentInternalError: HttpServerRespondable.toResponse,
+    EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    FlowBrowserUpdateError: () =>
+      Effect.succeed(
+        HttpServerResponse.text("Flow's update manager is unavailable. Please retry.", {
+          status: 503,
+        }),
+      ),
+  }),
+);
+
+export const flowBrowserUpdateRouteLayer = Layer.mergeAll(
+  HttpRouter.add("GET", FLOW_BROWSER_UPDATE_PATH, flowBrowserUpdateRoute(false)),
+  HttpRouter.add("POST", FLOW_BROWSER_UPDATE_PATH, flowBrowserUpdateRoute(true)),
+);
 
 export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
