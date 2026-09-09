@@ -63,7 +63,9 @@ export function memoryStats(): MemoryStats {
   return { memories: mem.n, observations: obs.n, bySource };
 }
 
-export function registerMemoryRoutes(app: FastifyInstance): void {
+export function registerMemoryRoutes(app: FastifyInstance, options: {
+  remember?: (context: {text:string;repo:string|null;branch:string|null;sessionId:string|null}) => void;
+} = {}): void {
   app.post<{ Body: { query?: string; queries?: string[]; repo?: string | null; limit?: number } }>(
     "/v1/memory/search",
     async (req, reply) => {
@@ -169,6 +171,10 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
         branch: b.branch ? String(b.branch) : null,
         sessionId: b.session ? String(b.session) : null,
       };
+      if (options.remember) {
+        options.remember(ctx);
+        return reply.code(202).send({ status: "queued" });
+      }
       const pending = Promise.resolve().then(() => rememberText(ctx))
         .then((out) => console.log(`[memory] remember distilled: ${out.observations} observation(s)${out.reason ? ` (${out.reason})` : ""}`))
         .catch((err) => console.warn(`[memory] remember failed: ${err instanceof Error ? err.message : String(err)}`));

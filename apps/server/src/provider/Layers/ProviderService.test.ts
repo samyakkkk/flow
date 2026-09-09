@@ -4647,6 +4647,21 @@ for (const driverName of [
           yield* provider.sendTurn({ threadId, input: "hello" });
           assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "Briefing brain-a\n\nhello");
           assert.deepEqual(captures.at(-1), { text: "hello" });
+          yield* provider.sendTurn({
+            threadId,
+            attachments: [
+              {
+                type: "image",
+                id: "diagnostic-image",
+                name: "failure.png",
+                mimeType: "image/png",
+                sizeBytes: 32,
+              },
+            ],
+          });
+          assert.deepEqual(captures.at(-1), {
+            text: '[User attached image "failure.png" (image/png; attachment diagnostic-image). Its contents are not included in this text transcript.]',
+          });
           yield* provider.sendTurn({ threadId, input: "again" });
           assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, "again");
           binding = "brain-b";

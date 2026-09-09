@@ -12,11 +12,13 @@ let _readTranscript: TranscriptReader = () => [];
 export function setTranscriptReader(fn: TranscriptReader): void { _readTranscript = fn; }
 
 function checkpointFor(id: string, branch: string | null) {
+  const meta = db.prepare("SELECT repo, backend, last_distilled_seq FROM agent_sessions WHERE id = ?")
+    .get(id) as { repo: string | null; backend: string; last_distilled_seq: number | null } | undefined;
+  // Hosted T3 chats have one owner, including any legacy jobs left by an older
+  // worker. Never recover those jobs through the standalone model transport.
+  if (!meta || meta.backend === "ext:t3") return;
   const pending = pendingCheckpoint(id);
   if (pending) return pending;
-  const meta = db.prepare("SELECT repo, last_distilled_seq FROM agent_sessions WHERE id = ?")
-    .get(id) as { repo: string | null; last_distilled_seq: number | null } | undefined;
-  if (!meta) return;
   const events = _readTranscript(id);
   const created = events.find((e) => e.kind === "created")?.data as { branch?: string } | undefined;
   return createCheckpoint(id, meta.last_distilled_seq ?? 0, {

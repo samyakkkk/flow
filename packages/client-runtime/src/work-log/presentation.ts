@@ -273,6 +273,9 @@ function unwrapMcpResult(value: unknown): unknown {
       continue;
     }
     if (Array.isArray(current)) {
+      // A document catalog can also contain `text` fields; only unwrap actual
+      // MCP text blocks, not arbitrary arrays of saved documents.
+      if (!current.every((entry) => asRecord(entry)?.type === "text")) return current;
       const text = current
         .map((entry) => nonEmptyString(asRecord(entry)?.text))
         .filter((entry): entry is string => entry !== null);
@@ -571,6 +574,22 @@ function getEntityResultItem(value: unknown): FlowBrainDisplayItem {
       tone: "danger",
     };
   }
+  const document = asRecord(result.document);
+  if (document) {
+    const kind = nonEmptyString(document.kind) ?? "memory";
+    const text = nonEmptyString(document.text);
+    return {
+      ...entityItem(document),
+      eyebrow: kind === "skill" ? "SKILL.md" : titleCase(kind),
+      ...(text
+        ? {
+            description:
+              kind === "skill" ? text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "") : text,
+          }
+        : {}),
+      tags: typeof document.revision === "number" ? [`Revision ${document.revision}`] : [],
+    };
+  }
   const card = asRecord(result.card);
   if (card) {
     const kind = nonEmptyString(card.kind) ?? nonEmptyString(result.card_type) ?? "context";
@@ -695,6 +714,44 @@ function responseDisplay(
   }
   const response = asRecord(responseValue);
   const requestRecord = asRecord(request);
+  if (tool === "list_skills" && Array.isArray(responseValue)) {
+    const skills = records(responseValue);
+    return {
+      responseSummary: compactCount(skills.length, "skill"),
+      responseSections: [
+        {
+          title: "Reusable skills",
+          items: skills.map((skill) => ({
+            ...entityItem(skill),
+            eyebrow: "SKILL.md",
+            tags: typeof skill.revision === "number" ? [`Revision ${skill.revision}`] : [],
+          })),
+        },
+      ],
+    };
+  }
+  if (
+    (tool === "read_skill" || tool === "read_document" || tool === "get_entity") &&
+    response &&
+    typeof response.text === "string" &&
+    typeof response.kind === "string"
+  ) {
+    const skill = response.kind === "skill";
+    return {
+      responseSummary: `${nonEmptyString(response.name) ?? (skill ? "Skill" : "Memory")} · revision ${String(response.revision ?? "?")}`,
+      responseSections: [
+        {
+          title: skill ? "SKILL.md" : response.kind === "notes" ? "Conversation notes" : "Memory",
+          ...(nonEmptyString(response.description)
+            ? { subtitle: String(response.description) }
+            : {}),
+          text: skill
+            ? response.text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+            : response.text,
+        },
+      ],
+    };
+  }
   if (tool === "find_entity" && response) return findEntityDisplay(response, requestRecord);
   if (tool === "get_entity" && response) return getEntityDisplay(response);
   if (tool === "search_knowledge" && response) {
@@ -806,7 +863,12 @@ export function resolveFlowBrainConsultationDisplay(
 ): FlowBrainConsultationDisplay | null {
   const details = resolveFlowBrainToolCallDetails(entry);
   if (!details) return null;
-  const requestFields = displayFields(details.request);
+  const documentTool = details.tool === "read_skill" || details.tool === "read_document";
+  const requestFields = displayFields(details.request).map((field) =>
+    documentTool && field.label === "Entity"
+      ? { ...field, label: details.tool === "read_skill" ? "Skill" : "Document" }
+      : field,
+  );
   const response = responseDisplay(
     details.tool,
     details.request,

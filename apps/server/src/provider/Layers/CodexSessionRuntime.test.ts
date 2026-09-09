@@ -456,7 +456,7 @@ describe("buildCodexDeveloperInstructions", () => {
     });
 
     NodeAssert.match(instructions, /^<collaboration_mode># Collaboration Mode: Default/);
-    NodeAssert.match(instructions, /T3 Code/);
+    NodeAssert.match(instructions, /Flow/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
   });
@@ -781,6 +781,44 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("starts an internal worker without persisting native history", () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = [];
+      const opened = yield* openCodexThread({
+        client: {
+          request: (method, payload) => {
+            calls.push({ method, payload });
+            return Effect.succeed(makeThreadOpenResponse("passive-thread"));
+          },
+          raw: { request: () => Effect.die("An ephemeral worker must start fresh") },
+        },
+        threadId: ThreadId.make("worker-1"),
+        runtimeMode: "approval-required",
+        cwd: "/tmp/passive-worker",
+        requestedModel: "gpt-5.6-sol",
+        serviceTier: undefined,
+        resumeThreadId: "interactive-thread-must-not-be-resumed",
+        ephemeral: true,
+        baseInstructions: "Maintain conversation notes using the curator tools.",
+      });
+      NodeAssert.equal(opened.thread.id, "passive-thread");
+      NodeAssert.deepStrictEqual(calls, [
+        {
+          method: "thread/start",
+          payload: {
+            cwd: "/tmp/passive-worker",
+            approvalPolicy: "untrusted",
+            sandbox: "read-only",
+            approvalsReviewer: "user",
+            model: "gpt-5.6-sol",
+            ephemeral: true,
+            baseInstructions: "Maintain conversation notes using the curator tools.",
+          },
+        },
+      ]);
+    }),
+  );
+
   it.effect("resumes metadata when historical turns contain unknown error values", () =>
     Effect.gen(function* () {
       const response = makeThreadOpenResponse("saved-thread");

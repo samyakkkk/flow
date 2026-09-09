@@ -4,7 +4,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/unstable/ai";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { BrainService } from "./BrainService.ts";
@@ -52,7 +52,7 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
                 catch: (error) =>
                   error instanceof Error ? error.message : "Chat memories are unavailable.",
               });
-              return {
+              return new McpSchema.CallToolResult({
                 content: [
                   {
                     type: "text" as const,
@@ -61,7 +61,7 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
                     ),
                   },
                 ],
-              };
+              });
             }
             return yield* Effect.tryPromise({
               try: () =>
@@ -75,7 +75,12 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
             });
           }).pipe(
             Effect.catch((error) =>
-              Effect.succeed({ isError: true, content: [{ type: "text" as const, text: error }] }),
+              Effect.succeed(
+                new McpSchema.CallToolResult({
+                  isError: true,
+                  content: [{ type: "text", text: error }],
+                }),
+              ),
             ),
           ),
       });

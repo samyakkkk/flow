@@ -84,6 +84,9 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  /** Internal workers can reuse a thread without adding it to Codex history. */
+  readonly ephemeral?: boolean;
+  readonly baseInstructions?: string;
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
@@ -2252,6 +2255,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
+          ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
+          ...(options?.baseInstructions !== undefined
+            ? { baseInstructions: options.baseInstructions }
+            : {}),
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,

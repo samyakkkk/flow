@@ -1,6 +1,6 @@
 import { GRAPH_PREAMBLE } from "../../../../flow-t3/shared/orchestrator/src/agents/graph-preamble.ts";
 import { isToolLifecycleItemType } from "@t3tools/contracts";
-import type { ThreadId, ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { ThreadId, ProviderRuntimeEvent, ProviderSendTurnInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -133,6 +133,7 @@ export function captureRuntimeEvent(event: ProviderRuntimeEvent): BrainCaptureIn
   if (event.type === "content.delta" && event.payload.streamKind === "assistant_text")
     return {
       receipt: event.eventId,
+      occurredAt: Date.parse(event.createdAt),
       kind: "update",
       data: {
         sessionUpdate: "agent_message_chunk",
@@ -145,6 +146,7 @@ export function captureRuntimeEvent(event: ProviderRuntimeEvent): BrainCaptureIn
   )
     return {
       receipt: event.eventId,
+      occurredAt: Date.parse(event.createdAt),
       kind: "update",
       data: {
         sessionUpdate: event.type === "item.started" ? "tool_call" : "tool_call_update",
@@ -154,12 +156,42 @@ export function captureRuntimeEvent(event: ProviderRuntimeEvent): BrainCaptureIn
         rawInput: event.payload.data,
       },
     };
-  if (event.type === "turn.completed" || event.type === "session.exited")
+  if (event.type === "runtime.error")
     return {
       receipt: event.eventId,
+      occurredAt: Date.parse(event.createdAt),
+      kind: "error",
+      data: event.payload,
+    };
+  if (
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted" ||
+    event.type === "session.exited"
+  )
+    return {
+      receipt: event.eventId,
+      occurredAt: Date.parse(event.createdAt),
       kind: "update",
-      data: { sessionUpdate: "turn_completed", ...event.payload },
+      data: {
+        sessionUpdate: "turn_completed",
+        ...event.payload,
+        ...(event.type === "turn.aborted" ? { state: "interrupted" } : {}),
+        ...(event.type === "session.exited" ? { state: "session exited" } : {}),
+      },
       closed: true,
     };
   return undefined;
+}
+
+/** Preserve attachment-only requests without copying their binary contents into Brain capture. */
+export function formatBrainUserPrompt(
+  input: Pick<ProviderSendTurnInput, "input" | "attachments">,
+): string | undefined {
+  const attachments = input.attachments ?? [];
+  const references = attachments.map(
+    (attachment) =>
+      `[User attached ${attachment.type} ${JSON.stringify(attachment.name)} (${attachment.mimeType}; attachment ${attachment.id}). Its contents are not included in this text transcript.]`,
+  );
+  const text = [input.input, ...references].filter(Boolean).join("\n\n");
+  return text || undefined;
 }

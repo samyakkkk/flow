@@ -290,3 +290,13 @@ export function memoryVectors(): CachedVec[] {
 export function activeMemoryRows(): MemoryRow[] {
   return db.prepare(`SELECT * FROM memories WHERE status = 'active'`).all() as MemoryRow[];
 }
+
+/** Refresh an edited legacy claim without letting an older embedding overwrite a later edit. */
+export async function refreshMemoryEmbedding(id: string, claim: string): Promise<void> {
+  invalidateVectorCache();
+  let vector: Float32Array | null = null;
+  try { vector = await _embedder(claim); } catch { /* Lexical document search remains available. */ }
+  db.prepare("UPDATE memories SET embedding = ? WHERE id = ? AND claim = ?")
+    .run(vector ? vecToBlob(vector) : null, id, claim);
+  invalidateVectorCache();
+}
