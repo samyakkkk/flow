@@ -20,6 +20,7 @@ the exact commit, publishing, and verifying installation and update delivery.
 
    Use a normal fast-forward push; merge `origin/release` into your candidate
    first if needed. Never force-push around a divergent release branch.
+
 2. Each push runs **Flow browser release** against the exact triggering SHA.
    It selects the next patch above all stable `flow-vX.Y.Z` tags (for example,
    `0.1.2` → `0.1.3`). No manual tagging or package version edit is needed.
@@ -332,6 +333,11 @@ and extracts that archive into `~/.t3/wsl-runtime/sha256-<archive-digest>` insid
 the selected distro, then reuses it for later launches of the same update. The
 Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
 removed after the distro-local runtime passes preflight.
+
+Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
+native libraries and helper executables. Avoid enabling whole-package smart
+unpacking: each loose file adds work to NSIS installation and counts against
+the payload limit.
 
 The artifact builder rejects a Windows package when any of these invariants
 break:

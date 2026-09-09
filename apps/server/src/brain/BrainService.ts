@@ -10,7 +10,7 @@ import { SharedBrainRuntime, serveSharedBrain, type BrainClient } from "./shared
 import { BrainRuntime } from "./BrainRuntime.ts";
 import { makeBrainCurator } from "./curator.ts";
 
-class BrainServiceError extends Schema.TaggedErrorClass<BrainServiceError>()("BrainServiceError", {
+class BrainServiceError extends Schema.TaggedError<BrainServiceError>()("BrainServiceError", {
   message: Schema.String,
 }) {}
 export class BrainService extends Context.Service<

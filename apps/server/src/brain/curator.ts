@@ -32,7 +32,7 @@ import { CuratorSessions } from "./curator-sessions.ts";
 import type { CodexAdapterShape } from "../provider/Services/CodexAdapter.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(CodexSettings);
-class CuratorError extends Schema.TaggedErrorClass<CuratorError>()("CuratorError", {
+class CuratorError extends Schema.TaggedError<CuratorError>()("CuratorError", {
   message: Schema.String,
 }) {}
 const record = (value: unknown): Record<string, unknown> =>
