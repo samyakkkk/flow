@@ -2,6 +2,8 @@ import { GRAPH_PREAMBLE } from "../../../../flow-t3/shared/orchestrator/src/agen
 import { expect, it } from "@effect/vitest";
 import {
   ProjectId,
+  EventId,
+  ProviderDriverKind,
   ThreadId,
   type OrchestrationThreadShell,
   type OrchestrationProjectShell,
@@ -11,7 +13,61 @@ import * as Option from "effect/Option";
 import { BrainService } from "./BrainService.ts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { makeBrainChatContextLoader, makeBrainChatCapture } from "./chat-context.ts";
+import {
+  makeBrainChatContextLoader,
+  makeBrainChatCapture,
+  captureRuntimeEvent,
+} from "./chat-context.ts";
+
+it("retains the provider event's original timestamp for delayed Brain capture", () => {
+  const createdAt = "2026-01-02T03:04:05.000Z";
+  const captured = captureRuntimeEvent({
+    eventId: EventId.make("historical-delta"),
+    provider: ProviderDriverKind.make("codex"),
+    threadId: ThreadId.make("chat"),
+    createdAt,
+    type: "content.delta",
+    payload: { streamKind: "assistant_text", delta: "The focused check passed." },
+  });
+  expect(captured?.occurredAt).toBe(Date.parse(createdAt));
+  expect(captured?.data).toMatchObject({ content: { text: "The focused check passed." } });
+});
+
+it("retains provider failures and interruption reasons for passive recovery", () => {
+  const base = {
+    eventId: EventId.make("provider-failure"),
+    provider: ProviderDriverKind.make("codex"),
+    threadId: ThreadId.make("chat"),
+    createdAt: "2026-01-02T03:04:05.000Z",
+  };
+  const failure = captureRuntimeEvent({
+    ...base,
+    type: "runtime.error",
+    payload: { message: "Subscription limit reached.", class: "provider_error" },
+  });
+  expect(failure?.kind).toBe("error");
+  expect(failure?.data).toMatchObject({ message: "Subscription limit reached." });
+  const aborted = captureRuntimeEvent({
+    ...base,
+    type: "turn.aborted",
+    payload: { reason: "User stopped the interrupted verification." },
+  });
+  expect(aborted?.closed).toBe(true);
+  expect(aborted?.data).toMatchObject({
+    state: "interrupted",
+    reason: "User stopped the interrupted verification.",
+  });
+  const exited = captureRuntimeEvent({
+    ...base,
+    type: "session.exited",
+    payload: { reason: "Provider process disconnected.", recoverable: true },
+  });
+  expect(exited?.closed).toBe(true);
+  expect(exited?.data).toMatchObject({
+    state: "session exited",
+    reason: "Provider process disconnected.",
+  });
+});
 
 it.effect(
   "uses real orient output, preserves it uncapped, and respects changing/disconnected bindings",

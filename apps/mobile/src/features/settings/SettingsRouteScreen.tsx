@@ -140,6 +140,9 @@ function LocalSettingsRouteScreen() {
           />
         </SettingsSection>
 
+        <SettingsSection title="Knowledge">
+          <SettingsRow icon="brain" label="Brain" target="SettingsBrain" />
+        </SettingsSection>
         <GeneralSettingsSection />
 
         <SettingsSection title="Appearance">
@@ -526,6 +529,9 @@ function ConfiguredSettingsRouteScreen() {
           />
         </SettingsSection>
 
+        <SettingsSection title="Knowledge">
+          <SettingsRow icon="brain" label="Brain" target="SettingsBrain" />
+        </SettingsSection>
         <GeneralSettingsSection />
 
         <SettingsSection title="Appearance">

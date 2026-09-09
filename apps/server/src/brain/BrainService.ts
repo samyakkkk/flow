@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { ServerConfig } from "../config.ts";
 import { SharedBrainRuntime, serveSharedBrain, type BrainClient } from "./shared-runtime.ts";
 import { BrainRuntime } from "./BrainRuntime.ts";
+import { makeBrainCurator } from "./curator.ts";
 
 class BrainServiceError extends Schema.TaggedErrorClass<BrainServiceError>()("BrainServiceError", {
   message: Schema.String,
@@ -54,9 +55,11 @@ export class BrainService extends Context.Service<
         yield* registerProjects(shared);
         return BrainService.of({ ready: Effect.succeed(shared) });
       }
+      const runCurator = yield* makeBrainCurator;
       const runtime = new BrainRuntime(path.join(config.stateDir, "brain"), {
         platform,
         architecture,
+        runCurator,
       });
       yield* Effect.addFinalizer(() => Effect.promise(() => runtime.close()));
       yield* Effect.tryPromise({
