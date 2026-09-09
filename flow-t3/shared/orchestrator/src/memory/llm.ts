@@ -34,5 +34,8 @@ export function setLlmTransport(fn: LlmTransport): void {
   _transport = fn;
 }
 export function callLlm(prompt: string, opts: LlmCallOpts): Promise<string> {
+  // Explicit remember can retain its verbatim fallback while extraction is
+  // disabled, but its consolidation judge must not silently invoke a model.
+  if (!distillerEnabled()) return Promise.reject(new Error("Memory model calls are disabled."));
   return _transport(prompt, opts);
 }

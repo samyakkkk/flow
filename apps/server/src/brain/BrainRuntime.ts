@@ -1,5 +1,5 @@
 import { ProjectBrainBindings } from "./project-bindings.ts";
-import { brainResourceEnvironment } from "@flow/brain-runtime";
+import { brainResourceEnvironment, type BrainCuratorRunner } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
 import {
   startSessionWorker,
@@ -92,17 +92,20 @@ export class BrainRuntime {
   readonly projectBindings: ProjectBrainBindings;
   readonly directory: string;
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
+  private readonly runCurator: BrainCuratorRunner | undefined;
   constructor(
     directory: string,
     options: {
       databasePath?: string;
       platform: NodeJS.Platform;
       architecture: NodeJS.Architecture;
+      runCurator?: BrainCuratorRunner;
     },
   ) {
     this.directory = directory;
     this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
+    this.runCurator = options.runCurator;
     // FalkorDBLite requires a <104-byte Unix socket path on macOS. Worktree
     // paths routinely exceed that. Stable hashed storage also isolates dev homes.
     this.databasePath =
@@ -289,6 +292,9 @@ export class BrainRuntime {
       throw new Error(this.database.message || "The app's brain runtime is unavailable.");
   }
   private async readKnowledge(workspace: Workspace): Promise<BrainKnowledge> {
+    const curated = this.db?.isRunning
+      ? await (await this.sessionWorker(workspace)).knowledge()
+      : { documents: [], memories: [] };
     if (this.db?.isRunning && workspace.sources.some((source) => source.pipeline === "flow")) {
       const graph = this.flowGraph(workspace);
       // Read the canonical graph, including writes from an in-flight builder.
@@ -329,7 +335,7 @@ export class BrainRuntime {
             : node;
         }),
         edges: relations.data ?? [],
-        memories: [],
+        ...curated,
       };
     }
     if (!this.db?.isRunning) return emptyKnowledge();
@@ -337,7 +343,8 @@ export class BrainRuntime {
     const combined = {
       entities: [] as BrainKnowledge["entities"][number][],
       edges: [] as BrainKnowledge["edges"][number][],
-      memories: [] as BrainKnowledge["memories"][number][],
+      memories: [...curated.memories] as BrainKnowledge["memories"][number][],
+      documents: curated.documents,
     };
     for (const source of workspace.sources) {
       if (!source.revision) continue;
@@ -421,6 +428,8 @@ export class BrainRuntime {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "read") return null;
     if (command.action === "readChat") throw new Error("Chat must be resolved by the server.");
+    if (command.action === "readDocument")
+      throw new Error("Document reads must be resolved by the server.");
     if (command.action === "listGithubRepositories" || command.action === "listGithubBranches")
       return null;
     if (command.action === "bindProject")
@@ -695,34 +704,44 @@ export class BrainRuntime {
         const directory = NodePath.join(this.directory, "workspaces", workspace.id);
         await NodeFSP.mkdir(directory, { recursive: true });
         await this.writeSessionSources(workspace);
-        return startSessionWorker({
-          ...brainResourceEnvironment({
-            graphName: `flow_brain_${workspace.id.replaceAll("-", "")}`,
-            databaseSocket: this.db.socketPath,
-            embeddingUrl: bridge.url,
-            embeddingToken: bridge.token,
-          }),
-          // Explicit LLM configuration is safe to share; resource ownership
-          // variables remain scoped to this brain worker.
-          ...Object.fromEntries(
-            [
-              "LLM_TRANSPORT",
-              "LLM_MODEL_FAST",
-              "LLM_BASE_URL",
-              "LLM_API_KEY",
-              "OPENROUTER_API_KEY",
-              "DISTILLER_MODEL",
-              "FLOW_DISTILLER",
-            ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]!]])),
-          ),
-          FLOW_PROJECT_NAME: workspace.name,
-          DB_PATH: NodePath.join(directory, "flow.db"),
-          JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
-          OPENCODE_WORKSPACE_DIR: directory,
-          FLOW_SOURCE_REGISTRY: NodePath.join(directory, "repos.json"),
-          FLOW_ADMIN_TOKEN: NodeCrypto.randomBytes(32).toString("hex"),
-          INDEXER_RUNTIME: workspace.cli,
-        });
+        return startSessionWorker(
+          {
+            ...brainResourceEnvironment({
+              graphName: `flow_brain_${workspace.id.replaceAll("-", "")}`,
+              databaseSocket: this.db.socketPath,
+              embeddingUrl: bridge.url,
+              embeddingToken: bridge.token,
+            }),
+            // Explicit LLM configuration is safe to share; resource ownership
+            // variables remain scoped to this brain worker.
+            ...Object.fromEntries(
+              [
+                "LLM_TRANSPORT",
+                "LLM_MODEL_FAST",
+                "LLM_BASE_URL",
+                "LLM_API_KEY",
+                "OPENROUTER_API_KEY",
+                "DISTILLER_MODEL",
+                "FLOW_DISTILLER",
+              ].flatMap((key) =>
+                process.env[key] === undefined ? [] : [[key, process.env[key]!]],
+              ),
+            ),
+            FLOW_PROJECT_NAME: workspace.name,
+            DB_PATH: NodePath.join(directory, "flow.db"),
+            JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
+            OPENCODE_WORKSPACE_DIR: directory,
+            FLOW_SOURCE_REGISTRY: NodePath.join(directory, "repos.json"),
+            FLOW_ADMIN_TOKEN: NodeCrypto.randomBytes(32).toString("hex"),
+            INDEXER_RUNTIME: workspace.cli,
+          },
+          false,
+          undefined,
+          this.runCurator
+            ? (request) =>
+                this.runCurator!({ ...request, sessionId: `${workspace.id}:${request.sessionId}` })
+            : undefined,
+        );
       })();
       this.sessionWorkers.set(workspace.id, pending);
       pending.catch(() => {
@@ -762,6 +781,11 @@ export class BrainRuntime {
     if (!workspace) throw new Error("Brain is not available");
     const worker = await this.sessionWorker(workspace);
     return worker.memories(session, revision);
+  }
+  async brainDocument(workspaceId: string, documentId: string) {
+    const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace) throw new Error("Brain is not available");
+    return (await this.sessionWorker(workspace)).document(documentId);
   }
   async callProjectTool(
     projectId: ProjectId,
@@ -819,11 +843,12 @@ export class BrainRuntime {
     return this.captureBrainEvent(workspace.id, input);
   }
   async captureBrainEvent(workspaceId: string, input: BrainCapture) {
+    const occurredAt = input.occurredAt ?? Date.now();
     const workspace = this.workspace(workspaceId);
     const repo = input.context.workspaceRoot
       ? await this.sessionRepository(input.context.workspaceRoot)
       : input.context.repo;
-    input = { ...input, context: { ...input.context, ...(repo ? { repo } : {}) } };
+    input = { ...input, occurredAt, context: { ...input.context, ...(repo ? { repo } : {}) } };
     const directory = NodePath.join(this.directory, "capture", workspace.id);
     await NodeFSP.mkdir(directory, { recursive: true });
     this.captureSequence = Math.max(Date.now() * 1000, this.captureSequence + 1);

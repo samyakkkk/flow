@@ -27,9 +27,13 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
       Effect.fn("environment.brain.request")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         yield* requireEnvironmentScope(
-          ["read", "readChat", "listGithubRepositories", "listGithubBranches"].includes(
-            args.payload.command.action,
-          )
+          [
+            "read",
+            "readChat",
+            "readDocument",
+            "listGithubRepositories",
+            "listGithubBranches",
+          ].includes(args.payload.command.action)
             ? AuthOrchestrationReadScope
             : AuthOrchestrationOperateScope,
         );
@@ -37,6 +41,14 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
           Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
         );
         const command = args.payload.command;
+        if (command.action === "readDocument") {
+          return yield* Effect.tryPromise(async () => ({
+            state: await runtime.state(undefined, true),
+            document: await runtime.brainDocument(command.workspaceId, command.documentId),
+            error: null,
+            createdWorkspaceId: null,
+          })).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
         if (command.action === "read" && command.projectId) {
           const selectedProject = yield* projections
             .getProjectShellById(command.projectId)

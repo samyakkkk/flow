@@ -1,8 +1,18 @@
 // @effect-diagnostics globalTimers:off - Node child lifecycle timers must work outside an Effect runtime.
 // @effect-diagnostics nodeBuiltinImport:off - Owns the isolated original Flow runtime process.
-import { ChatMemoryList } from "@t3tools/contracts";
+import {
+  BrainDocument,
+  BrainDocumentSummary,
+  BrainMemory,
+  ChatMemoryList,
+} from "@t3tools/contracts";
 import { brainResourceEnvironment } from "@flow/brain-runtime";
-import type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
+import type {
+  BrainSessionContext,
+  BrainCapture,
+  BrainCuratorRun,
+  BrainCuratorRunner,
+} from "@flow/brain-runtime";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -14,11 +24,19 @@ const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const decodeChatMemories = Schema.decodeUnknownSync(ChatMemoryList);
 const decodeTools = Schema.decodeUnknownSync(Schema.Array(McpSchema.Tool));
 const decodeResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
+const decodeDocument = Schema.decodeUnknownSync(Schema.NullOr(BrainDocument));
+const decodeKnowledge = Schema.decodeUnknownSync(
+  Schema.Struct({
+    documents: Schema.Array(BrainDocumentSummary),
+    memories: Schema.Array(BrainMemory),
+  }),
+);
 export type { BrainSessionContext, BrainCapture } from "@flow/brain-runtime";
 export async function startSessionWorker(
   environment: Record<string, string>,
   catalog = false,
   entry?: string,
+  runCurator?: BrainCuratorRunner,
 ) {
   if (!catalog)
     brainResourceEnvironment({
@@ -102,8 +120,30 @@ export async function startSessionWorker(
         id?: number;
         result?: unknown;
         error?: string;
+        curatorRequest?: number;
+        curatorRun?: BrainCuratorRun;
       }) => {
-        if (message.ready) {
+        if (message.curatorRequest !== undefined && message.curatorRun) {
+          const curatorRequest = message.curatorRequest;
+          const execute =
+            runCurator ??
+            (() =>
+              Promise.reject(
+                new Error("This Brain host has no Codex extraction provider configured."),
+              ));
+          void execute(message.curatorRun).then(
+            (result) => {
+              if (child.connected) child.send({ curatorReply: curatorRequest, result });
+            },
+            (error) => {
+              if (child.connected)
+                child.send({
+                  curatorReply: curatorRequest,
+                  error: error instanceof Error ? error.message : "Background extraction failed.",
+                });
+            },
+          );
+        } else if (message.ready) {
           clearTimeout(timeout);
           try {
             resolve(decodeTools(message.tools));
@@ -157,6 +197,8 @@ export async function startSessionWorker(
     },
     memories: async (session: string, revision?: string) =>
       decodeChatMemories(await request("chatMemories", { session, revision })),
+    document: async (id: string) => decodeDocument(await request("documents", { id })),
+    knowledge: async () => decodeKnowledge(await request("knowledge", {})),
     drain: () => request("drain", {}),
     capture: (input: BrainCapture) => request("capture", input),
     async close() {

@@ -9,13 +9,20 @@ import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/unstable/ai";
-import { BrainCommand, BrainState, ChatMemoryList, ProjectId } from "@t3tools/contracts";
+import {
+  BrainCommand,
+  BrainDocument,
+  BrainState,
+  ChatMemoryList,
+  ProjectId,
+} from "@t3tools/contracts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
 import type { BrainCapture, BrainSessionContext } from "./session-worker.ts";
 export type BrainClient = Pick<
   BrainRuntime,
   | "projectBindings"
   | "chatMemories"
+  | "brainDocument"
   | "projectBrainId"
   | "callProjectTool"
   | "captureProjectEvent"
@@ -35,6 +42,7 @@ const Context = Schema.Struct({
 const Capture = Schema.Struct({
   context: Context,
   receipt: Schema.String,
+  occurredAt: Schema.optionalKey(Schema.Number),
   kind: Schema.Literals(["user_prompt", "update", "error", "created", "graph"]),
   data: Schema.Unknown,
   closed: Schema.optionalKey(Schema.Boolean),
@@ -46,6 +54,7 @@ const Request = Schema.Struct({
     "call",
     "capture",
     "memories",
+    "document",
     "repositories",
     "branches",
   ]),
@@ -60,6 +69,8 @@ const Request = Schema.Struct({
   command: Schema.optional(BrainCommand),
 });
 const decodeRequest = Schema.decodeUnknownSync(Request);
+const decodeBrainDocument = Schema.decodeUnknownSync(Schema.NullOr(BrainDocument));
+const decodeChatMemories = Schema.decodeUnknownSync(ChatMemoryList);
 const decodeDescriptor = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ url: Schema.String, token: Schema.String })),
 );
@@ -115,6 +126,10 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
             `${input.instance}:${input.context.session}`,
             input.revision,
           );
+          break;
+        case "document":
+          if (!input.workspace || !input.name) throw Error("Missing brain/document");
+          result = await runtime.brainDocument(input.workspace, input.name);
           break;
         case "capture":
           if (!input.workspace || !input.capture) throw Error("Missing brain/capture");
@@ -232,7 +247,7 @@ export class SharedBrainRuntime implements BrainClient {
   async chatMemories(projectId: ProjectId, session: string, revision?: string) {
     const workspace = this.projectBrainId(projectId);
     if (!workspace) return { memories: [], status: "disabled" as const };
-    const result = Schema.decodeUnknownSync(ChatMemoryList)(
+    const result = decodeChatMemories(
       await this.request("memories", { workspace, context: { session }, revision }),
     );
     if (this.projectBrainId(projectId) !== workspace)
@@ -279,6 +294,7 @@ export class SharedBrainRuntime implements BrainClient {
   async captureProjectEvent(project: ProjectId, capture: BrainCapture) {
     const workspace = this.projectBrainId(project);
     if (!workspace) return;
+    capture = { ...capture, occurredAt: capture.occurredAt ?? Date.now() };
     this.sequence = Math.max(this.sequence + 1, Date.now() * 1000);
     const file = NodePath.join(this.directory, "capture", `${this.sequence}.json`);
     await NodeFSP.writeFile(file + ".tmp", JSON.stringify({ workspace, capture }), { mode: 0o600 });
@@ -308,6 +324,11 @@ export class SharedBrainRuntime implements BrainClient {
   }
   async command(command: BrainCommand) {
     return decodeWorkspaceId(await this.request("command", { command }));
+  }
+  async brainDocument(workspaceId: string, documentId: string) {
+    return decodeBrainDocument(
+      await this.request("document", { workspace: workspaceId, name: documentId }),
+    );
   }
   async listGithubRepositories() {
     return [...decodeRepositories(await this.request("repositories"))];

@@ -19,12 +19,31 @@ export const BrainMemory = Schema.Struct({
   source: Schema.String,
   entityIds: Schema.Array(Schema.String),
 });
+export const BrainDocumentSummary = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["notes", "memory", "skill"]),
+  name: Schema.String,
+  description: Schema.String,
+  revision: Schema.Number,
+  sessionId: Schema.String,
+  repo: Schema.NullOr(Schema.String),
+  lifecycle: Schema.Literals(["standing", "temporal", "issue"]),
+  status: Schema.Literals(["active", "resolved", "superseded"]),
+  halfLifeDays: Schema.NullOr(Schema.Number),
+  createdAt: Schema.Number,
+  updatedAt: Schema.Number,
+  observedAt: Schema.optionalKey(Schema.Number),
+});
+export type BrainDocumentSummary = typeof BrainDocumentSummary.Type;
+export const BrainDocument = Schema.Struct({ ...BrainDocumentSummary.fields, text: Schema.String });
+export type BrainDocument = typeof BrainDocument.Type;
 export const BrainKnowledge = Schema.Struct({
   entities: Schema.Array(BrainEntity),
   edges: Schema.Array(
     Schema.Struct({ from: Schema.String, to: Schema.String, label: Schema.String }),
   ),
   memories: Schema.Array(BrainMemory),
+  documents: Schema.optionalKey(Schema.Array(BrainDocumentSummary)),
 });
 export type BrainKnowledge = typeof BrainKnowledge.Type;
 export const BrainSource = Schema.Struct({
@@ -109,6 +128,9 @@ export const ChatMemoryList = Schema.Struct({
     }),
   ),
   status: Schema.Literals(["idle", "extracting", "error", "disabled"]),
+  notes: Schema.optionalKey(Schema.NullOr(BrainDocument)),
+  documents: Schema.optionalKey(Schema.Array(BrainDocumentSummary)),
+  extractionError: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainCommand = Schema.Union([
@@ -123,6 +145,11 @@ export const BrainCommand = Schema.Union([
     revision: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ action: Schema.Literal("start") }),
+  Schema.Struct({
+    action: Schema.Literal("readDocument"),
+    workspaceId: Schema.String,
+    documentId: Schema.String,
+  }),
   Schema.Struct({ action: Schema.Literal("refreshGithub") }),
   Schema.Struct({ action: Schema.Literal("listGithubRepositories") }),
   Schema.Struct({ action: Schema.Literal("listGithubBranches"), repository: Schema.String }),
@@ -164,6 +191,7 @@ export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
   chatMemories: Schema.optional(ChatMemoryList),
+  document: Schema.optionalKey(Schema.NullOr(BrainDocument)),
   error: Schema.NullOr(Schema.String),
   createdWorkspaceId: Schema.NullOr(Schema.String),
   branches: Schema.optional(Schema.Array(Schema.String)),

@@ -1,10 +1,11 @@
 import { BrainIcon } from "./BrainIcon";
 import { useEffect, useRef, useState } from "react";
 import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { retainChatContextOnError } from "@t3tools/client-runtime/state/brain";
 import {
   BrainCircuitIcon,
   ChevronDownIcon,
-  SparklesIcon,
+  BookOpenIcon,
   Maximize2Icon,
   AlertCircleIcon,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import {
 import { BrainGraph } from "./BrainGraph";
 import { useProjectBrainChoice } from "./useProjectBrainChoice";
 import { Button } from "../ui/button";
+import { BrainDocumentDialog, BrainDocumentLibrary } from "./BrainDocuments";
 
 export function ChatBrainPanel({
   environmentId,
@@ -29,7 +31,7 @@ export function ChatBrainPanel({
   projectId,
 }: {
   environmentId: EnvironmentId;
-  threadId: ThreadId;
+  threadId: ThreadId | null;
   projectId: ProjectId;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
@@ -37,7 +39,7 @@ export function ChatBrainPanel({
   const [error, setError] = useState(false);
   const [changedIds, setChangedIds] = useState<string[]>([]);
   const [savedNow, setSavedNow] = useState(false);
-  const [memoriesExpanded, setMemoriesExpanded] = useState(true);
+  const [notesExpanded, setNotesExpanded] = useState(true);
   const [brainExpanded, setBrainExpanded] = useState(false);
   const [view, setView] = useState<string | null>(null);
   const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
@@ -83,7 +85,9 @@ export function ChatBrainPanel({
       try {
         const result = await execute({
           environmentId,
-          input: { action: "readChat", threadId, ...(revision ? { revision } : {}) },
+          input: threadId
+            ? { action: "readChat", threadId, ...(revision ? { revision } : {}) }
+            : { action: "read", projectId, metadataOnly: true },
         });
         if (disposed) return;
         if (result._tag === "Failure") {
@@ -92,11 +96,25 @@ export function ChatBrainPanel({
           revision = undefined;
           return;
         }
+        if (result.value.error) {
+          revision = undefined;
+          delay = 5000;
+          setError(true);
+          setResponse((previous) => retainChatContextOnError(previous, result.value));
+          return;
+        }
         revision = result.value.chatMemories?.revision;
         delay = revision ? 100 : 5000;
-        const currentNotes = new Map(
-          result.value.chatMemories?.memories.map((note) => [note.id, note.text]),
-        );
+        const currentNotes = new Map([
+          ...(result.value.chatMemories?.memories.map((note) => [note.id, note.text] as const) ??
+            []),
+          ...(result.value.chatMemories?.notes
+            ? [[result.value.chatMemories.notes.id, result.value.chatMemories.notes.text] as const]
+            : []),
+          ...(result.value.chatMemories?.documents?.map(
+            (doc) => [doc.id, String(doc.revision)] as const,
+          ) ?? []),
+        ]);
         if (
           previousNotes &&
           (currentNotes.size !== previousNotes.size ||
@@ -115,7 +133,7 @@ export function ChatBrainPanel({
           }, 8000);
         }
         previousNotes = currentNotes;
-        setError(Boolean(result.value.error));
+        setError(false);
         setResponse((previous) =>
           JSON.stringify(previous) === JSON.stringify(result.value) ? previous : result.value,
         );
@@ -142,8 +160,10 @@ export function ChatBrainPanel({
       clearTimeout(highlightTimer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [environmentId, threadId, execute, refreshKey]);
-  const brain = response?.state.workspaces[0];
+  }, [environmentId, threadId, projectId, execute, refreshKey]);
+  const brain = threadId
+    ? response?.state.workspaces[0]
+    : response?.state.workspaces.find((workspace) => workspace.projectIds?.includes(projectId));
   const failedSources = brain?.sources.filter((source) => source.status === "error") ?? [];
   const notes = response?.chatMemories;
   const consultedNodeIds = [...new Set(notes?.consultedNodeIds ?? [])];
@@ -153,18 +173,19 @@ export function ChatBrainPanel({
     autoExpandedThread.current = threadId;
     setBrainExpanded(true);
   }, [consultedNodeCount, threadId]);
-  const selectedMemory = notes?.memories.find((memory) => view === `memory:${memory.id}`);
   const memoryStatus = !brain
-    ? "Connect a brain to save memories."
+    ? "Connect a brain to preserve this conversation."
     : notes?.status === "extracting"
-      ? "Updating memories…"
+      ? "Updating notes, memories, and skills…"
       : notes?.status === "error"
         ? "Extraction needs attention. Flow will retry."
         : notes?.status === "disabled"
           ? "Automatic extraction is disabled."
           : savedNow
             ? "Saved just now"
-            : "Saved automatically from this conversation";
+            : notes?.notes
+              ? "Saved automatically from this conversation"
+              : "Ready for conversation notes";
   return (
     <>
       <aside
@@ -235,7 +256,7 @@ export function ChatBrainPanel({
                       className={`size-4 shrink-0 text-muted-foreground ${brainExpanded ? "rotate-180" : ""}`}
                     />
                   </button>
-                  {brain && (
+                  {brain && threadId && (
                     <button
                       type="button"
                       aria-label="Expand brain graph"
@@ -297,7 +318,9 @@ export function ChatBrainPanel({
                     ) : (
                       <p className="p-3 text-xs text-muted-foreground">
                         {brain
-                          ? "Index sources to see your knowledge graph."
+                          ? threadId
+                            ? "Index sources to see your knowledge graph."
+                            : "Open this brain to explore its knowledge graph."
                           : "Connect a brain above to give this chat shared knowledge."}
                       </p>
                     )}
@@ -320,132 +343,112 @@ export function ChatBrainPanel({
                   </div>
                 )}
               </section>
-              <section
-                aria-label="Memories from this chat"
-                className="mt-3 border-t border-border/60 pt-3"
-              >
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    aria-expanded={memoriesExpanded}
-                    onClick={() => setMemoriesExpanded((value) => !value)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-muted/60"
-                  >
-                    <SparklesIcon className="size-4 shrink-0 text-primary" />
-                    <span className="flex-1 text-sm">Memories</span>
-                    <span className="text-xs text-muted-foreground">
-                      {notes?.memories.length ?? 0}
-                    </span>
-                    <ChevronDownIcon
-                      className={`size-4 text-muted-foreground ${memoriesExpanded ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Expand all chat memories"
-                    onClick={() => setView("memories")}
-                    className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <Maximize2Icon className="size-3.5" />
-                  </button>
-                </div>
-                {memoriesExpanded && (
-                  <>
-                    <p role="status" className="px-2 py-2 text-[11px] text-muted-foreground">
-                      {memoryStatus}
-                    </p>
-                    {notes?.memories.length ? (
-                      <ol className="max-h-64 space-y-1 overflow-y-auto">
-                        {notes.memories.map((memory) => (
-                          <li
-                            key={memory.id}
-                            className={`rounded-xl transition-colors motion-reduce:transition-none ${changedIds.includes(memory.id) ? "bg-primary/10" : ""}`}
-                          >
-                            <button
-                              type="button"
-                              aria-label={`Read memory: ${memory.text}`}
-                              onClick={() => setView(`memory:${memory.id}`)}
-                              className="group flex w-full items-start gap-2 rounded-xl px-2 py-2.5 text-left hover:bg-muted/60"
-                            >
-                              <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary/50" />
-                              <span className="line-clamp-3 flex-1 whitespace-pre-wrap break-words text-xs leading-relaxed">
-                                {memory.text}
-                              </span>
-                              <Maximize2Icon className="mt-0.5 size-3 shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
-                            </button>
-                          </li>
-                        ))}
-                      </ol>
-                    ) : (
-                      <p className="px-2 py-3 text-xs leading-relaxed text-muted-foreground">
-                        No memories yet. Useful context will appear here as Flow learns from this
-                        chat.
-                      </p>
-                    )}
-                  </>
-                )}
-              </section>
             </>
+          )}
+          <section aria-label="Conversation notes" className="mt-3 border-t border-border/60 pt-3">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-expanded={notesExpanded}
+                onClick={() => setNotesExpanded((value) => !value)}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-muted/60"
+              >
+                <BookOpenIcon className="size-4 shrink-0 text-primary" />
+                <span className="flex-1 text-sm">Conversation notes</span>
+                <ChevronDownIcon
+                  className={`size-4 text-muted-foreground ${notesExpanded ? "rotate-180" : ""}`}
+                />
+              </button>
+              {notes?.notes && (
+                <button
+                  type="button"
+                  aria-label="Read full conversation notes"
+                  onClick={() => setView("notes")}
+                  className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Maximize2Icon className="size-3.5" />
+                </button>
+              )}
+            </div>
+            {notesExpanded && (
+              <>
+                <p role="status" className="px-2 py-2 text-[11px] text-muted-foreground">
+                  {memoryStatus}
+                </p>
+                {notes?.notes ? (
+                  <button
+                    type="button"
+                    aria-label="Read full notes"
+                    onClick={() => setView("notes")}
+                    className={`w-full rounded-xl px-2 py-2 text-left hover:bg-muted/60 ${changedIds.includes(notes.notes.id) ? "bg-primary/5" : ""}`}
+                  >
+                    <span className="line-clamp-6 whitespace-pre-wrap break-words text-xs leading-relaxed">
+                      {notes.notes.text}
+                    </span>
+                    <span className="mt-2 block text-[11px] text-primary">Read full notes →</span>
+                  </button>
+                ) : (
+                  <p className="px-2 py-3 text-xs leading-relaxed text-muted-foreground">
+                    {brain
+                      ? "Your task, progress, and corrections will appear here from the first message."
+                      : "Notes help you and your agent pick up where this conversation left off."}
+                  </p>
+                )}
+                {notes?.extractionError && (
+                  <details className="px-2 pb-2 text-xs text-destructive">
+                    <summary className="cursor-pointer">Extraction needs attention</summary>
+                    <p className="mt-2 break-words">{notes.extractionError}</p>
+                  </details>
+                )}
+              </>
+            )}
+          </section>
+          {brain && (
+            <BrainDocumentLibrary
+              key={brain.id}
+              compact
+              environmentId={environmentId}
+              workspaceId={brain.id}
+              documents={notes?.documents ?? []}
+              legacyMemories={(notes?.memories ?? []).map((memory) => ({
+                id: memory.id,
+                kind: "Decision" as const,
+                title: memory.text.slice(0, 140),
+                body: memory.text,
+                source: "Conversation",
+                entityIds: [],
+              }))}
+            />
           )}
         </div>
       </aside>
       {brainChoiceDialog}
+      {brain && (
+        <BrainDocumentDialog
+          document={view === "notes" ? (notes?.notes ?? null) : null}
+          initial={notes?.notes ?? undefined}
+          environmentId={environmentId}
+          workspaceId={brain.id}
+          onClose={() => setView(null)}
+        />
+      )}
       <Dialog
-        open={view !== null}
+        open={view === "brain"}
         onOpenChange={(open) => {
           if (!open) setView(null);
         }}
       >
-        <DialogPopup className={view === "brain" ? "sm:max-w-4xl" : "sm:max-w-2xl"}>
+        <DialogPopup className="sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>
-              {view === "brain"
-                ? (brain?.name ?? "Brain")
-                : view === "memories"
-                  ? "This chat’s memories"
-                  : "Chat memory"}
-            </DialogTitle>
-            <DialogDescription>
-              {view === "brain"
-                ? "The knowledge connected to this project."
-                : "Saved from this conversation and available to your agent."}
-            </DialogDescription>
+            <DialogTitle>{brain?.name ?? "Brain"}</DialogTitle>
+            <DialogDescription>The knowledge connected to this project.</DialogDescription>
           </DialogHeader>
           <DialogPanel>
-            {view === "brain" ? (
-              brain && response?.state.database.status === "ready" ? (
-                <BrainGraph knowledge={brain.knowledge} highlightedNodeIds={consultedNodeIds} />
-              ) : (
-                <p className="text-sm text-muted-foreground">The brain is currently unavailable.</p>
-              )
-            ) : view === "memories" ? (
-              <div className="space-y-3">
-                {notes?.memories.length ? (
-                  notes.memories.map((memory) => (
-                    <article key={memory.id} className="rounded-xl border border-border p-4">
-                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                        {memory.text}
-                      </p>
-                    </article>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No memories saved from this chat yet.
-                  </p>
-                )}
-              </div>
-            ) : selectedMemory ? (
-              <article>
-                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                  {selectedMemory.text}
-                </p>
-                <p className="mt-4 text-xs text-muted-foreground">
-                  {selectedMemory.origin === "user_stated"
-                    ? "From you"
-                    : "Extracted from the conversation"}
-                </p>
-              </article>
-            ) : null}
+            {brain && response?.state.database.status === "ready" ? (
+              <BrainGraph knowledge={brain.knowledge} highlightedNodeIds={consultedNodeIds} />
+            ) : (
+              <p className="text-sm text-muted-foreground">The brain is currently unavailable.</p>
+            )}
           </DialogPanel>
         </DialogPopup>
       </Dialog>

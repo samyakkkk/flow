@@ -30,6 +30,7 @@ import { registerIngestRoutes } from "./ingest/routes.js";
 import { registerIntegrationRoutes } from "./integrations.js";
 import { registerCorrectionRoutes } from "./corrections.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
+import { startIdleSweep, stopIdleSweep } from "./memory/trigger.js";
 import { setNodeAnchorProvider } from "./memory/anchors.js";
 import { makeGatewayAnchorProvider } from "./memory/anchor-provider.js";
 import { registerSourceRoutes } from "./sources.js";
@@ -260,6 +261,7 @@ app.addHook("onClose", async () => {
   stopWorkspaceCleanup?.();
   stopSetupWorker?.();
   stopDrainer();
+  stopIdleSweep();
   stopAllPollers();
   stopTelemetryReporter();
   // Kill live indexer CLIs (and their process groups) — an orphaned indexer
@@ -285,6 +287,8 @@ const start = async (): Promise<void> => {
   try {
     await app.listen({ port: PORT, host: "0.0.0.0" });
     console.log(`[orchestrator] listening on port ${PORT}`);
+
+    startIdleSweep();
 
     // Recover jobs left 'running' by a crash/restart (S103)
     recoverStalledJobs();

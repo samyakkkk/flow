@@ -6,7 +6,7 @@
   "type": "module",
   "description": "Original Flow Brain orchestration, memory and indexing implementation shared by local and cloud hosts.",
   "scripts": {
-    "test": "node --import tsx/esm --test test/memory.test.ts test/live-scheduler.test.ts test/index-incremental.test.ts test/index-queue.test.ts",
+    "test": "node --import tsx/esm --test test/memory.test.ts test/live-scheduler.test.ts test/index-incremental.test.ts test/index-queue.test.ts test/curation.test.ts test/curation-coordinator.test.ts test/curation-public.test.ts test/curation-legacy-boundary.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

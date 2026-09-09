@@ -383,6 +383,86 @@ describe("Flow brain MCP presentation", () => {
     ).toBeNull();
   });
 
+  it("shows discovered skills and their complete procedure as Brain consultations", () => {
+    const skill = {
+      id: "skill-1",
+      kind: "skill",
+      name: "Verify name normalization",
+      description: "Run the focused whitespace regression.",
+      revision: 2,
+      text: "---\nname: verify-name\ndescription: Focused regression\n---\n\nRun `node --test normalize-name.test.mjs`. Expect one passing test.",
+    };
+    const entry = {
+      ...brainEntry,
+      toolData: {
+        server: "t3-code",
+        tool: "read_skill",
+        arguments: { id: skill.id },
+        result: { content: [{ type: "text", text: JSON.stringify(skill) }] },
+      },
+    };
+    expect(resolveWorkEntryToolPresentation(entry)?.displayName).toBe(
+      "Consulted the brain · Read skill",
+    );
+    const display = resolveFlowBrainConsultationDisplay(entry);
+    expect(display?.requestFields).toEqual([{ label: "Skill", value: skill.id }]);
+    expect(display?.responseSections[0]?.text).toContain("node --test normalize-name.test.mjs");
+    expect(display?.responseSections[0]?.text).not.toContain("description:");
+    const listed = resolveFlowBrainConsultationDisplay({
+      ...entry,
+      toolData: {
+        ...entry.toolData,
+        tool: "list_skills",
+        arguments: {},
+        result: { content: [{ type: "text", text: JSON.stringify([skill]) }] },
+      },
+    });
+    const batch = resolveFlowBrainConsultationDisplay({
+      ...entry,
+      toolData: {
+        ...entry.toolData,
+        tool: "get_entity",
+        arguments: { ids: [skill.id, "missing"] },
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "batch",
+                found: 1,
+                results: [
+                  { id: skill.id, status: "found", document: skill },
+                  { id: "missing", status: "not_found" },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+    });
+    expect(batch?.responseSections[0]?.items?.[0]).toMatchObject({
+      title: skill.name,
+      eyebrow: "SKILL.md",
+      tags: ["Revision 2"],
+    });
+    expect(batch?.responseSections[0]?.items?.[0]?.description).toContain(
+      "node --test normalize-name.test.mjs",
+    );
+    expect(batch?.responseSections[0]?.items?.[1]?.tone).toBe("warning");
+    expect(listed?.responseSummary).toBe("1 skill");
+    expect(listed?.responseSections[0]?.items?.[0]).toMatchObject({
+      id: skill.id,
+      title: skill.name,
+      eyebrow: "SKILL.md",
+    });
+    expect(
+      resolveWorkEntryToolPresentation({
+        ...entry,
+        toolData: { ...entry.toolData, server: "unrelated" },
+      }),
+    ).toBeNull();
+  });
+
   it("extracts and formats the request and response without provider metadata", () => {
     const details = resolveFlowBrainToolCallDetails(brainEntry);
     expect(details).toEqual({
