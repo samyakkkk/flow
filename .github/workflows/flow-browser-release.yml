@@ -1,6 +1,8 @@
 name: Flow browser release
 
 on:
+  pull_request:
+    branches: [main-v2]
   push:
     tags:
       - "flow-v*.*.*"
@@ -15,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: flow-browser-release
+  group: flow-browser-release-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'push' && github.ref || 'main-v2' }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main-v2' || github.ref }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -39,10 +41,12 @@ jobs:
           FLOW_VERSION: ${{ inputs.version }}
           FLOW_REF: ${{ github.ref_name }}
         run: |
-          git merge-base --is-ancestor HEAD origin/main-v2
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            git merge-base --is-ancestor HEAD origin/main-v2
+          fi
           node --input-type=module - <<'JS'
           import { appendFileSync } from 'node:fs';
-          const version = process.env.GITHUB_EVENT_NAME === 'push'
+          const version = process.env.GITHUB_EVENT_NAME === 'pull_request' ? '0.0.0' : process.env.GITHUB_EVENT_NAME === 'push'
             ? process.env.FLOW_REF.replace(/^flow-v/, '') : process.env.FLOW_VERSION;
           if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
             throw new Error('Use a stable X.Y.Z version.');
@@ -83,6 +87,7 @@ jobs:
           path: release-browser/*
           if-no-files-found: error
   publish:
+    if: github.event_name != 'pull_request'
     needs: package
     runs-on: ubuntu-24.04
     permissions:
