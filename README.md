@@ -69,22 +69,22 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 
 ## Installation
 
-Install the local Flow browser app from GitHub Releases with bash. You need
-Node.js 24.13.1+ (24.x), npm, curl, and tar. The local Brain supports Apple Silicon
-macOS 15+ and Linux x64.
+Install Flow on an Apple Silicon Mac running macOS 15 or newer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
-flow
+open "$HOME/Applications/Flow.app"
 ```
 
-The installer downloads the latest stable `flow-vX.Y.Z` release, verifies its
-checksum, installs dependencies, builds the web app, and installs the `flow`
-command. This is a source-build distribution, so the first install can take a
-few minutes. No Git clone, Docker, or `flow up` is required. Create projects and
-configure the Brain in the app. Install and sign in to a supported provider
-before starting a thread.
+The installer downloads a ready-built app with its own Node runtime, server,
+web interface, and native Brain libraries. No Node, npm, Homebrew, Docker, or
+local build is required. Open **Flow** from your Applications folder whenever
+you want to use it; its interface opens in your browser. You can drag its icon
+to the Dock. Configure your provider and Brain in the app.
+
+The `flow` terminal command is also installed in `~/.local/bin`. See the
+[source-checkout instructions](./docs/user/install.md#install-from-a-checkout)
+for development and Linux installations.
 
 The installer follows published browser releases. Pushes to the `release` branch
 build and publish the next version after release checks pass.
@@ -92,7 +92,7 @@ build and publish the next version after release checks pass.
 ### Updates
 
 Flow checks for updates in the background at startup and every six hours while
-running. Updates build in a separate directory. When one is ready, the sidebar
+running. Updates are downloaded and verified in a separate directory. When one is ready, the sidebar
 shows **Update ready · Restart to update**. Confirm the restart to apply it; the
 page reloads when Flow reconnects. Running sessions are not restarted without
 your action. A prepared update also takes effect when you next start the stopped

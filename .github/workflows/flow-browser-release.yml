@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   package:
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -41,7 +41,7 @@ jobs:
           FLOW_VERSION: ${{ inputs.version }}
         run: node scripts/flow-release-version.mjs
       - name: Test installer and launcher
-        run: node --test scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+        run: node --test scripts/prepare-browser-lockfile.test.mjs scripts/flow-bundle.test.mjs scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
       - name: Prepare release source
         env:
           FLOW_VERSION: ${{ steps.version.outputs.version }}
@@ -59,15 +59,12 @@ jobs:
           JS
           mkdir -p release-browser
           cp "$RUNNER_TEMP/flow-source/scripts/flow-release.mjs" release-browser/flow-release.mjs
-          tar -czf release-browser/flow-source.tar.gz -C "$RUNNER_TEMP/flow-source" .
-          (cd release-browser && sha256sum flow-source.tar.gz > flow-source.tar.gz.sha256)
-      - name: Verify source installation
-        working-directory: ${{ runner.temp }}/flow-source
-        run: |
-          bash scripts/install-flow.sh --prefix "$RUNNER_TEMP/flow-install"
-          node scripts/verify-browser-install.mjs
-          node_modules/.bin/vp test run apps/server/src/flowBrowserUpdate.test.ts apps/web/src/components/sidebar/flowBrowserUpdate.test.ts
-          node apps/server/src/bin.ts --version
+          tar --no-xattrs --no-acls -czf release-browser/flow-source.tar.gz -C "$RUNNER_TEMP/flow-source" .
+          (cd release-browser && shasum -a 256 flow-source.tar.gz > flow-source.tar.gz.sha256)
+      - name: Build ready-to-run Apple Silicon package
+        env:
+          FLOW_VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/build-browser-bundle.mjs "$RUNNER_TEMP/flow-source" "$GITHUB_WORKSPACE/release-browser" "$FLOW_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: flow-browser-release

@@ -19,6 +19,11 @@ const { DatabaseSync } = NodeSqlite;
 const repository = "samyakkkk/flow";
 const tagPattern = /^flow-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const assetName = "flow-source.tar.gz";
+const macAssetName = "flow-browser-darwin-arm64.tar.gz";
+const bundledAssets = {
+  "darwin-arm64": macAssetName,
+  "linux-x64": "flow-browser-linux-x64.tar.gz",
+};
 const checkInterval = 6 * 60 * 60 * 1000;
 const self = fileURLToPath(import.meta.url);
 
@@ -47,16 +52,26 @@ export function run(command, args, cwd) {
   });
 }
 
-export function validateRelease(release) {
+export function validateRelease(release, target = { platform: platform(), arch: arch() }) {
   if (!tagPattern.test(release.tag_name) || release.draft || release.prerelease)
     throw Error("The latest release is not a stable Flow browser release (flow-vX.Y.Z).");
-  const urls = [assetName, `${assetName}.sha256`].map((name) => {
+  const bundledAsset = bundledAssets[`${target.platform}-${target.arch}`];
+  const selectedAsset =
+    bundledAsset && release.assets?.some((entry) => entry.name === bundledAsset)
+      ? bundledAsset
+      : assetName;
+  const urls = [selectedAsset, `${selectedAsset}.sha256`].map((name) => {
     const asset = release.assets?.find((entry) => entry.name === name);
     const expected = `https://github.com/${repository}/releases/download/${release.tag_name}/${name}`;
     if (asset?.browser_download_url !== expected) throw Error(`Release is missing ${name}.`);
     return expected;
   });
-  return { tag: release.tag_name, archiveUrl: urls[0], checksumUrl: urls[1] };
+  return {
+    tag: release.tag_name,
+    archiveUrl: urls[0],
+    checksumUrl: urls[1],
+    assetName: selectedAsset,
+  };
 }
 
 export function newerTag(candidate, current) {
@@ -69,9 +84,9 @@ export function newerTag(candidate, current) {
   return false;
 }
 
-async function download(url, fetcher = fetch) {
+async function download(url, fetcher = fetch, timeout = 120000) {
   const response = await fetcher(url, {
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(timeout),
     headers: { "User-Agent": "Flow-browser-installer" },
   });
   if (!response.ok) throw Error(`Download failed (${response.status}): ${url}`);
@@ -86,18 +101,78 @@ export async function latestRelease(fetcher = fetch) {
   );
 }
 
-export function verifyArchive(bytes, checksum) {
-  const expected = /^([a-fA-F0-9]{64})\s+\*?flow-source\.tar\.gz\s*$/
-    .exec(checksum)?.[1]
-    .toLowerCase();
+export function verifyArchive(bytes, checksum, name = assetName) {
+  const match = /^([a-fA-F0-9]{64})\s+\*?(\S+)\s*$/.exec(checksum);
+  const expected =
+    match && match[2] === name && [assetName, ...Object.values(bundledAssets)].includes(name)
+      ? match[1].toLowerCase()
+      : null;
   if (!expected || createHash("sha256").update(bytes).digest("hex") !== expected)
     throw Error("Flow release checksum verification failed.");
 }
 
 async function buildRelease(directory) {
+  if (await verifyBundle(directory)) return;
   // Use the release's frozen workspace lockfile; never publish/install upstream t3.
   await run("bash", [join(directory, "scripts/install-flow.sh"), "--build-only"], directory);
   await run(process.execPath, [join(directory, "apps/server/src/bin.ts"), "--version"], directory);
+}
+
+export async function verifyBundle(directory) {
+  const bundle = await json(join(directory, "flow-bundle.json"));
+  if (!bundle) return null;
+  if (
+    bundle.format !== 1 ||
+    bundle.platform !== platform() ||
+    bundle.arch !== arch() ||
+    !tagPattern.test(bundle.tag)
+  )
+    throw Error("This Flow bundle does not support this platform.");
+  await fs.access(join(directory, "runtime/bin/node"), NodeFS.constants.X_OK);
+  await fs.access(join(directory, "runtime/git/bin/git"), NodeFS.constants.X_OK);
+  await fs.access(join(directory, "apps/web/dist/index.html"));
+  await run(
+    join(directory, "runtime/bin/node"),
+    [join(directory, "apps/server/src/bin.ts"), "--version"],
+    directory,
+  );
+  return bundle;
+}
+
+export async function releaseRuntime(directory) {
+  const bundled = join(directory, "runtime/bin/node");
+  return (await fs.stat(bundled).catch(() => null)) ? bundled : process.execPath;
+}
+
+export async function adoptBundle(home, directory, checksum) {
+  const bundle = await verifyBundle(directory);
+  if (!bundle || !/^[a-f0-9]{64}$/.test(checksum)) throw Error("Invalid verified Flow bundle.");
+  const lock = new DatabaseSync(join(home, "update-lock.sqlite"));
+  try {
+    lock.exec("BEGIN EXCLUSIVE");
+    const current = await json(join(home, "current/flow-release.json"));
+    if (current && newerTag(current.tag, bundle.tag))
+      throw Error("A newer Flow version is already installed.");
+    if (current?.tag === bundle.tag && (await json(join(home, "current/flow-bundle.json"))))
+      return current;
+    const releases = join(home, "releases");
+    await fs.mkdir(releases, { recursive: true });
+    const target = join(releases, `${bundle.tag}-${bundle.platform}-${bundle.arch}`);
+    const receipt = { tag: bundle.tag, sha256: checksum };
+    const existing = await json(join(target, "flow-release.json"));
+    if (existing && existing.sha256 !== checksum)
+      throw Error("Release already exists with a different checksum.");
+    if (!existing) {
+      await atomic(join(directory, "flow-release.json"), receipt);
+      await fs.rename(directory, target);
+    }
+    const link = join(home, `.current-${randomUUID()}`);
+    await fs.symlink(NodePath.relative(home, target), link);
+    await fs.rename(link, join(home, "current"));
+    return receipt;
+  } finally {
+    lock.close();
+  }
 }
 
 export async function stageRelease(home, release, { fetcher = fetch, build = buildRelease } = {}) {
@@ -105,14 +180,21 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
   if (!newerTag(release.tag, current?.tag)) return current;
   const releases = join(home, "releases");
   await fs.mkdir(releases, { recursive: true });
-  const directory = join(releases, release.tag);
+  const directory = join(
+    releases,
+    Object.values(bundledAssets).includes(release.assetName)
+      ? `${release.tag}-${platform()}-${arch()}`
+      : release.tag,
+  );
   let receipt = await json(join(directory, "flow-release.json"));
   if (!receipt) {
     const temporary = await fs.mkdtemp(join(releases, ".prepare-"));
     try {
-      const bytes = Buffer.from(await (await download(release.archiveUrl, fetcher)).arrayBuffer());
+      const bytes = Buffer.from(
+        await (await download(release.archiveUrl, fetcher, 900000)).arrayBuffer(),
+      );
       const checksum = await (await download(release.checksumUrl, fetcher)).text();
-      verifyArchive(bytes, checksum);
+      verifyArchive(bytes, checksum, release.assetName || assetName);
       const archive = join(temporary, "source.tar.gz");
       await fs.writeFile(archive, bytes);
       const source = join(temporary, "source");
@@ -125,6 +207,11 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
         "pnpm-lock.yaml",
       ])
         await fs.access(join(source, entry));
+      const bundle = await json(join(source, "flow-bundle.json"));
+      if (bundle && bundle.tag !== release.tag)
+        throw Error("Bundle version does not match release.");
+      if (Object.values(bundledAssets).includes(release.assetName) && !bundle)
+        throw Error("Release is missing its prebuilt bundle.");
       await build(source);
       await fs.access(join(source, "apps/web/dist/index.html"));
       receipt = { tag: release.tag, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -136,7 +223,7 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
   }
   if (receipt.tag !== release.tag) throw Error("Installed release identity does not match.");
   const link = join(home, `.current-${randomUUID()}`);
-  await fs.symlink(join("releases", release.tag), link);
+  await fs.symlink(NodePath.relative(home, directory), link);
   await fs.rename(link, join(home, "current"));
   return receipt;
 }
@@ -156,6 +243,8 @@ export async function update(home, checkOnly = false) {
     const current = await json(join(home, "current", "flow-release.json"));
     if (!newerTag(release.tag, current?.tag))
       return console.log(`Flow ${current.tag} is up to date.`);
+    if ((await json(join(home, "current/flow-bundle.json"))) && release.assetName === assetName)
+      throw Error("This release does not contain a ready-built package for this platform.");
     if (checkOnly)
       return console.log(`Flow ${release.tag} is available. Run flow update to prepare it.`);
     console.log(`Preparing Flow ${release.tag}…`);
@@ -183,7 +272,7 @@ export async function installLauncher(home, prefix) {
   const temp = join(bin, `.flow-${randomUUID()}`);
   await fs.writeFile(
     temp,
-    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(process.execPath)} ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
+    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(await releaseRuntime(join(home, "current")))} ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
     { mode: 0o755 },
   );
   await fs.rename(temp, target);
@@ -243,7 +332,20 @@ async function launch(home, args) {
         releaseLock();
       }
     }
-    await run(process.execPath, [join(code, "scripts/flow.mjs"), ...args], code);
+    const runtime = await releaseRuntime(code);
+    const tools = join(home, "tools");
+    if (await json(join(code, "flow-bundle.json"))) {
+      // Provider CLI installs must survive replacing the versioned app/runtime.
+      process.env.npm_config_prefix ||= process.env.NPM_CONFIG_PREFIX || tools;
+    }
+    process.env.PATH = [
+      NodePath.dirname(runtime),
+      join(code, "runtime/git/bin"),
+      join(tools, "bin"),
+      join(homedir(), ".local/bin"),
+      process.env.PATH || "",
+    ].join(NodePath.delimiter);
+    await run(runtime, [join(code, "scripts/flow.mjs"), ...args], code);
   } finally {
     commandLock.close();
   }
@@ -251,11 +353,15 @@ async function launch(home, args) {
 
 export async function spawnReleaseCommand(home, args, onFailure = () => {}) {
   const log = openSync(join(home, "update.log"), "a", 0o600);
-  const child = spawn(process.execPath, [join(home, "current/scripts/flow-release.mjs"), ...args], {
-    detached: true,
-    stdio: ["ignore", log, log],
-    env: { ...process.env, FLOW_RELEASE_HOME: home },
-  });
+  const child = spawn(
+    await releaseRuntime(join(home, "current")),
+    [join(home, "current/scripts/flow-release.mjs"), ...args],
+    {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...process.env, FLOW_RELEASE_HOME: home },
+    },
+  );
   closeSync(log);
   child.once("exit", (code) => {
     if (code !== 0) onFailure();
@@ -293,6 +399,19 @@ export async function main(args) {
   await fs.mkdir(requestedHome, { recursive: true });
   const home = await fs.realpath(requestedHome);
   process.env.FLOW_INSTANCE_HOME ||= join(home, "instance-home");
+  if (args[0] === "install-bundle") {
+    if (args.length !== 3 && !(args.length === 5 && args[3] === "--prefix"))
+      throw Error("Usage: install-bundle DIRECTORY CHECKSUM [--prefix DIRECTORY]");
+    // Load before adoption moves this bootstrap tree into its final location.
+    const { installMacApp } = await import("./flow-mac-app.mjs");
+    await adoptBundle(home, resolve(args[1]), args[2]);
+    await installLauncher(home, resolve(args[4] || join(homedir(), ".local")));
+    if (platform() === "darwin") {
+      const app = await installMacApp(home, process.env.FLOW_APPLICATIONS_DIR);
+      console.log(`Installed ${app}. Open Flow from Applications to get started.`);
+    }
+    return;
+  }
   if (args[0] === "install") {
     if (args.length !== 1 && !(args.length === 3 && args[1] === "--prefix"))
       throw Error("Usage: install [--prefix DIRECTORY]");

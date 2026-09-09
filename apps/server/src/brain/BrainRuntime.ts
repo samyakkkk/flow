@@ -79,6 +79,8 @@ export class BrainRuntime {
     message: "Public repositories work without sign-in. Checking GitHub CLI…",
   };
   private clis: BrainState["clis"] = [];
+  private cliCheckedAt = 0;
+  private checkingClis: Promise<void> | undefined;
   private workspaces: Workspace[] = [];
   private jobs = new Map<string, AbortController>();
   private queue: Promise<void> = Promise.resolve();
@@ -146,15 +148,7 @@ export class BrainRuntime {
           cause: error,
         });
     }
-    this.clis = await Promise.all(
-      (["claude", "codex", "opencode"] as const).map(async (id) => ({
-        id,
-        installed: await run(id, ["--version"]).then(
-          () => true,
-          () => false,
-        ),
-      })),
-    );
+    await this.refreshClis();
     await this.refreshGithub();
     await this.start();
     if (this.db?.isRunning)
@@ -388,7 +382,30 @@ export class BrainRuntime {
     }
     return combined;
   }
+  private async refreshClis() {
+    if (this.checkingClis) return this.checkingClis;
+    if (this.clis.length && Date.now() - this.cliCheckedAt < 5_000) return;
+    this.checkingClis = (async () => {
+      this.clis = await Promise.all(
+        (["claude", "codex", "opencode"] as const).map(async (id) => ({
+          id,
+          installed: await run(id, ["--version"]).then(
+            () => true,
+            () => false,
+          ),
+        })),
+      );
+      this.cliCheckedAt = Date.now();
+    })();
+    try {
+      await this.checkingClis;
+    } finally {
+      this.checkingClis = undefined;
+    }
+  }
   async state(projectId?: ProjectId, metadataOnly = false): Promise<BrainState> {
+    // Provider installation can finish after the shared Brain runtime starts.
+    await this.refreshClis();
     if (this.db && !this.db.isRunning)
       this.database = {
         status: "error",

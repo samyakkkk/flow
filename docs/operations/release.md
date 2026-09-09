@@ -23,11 +23,13 @@ the exact commit, publishing, and verifying installation and update delivery.
 2. Each push runs **Flow browser release** against the exact triggering SHA.
    It selects the next patch above all stable `flow-vX.Y.Z` tags (for example,
    `0.1.2` → `0.1.3`). No manual tagging or package version edit is needed.
-3. The workflow tests the installer and launcher, builds a disposable source
-   installation on Linux, and verifies the server version command.
+3. On an Apple Silicon macOS runner, the workflow builds the web app and native
+   dependencies once, verifies a private Node distribution against its official
+   checksum, and packages the runtime with Flow.
 4. It publishes a `flow-vX.Y.Z` GitHub release with `flow-source.tar.gz`,
    `flow-source.tar.gz.sha256`, and its matching `flow-release.mjs` bootstrap,
-   marked as the latest release. Existing installations discover it automatically.
+   plus `flow-browser-darwin-arm64.tar.gz` and its SHA-256 file, marked as latest.
+   Existing installations discover it automatically.
 5. Verify installation on supported targets and the transition from the preceding
    release before broadly sharing the installer.
 
@@ -40,19 +42,26 @@ Dispatch from another branch is rejected. A full rerun after successful publicat
 creates another patch version; rerun only failed jobs when recovering publication.
 Inspect tags, drafts, and assets before retrying a partially successful release.
 
-The archive excludes vendored `.repos` references and contains version-aligned
-source plus the frozen dependency lockfile. The browser installer filters to the
-server/web workspace dependency tree and the shared Brain services, requests only
-the current OS/CPU, and skips the Electron executable download. The workflow runs
-`scripts/verify-browser-install.mjs` against the fresh install to detect unrelated
-workspaces, mobile/cloud dependencies, or foreign native binaries, and smoke-tests
-SQLite and terminal creation. The installer also repairs the macOS `node-pty`
-helper executable permission without modifying pnpm’s shared store.
-Recipients build dependencies and
-the web app locally; there is no npm publication or hosted-service deployment.
-The workflow does not publish desktop artifacts or use the inherited `v*` tags.
-Keep the repository's latest stable release on this browser channel: the
-installer rejects releases without a stable `flow-vX.Y.Z` tag and both assets.
+The source archive remains available for older installers. New Mac installations
+select the platform bundle. `scripts/build-browser-bundle.mjs` accepts an isolated
+source archive, output directory, and version. It builds on the target Mac,
+includes private Node and Git runtimes and verified FalkorDB libraries, prunes
+build-only dependencies, and preserves the source/license files needed at runtime.
+Both browser and future desktop packaging can reuse the server/Brain build inputs;
+Electron native modules may still require its ABI-specific build.
+
+The builder runs the dependency audit, focused update tests, and packaged-runtime
+checks for Git commit/clone/worktrees, SQLite, terminal creation, Brain worker
+catalog, llama, and a graph query. Git is built with runtime-relative paths and
+ships with its corresponding source and license.
+Verify the relocated package with system Node absent from PATH, its Applications
+launcher, and a staged update before sharing. The installer creates a small
+`~/Applications/Flow.app` launcher locally; this is not a signed/notarized Electron
+distribution or a standalone downloaded `.app`.
+
+Keep the repository's latest stable release on this browser channel until there
+are separate platform feeds. The package manager is only used by the build job;
+recipient installation and bundled updates download, verify, and unpack assets.
 
 Pushing to `release` or dispatching this workflow publishes a real release.
 PRs targeting `main-v2` or `release` only validate; pushes to `main-v2` and tag

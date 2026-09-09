@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { BRAND } from "@t3tools/shared/branding";
 import { describe, it, assert } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -2622,7 +2623,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.strictEqual(cursorProvider?.status, "disabled");
               assert.strictEqual(
                 cursorProvider?.message,
-                "Cursor is disabled in T3 Code settings.",
+                `Cursor is disabled in ${BRAND.name} settings.`,
               );
               assert.strictEqual(cursorSpawned, false);
             }).pipe(Effect.provide(runtimeServices));
@@ -2637,7 +2638,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.enabled, false);
           assert.strictEqual(status.status, "disabled");
           assert.strictEqual(status.installed, false);
-          assert.strictEqual(status.message, "Codex is disabled in T3 Code settings.");
+          assert.strictEqual(status.message, `Codex is disabled in ${BRAND.name} settings.`);
         }),
       );
     });
@@ -2645,6 +2646,43 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
     // ── checkClaudeProviderStatus tests ──────────────────────────
 
     describe("checkClaudeProviderStatus", () => {
+      for (const authCase of [
+        { stdout: '{"loggedIn":false,"authMethod":"none"}', code: 1, expected: "unauthenticated" },
+        {
+          stdout: '{"loggedIn":true,"authMethod":"claude.ai"}',
+          code: 0,
+          expected: "authenticated",
+        },
+        { stdout: "unexpected output", code: 0, expected: "unknown" },
+      ] as const) {
+        it.effect(
+          `checks first-party authentication despite successful SDK initialization: ${authCase.expected}`,
+          () =>
+            Effect.gen(function* () {
+              const status = yield* checkClaudeProviderStatus(
+                defaultClaudeSettings,
+                claudeCapabilities({ apiProvider: "firstParty" }),
+              );
+              assert.strictEqual(status.installed, true);
+              assert.strictEqual(status.auth.status, authCase.expected);
+              assert.strictEqual(
+                status.status,
+                authCase.expected === "authenticated" ? "ready" : "warning",
+              );
+            }).pipe(
+              Effect.provide(
+                mockSpawnerLayer((args) => {
+                  if (args.join(" ") === "--version")
+                    return { stdout: "2.1.266\n", stderr: "", code: 0 };
+                  if (args.join(" ") === "auth status")
+                    return { stdout: authCase.stdout, stderr: "", code: authCase.code };
+                  throw new Error(`Unexpected args: ${args.join(" ")}`);
+                }),
+              ),
+            ),
+        );
+      }
+
       it.effect("returns ready when claude is installed and authenticated", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(

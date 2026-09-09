@@ -17,7 +17,9 @@ for [installation](../../../docs/user/install.md) and [updates](../../../docs/us
 
 Use repository `samyakkkk/flow`, publication branch `release`, and stable tags `flow-vX.Y.Z`.
 Do not use the inherited `v*` desktop/npm workflow for browser distribution.
-This release ships source that recipients build locally, not a hosted service.
+The Mac browser release ships a ready-built package with private Node and Git runtimes,
+native dependencies, and a locally created `Flow.app` browser launcher. A legacy
+source archive remains available; it is not the new Mac installation path.
 
 Inspect git status, remotes, GitHub authentication, remote tags, and existing
 releases. Fetch `origin/release` and `origin/main-v2` without resetting or switching the user's checkout.
@@ -39,14 +41,17 @@ Match the workflow's Node requirement (currently 24.13.1 or newer within 24.x).
 Run its focused release tests:
 
 ```bash
-node --test scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+node --test scripts/flow-bundle.test.mjs scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
 ```
 
 For source-install verification, follow the workflow's staged archive procedure:
 exclude `.repos`, stamp versions in staged files only, and install using a temporary
 `--prefix`. Run its focused server/web update tests and server `--version` check.
-Do not run repository-wide checks. CI verifies installation on Linux; that does
-not prove macOS compatibility or the running-app update experience.
+Do not run repository-wide checks. Run `scripts/build-browser-bundle.mjs` against
+an isolated archive on the matching host. It builds and prunes the runtime,
+verifies the native components, and emits the platform archive and checksum.
+Linux container checks exercise shared behavior; they do not prove macOS native
+compatibility, application launching, or fresh-Mac installation.
 
 Resolve failures before publication. Search unexpected symptoms in Flow's graph
 before investigating code. Keep fixes separate from the watched live checkout.
@@ -80,20 +85,28 @@ report that automatic publication is blocked rather than claiming delivery.
 
 Confirm the release is stable, not a draft or prerelease, and GitHub's
 `/repos/samyakkkk/flow/releases/latest` points to the intended tag. Verify the remote
-tag resolves to the selected commit. Require these three assets:
+tag resolves to the selected commit. Require these assets for a Mac browser release:
 
 - `flow-source.tar.gz`
 - `flow-source.tar.gz.sha256`
 - `flow-release.mjs`
+- `flow-browser-darwin-arm64.tar.gz`
+- `flow-browser-darwin-arm64.tar.gz.sha256`
 
 Download assets to a temporary directory. Check the archive with
 `sha256sum -c flow-source.tar.gz.sha256`, or on macOS,
 `shasum -a 256 -c flow-source.tar.gz.sha256`. Check the bootstrap matches the release
-source. Keep the repository's latest stable release on the Flow browser channel;
+source. Also verify the platform archive checksum and its `flow-bundle.json`
+identity. Keep the repository's latest stable release on the Flow browser channel;
 a different channel can break installer discovery.
 
-Smoke-test the published bootstrap with a temporary `FLOW_RELEASE_HOME` and
-launcher `--prefix`. Keep instance state isolated too. Verify the installed launcher
+Smoke-test the published bootstrap with a temporary `FLOW_RELEASE_HOME`,
+`FLOW_APPLICATIONS_DIR`, and launcher `--prefix`. Keep instance state isolated too.
+Use a clean macOS VM when available to prove installation without Node, Git,
+Homebrew, or developer tools. A restricted-PATH or sandboxed host run is useful
+but must be reported separately from a fresh-machine test. Verify Applications
+launching, Git operations, provider setup, and a prebuilt-to-prebuilt update
+without npm/build commands. Preserve the same browser origin and application data. Verify the installed launcher
 and server version without touching live Flow. Before broad sharing, verify
 supported target platforms and an upgrade from the preceding version. For requested
 browser verification, follow [test-t3-app](../test-t3-app/SKILL.md) and the repository's
@@ -102,7 +115,7 @@ browser permission rules. Never claim tests that were not performed.
 Updates prepare automatically at startup and periodically. The running browser
 shows **Update ready** and asks before **Restart to update**; that restart can
 interrupt sessions and terminals. `flow update --check` checks, `flow update`
-prepares, and `flow restart` explicitly restarts. Download/build failure preserves
+prepares, and `flow restart` explicitly restarts. Download/verification failure preserves
 the selected version; this does not promise database rollback after a new runtime
 starts.
 

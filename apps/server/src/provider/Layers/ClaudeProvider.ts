@@ -27,6 +27,7 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
+  extractAuthBoolean,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -553,6 +554,44 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         message: "Could not verify Claude authentication status from initialization result.",
       },
     });
+  }
+
+  // SDK initialization also succeeds when first-party Claude is logged out.
+  // External backends (such as Bedrock) authenticate through their own credentials.
+  if (capabilities.apiProvider === "firstParty") {
+    const authProbe = yield* runClaudeCommand(
+      claudeSettings,
+      ["auth", "status"],
+      resolvedEnvironment,
+    ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result);
+    let authenticated: boolean | undefined;
+    if (Result.isSuccess(authProbe)) {
+      try {
+        authenticated = extractAuthBoolean(JSON.parse(authProbe.success.stdout));
+      } catch {
+        // Unsupported or malformed output must not become an authenticated state.
+      }
+    }
+    if (authenticated !== true) {
+      return buildServerProvider({
+        presentation: CLAUDE_PRESENTATION,
+        enabled: claudeSettings.enabled,
+        checkedAt,
+        models,
+        slashCommands: dedupedSlashCommands,
+        skills,
+        probe: {
+          installed: true,
+          version: parsedVersion,
+          status: "warning",
+          auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+          message:
+            authenticated === false
+              ? "Claude is not authenticated. Run `claude auth login` to sign in."
+              : "Could not verify Claude authentication status.",
+        },
+      });
+    }
   }
 
   const authMetadata =

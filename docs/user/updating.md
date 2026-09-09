@@ -3,7 +3,8 @@
 ## GitHub release installation
 
 Flow checks for a stable GitHub release at startup and every six hours while
-running. It downloads and verifies the archive and builds it in a new directory.
+running. Bundled Mac installations download and verify a ready-built package in
+a new directory. They do not run npm or build the app during updates.
 
 When the update is prepared, **Update ready** appears in the browser app's
 sidebar. Select **Restart to update**, then confirm when you are ready to
@@ -18,7 +19,7 @@ same data directory. Terminal commands remain available:
 
 ```bash
 flow update --check  # Check availability without preparing the update
-flow update          # Download and build the latest stable release now
+flow update          # Download and prepare the latest stable release now
 flow restart         # Apply the prepared release; interrupts active work
 ```
 
@@ -26,13 +27,17 @@ Set `FLOW_AUTO_UPDATE=0` in your shell configuration to disable automatic
 preparation. Manual `flow update` remains available. Development instances stay
 on their saved checkout and do not switch versions automatically.
 
-If downloading, checksum verification, or building fails, the previous release
+If downloading, checksum verification, or preparation fails, the previous release
 remains selected. Inspect `~/.local/share/flow-browser/update.log` for automatic
 update failures, then retry with `flow update`. Paths are relative to
 `FLOW_RELEASE_HOME` when using a custom installation directory. Previous release
 directories are retained. Preparation checks the server's version command and
-web build; it does not provide database rollback if a new server fails after
+web assets; it does not provide database rollback if a new server fails after
 startup or applies a migration.
+
+Older source-built release installations can adopt the private runtime and
+Applications launcher by rerunning the current installer. Until converted, they
+retain their source-build update path.
 
 ## Source-checkout installation
 

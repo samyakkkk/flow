@@ -5,33 +5,36 @@ sets up the local browser app from stable GitHub Releases.
 
 ## Requirements
 
-- Node.js 24.13.1 or later in the 24.x line, with npm on PATH.
-- curl and tar for downloading and extracting the release.
-- Apple Silicon macOS 15+ or Linux x64 for the native local Brain.
-- An installed, authenticated provider to start a thread; configure it after launch if needed.
+- An Apple Silicon Mac running macOS 15 or newer, with an internet connection.
+- A supported provider account; configure its CLI and login in Flow's provider settings.
+
+Flow includes its own Node runtime and ready-built dependencies. You do not need
+Node, npm, Homebrew, Docker, Git, or a compiler to install the browser app.
 
 ## Install with bash
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
-flow
+open "$HOME/Applications/Flow.app"
 ```
 
-The installer on the `release` branch downloads the latest published stable
-Flow browser release. Existing installations follow the same release feed.
+The installer verifies the release archive's SHA-256 checksum and installs the
+ready-built server, web app, native libraries, and private Node runtime. Your
+system Node installation is not changed. The Brain downloads its embedding model
+automatically on first use.
 
-The installer verifies the release archive's SHA-256 checksum, installs the
-release's locked browser/server/Brain dependencies for your OS and CPU, and builds
-the web app. Mobile and cloud workspaces and other platforms' native packages
-are excluded; the Electron executable is not downloaded. Node.js must already be
-installed; native dependencies may require your platform's build tools if a
-prebuilt binary is unavailable. Installation can take a few minutes.
+**Flow.app** is added to your personal `~/Applications` folder. Opening it starts
+Flow and opens your browser; reopening it returns to the existing instance. Drag
+it to the Dock if you want a shortcut. This is a browser launcher, not Electron.
 
-The launcher is installed in `~/.local/bin`. Add that directory to your shell's
-PATH for future terminals. To choose another prefix, append `-s -- --prefix
-/your/prefix` to the `bash` command above. The installer refuses to overwrite an
-unrelated command; `command -v flow` shows which command your shell finds.
+The optional terminal command is installed in `~/.local/bin`. Add that directory
+to PATH to use `flow` from any terminal. To choose another CLI prefix, append
+`-s -- --prefix /your/prefix` to the `bash` command above. Unrelated launchers and
+applications are never overwritten.
+
+If you installed an earlier source-built release, rerun this installer to adopt
+the bundled runtime. Existing data stays in place; an active server keeps running
+until you explicitly restart it. Future bundled updates require no local build.
 
 Release files live in `~/.local/share/flow-browser/releases`. Application data
 lives separately under `~/.local/share/flow-browser/instance-home`. Existing
@@ -48,7 +51,12 @@ Create projects in the app and choose their Brain. See
 
 ## Install from a checkout
 
-For development or before the first GitHub release, use Git and run:
+For development, or Linux x64 where the ready-built installer is not yet available,
+install Node.js 24.13.1+ within 24.x and Git, then run:
+
+Linux Brain support requires Ubuntu 24.04 or compatible system libraries
+(glibc 2.38 and GLIBCXX_3.4.32 or newer). Debian 12 is not supported by the
+bundled native database.
 
 ```bash
 git clone --branch main-v2 --single-branch https://github.com/samyakkkk/flow.git
@@ -83,6 +91,10 @@ computer.
 | Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                           |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                     |
 | Antigravity | Install and sign in with Google from Flow's provider settings.                               |
+
+For Codex and Claude, onboarding also offers **Install** and **Sign in** in its
+setup terminal. These use the providers' standalone installers; no system Node
+is needed.
 
 Provider CLIs must be on the server's `PATH`. If Flow cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
