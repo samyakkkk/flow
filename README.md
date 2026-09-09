@@ -74,7 +74,7 @@ Node.js 24.13.1+ (24.x), npm, curl, and tar. The local Brain supports Apple Sili
 macOS 15+ and Linux x64.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/main-v2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 flow
 ```
@@ -86,9 +86,8 @@ few minutes. No Git clone, Docker, or `flow up` is required. Create projects and
 configure the Brain in the app. Install and sign in to a supported provider
 before starting a thread.
 
-**Release availability:** this command requires the installer changes to be on
-`main-v2` and a published Flow browser release. Until the first release is
-published, use the [source-checkout installation](./docs/user/install.md#install-from-a-checkout).
+The installer follows published browser releases. Pushes to the `release` branch
+build and publish the next version after release checks pass.
 
 ### Updates
 

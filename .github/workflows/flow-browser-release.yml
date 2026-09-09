@@ -2,15 +2,14 @@ name: Flow browser release
 
 on:
   pull_request:
-    branches: [main-v2]
+    branches: [main-v2, release]
   push:
-    tags:
-      - "flow-v*.*.*"
+    branches: [release]
   workflow_dispatch:
     inputs:
       version:
-        description: Stable Flow version (X.Y.Z)
-        required: true
+        description: Optional stable version (X.Y.Z); defaults to next patch
+        required: false
         type: string
 
 permissions:
@@ -19,6 +18,7 @@ permissions:
 concurrency:
   group: flow-browser-release-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   package:
@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main-v2' || github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -39,23 +39,9 @@ jobs:
         id: version
         env:
           FLOW_VERSION: ${{ inputs.version }}
-          FLOW_REF: ${{ github.ref_name }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            git merge-base --is-ancestor HEAD origin/main-v2
-          fi
-          node --input-type=module - <<'JS'
-          import { appendFileSync } from 'node:fs';
-          const version = process.env.GITHUB_EVENT_NAME === 'pull_request' ? '0.0.0' : process.env.GITHUB_EVENT_NAME === 'push'
-            ? process.env.FLOW_REF.replace(/^flow-v/, '') : process.env.FLOW_VERSION;
-          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
-            throw new Error('Use a stable X.Y.Z version.');
-          }
-          appendFileSync(process.env.GITHUB_OUTPUT, `tag=flow-v${version}\nversion=${version}\n`);
-          JS
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: node scripts/flow-release-version.mjs
       - name: Test installer and launcher
-        run: node --test scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+        run: node --test scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
       - name: Prepare release source
         env:
           FLOW_VERSION: ${{ steps.version.outputs.version }}

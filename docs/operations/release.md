@@ -11,18 +11,34 @@ For an agent-guided release, use the repository's
 [$deploy-flow skill](../../.agents/skills/deploy-flow/SKILL.md). It covers preparing
 the exact commit, publishing, and verifying installation and update delivery.
 
-1. Merge the installer and desired changes to `main-v2`.
-2. Tag a commit on `main-v2` as `flow-vX.Y.Z` and push that tag. The workflow
-   builds that exact commit and checks that it belongs to `main-v2`. Alternatively,
-   dispatch **Flow browser release** with a new stable `X.Y.Z` version once the
-   workflow is available for manual dispatch; that path builds `main-v2` HEAD.
+1. Develop on `main-v2`. Push the reviewed commit to `release` to ship it:
+
+   ```bash
+   git fetch origin
+   git push origin <verified-full-commit-sha>:refs/heads/release
+   ```
+
+   Use a normal fast-forward push; merge `origin/release` into your candidate
+   first if needed. Never force-push around a divergent release branch.
+2. Each push runs **Flow browser release** against the exact triggering SHA.
+   It selects the next patch above all stable `flow-vX.Y.Z` tags (for example,
+   `0.1.2` → `0.1.3`). No manual tagging or package version edit is needed.
 3. The workflow tests the installer and launcher, builds a disposable source
    installation on Linux, and verifies the server version command.
 4. It publishes a `flow-vX.Y.Z` GitHub release with `flow-source.tar.gz`,
    `flow-source.tar.gz.sha256`, and its matching `flow-release.mjs` bootstrap,
-   marked as the latest release.
-5. Verify installation on the supported target platforms and the transition
-   from the preceding release before broadly sharing the installer.
+   marked as the latest release. Existing installations discover it automatically.
+5. Verify installation on supported targets and the transition from the preceding
+   release before broadly sharing the installer.
+
+Publication runs are serialized with a queue of up to 100 pending runs. Each
+checkout is pinned to its event SHA. A run whose source does not descend from the
+highest existing browser tag fails instead of publishing older code as latest.
+When manual dispatch is available, select the `release` branch; omit `version`
+for the next patch or supply a greater stable version for a minor/major release.
+Dispatch from another branch is rejected. A full rerun after successful publication
+creates another patch version; rerun only failed jobs when recovering publication.
+Inspect tags, drafts, and assets before retrying a partially successful release.
 
 The archive excludes vendored `.repos` references and contains version-aligned
 source plus the frozen dependency lockfile. Recipients build dependencies and
@@ -31,11 +47,12 @@ The workflow does not publish desktop artifacts or use the inherited `v*` tags.
 Keep the repository's latest stable release on this browser channel: the
 installer rejects releases without a stable `flow-vX.Y.Z` tag and both assets.
 
-Pushing a matching tag or dispatching this workflow publishes a real release.
-Neither path is a dry run.
-No release is published merely by merging the workflow. Remote servers using
-upstream T3 service management still use their existing update mechanism; this
-installer manages its own local primary and does not replace that protocol.
+Pushing to `release` or dispatching this workflow publishes a real release.
+PRs targeting `main-v2` or `release` only validate; pushes to `main-v2` and tag
+pushes do not publish browser releases. A GitHub account billing lock prevents
+Actions jobs from starting and must be resolved before automatic publication works.
+Remote servers using upstream T3 service management retain their existing update
+mechanism; this installer manages its own local primary.
 
 ## Flow desktop release readiness
 

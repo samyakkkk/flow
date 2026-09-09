@@ -1,6 +1,6 @@
 ---
 name: deploy-flow
-description: Prepare, publish, and verify a Flow local browser app release from main-v2 using GitHub Actions. Use when asked to deploy Flow, ship a browser version, publish installer assets, or verify release and auto-update delivery. Clarify the target when desktop or cloud deployment is intended; those use different procedures.
+description: Prepare, publish, and verify a Flow local browser app release from the release branch using GitHub Actions. Use when asked to deploy Flow, ship a browser version, publish installer assets, or verify release and auto-update delivery. Clarify the target when desktop or cloud deployment is intended; those use different procedures.
 ---
 
 # Deploy Flow
@@ -15,21 +15,17 @@ Read the authoritative [browser workflow](../../../.github/workflows/flow-browse
 and [release manager](../../../scripts/flow-release.mjs). Consult the user guides
 for [installation](../../../docs/user/install.md) and [updates](../../../docs/user/updating.md).
 
-Use repository `samyakkkk/flow`, branch `main-v2`, and stable tags `flow-vX.Y.Z`.
+Use repository `samyakkkk/flow`, publication branch `release`, and stable tags `flow-vX.Y.Z`.
 Do not use the inherited `v*` desktop/npm workflow for browser distribution.
 This release ships source that recipients build locally, not a hosted service.
 
 Inspect git status, remotes, GitHub authentication, remote tags, and existing
-releases. Fetch `origin/main-v2` without resetting or switching the user's checkout.
-Choose a full, pushed commit SHA on that branch and a new stable version greater
-than the current browser release. Distinguish an absent first release from an
-authentication or network failure. Ensure the tag is absent locally and remotely
-and no release already uses it.
-
-Verify the target commit contains the workflow, installer, release manager, and
-intended changes. Tagging HEAD cannot release uncommitted changes. For the first
-release, ensure the public `main-v2/install.sh` URL will also exist. The sharing
-command needs both that script and published assets.
+releases. Fetch `origin/release` and `origin/main-v2` without resetting or switching the user's checkout.
+Choose a full verified commit that descends from `origin/release`. Development
+can stay on `main-v2`; a push to `release` automatically allocates the next patch
+above existing stable browser tags. Verify the candidate contains the workflow,
+installer, release manager, and intended changes. The public sharing command uses
+`release/install.sh` and requires published browser assets.
 
 ## Prepare and check
 
@@ -43,7 +39,7 @@ Match the workflow's Node requirement (currently 24.13.1 or newer within 24.x).
 Run its focused release tests:
 
 ```bash
-node --test scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+node --test scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
 ```
 
 For source-install verification, follow the workflow's staged archive procedure:
@@ -57,33 +53,28 @@ before investigating code. Keep fixes separate from the watched live checkout.
 
 ## Publish
 
-Pushing a matching tag or dispatching this workflow publishes a real stable
-release and changes the update feed. Neither is a dry run. A request to write this
-skill or prepare a release does not authorize publication. If publication is
-already authorized, proceed without asking again. Otherwise, finish preparation
-and present the concrete version, SHA, changes, and checks before requesting the
-missing publication approval.
+Pushing to `release` publishes a real stable release and changes the update feed.
+A preparation-only request does not authorize publication. When publication is
+already authorized, proceed without asking again; otherwise present the verified
+SHA, changes, and checks before requesting missing publication approval.
 
-Prefer an exact-commit tag. Set `FLOW_VERSION` and `FLOW_COMMIT` to the verified
-stable version and full SHA. Run each step only after the preceding one succeeds:
+Push the verified full `FLOW_COMMIT` using a normal fast-forward branch update:
 
 ```bash
-FLOW_TAG="flow-v${FLOW_VERSION}"
-git merge-base --is-ancestor "$FLOW_COMMIT" origin/main-v2
-git tag "$FLOW_TAG" "$FLOW_COMMIT"
-git push origin "refs/tags/$FLOW_TAG"
+git merge-base --is-ancestor origin/release "$FLOW_COMMIT"
+git push origin "$FLOW_COMMIT:refs/heads/release"
 ```
 
-Never force a tag, push all tags, or overwrite an existing release to resolve a
-collision. Alternatively, when manual dispatch is available, run **Flow browser
-release** with the stable version input. This selects `main-v2` HEAD when the job
-checks out source, not a previously reviewed SHA. Verify the actual packaged
-commit. Do not change the default branch merely to enable dispatch.
+Do not force-push or manually create a tag to trigger publication. The workflow
+pins the event SHA and allocates the next patch version. If manual dispatch is
+available, select `release`; an optional version supports a greater minor/major.
+Do not change the default branch merely to enable dispatch.
 
-Find the workflow run matching this tag and commit, record its URL, and wait for
-packaging and publication to succeed. Inspect that run's logs on failure. Check
-whether publication partially succeeded before retrying. Do not automatically
-delete tags or releases as recovery.
+Find the run matching the pushed SHA and wait for packaging and publication.
+Inspect logs and partial publication on failure. A full rerun after success
+allocates another patch; prefer rerunning failed jobs for recovery. Never delete
+tags or releases automatically. If GitHub reports an account billing lock,
+report that automatic publication is blocked rather than claiming delivery.
 
 ## Verify delivery
 

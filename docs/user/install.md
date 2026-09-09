@@ -13,13 +13,13 @@ sets up the local browser app from stable GitHub Releases.
 ## Install with bash
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/main-v2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 flow
 ```
 
-This command needs a published stable Flow browser release and the installer on
-`main-v2`. Until the first release is published, use the checkout instructions below.
+The installer on the `release` branch downloads the latest published stable
+Flow browser release. Existing installations follow the same release feed.
 
 The installer verifies the release archive's SHA-256 checksum, installs the
 release's locked dependencies, and builds the web app. Node.js must already be
