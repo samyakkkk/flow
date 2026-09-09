@@ -19,6 +19,7 @@ import { usePreparedConnection } from "../../state/session";
 import { useProjects } from "../../state/entities";
 import type { BrainSnapshot } from "../../brain/repository";
 import { BrainPage } from "./BrainPage";
+import { BrainDocumentLibrary } from "./BrainDocuments";
 import { BrainSources, BrainIndexing } from "./BrainSources";
 import { BrainSelect, CreateBrainDialog, cliName } from "./BrainControls";
 import { Button } from "../ui/button";
@@ -48,7 +49,7 @@ function toSnapshot(workspace: BrainWorkspace | undefined): BrainSnapshot {
           : 50 + 35 * Math.sin((index / entities.length) * 2 * Math.PI - Math.PI / 2),
     })),
     edges: workspace?.knowledge.edges ?? [],
-    memories: [],
+    memories: workspace?.knowledge.memories ?? [],
     sources: (workspace?.sources ?? []).map((source) => ({
       name: source.repository,
       detail: source.message,
@@ -271,6 +272,32 @@ function BrainController({
               </Button>
             </div>
           </header>
+        }
+        skills={
+          workspace &&
+          environmentId && (
+            <BrainDocumentLibrary
+              kind="skill"
+              key={`skills:${environmentId}:${workspace.id}`}
+              documents={workspace.knowledge.documents ?? []}
+              legacyMemories={workspace.knowledge.memories}
+              environmentId={environmentId}
+              workspaceId={workspace.id}
+            />
+          )
+        }
+        memories={
+          workspace &&
+          environmentId && (
+            <BrainDocumentLibrary
+              kind="memory"
+              key={`documents:${environmentId}:${workspace.id}`}
+              documents={workspace.knowledge.documents ?? []}
+              legacyMemories={workspace.knowledge.memories}
+              environmentId={environmentId}
+              workspaceId={workspace.id}
+            />
+          )
         }
       >
         {workspace && state && environmentId && (

@@ -21,7 +21,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import db from "../db.js";
 import { executableCandidates, rememberExecutable } from "../../../bin/lib/executables.mjs";
 import { track } from "../telemetry.js";
-import { onSessionClosed, setTranscriptReader, startIdleSweep } from "../memory/trigger.js";
+import { onSessionClosed, setTranscriptReader } from "../memory/trigger.js";
 import { setSessionTranscriptReader, startSessionEmbedSweep } from "./session-search.js";
 import {
   createSessionWorktree,
@@ -739,12 +739,9 @@ export function readTranscript(id: string, sinceSeq = 0): SessionEvent[] {
   return out;
 }
 
-// Wire the memory distiller's triggers: give it the transcript reader (avoids an
-// import cycle) and start five-minute checkpoints, including active sessions.
-// Guarded so tests that never touch
-// sessions don't spin up a timer; FLOW_DISTILLER=0 disables both.
+// Supply the legacy transcript reader without starting extraction as an import
+// side effect. The standalone entry point owns its sweep; T3 owns its curator.
 setTranscriptReader((id) => readTranscript(id).map((e) => ({ seq: e.seq, kind: e.kind, data: e.data })));
-startIdleSweep();
 
 // Same wiring for semantic session search (embeds session docs off the hot
 // path; FLOW_SESSION_SEARCH=0 disables the sweep).

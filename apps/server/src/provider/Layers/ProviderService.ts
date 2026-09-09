@@ -51,6 +51,7 @@ import {
   makeBrainChatContextLoader,
   makeBrainChatCapture,
   captureRuntimeEvent,
+  formatBrainUserPrompt,
   type BrainChatCapture,
   type BrainChatContextLoader,
 } from "../../brain/chat-context.ts";
@@ -1510,14 +1511,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                     )
                 : undefined;
             if (brain) captureBrainBindings.set(input.threadId, brain.bindingKey);
-            if (parsed.input && parsed.continuation !== true && options?.captureBrainEvent) {
+            const brainUserPrompt = formatBrainUserPrompt(parsed);
+            if (brainUserPrompt && parsed.continuation !== true && options?.captureBrainEvent) {
               yield* options
                 .captureBrainEvent(
                   input.threadId,
                   {
                     receipt: `prompt:${[yield* Random.nextInt, yield* Random.nextInt, yield* Random.nextInt, yield* Random.nextInt].join("-")}`,
                     kind: "user_prompt",
-                    data: { text: parsed.input },
+                    data: { text: brainUserPrompt },
                   },
                   captureBrainBindings.get(input.threadId),
                 )

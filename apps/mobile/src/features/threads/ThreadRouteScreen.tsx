@@ -657,8 +657,34 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
-  const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
-  const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const handleOpenBrain = useCallback(() => {
+    if (environmentIdRaw && threadId)
+      navigation.navigate("ThreadBrain", {
+        environmentId: String(environmentIdRaw),
+        threadId: String(threadId),
+      });
+  }, [environmentIdRaw, threadId, navigation]);
+  const centerGitHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
+  const rightGitHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const brainHeaderItem = useMemo(
+    () =>
+      withNativeGlassHeaderItem({
+        accessibilityLabel: "Open brain and notes",
+        icon: { name: "brain", type: "sfSymbol" as const },
+        identifier: "thread-brain",
+        onPress: handleOpenBrain,
+        type: "button" as const,
+      }),
+    [handleOpenBrain],
+  );
+  const threadCenterHeaderItems = useMemo(
+    () => [...centerGitHeaderItems, brainHeaderItem],
+    [centerGitHeaderItems, brainHeaderItem],
+  );
+  const compactRightHeaderItems = useMemo(
+    () => [...rightGitHeaderItems, brainHeaderItem],
+    [rightGitHeaderItems, brainHeaderItem],
+  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -703,7 +729,9 @@ function ThreadRouteContent(
   const androidHeaderActions = useMemo<ReadonlyArray<AndroidHeaderAction>>(() => {
     if (Platform.OS !== "android") return [];
 
-    const actions: AndroidHeaderAction[] = [];
+    const actions: AndroidHeaderAction[] = [
+      { accessibilityLabel: "Open brain and notes", icon: "brain", onPress: handleOpenBrain },
+    ];
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -739,6 +767,7 @@ function ThreadRouteContent(
     }
     return actions;
   }, [
+    handleOpenBrain,
     fileInspector.supported,
     handleOpenFilesInspector,
     handleOpenTerminal,

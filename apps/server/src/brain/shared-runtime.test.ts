@@ -8,6 +8,8 @@ const { tmpdir } = NodeOS;
 import * as NodePath from "node:path";
 const { join } = NodePath;
 import * as Schema from "effect/Schema";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
 import { ProjectId, BrainState } from "@t3tools/contracts";
 import { serveSharedBrain, SharedBrainRuntime } from "./shared-runtime.ts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
@@ -84,6 +86,7 @@ it("shares tools and capture over authenticated transport while isolating projec
     );
     expect((await a.state(decodeProjectId("unbound"))).workspaces).toEqual([]);
     await close();
+    const capturedAfter = await Effect.runPromise(Clock.currentTimeMillis);
     await a.captureProjectEvent(project, {
       context: { session: "same-thread" },
       receipt: "receipt-1",
@@ -91,6 +94,14 @@ it("shares tools and capture over authenticated transport while isolating projec
       data: { text: "remember" },
     });
     await a.drainCapture();
+    const pendingFiles = await NodeFSP.readdir(join(root, "a", "capture"));
+    const pending = JSON.parse(
+      await readFile(join(root, "a", "capture", pendingFiles[0]!), "utf8"),
+    ) as { capture: BrainCapture };
+    expect(pending.capture.occurredAt).toBeGreaterThanOrEqual(capturedAfter);
+    expect(pending.capture.occurredAt).toBeLessThanOrEqual(
+      await Effect.runPromise(Clock.currentTimeMillis),
+    );
     await a.close();
     close = await serveSharedBrain(runtime, source);
     a = new SharedBrainRuntime(source, join(root, "a"), "instance-a");
@@ -98,6 +109,7 @@ it("shares tools and capture over authenticated transport while isolating projec
     await a.drainCapture();
     expect(captures).toHaveLength(1);
     expect(captures[0]!.context.session).toBe("instance-a:same-thread");
+    expect(captures[0]!.occurredAt).toBe(pending.capture.occurredAt);
     expect(a.projectBrainId(project)).toBe("brain");
     expect(state.workspaces[0]!.projectIds).toEqual([project]);
   } finally {

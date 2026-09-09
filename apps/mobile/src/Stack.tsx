@@ -54,6 +54,7 @@ import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
+import { BrainRouteScreen } from "./features/brain/BrainRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
@@ -151,6 +152,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Settings",
       },
+    }),
+    SettingsBrain: createNativeStackScreen({
+      screen: BrainRouteScreen,
+      linking: "brain",
+      options: { title: "Brain" },
     }),
     SettingsEnvironments: createNativeStackScreen({
       screen: SettingsEnvironmentsRouteScreen,
@@ -472,6 +478,11 @@ export const RootStack = createNativeStackNavigator({
       screen: ThreadRouteScreen,
       linking: THREAD_LINKING_PREFIX,
       options: GLASS_HEADER_OPTIONS,
+    }),
+    ThreadBrain: createNativeStackScreen({
+      screen: BrainRouteScreen,
+      linking: `${THREAD_LINKING_PREFIX}/brain`,
+      options: { ...GLASS_HEADER_OPTIONS, title: "Brain & notes" },
     }),
     ThreadTerminal: createNativeStackScreen({
       screen: ThreadTerminalRouteScreen,

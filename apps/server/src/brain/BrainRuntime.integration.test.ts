@@ -260,6 +260,9 @@ describe("native brain persistence", () => {
           expect((await runtime.state()).workspaces[0]!.knowledge.entities).toHaveLength(3);
           await runtime.close();
           runtimes.pop();
+          // A full Brain read now also loads its conversation documents, so
+          // workers can start before the first interactive graph consultation.
+          captureState.resources.length = 0;
           const reopened = new BrainRuntime(NodePath.join(directory, "state"), {
             databasePath: NodePath.join(directory, "db"),
             platform,
@@ -292,7 +295,6 @@ describe("native brain persistence", () => {
             repo: "octocat/Hello-World",
             branch: "main",
           };
-          captureState.resources.length = 0;
           const orient = await reopened.callProjectTool(project.id, "orient", {}, context);
           expect(orient.isError).not.toBe(true);
           expect(

@@ -155,6 +155,8 @@ type CodexThreadItem =
 
 export interface CodexSessionRuntimeOptions {
   readonly threadId: ThreadId;
+  readonly ephemeral?: boolean;
+  readonly baseInstructions?: string;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly binaryPath: string;
   readonly homePath?: string;
@@ -529,6 +531,8 @@ function runtimeModeToThreadConfig(input: RuntimeMode): {
 
 function buildThreadStartParams(input: {
   readonly cwd: string;
+  readonly ephemeral?: boolean;
+  readonly baseInstructions?: string;
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
@@ -536,6 +540,8 @@ function buildThreadStartParams(input: {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
+    ...(input.ephemeral !== undefined ? { ephemeral: input.ephemeral } : {}),
+    ...(input.baseInstructions !== undefined ? { baseInstructions: input.baseInstructions } : {}),
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
@@ -704,15 +710,21 @@ interface CodexThreadOpenClient {
 export const openCodexThread = (input: {
   readonly client: CodexThreadOpenClient;
   readonly threadId: ThreadId;
+  readonly ephemeral?: boolean;
+  readonly baseInstructions?: string;
   readonly runtimeMode: RuntimeMode;
   readonly cwd: string;
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
-  const resumeThreadId = input.resumeThreadId;
+  // Internal workers recover from their application checkpoint, never from a
+  // persisted interactive thread accidentally supplied as a resume cursor.
+  const resumeThreadId = input.ephemeral ? undefined : input.resumeThreadId;
   const startParams = buildThreadStartParams({
     cwd: input.cwd,
+    ...(input.ephemeral !== undefined ? { ephemeral: input.ephemeral } : {}),
+    ...(input.baseInstructions !== undefined ? { baseInstructions: input.baseInstructions } : {}),
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
@@ -2264,6 +2276,10 @@ export const makeCodexSessionRuntime = (
       const requestedModel = normalizeCodexModelSlug(options.model);
 
       const opened = yield* openCodexThread({
+        ...(options.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
+        ...(options.baseInstructions !== undefined
+          ? { baseInstructions: options.baseInstructions }
+          : {}),
         client,
         threadId: options.threadId,
         runtimeMode: options.runtimeMode,
