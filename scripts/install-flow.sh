@@ -21,15 +21,28 @@ FLOW_NODE=$(command -v node || true)
 "$FLOW_NODE" -e 'const [m,n,p]=process.versions.node.split(".").map(Number); if (m!==24 || n<13 || (n===13 && p<1)) { console.error("Use Node.js 24.13.1+ (24.x)."); process.exit(1); }'
 if [ "$FLOW_BUILD" = 1 ]; then
   cd "$FLOW_SOURCE"
+  # This installer ships only the local browser app. The shared web package
+  # imports Electron's auth adapter, but does not need an Electron executable.
+  export FLOW_INSTALL_CPU=current FLOW_INSTALL_OS=current FLOW_INSTALL_LIBC=current
+  export ELECTRON_SKIP_BINARY_DOWNLOAD=1
   if [ ! -x node_modules/.bin/vp ]; then
     # Bootstrap outside the workspace and skip Vite+'s browser-test peers. The
     # actual app dependencies are resolved by pnpm from the frozen lockfile.
     FLOW_BOOTSTRAP=$(mktemp -d)
     npm install --prefix "$FLOW_BOOTSTRAP" --legacy-peer-deps --no-audit --no-fund --package-lock=false vite-plus@0.3.0
-    "$FLOW_BOOTSTRAP/node_modules/.bin/vp" install --frozen-lockfile
+    FLOW_VP="$FLOW_BOOTSTRAP/node_modules/.bin/vp"
   else
-    node_modules/.bin/vp install --frozen-lockfile
+    FLOW_VP="$FLOW_SOURCE/node_modules/.bin/vp"
   fi
+  # Brain workers import these shared services by source path, so they must be
+  # included explicitly in addition to the server's workspace dependency tree.
+  "$FLOW_VP" install --frozen-lockfile \
+    --filter @t3tools/monorepo --filter 't3...' \
+    --filter '@flow/brain-graph-gateway...' --filter '@flow/brain-orchestrator...'
+  "$FLOW_NODE" --input-type=module - <<'JS'
+import { prepareBrowserNative } from './scripts/prepare-browser-native.mjs';
+prepareBrowserNative(process.cwd());
+JS
   node_modules/.bin/vp run --filter @t3tools/web build
 fi
 [ -f "$FLOW_SOURCE/apps/web/dist/index.html" ] || { echo 'Build the web app before installing the launcher.' >&2; exit 1; }

@@ -22,7 +22,9 @@ The installer on the `release` branch downloads the latest published stable
 Flow browser release. Existing installations follow the same release feed.
 
 The installer verifies the release archive's SHA-256 checksum, installs the
-release's locked dependencies, and builds the web app. Node.js must already be
+release's locked browser/server/Brain dependencies for your OS and CPU, and builds
+the web app. Mobile and cloud workspaces and other platforms' native packages
+are excluded; the Electron executable is not downloaded. Node.js must already be
 installed; native dependencies may require your platform's build tools if a
 prebuilt binary is unavailable. Installation can take a few minutes.
 

@@ -41,7 +41,7 @@ jobs:
           FLOW_VERSION: ${{ inputs.version }}
         run: node scripts/flow-release-version.mjs
       - name: Test installer and launcher
-        run: node --test scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+        run: node --test scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
       - name: Prepare release source
         env:
           FLOW_VERSION: ${{ steps.version.outputs.version }}
@@ -65,6 +65,7 @@ jobs:
         working-directory: ${{ runner.temp }}/flow-source
         run: |
           bash scripts/install-flow.sh --prefix "$RUNNER_TEMP/flow-install"
+          node scripts/verify-browser-install.mjs
           node_modules/.bin/vp test run apps/server/src/flowBrowserUpdate.test.ts apps/web/src/components/sidebar/flowBrowserUpdate.test.ts
           node apps/server/src/bin.ts --version
       - uses: actions/upload-artifact@v4

@@ -41,7 +41,14 @@ creates another patch version; rerun only failed jobs when recovering publicatio
 Inspect tags, drafts, and assets before retrying a partially successful release.
 
 The archive excludes vendored `.repos` references and contains version-aligned
-source plus the frozen dependency lockfile. Recipients build dependencies and
+source plus the frozen dependency lockfile. The browser installer filters to the
+server/web workspace dependency tree and the shared Brain services, requests only
+the current OS/CPU, and skips the Electron executable download. The workflow runs
+`scripts/verify-browser-install.mjs` against the fresh install to detect unrelated
+workspaces, mobile/cloud dependencies, or foreign native binaries, and smoke-tests
+SQLite and terminal creation. The installer also repairs the macOS `node-pty`
+helper executable permission without modifying pnpm’s shared store.
+Recipients build dependencies and
 the web app locally; there is no npm publication or hosted-service deployment.
 The workflow does not publish desktop artifacts or use the inherited `v*` tags.
 Keep the repository's latest stable release on this browser channel: the
