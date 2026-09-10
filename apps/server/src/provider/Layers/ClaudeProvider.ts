@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -53,6 +54,7 @@ import {
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+const decodeClaudeAuthJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
@@ -564,14 +566,13 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       ["auth", "status"],
       resolvedEnvironment,
     ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result);
-    let authenticated: boolean | undefined;
-    if (Result.isSuccess(authProbe)) {
-      try {
-        authenticated = extractAuthBoolean(JSON.parse(authProbe.success.stdout));
-      } catch {
-        // Unsupported or malformed output must not become an authenticated state.
-      }
-    }
+    const authenticated = Result.isSuccess(authProbe)
+      ? yield* decodeClaudeAuthJson(authProbe.success.stdout).pipe(
+          Effect.map(extractAuthBoolean),
+          // Unsupported or malformed output must not become an authenticated state.
+          Effect.orElseSucceed(() => undefined),
+        )
+      : undefined;
     if (authenticated !== true) {
       return buildServerProvider({
         presentation: CLAUDE_PRESENTATION,

@@ -13,12 +13,12 @@ it.effect("keeps bundled tools ahead of system stubs after login-shell hydration
     const env = { PATH: "/usr/bin:/bin:/app/runtime/bin:/app/runtime/git/bin" };
     yield* preserveBundledRuntimePath(env, "darwin").pipe(
       Effect.provideService(HostProcessExecutablePath, "/app/runtime/bin/node"),
-      Effect.provide(
+      Effect.provide([
         FileSystem.layerNoop({
           exists: (file) => Effect.succeed(file === "/app/flow-bundle.json"),
         }),
-      ),
-      Effect.provide(Path.layer),
+        Path.layer,
+      ]),
     );
     assert.equal(env.PATH, "/app/runtime/bin:/app/runtime/git/bin:/usr/bin:/bin");
   }),
@@ -29,8 +29,7 @@ it.effect("preserves normal shell precedence outside a marked runtime bundle", (
     const env = { PATH: "/usr/bin:/bin:/app/runtime/bin" };
     yield* preserveBundledRuntimePath(env, "darwin").pipe(
       Effect.provideService(HostProcessExecutablePath, "/app/runtime/bin/node"),
-      Effect.provide(FileSystem.layerNoop({ exists: () => Effect.succeed(false) })),
-      Effect.provide(Path.layer),
+      Effect.provide([FileSystem.layerNoop({ exists: () => Effect.succeed(false) }), Path.layer]),
     );
     assert.equal(env.PATH, "/usr/bin:/bin:/app/runtime/bin");
   }),
