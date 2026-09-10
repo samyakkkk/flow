@@ -30,6 +30,7 @@ export async function installMacApp(
       NodePath.join(home, "current/runtime/Flow.icns"),
       NodePath.join(contents, "Resources/Flow.icns"),
     );
+    // Launch Services otherwise treats script-only apps as Intel and requires Rosetta.
     await NodeFSP.writeFile(
       NodePath.join(contents, "Info.plist"),
       `<?xml version="1.0" encoding="UTF-8"?>
@@ -43,6 +44,8 @@ export async function installMacApp(
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>LSArchitecturePriority</key><array><string>arm64</string></array>
+<key>LSRequiresNativeExecution</key><true/>
 <key>LSUIElement</key><true/>
 </dict></plist>\n`,
     );
