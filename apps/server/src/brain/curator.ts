@@ -2,6 +2,11 @@ import type { BrainCuratorRun, BrainCuratorResult, BrainCuratorRunner } from "@f
 import {
   ApprovalRequestId,
   CodexSettings,
+  ClaudeSettings,
+  OpenCodeSettings,
+  DEFAULT_MODEL_BY_PROVIDER,
+  ProviderDriverKind,
+  type ServerSettings,
   DEFAULT_MODEL,
   EnvironmentId,
   ProviderInstanceId,
@@ -29,9 +34,16 @@ import { withCodexAppServerClient } from "../provider/Layers/CodexProvider.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { CuratorSessions } from "./curator-sessions.ts";
-import type { CodexAdapterShape } from "../provider/Services/CodexAdapter.ts";
+import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter.ts";
+import type { ProviderAdapterError } from "../provider/Errors.ts";
+import { makeClaudeAdapter } from "../provider/Layers/ClaudeAdapter.ts";
+import { makeOpenCodeAdapter } from "../provider/Layers/OpenCodeAdapter.ts";
+import { prepareOpenCodeCurator } from "./curator-opencode.ts";
 
-const decodeSettings = Schema.decodeUnknownSync(CodexSettings);
+const decodeCodex = Schema.decodeUnknownEffect(CodexSettings);
+const decodeClaude = Schema.decodeUnknownEffect(ClaudeSettings);
+const decodeOpenCode = Schema.decodeUnknownEffect(OpenCodeSettings);
+
 class CuratorError extends Schema.TaggedErrorClass<CuratorError>()("CuratorError", {
   message: Schema.String,
 }) {}
@@ -65,7 +77,7 @@ const CURATOR_FLAGS = [
 const quoteArgument = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`;
 
 type Worker = {
-  adapter: CodexAdapterShape;
+  adapter: ProviderAdapterShape<ProviderAdapterError>;
   threadId: ThreadId;
   nativeThreadId: string;
   modelSelection: ModelSelection;
@@ -74,88 +86,141 @@ type Worker = {
 };
 
 export function curatorSessionKey(
-  request: Pick<BrainCuratorRun, "sessionId" | "endpoint" | "token">,
+  request: Pick<BrainCuratorRun, "sessionId" | "endpoint" | "token" | "cli">,
 ): string {
   // Rebinding a project can leave the same chat active in two brains. A worker
   // restart must also replace the native session's now-stale MCP connection.
   return NodeCrypto.createHash("sha256")
-    .update(JSON.stringify([request.sessionId, request.endpoint, request.token]))
+    .update(JSON.stringify([request.sessionId, request.endpoint, request.token, request.cli]))
     .digest("hex");
 }
 
-const makeWorker = (request: BrainCuratorRun) =>
+export function selectCuratorProvider(settings: ServerSettings, cli: BrainCuratorRun["cli"]) {
+  if (!cli || !["codex", "claude", "opencode"].includes(cli))
+    throw new Error("The Brain has no supported extraction CLI configured.");
+  const driver = cli === "claude" ? "claudeAgent" : cli;
+  const preferred = settings.defaultModelSelection?.instanceId;
+  const entries = Object.entries(deriveProviderInstanceConfigMap(settings)).filter(
+    ([, entry]) => entry.driver === driver && resolveProviderInstanceEnabled(entry),
+  );
+  const selected = entries.find(([id]) => id === preferred) ?? entries[0];
+  if (!selected)
+    throw new Error(
+      `Enable a ${cli} provider to extract this Brain's notes, memories, and skills.`,
+    );
+  return { instanceId: ProviderInstanceId.make(selected[0]), instance: selected[1] };
+}
+
+const makeWorker = (request: BrainCuratorRun, settings: ServerSettings) =>
   Effect.gen(function* () {
-    const settings = yield* (yield* ServerSettingsService).getSettings;
-    const preferred = settings.defaultModelSelection?.instanceId;
-    const entries = Object.entries(deriveProviderInstanceConfigMap(settings)).filter(
-      ([, entry]) => entry.driver === "codex" && resolveProviderInstanceEnabled(entry),
-    );
-    const selected = entries.find(([id]) => id === preferred) ?? entries[0];
-    if (!selected)
-      return yield* new CuratorError({
-        message:
-          "Enable a Codex provider to extract notes, memories, and skills with your subscription.",
-      });
-    const instanceId = ProviderInstanceId.make(selected[0]);
-    const instance = selected[1];
-    const config = decodeSettings(instance.config ?? {});
-    const environment = mergeProviderInstanceEnvironment(instance.environment);
-    const layout = yield* resolveCodexHomeLayout(config);
-    yield* materializeCodexShadowHome(layout);
-    const effectiveConfig = {
-      ...config,
-      binaryPath: expandHomePath(config.binaryPath),
-      homePath: layout.effectiveHomePath ?? "",
-    };
-    // Read the effective config through the same native client T3 uses for account
-    // probes. Disable every inherited MCP server for this observer's process.
-    const inheritedServers = yield* Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* withCodexAppServerClient({
-          ...effectiveConfig,
-          cwd: request.cwd,
+    const { instanceId, instance } = yield* Effect.try({
+      try: () => selectCuratorProvider(settings, request.cli),
+      catch: (error) => new CuratorError({ message: String(error) }),
+    });
+    let environment = mergeProviderInstanceEnvironment(instance.environment);
+    let cwd = request.cwd;
+    let nativeModel: string | undefined;
+    const adapter = yield* Effect.gen(function* () {
+      if (instance.driver === "claudeAgent") {
+        return yield* makeClaudeAdapter(yield* decodeClaude(instance.config ?? {}), {
+          instanceId,
           environment,
+          observerInstructions: request.instructions,
         });
-        const account = yield* client.request("account/read", {});
-        const response = yield* client.request("config/read", {
-          includeLayers: false,
-          cwd: request.cwd,
+      }
+      if (instance.driver === "opencode") {
+        const config = yield* decodeOpenCode(instance.config ?? {});
+        if (config.serverUrl)
+          return yield* new CuratorError({
+            message:
+              "Background extraction requires a local OpenCode provider so its tools and history can be isolated. Choose an OpenCode instance without a Server URL.",
+          });
+        const isolated = yield* Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => prepareOpenCodeCurator(environment),
+            catch: (error) => new CuratorError({ message: String(error) }),
+          }),
+          (isolated) => Effect.promise(isolated.close),
+        );
+        environment = isolated.environment;
+        cwd = isolated.directory;
+        nativeModel = isolated.model;
+        return yield* makeOpenCodeAdapter(
+          { ...config, binaryPath: expandHomePath(config.binaryPath) },
+          {
+            instanceId,
+            environment,
+            observerInstructions: request.instructions,
+          },
+        );
+      }
+      const config = yield* decodeCodex(instance.config ?? {});
+      const layout = yield* resolveCodexHomeLayout(config);
+      yield* materializeCodexShadowHome(layout);
+      const effectiveConfig = {
+        ...config,
+        binaryPath: expandHomePath(config.binaryPath),
+        homePath: layout.effectiveHomePath ?? "",
+      };
+      // Read the effective config through the same native client T3 uses for account
+      // probes. Disable every inherited MCP server for this observer's process.
+      const inheritedServers = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* withCodexAppServerClient({
+            ...effectiveConfig,
+            cwd: request.cwd,
+            environment,
+          });
+          const account = yield* client.request("account/read", {});
+          const response = yield* client.request("config/read", {
+            includeLayers: false,
+            cwd: request.cwd,
+          });
+          const subscriptionIssue = codexSubscriptionIssue(account, response.config);
+          if (subscriptionIssue) return yield* new CuratorError({ message: subscriptionIssue });
+          return Object.keys(record(record(response.config).mcp_servers));
+        }),
+      ).pipe(Effect.timeout("20 seconds"));
+      // Codex's -c parser splits dotted keys itself; TOML-quoting a key creates a
+      // different literal server name and fails its transport validation.
+      if (inheritedServers.some((name) => !/^[a-zA-Z0-9_-]+$/.test(name)))
+        return yield* new CuratorError({
+          message: "A configured MCP server name cannot be isolated for background extraction.",
         });
-        const subscriptionIssue = codexSubscriptionIssue(account, response.config);
-        if (subscriptionIssue) return yield* new CuratorError({ message: subscriptionIssue });
-        return Object.keys(record(record(response.config).mcp_servers));
-      }),
-    ).pipe(Effect.timeout("20 seconds"));
-    // Codex's -c parser splits dotted keys itself; TOML-quoting a key creates a
-    // different literal server name and fails its transport validation.
-    if (inheritedServers.some((name) => !/^[a-zA-Z0-9_-]+$/.test(name)))
-      return yield* new CuratorError({
-        message: "A configured MCP server name cannot be isolated for background extraction.",
-      });
-    const overrides = [
-      ...CURATOR_FLAGS,
-      ...inheritedServers.map((name) => `mcp_servers.${name}.enabled=false`),
-      "mcp_servers.t3-code.enabled=true",
-    ];
-    const launchArgs = [
-      config.launchArgs,
-      ...overrides.map((value) => `-c ${quoteArgument(value)}`),
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const adapter = yield* makeCodexAdapter(
-      { ...effectiveConfig, launchArgs },
-      {
-        instanceId,
-        environment,
-        ephemeral: true,
-        baseInstructions: request.instructions,
-      },
-    );
+      const overrides = [
+        ...CURATOR_FLAGS,
+        ...inheritedServers.map((name) => `mcp_servers.${name}.enabled=false`),
+        "mcp_servers.t3-code.enabled=true",
+      ];
+      const launchArgs = [
+        config.launchArgs,
+        ...overrides.map((value) => `-c ${quoteArgument(value)}`),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return yield* makeCodexAdapter(
+        { ...effectiveConfig, launchArgs },
+        {
+          instanceId,
+          environment,
+          ephemeral: true,
+          baseInstructions: request.instructions,
+        },
+      );
+    });
     const threadId = ThreadId.make(`flow-curator-${NodeCrypto.randomUUID()}`);
-    const modelSelection = createModelSelection(instanceId, DEFAULT_MODEL, [
-      { id: "reasoningEffort", value: "low" },
-    ]);
+    const defaultSelection = settings.defaultModelSelection;
+    const model =
+      defaultSelection?.instanceId === instanceId
+        ? defaultSelection.model
+        : (nativeModel ??
+          DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make(instance.driver)] ??
+          DEFAULT_MODEL);
+    const modelSelection = createModelSelection(
+      instanceId,
+      model,
+      instance.driver === "codex" ? [{ id: "reasoningEffort", value: "low" }] : [],
+    );
     const worker: Worker = {
       adapter,
       threadId,
@@ -195,7 +260,8 @@ const makeWorker = (request: BrainCuratorRun) =>
             yield* Deferred.fail(
               worker.pending,
               new CuratorError({
-                message: event.payload.errorMessage ?? `Codex extraction ${event.payload.state}.`,
+                message:
+                  event.payload.errorMessage ?? `Background extraction ${event.payload.state}.`,
               }),
             );
           } else {
@@ -215,20 +281,23 @@ const makeWorker = (request: BrainCuratorRun) =>
         else if (event.type === "runtime.error")
           yield* Deferred.fail(
             worker.pending,
-            new CuratorError({ message: "Codex could not complete background extraction." }),
+            new CuratorError({
+              message: "The selected provider could not complete background extraction.",
+            }),
           );
       }),
     ).pipe(Effect.forkScoped);
     const session = yield* adapter.startSession({
       threadId,
-      cwd: request.cwd,
+      cwd,
       runtimeMode: "approval-required",
       modelSelection,
     });
-    const nativeId = record(session.resumeCursor).threadId;
+    const cursor = record(session.resumeCursor);
+    const nativeId = cursor.sessionId ?? cursor.resume ?? cursor.threadId;
     if (typeof nativeId !== "string")
       return yield* new CuratorError({
-        message: "Codex did not create an ephemeral extraction session.",
+        message: "The selected provider did not create a background extraction session.",
       });
     worker.nativeThreadId = nativeId;
     return worker;
@@ -236,19 +305,31 @@ const makeWorker = (request: BrainCuratorRun) =>
 
 /** Dedicated instances of T3's adapter; no orchestration thread or native event log. */
 export const makeBrainCurator = Effect.gen(function* () {
-  const context = yield* Effect.context<Effect.Services<ReturnType<typeof makeWorker>>>();
+  const context = yield* Effect.context<
+    Effect.Services<ReturnType<typeof makeWorker>> | ServerSettingsService
+  >();
   const run = Effect.runPromiseWith(context);
   const workers = new CuratorSessions<{ scope: Scope.Closeable; worker: Worker }>(({ scope }) =>
     run(Scope.close(scope, Exit.void)),
   );
   yield* Effect.addFinalizer(() => Effect.promise(() => workers.dispose()));
   const execute: BrainCuratorRunner = async (request) => {
-    const sessionKey = curatorSessionKey(request);
+    const settings = await run(
+      Effect.flatMap(ServerSettingsService, (service) => service.getSettings),
+    );
+    const selected = selectCuratorProvider(settings, request.cli);
+    // A provider/configuration change needs fresh bounded source context, not a delta
+    // delivered into the previous CLI's native conversation.
+    const sessionKey =
+      curatorSessionKey(request) +
+      NodeCrypto.createHash("sha256")
+        .update(JSON.stringify([selected, settings.defaultModelSelection]))
+        .digest("hex");
     const entry = await workers.acquire(sessionKey, request.renew, async () => {
       const scope = await run(Scope.make());
       try {
         const worker = await run(
-          makeWorker(request).pipe(Effect.provideService(Scope.Scope, scope)),
+          makeWorker(request, settings).pipe(Effect.provideService(Scope.Scope, scope)),
         );
         return { scope, worker };
       } catch (error) {

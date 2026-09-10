@@ -343,6 +343,8 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 }
 
 export interface ClaudeAdapterLiveOptions {
+  /** Private observer sessions expose only their injected MCP server. */
+  readonly observerInstructions?: string;
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly createQuery?: (input: {
@@ -4662,6 +4664,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? [input.cwd] : []),
         serverConfig.attachmentsDir,
       ];
+      const observer = options?.observerInstructions;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4704,6 +4707,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                     Authorization: mcpSession.authorizationHeader,
                   },
                 },
+              },
+            }
+          : {}),
+        ...(observer !== undefined
+          ? {
+              systemPrompt: observer,
+              persistSession: false,
+              settingSources: [],
+              settings: { disableAllHooks: true },
+              tools: [],
+              allowedTools: ["mcp__t3-code__*"],
+              strictMcpConfig: true,
+              mcpServers: mcpSession
+                ? {
+                    "t3-code": {
+                      type: "http",
+                      url: mcpSession.endpoint,
+                      headers: { Authorization: mcpSession.authorizationHeader },
+                    },
+                  }
+                : {},
+              canUseTool: async (name, input) =>
+                name.startsWith("mcp__t3-code__")
+                  ? { behavior: "allow", updatedInput: input }
+                  : {
+                      behavior: "deny",
+                      message: "Background extraction only has Brain curator tools.",
+                    },
+              additionalDirectories: [],
+              extraArgs: {},
+              env: {
+                ...claudeEnvironment,
+                ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+                CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
+                CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
               },
             }
           : {}),

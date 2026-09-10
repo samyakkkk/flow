@@ -72,10 +72,17 @@ Busy extraction coalesces later activity into a follow-up. The panel shows pendi
 extraction error rather than reporting that unavailable processing succeeded. Captured activity
 is retained locally for retry; incomplete or truncated tool output can limit the conclusions.
 
-Automatic extraction uses an enabled Codex provider signed in with a ChatGPT subscription,
-independently of the provider used for the main conversation. Background sessions do not
-appear in your T3 chat list or Codex conversation history. They reuse context between
-checkpoints and renew it as it grows, retaining saved notes and access to earlier evidence.
+Automatic extraction follows the CLI selected for the Brain: Codex, Claude Code, or OpenCode.
+Enable and sign in to a matching provider in Settings. If several matching providers are enabled,
+Flow prefers your default provider when it matches that CLI, otherwise the first enabled match.
+A missing matching provider produces an extraction error; Flow does not switch to another CLI.
+Codex extraction requires a ChatGPT subscription. OpenCode extraction requires a local provider
+without a Server URL or remote organization configuration so background sessions can be isolated.
+The main conversation can use a different provider.
+
+Background sessions stay out of your chat list and normal native conversation history. They reuse
+context between checkpoints and renew it as it grows or when you change the Brain's CLI, retaining
+saved notes and access to earlier evidence.
 `FLOW_DISTILLER=0` disables automatic extraction in the brain runtime.
 
 ### Find and use what your brain learned

@@ -510,6 +510,9 @@ importers:
       falkordblite:
         specifier: 0.3.0
         version: 0.3.0(falkordb@6.8.0)
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
       msgpackr-extract:
         specifier: 3.0.4
         version: 3.0.4
