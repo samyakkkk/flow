@@ -21,7 +21,17 @@ export function validateBranding(config: unknown): Branding {
   }
   record(
     config,
-    ["name", "shortName", "connectName", "description", "links", "mark", "colors"],
+    [
+      "name",
+      "shortName",
+      "connectName",
+      "description",
+      "icon",
+      "wordmark",
+      "links",
+      "mark",
+      "colors",
+    ],
     "branding",
   );
   for (const key of ["name", "shortName", "connectName", "description"] as const) {
@@ -31,6 +41,20 @@ export function validateBranding(config: unknown): Branding {
       /[\p{Cc}\p{Zl}\p{Zp}]/u.test(config[key])
     ) {
       throw new Error(`branding.${key} must be a nonempty single-line string.`);
+    }
+  }
+  record(config.icon, ["source"], "icon");
+  record(config.wordmark, ["onLightSource", "onDarkSource"], "wordmark");
+  for (const [label, source] of [
+    ["icon.source", config.icon.source],
+    ["wordmark.onLightSource", config.wordmark.onLightSource],
+    ["wordmark.onDarkSource", config.wordmark.onDarkSource],
+  ] as const) {
+    if (
+      typeof source !== "string" ||
+      !/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[\w./-]+\.svg$/i.test(source)
+    ) {
+      throw new Error(`${label} must be a repository-relative SVG path without parent traversal.`);
     }
   }
   record(
@@ -85,7 +109,7 @@ export function mergeBranding(base: Branding, overrides: unknown): Branding {
     throw new Error("Branding overrides must be an object.");
   const merged: Record<string, unknown> = { ...base, ...overrides };
   const overrideRecord = overrides as Record<string, unknown>;
-  for (const key of ["links", "mark", "colors"] as const) {
+  for (const key of ["icon", "wordmark", "links", "mark", "colors"] as const) {
     if (key in overrides) {
       if (
         !overrideRecord[key] ||
@@ -99,8 +123,10 @@ export function mergeBranding(base: Branding, overrides: unknown): Branding {
   return validateBranding(merged);
 }
 
-export function brandingFingerprint(config: Branding) {
-  return NodeCrypto.createHash("sha256").update(JSON.stringify(config)).digest("hex");
+export function brandingFingerprint(config: Branding, artworkSources: ReadonlyArray<Uint8Array>) {
+  const hash = NodeCrypto.createHash("sha256").update(JSON.stringify(config));
+  for (const source of artworkSources) hash.update("\0").update(source);
+  return hash.digest("hex");
 }
 
 export function escapeXml(value: string) {

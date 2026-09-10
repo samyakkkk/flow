@@ -5,7 +5,19 @@ import { brandingFingerprint, validateBranding } from "./branding-config.ts";
 
 /** Fail before a build can combine one organization's name with another's icons. */
 export function checkBranding() {
-  const expected = brandingFingerprint(validateBranding(config));
+  const branding = validateBranding(config);
+  const artworkSources = [
+    branding.icon.source,
+    branding.wordmark.onLightSource,
+    branding.wordmark.onDarkSource,
+  ].map((source) => {
+    try {
+      return NodeFS.readFileSync(new URL(`../../${source}`, import.meta.url));
+    } catch {
+      throw new Error(`Brand artwork source is missing: ${source}`);
+    }
+  });
+  const expected = brandingFingerprint(branding, artworkSources);
   let actual: string;
   try {
     actual = NodeFS.readFileSync(

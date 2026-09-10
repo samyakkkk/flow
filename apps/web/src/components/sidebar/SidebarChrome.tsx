@@ -1,4 +1,3 @@
-import { BRAND } from "@t3tools/shared/branding";
 import {
   BrainCircuit,
   ArrowLeftIcon,
@@ -13,7 +12,7 @@ import { useEnvironments } from "../../state/environments";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { BrandLogo } from "../BrandLogo";
+import { BrandWordmark } from "../BrandWordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -81,17 +80,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       )}
       to="/"
     >
-      <span className="inline-flex min-w-0 items-baseline gap-1">
-        <BrandLogo aria-label={BRAND.name} className="h-2.5 w-auto shrink-0" />
-        <span
-          className={cn(
-            "truncate text-sm font-medium tracking-tight",
-            onBackdrop ? "text-white/70" : "text-muted-foreground",
-          )}
-        >
-          {BRAND.shortName}
-        </span>
-      </span>
+      <BrandWordmark className="h-[18px]" surface={onBackdrop ? "dark" : "auto"} />
     </Link>
   );
 }

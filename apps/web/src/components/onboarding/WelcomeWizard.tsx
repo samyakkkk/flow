@@ -66,7 +66,7 @@ import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
-import { BrandLogo } from "../BrandLogo";
+import { BrandWordmark } from "../BrandWordmark";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -195,12 +195,7 @@ export function WelcomeWizard({
         <DialogTitle className="sr-only">Set up {BRAND.name}</DialogTitle>
         <div className="flex min-h-0 flex-col">
           <DialogHeader className="gap-4">
-            <div className="flex items-baseline gap-1.5" role="img" aria-label={BRAND.name}>
-              <BrandLogo className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
-                {BRAND.name}
-              </span>
-            </div>
+            <BrandWordmark className="h-6" />
             <WizardSteps
               steps={ONBOARDING_STAGES}
               currentStep={stageIndex}
