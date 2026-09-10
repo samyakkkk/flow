@@ -123,7 +123,7 @@ export function cleanInstructions(text) {
 export function cleanShell(text) {
   // Only the command named flow is retired; other aliases and functions survive.
   const withoutFunctions = text.replace(
-    /^(?:function[ \t]+)?flow[ \t]*(?:\(\))?[ \t]*\{[^\n]*\n[^]*?^\}[^\n]*(?:\n|$)/gm,
+    /^(?:function[ \t]+)?flow[ \t]*(?:\(\))?[ \t]*\{[^}\n]*\n[^]*?^\}[^\n]*(?:\n|$)/gm,
     (block) =>
       /flow-release\.mjs|flow-browser/.test(block)
         ? block

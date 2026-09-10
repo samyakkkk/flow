@@ -228,3 +228,11 @@ test("retires multiline shell functions while leaving neighboring configuration 
   assert.match(result, /# Retired legacy Flow: }/);
   assert.match(result, /^alias other="keep"$/m);
 });
+
+test("a single-line Flow function cannot consume the next shell function", () => {
+  const neighbor = "other() {\n  echo keep\n}\n";
+  assert.equal(
+    cleanShell("flow() { /missing/flow; }\n" + neighbor),
+    "# Retired legacy Flow: flow() { /missing/flow; }\n" + neighbor,
+  );
+});
