@@ -7,6 +7,7 @@ import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeStreamPromises from "node:stream/promises";
 import * as NodeOS from "node:os";
+import * as NodeURL from "node:url";
 import * as yauzl from "yauzl";
 
 // Upstream's macOS npm package links Homebrew dylibs. The official Python wheel
@@ -86,6 +87,24 @@ export async function prepareNativeFalkor(
   if (platform === "darwin" && architecture === "arm64") {
     if (Number(NodeOS.release().split(".")[0]) < 24)
       throw new Error("This native FalkorDB bundle requires macOS 15 or newer.");
+    // Ready-built browser releases carry the verified native runtime alongside
+    // the app. Source checkouts retain the on-demand download below.
+    const bundled = NodePath.resolve(
+      NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
+      "../../../../runtime/brain/falkordb-macos-0.10.0",
+    );
+    if (
+      (await NodeFSP.readFile(NodePath.join(bundled, "verified.sha256"), "utf8").catch(
+        () => "",
+      )) === MAC_BINARY_SHA256
+    ) {
+      const paths = {
+        redisServerPath: NodePath.join(bundled, "bin/redis-server"),
+        modulePath: NodePath.join(bundled, "bin/falkordb.so"),
+      };
+      await Promise.all([NodeFSP.access(paths.redisServerPath), NodeFSP.access(paths.modulePath)]);
+      return paths;
+    }
     const target = NodePath.join(directory, "falkordb-macos-0.10.0");
     const marker = NodePath.join(target, "verified.sha256");
     const ready = await NodeFSP.readFile(marker, "utf8").catch(() => "");

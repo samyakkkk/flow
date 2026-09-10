@@ -2,7 +2,98 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+## Flow browser releases
+
+The local browser installer uses `.github/workflows/flow-browser-release.yml`,
+independently of the upstream desktop/npm/hosted release pipeline below.
+
+For an agent-guided release, use the repository's
+[$deploy-flow skill](../../.agents/skills/deploy-flow/SKILL.md). It covers preparing
+the exact commit, publishing, and verifying installation and update delivery.
+
+1. Develop on `main-v2`. Push the reviewed commit to `release` to ship it:
+
+   ```bash
+   git fetch origin
+   git push origin <verified-full-commit-sha>:refs/heads/release
+   ```
+
+   Use a normal fast-forward push; merge `origin/release` into your candidate
+   first if needed. Never force-push around a divergent release branch.
+2. Each push runs **Flow browser release** against the exact triggering SHA.
+   It selects the next patch above all stable `flow-vX.Y.Z` tags (for example,
+   `0.1.2` → `0.1.3`). No manual tagging or package version edit is needed.
+3. On an Apple Silicon macOS runner, the workflow builds the web app and native
+   dependencies once, verifies a private Node distribution against its official
+   checksum, and packages the runtime with Flow.
+4. It publishes a `flow-vX.Y.Z` GitHub release with `flow-source.tar.gz`,
+   `flow-source.tar.gz.sha256`, and its matching `flow-release.mjs` bootstrap,
+   plus `flow-browser-darwin-arm64.tar.gz` and its SHA-256 file, marked as latest.
+   Existing installations discover it automatically.
+5. Verify installation on supported targets and the transition from the preceding
+   release before broadly sharing the installer.
+
+Publication runs are serialized with a queue of up to 100 pending runs. Each
+checkout is pinned to its event SHA. A run whose source does not descend from the
+highest existing browser tag fails instead of publishing older code as latest.
+When manual dispatch is available, select the `release` branch; omit `version`
+for the next patch or supply a greater stable version for a minor/major release.
+Dispatch from another branch is rejected. A full rerun after successful publication
+creates another patch version; rerun only failed jobs when recovering publication.
+Inspect tags, drafts, and assets before retrying a partially successful release.
+
+The source archive remains available for older installers. New Mac installations
+select the platform bundle. `scripts/build-browser-bundle.mjs` accepts an isolated
+source archive, output directory, and version. It builds on the target Mac,
+includes private Node and Git runtimes and verified FalkorDB libraries, prunes
+build-only dependencies, and preserves the source/license files needed at runtime.
+Both browser and future desktop packaging can reuse the server/Brain build inputs;
+Electron native modules may still require its ABI-specific build.
+
+The builder runs the dependency audit, focused update tests, and packaged-runtime
+checks for Git commit/clone/worktrees, SQLite, terminal creation, Brain worker
+catalog, llama, and a graph query. Git is built with runtime-relative paths and
+ships with its corresponding source and license.
+Verify the relocated package with system Node absent from PATH, its Applications
+launcher, and a staged update before sharing. The installer creates a small
+`~/Applications/Flow.app` launcher locally; this is not a signed/notarized Electron
+distribution or a standalone downloaded `.app`.
+
+Keep the repository's latest stable release on this browser channel until there
+are separate platform feeds. The package manager is only used by the build job;
+recipient installation and bundled updates download, verify, and unpack assets.
+
+Pushing to `release` or dispatching this workflow publishes a real release.
+PRs targeting `main-v2` or `release` only validate; pushes to `main-v2` and tag
+pushes do not publish browser releases. A GitHub account billing lock prevents
+Actions jobs from starting and must be resolved before automatic publication works.
+Remote servers using upstream T3 service management retain their existing update
+mechanism; this installer manages its own local primary.
+
+## Flow desktop release readiness
+
+The workflow below is inherited from upstream T3. It is not yet a standalone
+Flow release pipeline. Before using it to distribute Flow from `main-v2`:
+
+- Adapt branch selection and version finalization to `main-v2`. Scheduled runs
+  use the repository's default branch; the inherited finalizer writes to `main`.
+- Separate Flow publication from upstream `t3` npm publishing and T3's relay,
+  Clerk, Vercel, and marketing deployment requirements. Remote server updates
+  currently depend on an exact matching `t3` package, so desktop-only publication
+  also needs an explicit decision about remote server update support.
+- Build with `T3CODE_DESKTOP_UPDATE_REPOSITORY=samyakkkk/flow` and publish the
+  installers, macOS ZIP payload, channel YAML, and blockmaps to that repository.
+  Configure Flow's application identity and signing before distributing desktop
+  builds; the packager still uses the upstream `com.t3tools.t3code` app ID.
+- Verify an installed Flow release can discover, download, and install a newer
+  Flow release while retaining its data before promising update delivery.
+
+The browser release manager and source-checkout launcher do not use Electron's
+updater. See [Updating Flow](../user/updating.md) for their separate update paths.
+
+## Upstream release workflow
+
+The following describes the inherited unified stable/nightly release workflow.
 
 ## What the workflow does
 

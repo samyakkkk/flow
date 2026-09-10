@@ -9,6 +9,19 @@ import {
 } from "./codexLaunchArgs.ts";
 
 describe("resolveCodexLaunchArgs", () => {
+  it("keeps the hydrated bundled environment without discarding provider launch settings", () => {
+    NodeAssert.equal(
+      resolveCodexLaunchArgs("--strict-config", { FLOW_BUNDLED_RUNTIME: "1" }),
+      "--strict-config -c allow_login_shell=false",
+    );
+    NodeAssert.equal(
+      resolveCodexLaunchArgs("--strict-config", {
+        FLOW_BUNDLED_RUNTIME: "1",
+        T3CODE_CODEX_LAUNCH_ARGS: "--enable foo",
+      }),
+      "--enable foo -c allow_login_shell=false",
+    );
+  });
   it("uses T3CODE_CODEX_LAUNCH_ARGS before configured settings", () => {
     NodeAssert.equal(
       resolveCodexLaunchArgs(" --strict-config ", { T3CODE_CODEX_LAUNCH_ARGS: "--enable foo" }),

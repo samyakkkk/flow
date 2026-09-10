@@ -1,4 +1,72 @@
-# Updating T3 Code
+# Updating Flow
+
+## GitHub release installation
+
+Flow checks for a stable GitHub release at startup and every six hours while
+running. Bundled Mac installations download and verify a ready-built package in
+a new directory. They do not run npm or build the app during updates.
+
+When the update is prepared, **Update ready** appears in the browser app's
+sidebar. Select **Restart to update**, then confirm when you are ready to
+interrupt active work. Flow restarts on the same address and the page reloads
+once the updated server is ready. Choose **Later** to keep working; the notice
+stays available. This restarts the server hosting the browser app, not a
+different remote environment selected in a thread.
+
+A prepared update also takes effect the next time you start the stopped primary
+app. Your instance identity, projects, threads, and Brain storage stay in the
+same data directory. Terminal commands remain available:
+
+```bash
+flow update --check  # Check availability without preparing the update
+flow update          # Download and prepare the latest stable release now
+flow restart         # Apply the prepared release; interrupts active work
+```
+
+Set `FLOW_AUTO_UPDATE=0` in your shell configuration to disable automatic
+preparation. Manual `flow update` remains available. Development instances stay
+on their saved checkout and do not switch versions automatically.
+
+If downloading, checksum verification, or preparation fails, the previous release
+remains selected. Inspect `~/.local/share/flow-browser/update.log` for automatic
+update failures, then retry with `flow update`. Paths are relative to
+`FLOW_RELEASE_HOME` when using a custom installation directory. Previous release
+directories are retained. Preparation checks the server's version command and
+web assets; it does not provide database rollback if a new server fails after
+startup or applies a migration.
+
+Older source-built release installations can adopt the private runtime and
+Applications launcher by rerunning the current installer. Until converted, they
+retain their source-build update path.
+
+## Source-checkout installation
+
+The checkout launcher installed by `scripts/install-flow.sh` does not use GitHub
+release updates. From your Flow checkout on `main-v2`, finish active work, then
+run each command only after the previous one succeeds:
+
+```bash
+flow stop
+git pull --ff-only origin main-v2
+bash scripts/install-flow.sh
+flow
+```
+
+If Git reports local changes or diverged history, resolve those before
+continuing. Stop any development instances using this checkout too, so files
+are not changed beneath their running servers. Updating preserves application data.
+
+## Desktop updater
+
+Packaged desktop builds inherit T3's background checks and user-triggered
+download/install through Electron. That is separate from the browser release
+installer. See the maintainer [release guidance](../operations/release.md) for
+Flow desktop distribution requirements.
+
+## Upstream T3 Code installations
+
+The guidance below applies to upstream T3 releases. Do not use `npx t3` to
+update a Flow installation; it installs the upstream application.
 
 The app you use and the server running your agents can be on different machines.
 When a server is behind your web or desktop app, an update notice appears in the

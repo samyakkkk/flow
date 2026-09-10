@@ -1,7 +1,39 @@
 import * as NodeOS from "node:os";
-import { assert, it } from "vite-plus/test";
+import { assert } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { HostProcessExecutablePath } from "@t3tools/shared/hostProcess";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
-import { hydratePosixHome } from "./os-jank.ts";
+import { hydratePosixHome, preserveBundledRuntimePath } from "./os-jank.ts";
+
+it.effect("keeps bundled tools ahead of system stubs after login-shell hydration", () =>
+  Effect.gen(function* () {
+    const env = { PATH: "/usr/bin:/bin:/app/runtime/bin:/app/runtime/git/bin" };
+    yield* preserveBundledRuntimePath(env, "darwin").pipe(
+      Effect.provideService(HostProcessExecutablePath, "/app/runtime/bin/node"),
+      Effect.provide([
+        FileSystem.layerNoop({
+          exists: (file) => Effect.succeed(file === "/app/flow-bundle.json"),
+        }),
+        Path.layer,
+      ]),
+    );
+    assert.equal(env.PATH, "/app/runtime/bin:/app/runtime/git/bin:/usr/bin:/bin");
+  }),
+);
+
+it.effect("preserves normal shell precedence outside a marked runtime bundle", () =>
+  Effect.gen(function* () {
+    const env = { PATH: "/usr/bin:/bin:/app/runtime/bin" };
+    yield* preserveBundledRuntimePath(env, "darwin").pipe(
+      Effect.provideService(HostProcessExecutablePath, "/app/runtime/bin/node"),
+      Effect.provide([FileSystem.layerNoop({ exists: () => Effect.succeed(false) }), Path.layer]),
+    );
+    assert.equal(env.PATH, "/usr/bin:/bin:/app/runtime/bin");
+  }),
+);
 
 it("hydrates HOME for minimal service environments from the user account", () => {
   const env: NodeJS.ProcessEnv = {};

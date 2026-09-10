@@ -52,8 +52,8 @@ authenticated connection. Moving a brain independently to a remote backend is
 still a future integration.
 
 This branch does not migrate installed data, configure Flow Cloud, or change
-existing installations. Upstream build and run instructions below apply to the
-T3 application. See [NOTICE.md](NOTICE.md) for attribution and license boundaries.
+existing installations. Use the Flow installation instructions below to run
+this fork. See [NOTICE.md](NOTICE.md) for attribution and license boundaries.
 
 ## Upstream T3 Code
 
@@ -69,59 +69,39 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 
 ## Installation
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build, OpenCode, and Antigravity. Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-> - Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**. No CLI is required.
-
-### Try it out (install-free)
-
-The easiest way to test T3 Code is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
+Install Flow on an Apple Silicon Mac running macOS 15 or newer:
 
 ```bash
-npx t3@latest
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
+open "$HOME/Applications/Flow.app"
 ```
 
-This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
+The installer downloads a ready-built app with its own Node runtime, server,
+web interface, and native Brain libraries. No Node, npm, Homebrew, Docker, or
+local build is required. Open **Flow** from your Applications folder whenever
+you want to use it; its interface opens in your browser. You can drag its icon
+to the Dock. Configure your provider and Brain in the app.
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+The `flow` terminal command is also installed in `~/.local/bin`. See the
+[source-checkout instructions](./docs/user/install.md#install-from-a-checkout)
+for development and Linux installations.
 
-### Desktop app
+The installer follows published browser releases. Pushes to the `release` branch
+build and publish the next version after release checks pass.
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+### Updates
 
-#### Windows (`winget`)
+Flow checks for updates in the background at startup and every six hours while
+running. Updates are downloaded and verified in a separate directory. When one is ready, the sidebar
+shows **Update ready · Restart to update**. Confirm the restart to apply it; the
+page reloads when Flow reconnects. Running sessions are not restarted without
+your action. A prepared update also takes effect when you next start the stopped
+app. Use `flow update` to prepare an update immediately, or `flow update --check`
+to check without downloading it.
 
-```bash
-winget install T3Tools.T3Code
-```
-
-#### macOS (Homebrew)
-
-```bash
-brew install --cask t3-code
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
+See [installation and provider setup](./docs/user/install.md) and
+[updating Flow](./docs/user/updating.md) for details. The upstream `npx t3`
+package and T3 desktop downloads install upstream T3 Code.
 
 ## Some notes
 
@@ -144,6 +124,9 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Run T3 Code as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+
+Publishing Flow? Use the repository's [$deploy-flow skill](./.agents/skills/deploy-flow/SKILL.md)
+and [browser release guide](./docs/operations/release.md#flow-browser-releases).
 
 ## If you REALLY want to contribute still.... read this first
 

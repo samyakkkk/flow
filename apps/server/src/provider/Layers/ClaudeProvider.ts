@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -27,6 +28,7 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
+  extractAuthBoolean,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -52,6 +54,7 @@ import {
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+const decodeClaudeAuthJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
@@ -553,6 +556,43 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         message: "Could not verify Claude authentication status from initialization result.",
       },
     });
+  }
+
+  // SDK initialization also succeeds when first-party Claude is logged out.
+  // External backends (such as Bedrock) authenticate through their own credentials.
+  if (capabilities.apiProvider === "firstParty") {
+    const authProbe = yield* runClaudeCommand(
+      claudeSettings,
+      ["auth", "status"],
+      resolvedEnvironment,
+    ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result);
+    const authenticated = Result.isSuccess(authProbe)
+      ? yield* decodeClaudeAuthJson(authProbe.success.stdout).pipe(
+          Effect.map(extractAuthBoolean),
+          // Unsupported or malformed output must not become an authenticated state.
+          Effect.orElseSucceed(() => undefined),
+        )
+      : undefined;
+    if (authenticated !== true) {
+      return buildServerProvider({
+        presentation: CLAUDE_PRESENTATION,
+        enabled: claudeSettings.enabled,
+        checkedAt,
+        models,
+        slashCommands: dedupedSlashCommands,
+        skills,
+        probe: {
+          installed: true,
+          version: parsedVersion,
+          status: "warning",
+          auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+          message:
+            authenticated === false
+              ? "Claude is not authenticated. Run `claude auth login` to sign in."
+              : "Could not verify Claude authentication status.",
+        },
+      });
+    }
   }
 
   const authMetadata =

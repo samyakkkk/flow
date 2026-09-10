@@ -1,11 +1,16 @@
 # Run Flow in a browser
 
-The source-checkout launcher starts chat and brain together in the background.
-It requires Node.js 22.16+ or 24.10+ and the checkout's dependencies. To install
+The launcher starts chat and brain together in the background.
+For the GitHub release installer, start with [Install Flow](./install.md).
+The commands below work for release and source installs; development instances
+still require a source checkout.
+
+To install directly from a checkout:
+It requires Node.js 24.13.1+ (24.x) and the checkout's dependencies. To install
 its command and build the web app, run:
 
 ```sh
-./scripts/install-flow.sh
+bash scripts/install-flow.sh
 ```
 
 Add the printed installation directory to PATH if needed. Then:
@@ -22,7 +27,7 @@ need to remember its port. Closing the terminal or browser leaves it running.
 `--no-open` prints the pairing link instead. Restart can interrupt active turns;
 it preserves application data. Provider CLI sign-ins remain shared.
 
-This installer runs from and retains a reference to its checkout; keep that
+The checkout installer runs from and retains a reference to its checkout; keep that
 checkout available. It does not yet download versioned releases or implement
 `flow update`/`flow repair`. Reinstalling refreshes the launcher without
 restarting apps. It refuses to overwrite an unrelated command. The existing
@@ -62,11 +67,12 @@ All modes share provider sign-ins. Separate application data does not isolate
 edits to the same working folder; use separate Git worktrees for independent
 coding tests. Test instances do not copy primary projects or connector settings.
 
-Data and saved instance configuration live beneath
-`~/.local/share/flow-app/instances`. For automation, `FLOW_INSTANCE_HOME` selects
+Data and saved instance configuration for source installations live beneath
+`~/.local/share/flow-app/instances`. Release installations use
+`~/.local/share/flow-browser/instance-home/instances` by default. For automation, `FLOW_INSTANCE_HOME` selects
 an entirely separate registry. It does not change provider credential homes.
 The first primary launch starts with new storage; existing legacy T3/Flow data
 is not migrated automatically.
 
 The current supervisor and installation script target macOS/Linux. Windows
-process-tree supervision and standalone release distribution remain follow-ups.
+process-tree supervision remains a follow-up.

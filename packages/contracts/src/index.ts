@@ -41,3 +41,4 @@ export * from "./usage.ts";
 export * from "./rpc.ts";
 
 export * from "./brain.ts";
+export * from "./flowBrowserUpdate.ts";

@@ -190,6 +190,8 @@ peerDependencyRules:
     vite: "*"
 
 supportedArchitectures:
-  cpu: [current, x64]
-  libc: [current, glibc]
-  os: [current, linux]
+  # Browser installs build on the recipient's machine. Keep cross-platform
+  # dependencies for development/release tooling unless the installer opts out.
+  cpu: [current, "${FLOW_INSTALL_CPU-x64}"]
+  libc: [current, "${FLOW_INSTALL_LIBC-glibc}"]
+  os: [current, "${FLOW_INSTALL_OS-linux}"]
