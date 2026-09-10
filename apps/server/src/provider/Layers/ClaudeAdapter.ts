@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  type Query,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -336,6 +337,7 @@ interface ClaudeSessionContext {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly setMcpServers?: Query["setMcpServers"];
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
@@ -4719,15 +4721,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               tools: [],
               allowedTools: ["mcp__t3-code__*"],
               strictMcpConfig: true,
-              mcpServers: mcpSession
-                ? {
-                    "t3-code": {
-                      type: "http",
-                      url: mcpSession.endpoint,
-                      headers: { Authorization: mcpSession.authorizationHeader },
-                    },
-                  }
-                : {},
+              // Connect after SDK initialization and await the connection receipt.
+              // Initial MCP discovery otherwise races the first observer turn.
+              mcpServers: {},
               canUseTool: async (name, input) =>
                 name.startsWith("mcp__t3-code__")
                   ? { behavior: "allow", updatedInput: input }
@@ -4786,6 +4782,43 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             cause,
           }),
       });
+
+      if (observer !== undefined && mcpSession) {
+        yield* Effect.tryPromise({
+          try: async () => {
+            if (!queryRuntime.setMcpServers)
+              throw new Error("Claude does not support awaited MCP setup.");
+            const result = await queryRuntime.setMcpServers({
+              "t3-code": {
+                type: "http",
+                url: mcpSession.endpoint,
+                headers: { Authorization: mcpSession.authorizationHeader },
+              },
+            });
+            if (Object.keys(result.errors).length || !result.added.includes("t3-code"))
+              throw new Error("The Brain curator tools could not connect.");
+          },
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId,
+              detail: "Could not connect the background Claude session to its Brain tools.",
+              cause,
+            }),
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId,
+                detail: "Could not connect the background Claude session to its Brain tools.",
+                cause,
+              }),
+          ),
+          Effect.onError(() => Effect.sync(() => queryRuntime.close())),
+        );
+      }
 
       const session: ProviderSession = {
         threadId,

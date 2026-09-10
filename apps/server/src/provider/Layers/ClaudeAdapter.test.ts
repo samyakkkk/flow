@@ -38,6 +38,8 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { setMcpProviderSession, clearMcpProviderSession } from "../../mcp/McpProviderSession.ts";
+import { EnvironmentId } from "@t3tools/contracts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -59,6 +61,9 @@ class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()
 ) {}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
+  setMcpServers?: (
+    servers: unknown,
+  ) => Promise<{ added: string[]; removed: string[]; errors: Record<string, string> }>;
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{
     readonly resolve: (value: IteratorResult<SDKMessage>) => void;
@@ -163,6 +168,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
 function makeHarness(config?: {
   readonly observerInstructions?: string;
+  readonly connectMcp?: FakeClaudeQuery["setMcpServers"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
   readonly cwd?: string;
@@ -173,6 +179,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
 }) {
   const query = new FakeClaudeQuery();
+  if (config?.connectMcp) query.setMcpServers = config.connectMcp;
   let createInput:
     | {
         readonly prompt: AsyncIterable<SDKUserMessage>;
@@ -378,6 +385,57 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
     );
+  });
+
+  it.effect("waits for private MCP connection before accepting the first observer turn", () => {
+    const started = Promise.withResolvers<unknown>();
+    const connected = Promise.withResolvers<{
+      added: string[];
+      removed: string[];
+      errors: Record<string, string>;
+    }>();
+    const harness = makeHarness({
+      observerInstructions: "Curate evidence.",
+      connectMcp: (servers) => {
+        started.resolve(servers);
+        return connected.promise;
+      },
+    });
+    return Effect.gen(function* () {
+      setMcpProviderSession({
+        environmentId: EnvironmentId.make("test"),
+        threadId: THREAD_ID,
+        providerSessionId: THREAD_ID,
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://localhost/private-curator",
+        authorizationHeader: "Bearer fixture",
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => clearMcpProviderSession(THREAD_ID)));
+      const adapter = yield* ClaudeAdapter;
+      let ready = false;
+      const session = yield* adapter
+        .startSession({ threadId: THREAD_ID, runtimeMode: "approval-required" })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              ready = true;
+            }),
+          ),
+          Effect.forkChild,
+        );
+      const servers = yield* Effect.promise(() => started.promise);
+      assert.equal(ready, false);
+      assert.deepEqual(servers, {
+        "t3-code": {
+          type: "http",
+          url: "http://localhost/private-curator",
+          headers: { Authorization: "Bearer fixture" },
+        },
+      });
+      connected.resolve({ added: ["t3-code"], removed: [], errors: {} });
+      yield* Fiber.join(session);
+      assert.equal(ready, true);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
   it.effect("isolates observer sessions from native history, hooks, and coding tools", () => {
