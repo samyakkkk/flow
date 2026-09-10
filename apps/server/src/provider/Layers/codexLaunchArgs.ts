@@ -5,7 +5,14 @@ export const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
 export const resolveCodexLaunchArgs = (
   launchArgs?: string,
   environment: NodeJS.ProcessEnv = process.env,
-) => environment[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || launchArgs?.trim() || "";
+) => {
+  const configured = environment[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || launchArgs?.trim() || "";
+  // Flow already hydrated the login environment before restoring its private
+  // tools. A second login shell would move macOS's developer-tool stubs first.
+  return environment.FLOW_BUNDLED_RUNTIME === "1"
+    ? `${configured} -c allow_login_shell=false`.trim()
+    : configured;
+};
 
 export const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> =>
   tokenizeCliArgs(launchArgs);

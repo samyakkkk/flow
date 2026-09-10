@@ -1,4 +1,8 @@
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessEnvironment,
+  HostProcessExecutablePath,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
 import {
   listLoginShellCandidates,
   mergePathEntries,
@@ -48,6 +52,29 @@ export function hydratePosixHome(
   }
 }
 
+export const preserveBundledRuntimePath = Effect.fn("preserveBundledRuntimePath")(function* (
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const executable = yield* HostProcessExecutablePath;
+  const bin = path.dirname(executable);
+  if (path.basename(bin) !== "bin" || path.basename(path.dirname(bin)) !== "runtime") return;
+  const root = path.resolve(bin, "../..");
+  const bundled = yield* fs
+    .exists(path.join(root, "flow-bundle.json"))
+    .pipe(Effect.orElseSucceed(() => false));
+  if (!bundled) return;
+  env.FLOW_BUNDLED_RUNTIME = "1";
+  // Login-shell hydration puts Apple's Git stub first on a clean Mac.
+  env.PATH = mergePathEntries(
+    [bin, path.join(root, "runtime/git/bin")].join(":"),
+    env.PATH,
+    platform,
+  );
+});
+
 export const fixPath = Effect.fn("fixPath")(function* (): Effect.fn.Return<
   void,
   never,
@@ -89,6 +116,7 @@ export const fixPath = Effect.fn("fixPath")(function* (): Effect.fn.Return<
       }),
     ),
   );
+  yield* preserveBundledRuntimePath(env, platform);
 });
 
 export const expandHomePath = Effect.fn(function* (input: string) {
