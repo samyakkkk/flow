@@ -29,7 +29,10 @@ if [ "$FLOW_BUILD" = 1 ]; then
     # Bootstrap outside the workspace and skip Vite+'s browser-test peers. The
     # actual app dependencies are resolved by pnpm from the frozen lockfile.
     FLOW_BOOTSTRAP=$(mktemp -d)
-    npm install --prefix "$FLOW_BOOTSTRAP" --legacy-peer-deps --no-audit --no-fund --package-lock=false vite-plus@0.3.0
+    # Make the host binding required: npm can silently omit failed optional
+    # downloads and otherwise report success with an unusable bootstrap.
+    FLOW_VP_NATIVE=$("$FLOW_NODE" -p '"@voidzero-dev/vite-plus-" + process.platform + "-" + process.arch + (process.platform === "linux" ? (process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl") : "")')
+    npm install --prefix "$FLOW_BOOTSTRAP" --legacy-peer-deps --no-audit --no-fund --package-lock=false vite-plus@0.3.0 "${FLOW_VP_NATIVE}@0.3.0"
     FLOW_VP="$FLOW_BOOTSTRAP/node_modules/.bin/vp"
   else
     FLOW_VP="$FLOW_SOURCE/node_modules/.bin/vp"

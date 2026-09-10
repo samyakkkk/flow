@@ -2396,7 +2396,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             Layer.updateService(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
               ChildProcessSpawner.make((command) => {
                 if (command._tag !== "StandardCommand") return spawner.spawn(command);
-                spawnedCommands.push(command.command);
+                // Platform package-manager discovery can run concurrently.
+                // This assertion tracks only the two configured Codex probes.
+                if (command.command === firstMissing || command.command === secondMissing)
+                  spawnedCommands.push(command.command);
                 const beforeSpawn =
                   command.command === secondMissing
                     ? Deferred.succeed(secondProbeStarted, undefined).pipe(
