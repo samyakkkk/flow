@@ -32,6 +32,15 @@ to PATH to use `flow` from any terminal. To choose another CLI prefix, append
 `-s -- --prefix /your/prefix` to the `bash` command above. Unrelated launchers and
 applications are never overwritten.
 
+The installer also retires recognized legacy Flow aliases, CLI wrappers, coding-agent
+hooks, and background services, even if the old CLI or Node installation is broken.
+It stops only identifiable Flow services and containers; unrelated Redis instances
+are left running. Changed files and container restart settings are backed up under
+`~/.flow/retired/`. Old Brain data is kept in place and is not migrated.
+Restart any existing terminals and coding-agent sessions to clear their cached
+aliases and hooks. You can open **Flow.app** immediately. Any legacy items that
+cannot be safely identified are reported for review.
+
 If you installed an earlier source-built release, rerun this installer to adopt
 the bundled runtime. Existing data stays in place; an active server keeps running
 until you explicitly restart it. Future bundled updates require no local build.
