@@ -15,7 +15,6 @@ import { cn } from "../../lib/utils";
 import { BrandWordmark } from "../BrandWordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
-  resolveSidebarStageBackdropVariant,
   StageBackdropButtonArt,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
@@ -212,12 +211,6 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 });
 
 export function SidebarBrainLink() {
-  const stageLabel = useEnvironmentStageLabel();
-  const environmentIdentificationMode = useEnvironmentIdentificationMode();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode === "artwork",
-  );
   const active = useLocation({ select: (location) => location.pathname === "/brain" });
   const { isMobile, setOpenMobile } = useSidebar();
   return (
@@ -229,20 +222,12 @@ export function SidebarBrainLink() {
         onClick={() => {
           if (isMobile) setOpenMobile(false);
         }}
-        className={cn(
-          "relative isolate flex items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          backdropVariant
-            ? "text-white hover:brightness-110"
-            : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          active && !backdropVariant && "bg-sidebar-accent text-sidebar-accent-foreground",
-        )}
+        className="relative isolate flex items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-sm font-medium text-white outline-none hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {backdropVariant && (
-          <span aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-            <StageBackdropButtonArt variant={backdropVariant} />
-            <span className="absolute inset-0 bg-black/15" />
-          </span>
-        )}
+        <span aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+          <StageBackdropButtonArt variant="dev" />
+          <span className="absolute inset-0 bg-black/15" />
+        </span>
         <BrainCircuit size={16} />
         <span>Brain</span>
       </Link>
