@@ -74,6 +74,23 @@ test("release lookup reports unavailable or rate-limited feeds", async () => {
   }
 });
 
+test("release lookup ignores desktop releases and selects the newest browser version", async () => {
+  const result = await latestRelease(
+    async () =>
+      new Response(
+        JSON.stringify([
+          { ...release("flow-desktop-v9.0.0"), tag_name: "flow-desktop-v9.0.0" },
+          release("flow-v1.9.0"),
+          release("flow-v1.10.0"),
+          { ...release("flow-v2.0.0"), prerelease: true },
+        ]),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+  );
+
+  assert.equal(result.tag, "flow-v1.10.0");
+});
+
 async function fixture(t) {
   const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "flow-release-test-")));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

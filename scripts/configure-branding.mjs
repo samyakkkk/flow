@@ -108,7 +108,7 @@ const desktopPackage = JSON.parse(
 );
 outputs.set(
   "apps/desktop/package.json",
-  JSON.stringify({ ...desktopPackage, productName: `${config.name} (Alpha)` }, null, 2) + "\n",
+  JSON.stringify({ ...desktopPackage, productName: config.name }, null, 2) + "\n",
 );
 outputs.set(
   "assets/brand/fingerprint",

@@ -94,11 +94,25 @@ async function download(url, fetcher = fetch, timeout = 120000) {
 }
 
 export async function latestRelease(fetcher = fetch) {
-  return validateRelease(
-    await (
-      await download(`https://api.github.com/repos/${repository}/releases/latest`, fetcher)
-    ).json(),
+  const releases = await (
+    await download(`https://api.github.com/repos/${repository}/releases?per_page=100`, fetcher)
+  ).json();
+  if (!Array.isArray(releases)) throw Error("GitHub returned an invalid Flow release feed.");
+
+  const stableBrowserReleases = releases.filter(
+    (release) =>
+      release &&
+      tagPattern.test(release.tag_name) &&
+      release.draft !== true &&
+      release.prerelease !== true,
   );
+  const latest = stableBrowserReleases.reduce(
+    (selected, release) =>
+      selected === undefined || newerTag(release.tag_name, selected.tag_name) ? release : selected,
+    undefined,
+  );
+  if (!latest) throw Error("No stable Flow browser release (flow-vX.Y.Z) is available.");
+  return validateRelease(latest);
 }
 
 export function verifyArchive(bytes, checksum, name = assetName) {
