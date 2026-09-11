@@ -49,7 +49,7 @@ a brain later from the side panel or project settings.
 
 Choose a brain for the project to give its chats Flow's graph, memory, and committed-source
 access. The next regular message automatically supplies Flow's orientation, including in an
-existing chat. Chats receive the original Flow tools without a separate skill or MCP installation.
+existing chat. Chats receive Flow's Brain tools without a separate skill or MCP installation.
 
 Orientation refreshes after an agent session restarts, after compaction, or when you change the
 connected brain. It is not repeated on every message. Disconnecting stops further reads and

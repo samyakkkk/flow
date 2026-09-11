@@ -10,8 +10,8 @@
   <p>Run your coding agents. Flow remembers the work.</p>
 </div>
 
-Flow is an open-source workspace for coding agents. Start a task with the provider
-you already use, and Flow captures the session into a project Brain: a searchable
+Flow is an open-source workspace for coding agents. Start a task with the coding
+agent you already use, and Flow captures the session into a project Brain: a searchable
 knowledge graph, retained conversation notes, living documentation, and reusable
 skills that improve as the project evolves.
 
@@ -80,9 +80,8 @@ uses that evidence to keep conversation notes, project knowledge, documentation,
 and skills current. Agents consult the Brain before working and can trace recalled
 context back to its source instead of relying on a loose prompt summary.
 
-The local app manages the Brain runtime for you. There is no separate `flow up`
-lifecycle to operate, and creating another project does not start another database
-or load another embedding model.
+The local app starts and manages the Brain automatically, so you can create a
+project and begin working without configuring a separate service.
 
 <p align="center">
   <img src="./docs/images/flow-knowledge-graph.webp" alt="Flow Brain knowledge graph showing project entities and relationships" width="1200">
@@ -145,8 +144,7 @@ please report problems and propose changes in
 Flow uses the open-source [T3 Code](https://github.com/pingdotgg/t3code) agent
 harness as its interface and runtime foundation. T3's original Git history and
 license notices are preserved. Flow's active Brain packages live under
-[`flow-t3/shared/`](./flow-t3/README.md), while the original Flow implementation is
-kept under [`flow/`](./flow/README.md) as a historical reference.
+[`flow-t3/shared/`](./flow-t3/README.md).
 
 See [NOTICE.md](./NOTICE.md) and [LICENSE](./LICENSE) for attribution and license
 details.
