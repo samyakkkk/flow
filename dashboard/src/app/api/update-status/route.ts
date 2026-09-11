@@ -14,9 +14,12 @@ const exec = promisify(execFile);
 // updates at start, but a dashboard that's been up for days never sees that).
 //
 // Mirrors the CLI's maybeSelfUpdate guards (bin/flow.mjs): only reports
-// commits that `flow up` would actually apply — clean worktree, on the
-// default branch, fast-forwardable. A dirty dev checkout reports 0 rather
-// than nagging about updates the CLI would refuse to pull.
+// commits that `flow up` would actually apply — clean worktree, on a legacy
+// install branch, and available from the isolated origin/main-legacy channel.
+// Transitional installs may still be locally named main/master, but this code
+// never reads their configured upstream (which may still be origin/main).
+// A dirty dev checkout reports 0 rather than nagging about updates the CLI
+// would refuse to pull.
 //
 // git fetch hits the network, so results are cached for 30 minutes across
 // requests (and across the multiple per-project dashboards sharing this
@@ -30,6 +33,8 @@ interface UpdateStatus {
 }
 
 const TTL_MS = 30 * 60 * 1000;
+const LEGACY_UPDATE_BRANCH = "main-legacy";
+const LEGACY_UPDATE_REF = `origin/${LEGACY_UPDATE_BRANCH}`;
 let cache: UpdateStatus | null = null;
 
 // dashboard/ is spawned with cwd = <flow root>/dashboard (bin/flow.mjs).
@@ -45,20 +50,20 @@ async function checkUpstream(): Promise<UpdateStatus> {
   if (!existsSync(join(FLOW_ROOT, ".git"))) return none;
   try {
     const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (branch !== "main" && branch !== "master") return none;
+    if (!["main", "master", LEGACY_UPDATE_BRANCH].includes(branch)) return none;
     if (await git(["status", "--porcelain"])) return none; // dirty dev checkout
-    await git(["rev-parse", "--abbrev-ref", "@{u}"]); // throws when no upstream
-    await git(["fetch", "--quiet"], 15000);
-    const behind = Number(await git(["rev-list", "--count", "HEAD..@{u}"]));
+    await git(["fetch", "--quiet", "origin", LEGACY_UPDATE_BRANCH], 15000);
+    await git(["rev-parse", "--verify", LEGACY_UPDATE_REF]);
+    const behind = Number(await git(["rev-list", "--count", `HEAD..${LEGACY_UPDATE_REF}`]));
     if (!behind) return none;
     return {
       behind,
       current: await git(["rev-parse", "--short", "HEAD"]),
-      latest: await git(["rev-parse", "--short", "@{u}"]),
+      latest: await git(["rev-parse", "--short", LEGACY_UPDATE_REF]),
       checkedAt: Date.now(),
     };
   } catch {
-    return none; // offline / detached / no upstream — never surface an error
+    return none; // offline / detached / missing legacy channel — never surface an error
   }
 }
 
@@ -76,7 +81,7 @@ export async function GET() {
 }
 
 // Tapping the banner runs the same command the old badge told users to type:
-// `flow up`. The CLI owns the whole update path — ff-only pull, npm install
+// `flow up`. The CLI owns the whole update path — ff-only merge, npm install
 // when the lockfile moved, dashboard rebuild, restart of every service
 // INCLUDING this process — so the child must be detached, with output going
 // to data/logs/self-update.log. The client keeps polling GET and reloads when

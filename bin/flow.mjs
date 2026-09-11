@@ -180,15 +180,23 @@ function readGlobalKey(projectDir, key) {
 //
 // `flow up` fast-forwards the checkout before starting services, so "update
 // flow" is just "flow up" — migrations and reconcilers run at service boot
-// with the new code. Deliberately conservative: ff-only, and skipped entirely
-// when this looks like a dev checkout (dirty worktree or non-default branch),
-// when offline, or when opted out (--no-update / FLOW_NO_UPDATE=1). An update
-// failure never blocks boot.
+// with the new code. Legacy installations have their own permanent update
+// channel: origin/main-legacy. Transitional installs may still have a local
+// branch named main/master, but they must never follow origin/main after this
+// updater lands because that branch is reserved for the new Flow generation.
 //
-// After a successful pull the CLI re-execs itself (with updates disabled) so
+// Deliberately conservative: ff-only, and skipped entirely when this looks
+// like a dev checkout (dirty worktree or an unrelated branch), when offline,
+// or when opted out (--no-update / FLOW_NO_UPDATE=1). An update failure never
+// blocks boot.
+//
+// After a successful fast-forward the CLI re-execs itself (with updates disabled) so
 // the rest of the invocation runs the NEW cli code too — otherwise this
 // process would keep executing the old flow.mjs from memory while spawning
 // new-source services.
+
+const LEGACY_UPDATE_BRANCH = "main-legacy";
+const LEGACY_UPDATE_REF = `origin/${LEGACY_UPDATE_BRANCH}`;
 
 function maybeSelfUpdate() {
   if (process.env.FLOW_NO_UPDATE === "1") return;
@@ -198,17 +206,23 @@ function maybeSelfUpdate() {
     spawnSync("git", args, { cwd: flowRoot, encoding: "utf8", timeout });
 
   const branch = (git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout ?? "").trim();
-  if (branch !== "main" && branch !== "master") return; // dev checkout on a feature branch
+  if (!["main", "master", LEGACY_UPDATE_BRANCH].includes(branch)) return; // dev checkout on a feature branch
   if ((git(["status", "--porcelain"]).stdout ?? "").trim()) return; // dirty — dev checkout
-  if (git(["rev-parse", "--abbrev-ref", "@{u}"]).status !== 0) return; // no upstream
 
-  if (git(["fetch", "--quiet"], 10000).status !== 0) return; // offline / remote unreachable
-  const behind = Number((git(["rev-list", "--count", "HEAD..@{u}"]).stdout ?? "0").trim());
+  if (git(["fetch", "--quiet", "origin", LEGACY_UPDATE_BRANCH], 10000).status !== 0) return;
+  if (git(["rev-parse", "--verify", LEGACY_UPDATE_REF]).status !== 0) return;
+
+  // Best effort: this also makes a manual `git pull` from an older local
+  // main/master checkout follow the legacy channel. The updater itself never
+  // relies on this setting; every comparison and merge names the ref above.
+  git(["branch", "--set-upstream-to", LEGACY_UPDATE_REF, branch]);
+
+  const behind = Number((git(["rev-list", "--count", `HEAD..${LEGACY_UPDATE_REF}`]).stdout ?? "0").trim());
   if (!behind) return;
 
   const oldHead = (git(["rev-parse", "--short", "HEAD"]).stdout ?? "").trim();
   const lockBefore = (git(["rev-parse", "HEAD:package-lock.json"]).stdout ?? "").trim();
-  if (git(["pull", "--ff-only", "--quiet"], 60000).status !== 0) {
+  if (git(["merge", "--ff-only", "--quiet", LEGACY_UPDATE_REF], 60000).status !== 0) {
     console.log(c.dim("  update available but not fast-forwardable — skipped (git pull manually)"));
     return;
   }
