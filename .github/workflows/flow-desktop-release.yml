@@ -218,8 +218,8 @@ jobs:
 
           mount_dir="$RUNNER_TEMP/flow-dmg"
           mkdir -p "$mount_dir"
-          device="$(hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir" | awk 'NR == 1 {print $1}')"
-          trap 'hdiutil detach "$device" >/dev/null' EXIT
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
           codesign --verify --deep --strict --verbose=2 "$mount_dir/Flow.app"
           spctl --assess --type execute --verbose=4 "$mount_dir/Flow.app"
 
