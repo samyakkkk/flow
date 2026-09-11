@@ -1,29 +1,62 @@
 {
-  "name": "flow",
-  "version": "0.1.0",
-  "license": "AGPL-3.0-only",
-  "type": "module",
-  "description": "Flow \u2014 multi-project CLI for the knowledge-graph agent system.",
-  "bin": {
-    "flow": "bin/flow.mjs"
-  },
-  "scripts": {
-    "preinstall": "node scripts/check-node.mjs",
-    "dev": "npm run --workspace orchestrator dev & npm run --workspace graph-gateway dev & npm run --workspace dashboard dev",
-    "verify": "bash verify-all.sh"
-  },
-  "workspaces": [
-    "orchestrator",
-    "graph-gateway",
-    "dashboard"
-  ],
+  "name": "@t3tools/monorepo",
   "private": true,
-  "engines": {
-    "node": ">=22",
-    "npm": ">=9"
+  "type": "module",
+  "scripts": {
+    "prepare": "node scripts/clean-tsgo-backups.mjs && effect-tsgo patch && vp config --no-agent",
+    "dev": "node scripts/dev-runner.ts dev",
+    "dev:share": "node scripts/dev-runner.ts dev --share",
+    "dev:server": "node scripts/dev-runner.ts dev:server",
+    "dev:web": "node scripts/dev-runner.ts dev:web",
+    "dev:marketing": "vp run --filter @t3tools/marketing dev",
+    "dev:desktop": "node scripts/dev-runner.ts dev:desktop",
+    "migrate-dev-db": "node apps/server/scripts/migrate-dev-db.ts",
+    "start": "vp run --filter t3 start",
+    "start:desktop": "vp run --filter @t3tools/desktop start",
+    "start:marketing": "vp run --filter @t3tools/marketing preview",
+    "start:mock-update-server": "node scripts/mock-update-server.ts",
+    "screenshots:mobile": "node scripts/mobile-showcase.ts",
+    "icons:export": "node scripts/configure-branding.mjs",
+    "icons:check": "node scripts/configure-branding.mjs --check",
+    "build": "vp run --filter './apps/*' build",
+    "build:marketing": "vp run --filter @t3tools/marketing build",
+    "build:desktop": "vp run --filter @t3tools/desktop --filter t3 build",
+    "build:resource-monitor": "cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml",
+    "typecheck": "vp run -r --concurrency-limit 2 typecheck",
+    "tc": "vp run -r --concurrency-limit 2 typecheck",
+    "lint": "vp lint --report-unused-disable-directives",
+    "knip": "knip --preprocessor ./scripts/knip-schemas.ts",
+    "knip:check": "knip --include files,dependencies --no-config-hints && knip --workspace apps/web --workspace packages/client-runtime --workspace packages/contracts --workspace packages/effect-acp --workspace packages/effect-codex-app-server --workspace packages/shared --workspace packages/ssh --workspace packages/tailscale --exports --preprocessor ./scripts/knip-schemas.ts --no-config-hints",
+    "knip:production": "knip --production --preprocessor ./scripts/knip-schemas.ts",
+    "lint:mobile": "node scripts/mobile-native-static-check.ts",
+    "test": "vp run -r test",
+    "test:resource-monitor": "cargo test --locked --manifest-path native/resource-monitor/Cargo.toml",
+    "test:desktop-smoke": "vp run --filter @t3tools/desktop smoke-test",
+    "fmt": "vp fmt",
+    "fmt:check": "vp fmt --check",
+    "dist:desktop:artifact": "node scripts/build-desktop-artifact.ts",
+    "dist:desktop:dmg": "node scripts/build-desktop-artifact.ts --platform mac --target dmg",
+    "dist:desktop:dmg:arm64": "node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64",
+    "dist:desktop:dmg:x64": "node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch x64",
+    "dist:desktop:linux": "node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64",
+    "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis",
+    "dist:desktop:win:arm64": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch arm64",
+    "dist:desktop:win:x64": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
+    "release:smoke": "node scripts/release-smoke.ts",
+    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
+    "sync:repos": "node scripts/sync-reference-repos.ts",
+    "branding:generate": "node scripts/configure-branding.mjs",
+    "branding:check": "node scripts/configure-branding.mjs --check"
   },
-  "dependencies": {
-    "falkordb": "^6.2.0",
-    "jsonc-parser": "^3.3.1"
-  }
+  "devDependencies": {
+    "@effect/tsgo": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "knip": "6.34.0",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": "^24.13.1"
+  },
+  "packageManager": "pnpm@11.10.0"
 }

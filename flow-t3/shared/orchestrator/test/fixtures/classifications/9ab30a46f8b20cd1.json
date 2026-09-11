@@ -1,0 +1,7 @@
+{
+  "classification": "not_applicable",
+  "confidence": 0.90,
+  "extracted": {
+    "reason": "comment event, not a ticket requiring context"
+  }
+}

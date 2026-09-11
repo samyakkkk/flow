@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libcurl4t64 libgomp1 openssh-client && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 10001 flow
+USER flow
+WORKDIR /home/flow
+ENV HOME=/home/flow PATH=/usr/bin:/bin
+CMD ["sleep", "infinity"]

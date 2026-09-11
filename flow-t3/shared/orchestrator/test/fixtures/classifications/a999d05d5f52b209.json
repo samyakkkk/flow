@@ -1,0 +1,8 @@
+{
+  "classification": "open_question",
+  "confidence": 0.88,
+  "extracted": {
+    "question": "Kubernetes vs ECS for container orchestration?",
+    "area": "infrastructure"
+  }
+}

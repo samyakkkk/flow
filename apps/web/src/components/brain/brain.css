@@ -1,0 +1,16 @@
+.brain-graph-surface {
+  position: relative;
+  height: 340px;
+  overflow: auto;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--muted-foreground) 18%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+}
+.brain-graph-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 128px;
+  max-width: 32%;
+}

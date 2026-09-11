@@ -1,0 +1,327 @@
+name: Flow Desktop Release
+
+on:
+  push:
+    tags:
+      - "flow-desktop-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Desktop version to publish (for example 0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flow-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Resolve release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - id: release
+        name: Validate version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            version="${GITHUB_REF_NAME#flow-desktop-v}"
+          else
+            version="${INPUT_VERSION#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must be X.Y.Z; received '$version'." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=flow-desktop-v$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            runner: macos-15
+            platform: mac
+            target: dmg
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+          - label: macOS x64
+            runner: macos-15
+            platform: mac
+            target: dmg
+            arch: x64
+            rust_target: x86_64-apple-darwin
+          - label: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install desktop dependencies
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux build libraries
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+
+      - name: Configure public application services
+        shell: bash
+        env:
+          CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+          CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+          RELAY_URL: ${{ vars.RELAY_URL }}
+        run: |
+          set -euo pipefail
+          : > .env
+          [[ -z "$CLERK_PUBLISHABLE_KEY" ]] || printf 'T3CODE_CLERK_PUBLISHABLE_KEY=%s\n' "$CLERK_PUBLISHABLE_KEY" >> .env
+          [[ -z "$CLERK_JWT_TEMPLATE" ]] || printf 'T3CODE_CLERK_JWT_TEMPLATE=%s\n' "$CLERK_JWT_TEMPLATE" >> .env
+          [[ -z "$CLERK_CLI_OAUTH_CLIENT_ID" ]] || printf 'T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=%s\n' "$CLERK_CLI_OAUTH_CLIENT_ID" >> .env
+          [[ -z "$RELAY_URL" ]] || printf 'T3CODE_RELAY_URL=%s\n' "$RELAY_URL" >> .env
+
+      - name: Set release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Prepare Apple credentials
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID_VALUE: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          MACOS_PROVISIONING_PROFILE_VALUE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+          APPLE_TEAM_ID_VALUE: ${{ vars.APPLE_TEAM_ID }}
+          PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+        run: |
+          set -euo pipefail
+          required=(CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_VALUE APPLE_API_KEY_ID_VALUE APPLE_API_ISSUER)
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required Apple release credential: $name" >&2
+              exit 1
+            fi
+          done
+
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID_VALUE}.p8"
+          printf '%s' "$APPLE_API_KEY_VALUE" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID_VALUE" >> "$GITHUB_ENV"
+
+          if [[ -n "$PASSKEY_RP_DOMAINS" ]]; then
+            if [[ -z "$APPLE_TEAM_ID_VALUE" || -z "$MACOS_PROVISIONING_PROFILE_VALUE" ]]; then
+              echo "Passkey domains require APPLE_TEAM_ID and MACOS_PROVISIONING_PROFILE." >&2
+              exit 1
+            fi
+            profile_path="$RUNNER_TEMP/Flow.provisionprofile"
+            printf '%s' "$MACOS_PROVISIONING_PROFILE_VALUE" | base64 -D > "$profile_path"
+            security cms -D -i "$profile_path" >/dev/null
+            echo "T3CODE_APPLE_TEAM_ID=$APPLE_TEAM_ID_VALUE" >> "$GITHUB_ENV"
+            echo "T3CODE_MACOS_PROVISIONING_PROFILE=$profile_path" >> "$GITHUB_ENV"
+            echo "T3CODE_CLERK_PASSKEY_RP_DOMAINS=$PASSKEY_RP_DOMAINS" >> "$GITHUB_ENV"
+          fi
+
+      - id: build
+        name: Build desktop artifact
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          T3CODE_DESKTOP_UPDATE_URL: https://github.com/${{ github.repository }}/releases/download/flow-desktop-latest
+        run: |
+          set -euo pipefail
+          args=(
+            --platform "${{ matrix.platform }}"
+            --target "${{ matrix.target }}"
+            --arch "${{ matrix.arch }}"
+            --build-version "${{ needs.preflight.outputs.version }}"
+            --verbose
+          )
+          [[ "${{ matrix.platform }}" != "mac" ]] || args+=(--signed)
+          vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Notarize and validate macOS distribution files
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          zips=(release/*.zip)
+          (( ${#dmgs[@]} == 1 && ${#zips[@]} == 1 )) || {
+            echo "Expected one DMG and one ZIP." >&2
+            exit 1
+          }
+
+          for artifact in "${dmgs[0]}" "${zips[0]}"; do
+            xcrun notarytool submit "$artifact" \
+              --key "$APPLE_API_KEY" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER" \
+              --wait
+          done
+
+          xcrun stapler staple "${dmgs[0]}"
+          xcrun stapler validate "${dmgs[0]}"
+          node scripts/refresh-update-manifest.ts release/latest-mac.yml release macOS
+
+          zip_dir="$RUNNER_TEMP/flow-zip"
+          ditto -x -k "${zips[0]}" "$zip_dir"
+          zip_app="$(find "$zip_dir" -maxdepth 1 -type d -name 'Flow.app' -print -quit)"
+          [[ -n "$zip_app" ]] || { echo "Flow.app is missing from ZIP." >&2; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$zip_app"
+          spctl --assess --type execute --verbose=4 "$zip_app"
+          xcrun stapler validate "$zip_app"
+
+          mount_dir="$RUNNER_TEMP/flow-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/Flow.app"
+          spctl --assess --type execute --verbose=4 "$mount_dir/Flow.app"
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-publish
+          find release -maxdepth 1 -type f \( \
+            -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o \
+            -name '*.blockmap' -o -name '*.yml' \
+          \) -exec cp {} release-publish/ \;
+          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" == "x64" ]]; then
+            for manifest in release-publish/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-x64.yml"
+            done
+          fi
+          [[ -n "$(find release-publish -type f -print -quit)" ]] || exit 1
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: flow-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish desktop release
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release scripts
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: flow-desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Merge macOS updater manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for x64_manifest in release-assets/*-mac-x64.yml; do
+            arm64_manifest="${x64_manifest%-x64.yml}.yml"
+            [[ -f "$arm64_manifest" ]] || { echo "Missing arm64 macOS manifest." >&2; exit 1; }
+            node scripts/merge-update-manifests.ts --platform mac "$arm64_manifest" "$x64_manifest"
+            rm "$x64_manifest"
+          done
+          (cd release-assets && sha256sum * > SHA256SUMS)
+
+      - name: Publish versioned and rolling releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Flow $RELEASE_VERSION" \
+            --generate-notes \
+            --latest=false
+
+          rolling_tag=flow-desktop-latest
+          if ! gh release view "$rolling_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$rolling_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Latest Flow desktop update" \
+              --notes "Rolling update feed for the latest signed Flow desktop release."
+          fi
+          gh release view "$rolling_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            while read -r asset; do
+              gh release delete-asset "$rolling_tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+            done
+          gh release upload "$rolling_tag" release-assets/* --repo "$GITHUB_REPOSITORY"

@@ -1,0 +1,30 @@
+{
+  "name": "Flow",
+  "shortName": "Flow",
+  "connectName": "Flow Connect",
+  "description": "Your workspace for coding agents.",
+  "icon": {
+    "source": "assets/brand/logo.svg"
+  },
+  "wordmark": {
+    "onLightSource": "assets/brand/wordmark-on-light.svg",
+    "onDarkSource": "assets/brand/wordmark-on-dark.svg"
+  },
+  "links": {
+    "website": "https://github.com/samyakkkk/flow",
+    "releases": "https://github.com/samyakkkk/flow/releases",
+    "support": "https://github.com/samyakkkk/flow/issues",
+    "legalWebsite": "https://t3.codes",
+    "repository": "https://github.com/samyakkkk/flow",
+    "iosDownload": "https://github.com/samyakkkk/flow/releases",
+    "androidDownload": "https://github.com/samyakkkk/flow/releases"
+  },
+  "mark": {
+    "viewBox": "0 0 693 693",
+    "path": "M345.84 172.967C326.277 174.056 310.089 180.669 297.277 192.806C283.204 206.139 276.167 223.269 276.167 244.194V281.139H331.465C334.226 281.139 336.465 283.378 336.465 286.139V317.25C336.465 320.011 334.226 322.25 331.465 322.25H297.78V311.743C297.78 310.639 296.885 309.743 295.78 309.743H278.163C277.059 309.743 276.163 310.639 276.163 311.743V325.947C276.163 325.975 276.166 326.002 276.167 326.029V558.917H230.611V326.344C230.637 326.216 230.651 326.083 230.651 325.947V311.743C230.651 310.639 229.756 309.743 228.651 309.743H211.033C209.929 309.743 209.033 310.639 209.033 311.743V322.25H187C184.239 322.25 182 320.011 182 317.25V286.139C182 283.377 184.239 281.139 187 281.139H230.611V242.25C230.611 221.139 235.704 202.435 245.889 186.139C256.259 169.842 270.519 157.065 288.667 147.806C305.433 139.252 324.491 134.652 345.84 134V172.967ZM390.213 138.784C398.708 141.075 406.711 144.175 414.223 148.084C432.371 157.528 446.538 170.677 456.723 187.528C466.908 204.195 472 223.547 472 245.584V558.917H426.444V245.584C426.444 223.918 419.5 206.417 405.611 193.084C400.968 188.503 395.835 184.699 390.213 181.67V138.784Z"
+  },
+  "colors": {
+    "background": "#168DDE",
+    "foreground": "#FFFFFF"
+  }
+}

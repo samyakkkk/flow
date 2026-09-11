@@ -1,0 +1,9 @@
+{
+  "classification": "action_item",
+  "confidence": 0.94,
+  "extracted": {
+    "owner": "Bob",
+    "task": "write API migration script",
+    "due": "next Friday"
+  }
+}

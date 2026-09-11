@@ -1,0 +1,34 @@
+{
+  "name": "@flow/brain-orchestrator",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "Original Flow Brain orchestration, memory and indexing implementation shared by local and cloud hosts.",
+  "scripts": {
+    "test": "node --import tsx/esm --test test/memory.test.ts test/live-scheduler.test.ts test/index-incremental.test.ts test/index-queue.test.ts test/curation.test.ts test/curation-coordinator.test.ts test/curation-public.test.ts test/curation-legacy-boundary.test.ts test/curation-notes.test.ts test/curation-migration-v2.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.2.0",
+    "@fastify/sensible": "^5.6.0",
+    "@opencode-ai/plugin": "1.17.20",
+    "@slack/bolt": "^5.1.0",
+    "@slack/web-api": "^7.18.0",
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^4.28.0",
+    "node-pty": "^1.1.0",
+    "shell-quote": "^1.10.0",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "@types/shell-quote": "^1.7.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

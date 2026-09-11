@@ -1,0 +1,149 @@
+<div align="center">
+
+# Flow
+
+### Your engineering partner. Built to keep you in Flow state.
+
+Flow builds your brain outside your head: a knowledge graph of your services and how they connect — the way you hold your system in your mind — plus a memory of everything you tell it. The coding agents you already use (Claude Code, Codex, OpenCode) plug into that brain, so they act with your understanding and take the smart actions you would — no re-explaining your stack every session. Run tasks in parallel, steer with minimum input, stay in Flow state. Works for one developer across many repos, and grows into a shared brain for the whole team.
+
+<img src="docs/images/home.png" width="760" alt="Flow dashboard — the live brain graph of your codebase with a floating Ask bar" />
+
+[Install](#install) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md) · AGPL-3.0
+
+</div>
+
+---
+
+## Install
+
+```bash
+curl -fsSL https://www.flow.engineer/install.sh | bash
+
+flow up myproject
+```
+
+That's it. `flow up` prints your dashboard URL — open it, connect a repo, and watch the graph build. Then ask questions from the floating bar or kick off a coding agent from the **Agents** tab.
+
+**You'll need:** Node 22+ and Docker running. Indexing runs through a coding CLI you already have — Claude Code, Codex, or opencode — and if you have none, the installer sets up opencode for you. Everything runs on your machine; your code never leaves it.
+
+<details>
+<summary>Other ways to install</summary>
+
+From a checkout:
+
+```bash
+git clone https://github.com/samyakkkk/flow.git && cd flow
+./setup.sh
+```
+
+Manual: `npm install && npm install -g .` — `setup.sh` just does everything in one shot.
+
+Works on macOS and Linux natively; on Windows use Git Bash or WSL2.
+
+</details>
+
+---
+
+## What you get
+
+**Your system, mapped the way you think about it.** Connect your repos and Flow builds a knowledge graph of your services, APIs, and the connections between them — across repos, the way it looks in your mind. Every claim in the graph carries `file:line` evidence and a confidence level, so answers are grounded in your actual code — where Flow doesn't know, it says so instead of guessing.
+
+**Your CLI stays your CLI.** Flow drives the same Claude Code, Codex, or OpenCode already installed and signed in on your machine — it doesn't replace your terminal workflow, it adds a place to run several tasks in parallel: pick a model per session, steer mid-run, approve permissions, watch everything from one dashboard.
+
+<img src="docs/images/session.png" width="760" alt="A coding-agent session in Flow — model picker, 'consulted the brain' markers, and the graph panel highlighting nodes the agent queried" />
+
+**Agents that act like you would.** Every session starts with your brain plugged in — the agent already knows which service owns what, what depends on this API, and what breaks if it changes something. You watch it consult the graph live, and you only step in when it matters.
+
+**It remembers the *why*, not just the what.** Decisions, trade-offs, gotchas, "we never do X" — the tribal knowledge that today lives in your head and old Slack threads. Say it once and it's part of the brain, surfaced to you and every future agent session automatically.
+
+**A brain that grows with your team.** Connect Slack, Linear, and meeting transcripts and the same graph accumulates your team's context and decisions. Start solo, [graduate when you're ready](#solo-today-team-tomorrow).
+
+---
+
+## Solo today, team tomorrow
+
+Flow runs the same in both lives — what changes is who shares the brain.
+
+**On your laptop (start here).** `flow up` runs everything locally — graph, memory, agents, dashboard — private to you. You're signed in automatically, nothing needs to be always-on, and every feature in this README works right here. This is the solo path, and it's complete on its own.
+
+**On your cloud (when the team joins).** Graduate by running the exact same install on any always-on box you control, started with `--mode prod`. Teammates get real logins to the same dashboard — same graph, same memory, same agents — and the always-on integrations (like the Slack bot) come alive. Flow doesn't care whose cloud:
+
+<p align="center">
+  <img src="https://img.shields.io/badge/AWS%20EC2-232F3E?style=for-the-badge" alt="AWS EC2" />
+  <img src="https://img.shields.io/badge/Google%20Cloud-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white" alt="Google Cloud" />
+  <img src="https://img.shields.io/badge/Azure-0078D4?style=for-the-badge" alt="Azure" />
+  <img src="https://img.shields.io/badge/DigitalOcean-0080FF?style=for-the-badge&logo=digitalocean&logoColor=white" alt="DigitalOcean" />
+  <img src="https://img.shields.io/badge/Hetzner-D50C2D?style=for-the-badge&logo=hetzner&logoColor=white" alt="Hetzner" />
+  <img src="https://img.shields.io/badge/Any%20Linux%20box-333333?style=for-the-badge&logo=linux&logoColor=white" alt="Any Linux box" />
+</p>
+
+If it runs Linux and Docker, it runs Flow — a $12/mo box is plenty.
+
+---
+
+## Your code stays yours
+
+Handing your architecture to someone else's platform is a real concern — so Flow is built to add **no new trust boundary**:
+
+- **Everything lives on your infrastructure.** The graph, the memory, the evidence database — all in local storage on your machine (or a box you own). There is no Flow cloud, no third-party graph store, and nothing is ever used to train models.
+- **Your code is read by the CLI you already trust.** Indexing runs through your own Claude Code / Codex / opencode install, under your existing account — the same trust decision you've already made. Flow itself sends your code nowhere; even embeddings are computed by a local model.
+- **Audit every line.** Flow is fully open source (AGPL). Integration keys are encrypted at rest, agents that read untrusted content never hold write-to-the-world tools, every automated behavior is a policy toggle (auto / propose / off), and every action is logged with provenance.
+
+---
+
+## How it works
+
+```
+connect sources ──▶ agents build the evidence-backed graph ──▶ answers, agents & context
+  (repos, Slack,        (every claim carries file:line             (grounded Q&A, agent
+   Linear, meetings)     evidence and confidence)                   sessions, Linear context)
+```
+
+Flow runs a few small services on your machine: a graph database (FalkorDB, in Docker), a gateway that governs every graph write, an orchestrator that runs the pipeline, and a dashboard. Each project is a self-contained folder with its own graph, database, and cloned repos — multiple projects run side by side.
+
+```
+flow up   [name]     # start a project (creates it if new); no name = all
+flow down [name]     # stop a project; no name = all
+flow ls              # projects, status, and dashboard URLs
+flow doctor          # health check
+```
+
+Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Connecting sources
+
+<img src="docs/images/sources.png" width="760" alt="Connecting sources in Flow — GitHub, Linear, Fireflies, and Slack" />
+
+Everything is configured in the dashboard — no env files. **GitHub** repos get indexed into the graph; **Linear** tickets are enriched with an auto-maintained CONTEXT BY FLOW section; **Fireflies** meeting transcripts become searchable evidence; **Slack** answers in-thread (deployed mode only — a laptop can't be always-on). Keys are encrypted at rest and applied without restarts.
+
+---
+
+## Troubleshooting
+
+`flow doctor` gives a health summary; services log to `data/projects/<name>/logs/`. Common fixes (wrong Node version, Docker not running, port conflicts) are in [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+---
+
+## Contributing
+
+Issues and PRs welcome. Everything is testable without real credentials:
+
+```bash
+bash verify-all.sh   # typecheck + tests + simulator scenarios + dashboard smoke
+```
+
+Run it before opening a PR and add a `CHANGELOG.md` entry. For larger changes, open an issue first.
+
+To test branches side by side, the installer can set up any branch as its own command (`--alias`, `--branch`), with its own ports and even its own database (`--port-offset`, `--fresh-db`) — see [`docs/testing.md`](docs/testing.md).
+
+Flow is early and moving fast — see [`ROADMAP.md`](ROADMAP.md) for what's next and [`CHANGELOG.md`](CHANGELOG.md) for dated history.
+
+## License
+
+[GNU AGPL-3.0](LICENSE). You're free to self-host, use, and modify Flow — including inside a company for internal purposes. If you run a modified version as a network service, the AGPL requires you to share those modifications under the same license. (For a commercial license without the copyleft terms, get in touch.)
+
+## Acknowledgements
+
+Built on the shoulders of [OpenCode](https://opencode.ai) (the agent runtime), [FalkorDB](https://www.falkordb.com) (the graph store and its renderer), and the [Agent Client Protocol](https://agentclientprotocol.com) (driving Claude Code, Codex, and OpenCode from one place).

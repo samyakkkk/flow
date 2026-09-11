@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.91,
+  "extracted": {
+    "claim": "Microservices communicate via gRPC for internal calls",
+    "subject": "microservice communication",
+    "technology": "gRPC"
+  }
+}

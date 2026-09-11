@@ -1,0 +1,8 @@
+{
+  "classification": "question",
+  "confidence": 0.93,
+  "extracted": {
+    "question": "How is authentication handled in the system?",
+    "subject": "authentication"
+  }
+}

@@ -1,0 +1,165 @@
+// slack-agent/runtime.ts — the seam between Slack plumbing and the answering
+// brain. Slack listeners build a RuntimeQuery and render the RuntimeAnswer;
+// nothing Slack-specific crosses this boundary, so the runtime can be swapped
+// for a customer-specific agent, a webhook, or a direct LLM call later.
+//
+// FlowRuntime is the default: it feeds the question to the orchestrator's own
+// answer-job pipeline (opencode answerer over the knowledge graph + memory).
+
+import { enqueueJob, getJob, cancelCloudJob } from "../opencode.js";
+import { cloudMode, cloudTaskTimeoutMs, slackConversation, conversationKey, conversationRepos } from "../agents/cloud-workspaces.js";
+import { containsSecret } from "../events.js";
+import { codingSlotStatus } from "../agents/coding-slot.js";
+import type { TranscriptTurn as Turn } from "./types.js";
+export type { TranscriptTurn, Surface, RuntimeQuery, RuntimeAnswer, AgentRuntime } from "./types.js";
+import type { AgentRuntime, RuntimeAnswer, RuntimeQuery } from "./types.js";
+
+interface AnswerPayload {
+  setup_wait?: string;
+  answer_md?: string;
+  citations?: { kind: string; ref: string }[];
+  confidence?: number;
+  gaps?: string[];
+}
+
+/** FLOW_PUBLIC_URL is this project's externally accessible dashboard URL, including its path. */
+export function cloudRunUrl(id: string, base = process.env.FLOW_PUBLIC_URL): string | undefined {
+  if (!base) return;
+  try {
+    const url = new URL(base);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return;
+    url.search = ""; url.hash = "";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/agents/cloud-${encodeURIComponent(id)}`;
+    return url.toString();
+  } catch { return; }
+}
+
+const POLL_MS = 1000;
+
+export class FlowRuntime implements AgentRuntime {
+  readonly name = "flow";
+
+  constructor(private answerTimeoutMs = Number(process.env.SLACK_AGENT_ANSWER_TIMEOUT_MS ?? (cloudMode() ? cloudTaskTimeoutMs() : 300_000))) {}
+
+  async ask(query: RuntimeQuery): Promise<RuntimeAnswer> {
+    if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
+    const question = buildQuestion(query);
+    const cloud = cloudMode();
+    if (cloud && containsSecret(question)) throw new Error("Message contains credentials");
+
+    const conversation = cloud ? slackConversation(
+      query.context.teamId ?? "", query.context.channelId, query.context.threadTs,
+    ) : undefined;
+    query.onStatus?.("Searching the knowledge graph…");
+    const { id } = await enqueueJob({ type: "answer", input: {
+      question,
+      display_message: query.prompt,
+      slack_requester: query.context.userId,
+      ...(query.images?.length ? { slack_images: query.images, slack_image_scope: query.imageScope } : {}),
+      ...(conversation ? { conversation } : {}),
+    } });
+    const url = cloudRunUrl(id);
+    if (conversation && url && conversationRepos(conversationKey(conversation)).some(repo => repo.worktree)) {
+      query.onRun?.(url);
+    }
+    const onAbort = () => { if (cloud) cancelCloudJob(id); };
+    query.signal?.addEventListener("abort", onAbort, { once: true });
+    if (query.signal?.aborted) onAbort();
+
+    try {
+      const deadline = Date.now() + this.answerTimeoutMs;
+      let lastStatus: string | undefined;
+      while (Date.now() < deadline) {
+        if (query.signal?.aborted) throw new DOMException("aborted", "AbortError");
+        await sleep(POLL_MS, query.signal);
+        const job = getJob(id);
+        const status = codingSlotStatus(id);
+        if (status && status !== lastStatus) {
+          query.onStatus?.(status === "waiting" ? "Waiting for the machine’s coding slot…" : "Working in this task’s workspace…");
+          query.onCodingStatus?.(status, cloudRunUrl(id));
+          lastStatus = status;
+        }
+        if (!job) throw new Error(`answer job ${id} disappeared`);
+        if (job.status === "done") {
+          const result = (job.result_json ? JSON.parse(job.result_json) : {}) as AnswerPayload;
+          if (result.setup_wait && url) query.onRun?.(url);
+          return {
+            markdown: renderAnswer(result),
+            waitingForSetup: Boolean(result.setup_wait),
+            citations: result.citations ?? [],
+            confidence: result.confidence,
+          };
+        }
+        if (job.status === "failed") {
+          throw new Error(`answer job failed: ${(job.result_json ?? "").slice(0, 300)}`);
+        }
+      }
+      throw new Error(`answer job ${id} timed out after ${Math.round(this.answerTimeoutMs / 1000)}s`);
+    } finally {
+      query.signal?.removeEventListener("abort", onAbort);
+      if (cloud) cancelCloudJob(id); // No-op after completion; also cancels on timeout.
+    }
+  }
+}
+
+/** Trivial runtime for tests: echoes the prompt back. */
+export class EchoRuntime implements AgentRuntime {
+  readonly name = "echo";
+
+  async ask(query: RuntimeQuery): Promise<RuntimeAnswer> {
+    query.onStatus?.("Echoing…");
+    return {
+      markdown: `You said: ${query.prompt}\n\n_(echo runtime — ${query.transcript.length} prior turns, surface: ${query.context.surface})_`,
+    };
+  }
+}
+
+// Slack-surface personality: the same answerer brain, addressed like a
+// colleague. Kept here (not in the answerer agent) so other surfaces —
+// dashboard ask, future interfaces — keep their own register.
+const SLACK_STYLE =
+  "Style: you're answering a colleague in Slack chat. Be friendly and concise — " +
+  "lead with the direct answer in a sentence or two, plain conversational tone. " +
+  "Format for easy reading: short paragraphs mixed with bullet points where they " +
+  "help (steps, lists, key facts) — no headers or heavy formatting. Keep it short " +
+  "by default and go deeper only when the question asks for detail. For coding tasks, include " +
+  "a complete handoff: changes, PR link, checks and their results, and available screenshot evidence. " +
+  "Do not shorten away verification or blockers, or describe unfinished delivery as done.";
+
+export function buildQuestion(query: RuntimeQuery): string {
+  const parts: string[] = [SLACK_STYLE, ""];
+  if (query.transcript.length > 0) {
+    const lines = query.transcript
+      .slice(-20)
+      .map((t: Turn) => `${t.role === "assistant" ? "Flow" : "User"}: ${t.text}`)
+      .join("\n");
+    parts.push(`Conversation so far (Slack thread):\n${lines}\n`);
+  }
+  if (query.images?.length) parts.push("Attached images are ordered oldest to newest from this Slack thread. Use the latest image for references such as this image; earlier images are retained for follow-ups.\n");
+  parts.push(query.prompt);
+  return parts.join("\n");
+}
+
+export function renderAnswer(result: AnswerPayload): string {
+  const answer = result.answer_md?.trim() || "(no answer)";
+  const cites = (result.citations ?? []).map((c) => `• ${c.kind}: ${c.ref}`).join("\n");
+  const gaps = (result.gaps ?? []).filter(Boolean);
+  let out = answer;
+  if (cites) out += `\n\n*Sources:*\n${cites}`;
+  if (gaps.length > 0) out += `\n\n*Gaps:* ${gaps.join("; ")}`;
+  return out;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

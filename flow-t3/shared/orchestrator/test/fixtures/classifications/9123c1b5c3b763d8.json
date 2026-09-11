@@ -1,0 +1,7 @@
+{
+  "classification": "not_applicable",
+  "confidence": 0.88,
+  "extracted": {
+    "reason": "ticket with no description, likely a placeholder or stub"
+  }
+}

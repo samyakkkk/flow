@@ -1,0 +1,9 @@
+{
+  "classification": "ticket_status_signal",
+  "confidence": 0.88,
+  "extracted": {
+    "ticket_id": "LAN-450",
+    "status": "complete",
+    "next_step": "review"
+  }
+}

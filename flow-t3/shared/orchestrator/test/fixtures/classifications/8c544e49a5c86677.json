@@ -1,0 +1,9 @@
+{
+  "classification": "ticket_status_signal",
+  "confidence": 0.87,
+  "extracted": {
+    "ticket_id": "AUTH-123",
+    "status": "deployed to staging",
+    "next_step": "QA sign-off"
+  }
+}

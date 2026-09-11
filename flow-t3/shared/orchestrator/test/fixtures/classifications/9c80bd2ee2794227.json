@@ -1,0 +1,9 @@
+{
+  "classification": "knowledge_claim",
+  "confidence": 0.91,
+  "extracted": {
+    "claim": "GitHub Actions for CI and Terraform for infrastructure",
+    "technology": ["GitHub Actions", "Terraform"],
+    "area": "deployment"
+  }
+}
