@@ -45,6 +45,7 @@ import {
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
+  omitWorkspaceDependencies,
   resolveMacStageDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
@@ -409,6 +410,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {
         "@effect/platform-node": "4.0.0-beta.59",
         effect: "4.0.0-beta.59",
+      },
+    );
+  });
+
+  it("omits bundled workspace packages from standalone server dependencies", () => {
+    assert.deepStrictEqual(
+      omitWorkspaceDependencies({
+        "@flow/brain-runtime": "workspace:*",
+        falkordblite: "0.3.0",
+        effect: "4.0.0-beta.103",
+      }),
+      {
+        falkordblite: "0.3.0",
+        effect: "4.0.0-beta.103",
       },
     );
   });

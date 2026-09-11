@@ -2489,6 +2489,16 @@ export function resolveDesktopRuntimeDependencies(
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
 }
 
+export function omitWorkspaceDependencies(
+  dependencies: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(dependencies).filter(
+      ([, dependencySpec]) => !dependencySpec.startsWith("workspace:"),
+    ),
+  );
+}
+
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
@@ -3655,7 +3665,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
           })
         : {
-            ...resolvedServerDependencies,
+            ...omitWorkspaceDependencies(resolvedServerDependencies),
             ...resolvedDesktopRuntimeDependencies,
             ...resolveFffNativeDependencies(
               options.platform,
