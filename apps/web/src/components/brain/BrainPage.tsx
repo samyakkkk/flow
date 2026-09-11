@@ -18,8 +18,8 @@ export function BrainPage({
   error,
   toolbar,
   indexing,
+  docs,
   skills,
-  memories,
   children,
   onCreate,
 }: {
@@ -31,6 +31,7 @@ export function BrainPage({
   error: string | null;
   toolbar: ReactNode;
   indexing: ReactNode;
+  docs?: ReactNode;
   skills?: ReactNode;
   memories?: ReactNode;
   children: ReactNode;
@@ -68,8 +69,8 @@ export function BrainPage({
             >
               {[
                 ["graph", "Knowledge Graph"],
+                ["docs", "Auto-Docs"],
                 ["skills", "Auto-Skills"],
-                ["memories", "Memories"],
               ].map(([value, label]) => (
                 <Tabs.Tab
                   key={value}
@@ -166,17 +167,13 @@ export function BrainPage({
               {hasBrain && indexing}
               {hasBrain && children}
             </Tabs.Panel>
+            <Tabs.Panel value="docs" className="space-y-4 outline-none">
+              {docs ?? <p className="py-8 text-sm text-muted-foreground">Connect a brain to view its auto-docs.</p>}
+            </Tabs.Panel>
             <Tabs.Panel value="skills" className="space-y-4 outline-none">
               {skills ?? (
                 <p className="py-8 text-sm text-muted-foreground">
                   Connect a brain to view its auto-skills.
-                </p>
-              )}
-            </Tabs.Panel>
-            <Tabs.Panel value="memories" className="space-y-4 outline-none">
-              {memories ?? (
-                <p className="py-8 text-sm text-muted-foreground">
-                  Connect a brain to view its memories.
                 </p>
               )}
             </Tabs.Panel>

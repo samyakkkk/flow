@@ -24,6 +24,7 @@ import { BrainGraph } from "./BrainGraph";
 import { useProjectBrainChoice } from "./useProjectBrainChoice";
 import { Button } from "../ui/button";
 import { BrainDocumentDialog, BrainDocumentLibrary } from "./BrainDocuments";
+import { ConversationNotesPreview } from "./ConversationNotesPreview";
 
 export function ChatBrainPanel({
   environmentId,
@@ -176,7 +177,7 @@ export function ChatBrainPanel({
   const memoryStatus = !brain
     ? "Connect a brain to preserve this conversation."
     : notes?.status === "extracting"
-      ? "Updating notes, memories, and skills…"
+      ? "Updating notes, auto-docs, and skills…"
       : notes?.status === "error"
         ? "Extraction needs attention. Flow will retry."
         : notes?.status === "disabled"
@@ -189,7 +190,7 @@ export function ChatBrainPanel({
   return (
     <>
       <aside
-        aria-label="Flow brain and chat memories"
+        aria-label="Flow brain and conversation notes"
         className="order-first m-3 min-h-0 shrink-0 self-start w-[calc(100%-1.5rem)] lg:order-last lg:ml-0 lg:mr-4 lg:mt-4 lg:w-80"
       >
         <div className="max-h-[55dvh] overflow-y-auto rounded-3xl border border-border/70 bg-card/95 p-4 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.16)] lg:max-h-[75dvh]">
@@ -345,6 +346,15 @@ export function ChatBrainPanel({
               </section>
             </>
           )}
+          {brain && (
+            <BrainDocumentLibrary
+              key={brain.id}
+              compact
+              environmentId={environmentId}
+              workspaceId={brain.id}
+              documents={(notes?.documents ?? []).filter(doc => doc.kind !== "memory")}
+            />
+          )}
           <section aria-label="Conversation notes" className="mt-3 border-t border-border/60 pt-3">
             <div className="flex items-center gap-1">
               <button
@@ -382,9 +392,7 @@ export function ChatBrainPanel({
                     onClick={() => setView("notes")}
                     className={`w-full rounded-xl px-2 py-2 text-left hover:bg-muted/60 ${changedIds.includes(notes.notes.id) ? "bg-primary/5" : ""}`}
                   >
-                    <span className="line-clamp-6 whitespace-pre-wrap break-words text-xs leading-relaxed">
-                      {notes.notes.text}
-                    </span>
+                    <ConversationNotesPreview text={notes.notes.text} />
                     <span className="mt-2 block text-[11px] text-primary">Read full notes →</span>
                   </button>
                 ) : (
@@ -403,23 +411,6 @@ export function ChatBrainPanel({
               </>
             )}
           </section>
-          {brain && (
-            <BrainDocumentLibrary
-              key={brain.id}
-              compact
-              environmentId={environmentId}
-              workspaceId={brain.id}
-              documents={notes?.documents ?? []}
-              legacyMemories={(notes?.memories ?? []).map((memory) => ({
-                id: memory.id,
-                kind: "Decision" as const,
-                title: memory.text.slice(0, 140),
-                body: memory.text,
-                source: "Conversation",
-                entityIds: [],
-              }))}
-            />
-          )}
         </div>
       </aside>
       {brainChoiceDialog}

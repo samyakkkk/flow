@@ -1,7 +1,18 @@
 import { CurationStore } from "./store.js";
 import { excerpt, record } from "./transcript.js";
+import { linkedNoteChunks, noteChunks } from "./notes.js";
 
 export const CURATION_PUBLIC_TOOLS = [
+  {
+    name: "read_note_context",
+    description: "Read this conversation's structured notes or one entry plus bounded linked context. Use a document revision for historical instruction references. This does not search other users' conversations.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { entryId: { type: "string" }, revision: { type: "integer", minimum: 1 } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
   {
     name: "list_skills",
     description:
@@ -28,7 +39,7 @@ export const CURATION_PUBLIC_TOOLS = [
   {
     name: "read_document",
     description:
-      "Read a saved Brain memory or skill by id from search_knowledge. Conversation notes are restricted to this chat. Returns full prose with revision and evidence references.",
+      "Read a saved Brain auto-doc, memory or skill by id from search_knowledge. Conversation notes are restricted to this chat. Returns full prose with revision and evidence references.",
     inputSchema: {
       type: "object" as const,
       properties: { id: { type: "string" } },
@@ -51,6 +62,23 @@ export class CurationPublicTools {
     args: Record<string, unknown>,
     sessionId: string,
   ): ReturnType<typeof result> | undefined {
+    if (name === "read_note_context") {
+      const id = `notes:${sessionId}`;
+      const revision = args.revision;
+      if (revision !== undefined && (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1))
+        return result("Invalid note revision.", true);
+      const doc = typeof revision === "number" ? this.store.revision(id, revision) : this.store.get(id);
+      if (!doc || doc.kind !== "notes" || doc.sessionId !== sessionId)
+        return result("Notes not found in this scope.", true);
+      const chunks = typeof revision === "number" ? noteChunks(doc.text) : this.store.chunks(id);
+      if (args.entryId === undefined) return result({ ...doc, chunks });
+      if (typeof args.entryId !== "string") return result("Invalid entry ID.", true);
+      const linked = linkedNoteChunks(chunks, args.entryId);
+      if (!linked.length) return result("Note entry not found.", true);
+      return result({ documentId: id, sessionId, documentRevision: doc.revision, title: doc.name, observedAt: doc.observedAt, chunks: linked,
+        unresolvedHistoricalReferences: [...new Set(linked.flatMap((chunk) => chunk.references))].filter((reference) => !chunks.some((chunk) => `${chunk.id}@${chunk.revision}` === reference)),
+        hint: "Historical P references require the applicable retained document revision; current instructions must not be substituted into old logs." });
+    }
     if (name === "list_skills") {
       const query = typeof args.query === "string" ? args.query : "";
       return result(
@@ -133,9 +161,8 @@ export class CurationPublicTools {
     let text = "";
     if (name === "orient") {
       const skills = this.store.list({ kind: "skill" });
-      const memories = this.store.list({ kind: "memory" });
-      if (memories.length)
-        text += `\nCURATED MEMORIES: ${memories.length} reusable memories are available through search_knowledge and read_document.\n`;
+      const docs = this.store.list({ kind: "doc" });
+      if (docs.length) text += `\nAUTO-DOCS: ${docs.length} maintained context documents are available through search_knowledge and read_document.\n`;
       if (skills.length)
         text +=
           `\nSKILLS (${skills.length}): reusable procedures learned from conversations. Call read_skill with an id to fetch the full SKILL.md; list_skills searches by purpose.\n` +

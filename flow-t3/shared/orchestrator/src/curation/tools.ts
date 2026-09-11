@@ -31,11 +31,16 @@ const object = (properties: Record<string, unknown>, required: string[]) => ({
 });
 export const CURATOR_TOOLS = [
   {
+    name: "read_document_revision",
+    description: "Read a retained document revision to resolve historical P-ID links. Notes remain scoped to this conversation; revisions before retention began may be unavailable.",
+    inputSchema: object({ id: str, revision: num, offset: num }, ["id", "revision"]),
+  },
+  {
     name: "search_documents",
     description:
-      "Find existing memories and skills by purpose before creating or changing them. Notes are scoped to this conversation.",
+      "Find existing auto-docs and skills by purpose before creating or changing them. Notes are scoped to this conversation.",
     inputSchema: object(
-      { query: str, kind: { type: "string", enum: ["notes", "memory", "skill"] } },
+      { query: str, kind: { type: "string", enum: ["notes", "doc", "skill"] } },
       ["query"],
     ),
   },
@@ -48,13 +53,14 @@ export const CURATOR_TOOLS = [
   {
     name: "write_document",
     description:
-      "Save notes, a memory, or a skill in this Brain. For notes, omit id to target this conversation's notes; a chat ID is not a document ID. Use a short human-readable title for name. Cite source sequence numbers including new evidence. Existing documents require expectedRevision. For small edits provide replaceFrom/replaceTo instead of text. Skill frontmatter, including its lowercase slug, is generated from name/description.",
+      "Save notes, an auto-doc (kind doc), or a skill in this Brain. For notes, omit id to target this conversation's notes; a chat ID is not a document ID. Use a short human-readable title for name. Cite source sequence numbers including new evidence. Existing documents require expectedRevision. For small edits provide replaceFrom/replaceTo instead of text. Skill frontmatter, including its lowercase slug, is generated from name/description.",
     inputSchema: object(
       {
         id: str,
-        kind: { type: "string", enum: ["notes", "memory", "skill"] },
+        kind: { type: "string", enum: ["notes", "doc", "skill"] },
         name: str,
         description: str,
+        folder: str,
         text: str,
         replaceFrom: str,
         replaceTo: str,
@@ -219,14 +225,21 @@ export class CuratorTools {
         "Checkpoint tool limit reached. Preserve established notes and finish; further investigation can continue at the next checkpoint.",
       );
     const cp = this.checkpoint;
+    if (name === "read_document_revision") {
+      const doc = this.store.revision(textField(args, "id", true)!, integerField(args, "revision", 0));
+      if (!doc || doc.kind === "memory" || (doc.kind === "notes" && doc.sessionId !== cp.sessionId))
+        throw new Error("Document revision not found in this scope.");
+      const offset = integerField(args, "offset", 0);
+      return { ...doc, text: doc.text.slice(offset, offset + 12000), totalCharacters: doc.text.length, nextOffset: offset + 12000 < doc.text.length ? offset + 12000 : null };
+    }
     if (name === "search_documents") {
       const query = textField(args, "query", true)!;
-      const kind = choice<DocumentKind>(args.kind, ["notes", "memory", "skill"], "document kind");
-      return this.store.search(query, kind, 12, { notesSessionId: cp.sessionId });
+      const kind = choice<DocumentKind>(args.kind, ["notes", "doc", "skill"], "document kind");
+      return this.store.search(query, kind, 12, { notesSessionId: cp.sessionId, includeLegacy: false, excludeMemories: true });
     }
     if (name === "read_document") {
       const doc = this.store.get(textField(args, "id", true)!);
-      if (!doc || (doc.kind === "notes" && doc.sessionId !== cp.sessionId))
+      if (!doc || doc.kind === "memory" || (doc.kind === "notes" && doc.sessionId !== cp.sessionId))
         throw new Error("Document not found in this scope.");
       const offset = integerField(args, "offset", 0);
       if (doc.revision === 0) this.legacyReads.set(doc.id, doc.text);
@@ -239,7 +252,7 @@ export class CuratorTools {
       };
     }
     if (name === "write_document") {
-      const kind = choice<DocumentKind>(args.kind, ["notes", "memory", "skill"], "document kind");
+      const kind = choice<DocumentKind>(args.kind, ["notes", "doc", "skill"], "document kind");
       if (!kind) throw new Error("Document kind is required.");
       if (
         !Array.isArray(args.evidence) ||
@@ -254,6 +267,7 @@ export class CuratorTools {
         "id",
         "name",
         "description",
+        "folder",
         "text",
         "replaceFrom",
         "replaceTo",
