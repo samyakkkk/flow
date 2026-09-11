@@ -129,7 +129,7 @@ export async function startSessionWorker(
             runCurator ??
             (() =>
               Promise.reject(
-                new Error("This Brain host has no Codex extraction provider configured."),
+                new Error("This Brain host has no background extraction provider configured."),
               ));
           void execute(message.curatorRun).then(
             (result) => {

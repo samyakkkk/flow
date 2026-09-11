@@ -96,13 +96,13 @@ if (process.argv.includes("--catalog")) {
   const runCurator = (curatorRun: BrainCuratorRun): Promise<BrainCuratorReply> => {
     const curatorRequest = ++nextCuratorRequest;
     return new Promise((resolve,reject) => {
-      const timer = setTimeout(() => {curatorRequests.delete(curatorRequest);reject(new Error("The Codex extraction host did not respond."));},5*60_000);
+      const timer = setTimeout(() => {curatorRequests.delete(curatorRequest);reject(new Error("The background extraction host did not respond."));},5*60_000);
       curatorRequests.set(curatorRequest,{
         resolve:result=>{clearTimeout(timer);resolve(result);},
         reject:error=>{clearTimeout(timer);reject(error);},
       });
       if (!process.connected) {
-        curatorRequests.get(curatorRequest)!.reject(new Error("The Codex extraction host disconnected."));
+        curatorRequests.get(curatorRequest)!.reject(new Error("The background extraction host disconnected."));
         curatorRequests.delete(curatorRequest);
       } else process.send?.({curatorRequest,curatorRun});
     });
@@ -154,7 +154,7 @@ if (process.argv.includes("--catalog")) {
       curatorRequests.delete(message.curatorReply);
       if (message.error) pending?.reject(new Error(message.error));
       else if (message.result) pending?.resolve(message.result);
-      else pending?.reject(new Error("Invalid Codex extraction receipt."));
+      else pending?.reject(new Error("Invalid background extraction receipt."));
       return;
     }
     try {

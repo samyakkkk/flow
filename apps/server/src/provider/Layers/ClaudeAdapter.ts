@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  type Query,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -336,6 +337,7 @@ interface ClaudeSessionContext {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly setMcpServers?: Query["setMcpServers"];
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
@@ -343,6 +345,8 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 }
 
 export interface ClaudeAdapterLiveOptions {
+  /** Private observer sessions expose only their injected MCP server. */
+  readonly observerInstructions?: string;
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly createQuery?: (input: {
@@ -4662,6 +4666,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? [input.cwd] : []),
         serverConfig.attachmentsDir,
       ];
+      const observer = options?.observerInstructions;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4707,6 +4712,35 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               },
             }
           : {}),
+        ...(observer !== undefined
+          ? {
+              systemPrompt: observer,
+              persistSession: false,
+              settingSources: [],
+              settings: { disableAllHooks: true },
+              tools: [],
+              allowedTools: ["mcp__t3-code__*"],
+              strictMcpConfig: true,
+              // Connect after SDK initialization and await the connection receipt.
+              // Initial MCP discovery otherwise races the first observer turn.
+              mcpServers: {},
+              canUseTool: async (name, input) =>
+                name.startsWith("mcp__t3-code__")
+                  ? { behavior: "allow", updatedInput: input }
+                  : {
+                      behavior: "deny",
+                      message: "Background extraction only has Brain curator tools.",
+                    },
+              additionalDirectories: [],
+              extraArgs: {},
+              env: {
+                ...claudeEnvironment,
+                ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+                CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
+                CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
+              },
+            }
+          : {}),
       };
 
       yield* Effect.annotateCurrentSpan({
@@ -4748,6 +4782,43 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             cause,
           }),
       });
+
+      if (observer !== undefined && mcpSession) {
+        yield* Effect.tryPromise({
+          try: async () => {
+            if (!queryRuntime.setMcpServers)
+              throw new Error("Claude does not support awaited MCP setup.");
+            const result = await queryRuntime.setMcpServers({
+              "t3-code": {
+                type: "http",
+                url: mcpSession.endpoint,
+                headers: { Authorization: mcpSession.authorizationHeader },
+              },
+            });
+            if (Object.keys(result.errors).length || !result.added.includes("t3-code"))
+              throw new Error("The Brain curator tools could not connect.");
+          },
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId,
+              detail: "Could not connect the background Claude session to its Brain tools.",
+              cause,
+            }),
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId,
+                detail: "Could not connect the background Claude session to its Brain tools.",
+                cause,
+              }),
+          ),
+          Effect.onError(() => Effect.sync(() => queryRuntime.close())),
+        );
+      }
 
       const session: ProviderSession = {
         threadId,

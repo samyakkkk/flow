@@ -87,14 +87,15 @@ it("captures immediately, curates all documents over private MCP, and advances o
     });
     expect(saved.result.isError).not.toBe(true);
     if (!skillId) {
-      const memory = await call("write_document", {
-        kind: "memory",
+      const document = await call("write_document", {
+        kind: "doc",
+        folder: "Testing",
         name: "Use isolated test state",
         description: "Keep test data separate.",
         text: "Testing uses isolated state, as the user described.",
         evidence: [seq],
       });
-      expect(memory.result.isError).not.toBe(true);
+      expect(document.result.isError).not.toBe(true);
       const skill = await call("write_document", {
         kind: "skill",
         name: "Verify a local test",
@@ -136,7 +137,7 @@ it("captures immediately, curates all documents over private MCP, and advances o
     expect(chat.notes?.text).toContain("testing procedure");
     expect(chat.notes?.observedAt).toBe(originalTime);
     expect(requests[0]?.input).toContain("2026-01-02T03:04:05.000Z");
-    expect(chat.documents?.map((doc) => doc.kind).sort()).toEqual(["memory", "skill"]);
+    expect(chat.documents?.map((doc) => doc.kind).sort()).toEqual(["doc", "skill"]);
     expect((await worker.document(skillId))?.text).toMatch(/^---\nname: "verify-a-local-test"/);
     expect((await worker.knowledge()).documents).toHaveLength(2);
     const skills = await worker.call("list_skills", { query: "testing" }, { session: "chat" });

@@ -7584,3 +7584,40 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 });
+
+it.effect("uses only curator permissions and instructions for private observer turns", () => {
+  const adapterLayer = Layer.effect(
+    OpenCodeAdapter,
+    makeOpenCodeAdapter(openCodeAdapterTestSettings, {
+      observerInstructions: "Curate this evidence.",
+    }),
+  ).pipe(
+    Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return Effect.gen(function* () {
+    const adapter = yield* OpenCodeAdapter;
+    const threadId = asThreadId("observer-test");
+    yield* adapter.startSession({ threadId, runtimeMode: "approval-required" });
+    NodeAssert.deepEqual(runtimeMock.state.sessionCreateInputs.at(-1)?.permission, [
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "t3-code_*", pattern: "*", action: "allow" },
+    ]);
+    yield* adapter.sendTurn({
+      threadId,
+      input: "checkpoint",
+      modelSelection: createModelSelection(
+        ProviderInstanceId.make("opencode"),
+        "anthropic/claude-sonnet-4-5",
+      ),
+    });
+    NodeAssert.equal(
+      (runtimeMock.state.promptCalls.at(-1) as { system: string }).system,
+      "Curate this evidence.",
+    );
+    yield* adapter.stopSession(threadId);
+  }).pipe(Effect.provide(adapterLayer));
+});

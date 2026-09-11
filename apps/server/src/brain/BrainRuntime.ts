@@ -756,7 +756,11 @@ export class BrainRuntime {
           undefined,
           this.runCurator
             ? (request) =>
-                this.runCurator!({ ...request, sessionId: `${workspace.id}:${request.sessionId}` })
+                this.runCurator!({
+                  ...request,
+                  cli: workspace.cli,
+                  sessionId: `${workspace.id}:${request.sessionId}`,
+                })
             : undefined,
         );
       })();

@@ -22,6 +22,7 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { BRAND } from "@t3tools/shared/branding";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -37,6 +38,8 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { setMcpProviderSession, clearMcpProviderSession } from "../../mcp/McpProviderSession.ts";
+import { EnvironmentId } from "@t3tools/contracts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -58,6 +61,9 @@ class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()
 ) {}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
+  setMcpServers?: (
+    servers: unknown,
+  ) => Promise<{ added: string[]; removed: string[]; errors: Record<string, string> }>;
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{
     readonly resolve: (value: IteratorResult<SDKMessage>) => void;
@@ -161,6 +167,8 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 }
 
 function makeHarness(config?: {
+  readonly observerInstructions?: string;
+  readonly connectMcp?: FakeClaudeQuery["setMcpServers"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
   readonly cwd?: string;
@@ -171,6 +179,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
 }) {
   const query = new FakeClaudeQuery();
+  if (config?.connectMcp) query.setMcpServers = config.connectMcp;
   let createInput:
     | {
         readonly prompt: AsyncIterable<SDKUserMessage>;
@@ -179,6 +188,7 @@ function makeHarness(config?: {
     | undefined;
 
   const adapterOptions: ClaudeAdapterLiveOptions = {
+    ...(config?.observerInstructions ? { observerInstructions: config.observerInstructions } : {}),
     ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
@@ -377,6 +387,86 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("waits for private MCP connection before accepting the first observer turn", () => {
+    const started = Promise.withResolvers<unknown>();
+    const connected = Promise.withResolvers<{
+      added: string[];
+      removed: string[];
+      errors: Record<string, string>;
+    }>();
+    const harness = makeHarness({
+      observerInstructions: "Curate evidence.",
+      connectMcp: (servers) => {
+        started.resolve(servers);
+        return connected.promise;
+      },
+    });
+    return Effect.gen(function* () {
+      setMcpProviderSession({
+        environmentId: EnvironmentId.make("test"),
+        threadId: THREAD_ID,
+        providerSessionId: THREAD_ID,
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://localhost/private-curator",
+        authorizationHeader: "Bearer fixture",
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => clearMcpProviderSession(THREAD_ID)));
+      const adapter = yield* ClaudeAdapter;
+      let ready = false;
+      const session = yield* adapter
+        .startSession({ threadId: THREAD_ID, runtimeMode: "approval-required" })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              ready = true;
+            }),
+          ),
+          Effect.forkChild,
+        );
+      const servers = yield* Effect.promise(() => started.promise);
+      assert.equal(ready, false);
+      assert.deepEqual(servers, {
+        "t3-code": {
+          type: "http",
+          url: "http://localhost/private-curator",
+          headers: { Authorization: "Bearer fixture" },
+        },
+      });
+      connected.resolve({ added: ["t3-code"], removed: [], errors: {} });
+      yield* Fiber.join(session);
+      assert.equal(ready, true);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("isolates observer sessions from native history, hooks, and coding tools", () => {
+    const harness = makeHarness({ observerInstructions: "Curate the supplied evidence." });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "approval-required" });
+      const opts = harness.getLastCreateQueryInput()!.options;
+      assert.equal(opts.persistSession, false);
+      assert.equal(opts.systemPrompt, "Curate the supplied evidence.");
+      assert.deepEqual(opts.settingSources, []);
+      assert.deepEqual(opts.tools, []);
+      assert.equal(opts.strictMcpConfig, true);
+      assert.deepEqual(opts.settings, { disableAllHooks: true });
+      assert.deepEqual(opts.mcpServers, {});
+      const permissionOptions = {
+        signal: new AbortController().signal,
+        toolUseID: "test",
+        requestId: "test-request",
+      };
+      const denied = yield* Effect.promise(() =>
+        opts.canUseTool!("Bash", { command: "touch bad" }, permissionOptions),
+      );
+      assert.equal(denied?.behavior, "deny");
+      const allowed = yield* Effect.promise(() =>
+        opts.canUseTool!("mcp__t3-code__write_document", { text: "note" }, permissionOptions),
+      );
+      assert.equal(allowed?.behavior, "allow");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("derives bypass permission mode from full-access runtime policy", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -392,8 +482,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.systemPrompt, {
         type: "preset",
         preset: "claude_code",
-        append:
-          "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>",
+        append: `<runtime_info>In case you're asked: you are running in ${BRAND.name} through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>`,
       });
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);

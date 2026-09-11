@@ -30,7 +30,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
+import type {
+  OpencodeClient,
+  Part,
+  PermissionRequest,
+  PermissionRuleset,
+  QuestionRequest,
+} from "@opencode-ai/sdk/v2";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -455,6 +461,8 @@ function takeOpenCodeTurnTokenUsage(
 }
 
 export interface OpenCodeAdapterLiveOptions {
+  /** Used only with a private server and isolated native storage. */
+  readonly observerInstructions?: string;
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
@@ -2806,6 +2814,13 @@ export function makeOpenCodeAdapter(
 
     const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
       function* (input) {
+        const permission: PermissionRuleset =
+          options?.observerInstructions !== undefined
+            ? [
+                { permission: "*", pattern: "*", action: "deny" },
+                { permission: "t3-code_*", pattern: "*", action: "allow" },
+              ]
+            : buildOpenCodePermissionRules(input.runtimeMode);
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
@@ -2887,7 +2902,7 @@ export function makeOpenCodeAdapter(
                   yield* runOpenCodeSdk("session.update", () =>
                     client.session.update({
                       sessionID: reusable.id,
-                      permission: buildOpenCodePermissionRules(input.runtimeMode),
+                      permission,
                     }),
                   );
                   return { openCodeSession: reusable, created: false };
@@ -2914,7 +2929,7 @@ export function makeOpenCodeAdapter(
                   yield* runOpenCodeSdk("session.update", () =>
                     client.session.update({
                       sessionID: forked.id,
-                      permission: buildOpenCodePermissionRules(input.runtimeMode),
+                      permission,
                     }),
                   );
                   return { openCodeSession: forked, created: true };
@@ -2928,7 +2943,7 @@ export function makeOpenCodeAdapter(
                 const createdSession = yield* runOpenCodeSdk("session.create", () =>
                   client.session.create({
                     ...(input.title ? { title: input.title } : {}),
-                    permission: buildOpenCodePermissionRules(input.runtimeMode),
+                    permission,
                   }),
                 );
                 if (!createdSession.data) {
@@ -3217,10 +3232,12 @@ export function makeOpenCodeAdapter(
                 ...(context.activeAgent ? { agent: context.activeAgent } : {}),
                 ...(context.activeVariant ? { variant: context.activeVariant } : {}),
                 // OpenCode appends this after its own agent/provider prompts.
-                system: buildRuntimeInstructions({
-                  harness: "OpenCode",
-                  model: `${parsedModel.providerID}/${parsedModel.modelID}`,
-                }),
+                system:
+                  options?.observerInstructions ??
+                  buildRuntimeInstructions({
+                    harness: "OpenCode",
+                    model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                  }),
                 parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
               },
               { signal },

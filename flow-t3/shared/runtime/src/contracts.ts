@@ -15,7 +15,10 @@ export interface BrainCapture {
   closed?: boolean;
 }
 /** The Brain owns curation; its host supplies subscription-backed execution. */
+export type BrainCuratorCli = "codex" | "claude" | "opencode";
 export interface BrainCuratorRun {
+  /** Filled by the owning host from the Brain workspace, never from chat input. */
+  cli?: BrainCuratorCli;
   sessionId: string;
   input: string;
   instructions: string;

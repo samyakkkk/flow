@@ -14,6 +14,7 @@ it.effect(
         "list_skills",
         "orient",
         "read_document",
+        "read_note_context",
         "read_query",
         "read_skill",
         "remember",
