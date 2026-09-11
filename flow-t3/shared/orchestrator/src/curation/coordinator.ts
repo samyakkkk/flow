@@ -175,7 +175,7 @@ export class CurationCoordinator {
       const notes = this.store.get(`notes:${sessionId}`);
       const associated = this.store
         .list({ sessionId })
-        .filter((doc) => doc.kind !== "notes")
+        .filter((doc) => doc.kind === "doc" || doc.kind === "skill")
         .slice(0, 30);
       const catalog = associated.length
         ? `Documents already associated with this chat (read/search before editing):\n${JSON.stringify(associated.map(({ id, kind, name, description, revision }) => ({ id, kind, name, description, revision })))}`
@@ -220,7 +220,7 @@ export class CurationCoordinator {
         header,
         renew
           ? "This is a renewed bounded context for the same logical conversation. Recover earlier details with search_transcript/read_evidence as needed."
-          : "Continue the same conversation's notes, memories, and skills using the new source below.",
+          : "Continue the same conversation's notes, Auto-Docs, and Auto-Skills using the new source below.",
         savedNotes,
         window.omitted
           ? `Earlier source has been omitted from this window; the earliest included reference is E${window.firstSeq}. It remains retrievable.`

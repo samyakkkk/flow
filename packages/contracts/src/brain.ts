@@ -20,8 +20,9 @@ export const BrainMemory = Schema.Struct({
   entityIds: Schema.Array(Schema.String),
 });
 export const BrainDocumentSummary = Schema.Struct({
+  folder: Schema.optionalKey(Schema.String),
   id: Schema.String,
-  kind: Schema.Literals(["notes", "memory", "skill"]),
+  kind: Schema.Literals(["notes", "doc", "memory", "skill"]),
   name: Schema.String,
   description: Schema.String,
   revision: Schema.Number,
