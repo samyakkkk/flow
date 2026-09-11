@@ -599,7 +599,7 @@ export class BundleNotSelfContainedError extends Schema.TaggedErrorClass<BundleN
   { exitCode: Schema.Number, output: Schema.String },
 ) {
   override get message(): string {
-    return `The packaged server bundle could not load from the isolated, extracted sidecar (exit ${this.exitCode}). Anything it imports that is neither a Node built-in nor in the selected runtime-external closure is unavailable to both backends. Output:
+    return `The packaged server bundle could not load from the isolated, extracted archive (exit ${this.exitCode}). Anything it imports that is neither a Node built-in nor in the selected runtime-external closure is unavailable to the packaged runtime. Output:
 ${this.output}`;
   }
 }
@@ -2046,7 +2046,7 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
+export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -2081,64 +2081,72 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
       }
     }
 
-    const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
-    if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
-      return yield* new BundleNotSelfContainedError({
-        exitCode: -1,
-        output: `Expected the server entry at ${entryPoint}.`,
-      });
-    }
+    // The Brain worker is a separate entry point: loading bin.mjs cannot catch
+    // missing dependencies in its catalog, which blocks desktop startup.
+    for (const [entry, argument] of [
+      ["bin.mjs", "--version"],
+      ["brain-runtime.mjs", "--catalog"],
+    ] as const) {
+      const entryPoint = path.join(probeApp, "apps/server/dist", entry);
+      if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
+        return yield* new BundleNotSelfContainedError({
+          exitCode: -1,
+          output: `Expected the server entry at ${entryPoint}.`,
+        });
+      }
 
-    // --version exercises the eagerly loaded module graph, which is where a
-    // missing dependency shows up, without starting a server or touching disk
-    // state. It does not cover lazily imported externals: node-pty is checked
-    // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
-    // and the bun adapters are covered by the shared runtime-external closure
-    // and emitted-bundle checks.
-    yield* runCommand(
-      ChildProcess.make(
-        process.execPath,
-        // --no-global-search-paths because clearing NODE_PATH is not enough:
-        // CommonJS resolution still falls back to $HOME/.node_modules,
-        // $HOME/.node_libraries and the install prefix, so a globally installed
-        // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", entryPoint, "--version"],
+      // --version exercises the eagerly loaded module graph, which is where a
+      // missing dependency shows up, without starting a server or touching disk
+      // state. It does not cover lazily imported externals: node-pty is checked
+      // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
+      // and the bun adapters are covered by the shared runtime-external closure
+      // and emitted-bundle checks.
+      yield* runCommand(
+        ChildProcess.make(
+          process.execPath,
+          // --no-global-search-paths because clearing NODE_PATH is not enough:
+          // CommonJS resolution still falls back to $HOME/.node_modules,
+          // $HOME/.node_libraries and the install prefix, so a globally installed
+          // copy of a missing dependency would quietly satisfy this check.
+          ["--no-global-search-paths", entryPoint, argument],
+          {
+            cwd: probeApp,
+            stdout: "pipe",
+            stderr: "pipe",
+            // NODE_PATH would let a createRequire call inside the bundle resolve
+            // a missing external from outside the packaged tree, which is the
+            // whole thing this is trying to rule out.
+            env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "" },
+          },
+        ),
         {
-          cwd: probeApp,
-          stdout: "pipe",
-          stderr: "pipe",
-          // NODE_PATH would let a createRequire call inside the bundle resolve
-          // a missing external from outside the packaged tree, which is the
-          // whole thing this is trying to rule out.
-          env: { ...process.env, NODE_PATH: "" },
+          label: `packaged runtime self-containment check (node ${entry} ${argument})`,
+          verbose: input.verbose,
         },
-      ),
-      {
-        label: "server sidecar self-containment check (node bin.mjs --version)",
-        verbose: input.verbose,
-      },
-    ).pipe(
-      // Printing a version should be immediate. A regression that blocks (on
-      // stdin, a port, a lock) would otherwise hang release CI until the job
-      // times out with nothing useful in the log.
-      Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
-      Effect.catchTags({
-        TimeoutError: () =>
-          Effect.fail(
-            new BundleNotSelfContainedError({
-              exitCode: -1,
-              output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
-            }),
-          ),
-        BuildCommandFailedError: (error) =>
-          Effect.fail(
-            new BundleNotSelfContainedError({
-              exitCode: error.exitCode,
-              output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-            }),
-          ),
-      }),
-    );
+      ).pipe(
+        // Printing a version should be immediate. A regression that blocks (on
+        // stdin, a port, a lock) would otherwise hang release CI until the job
+        // times out with nothing useful in the log.
+        Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.fail(
+              new BundleNotSelfContainedError({
+                exitCode: -1,
+                output: `The packaged ${entry} ${argument} check did not finish within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
+              }),
+            ),
+          BuildCommandFailedError: (error) =>
+            Effect.fail(
+              new BundleNotSelfContainedError({
+                exitCode: error.exitCode,
+                output:
+                  `${entry} ${argument}: ${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+              }),
+            ),
+        }),
+      );
+    }
   },
 );
 
@@ -3850,6 +3858,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
       verbose: options.verbose,
     });
+  }
+
+  if (options.platform !== "win") {
+    const productName = resolveDesktopProductName(appVersion);
+    const packagedDirectories = yield* fs.readDirectory(stageDistDir);
+    const archives: string[] = [];
+    for (const directory of packagedDirectories) {
+      const archive =
+        options.platform === "mac"
+          ? path.join(stageDistDir, directory, `${productName}.app`, "Contents/Resources/app.asar")
+          : path.join(stageDistDir, directory, "resources/app.asar");
+      if (yield* fs.exists(archive)) archives.push(archive);
+    }
+    if (archives.length === 0) {
+      return yield* new BundleNotSelfContainedError({
+        exitCode: -1,
+        output: `No packaged app.asar found in ${stageDistDir}.`,
+      });
+    }
+    for (const asarPath of archives) {
+      yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: options.verbose });
+    }
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);

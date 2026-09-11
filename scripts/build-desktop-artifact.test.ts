@@ -166,6 +166,10 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
+  yield* fs.writeFileString(
+    path.join(sourceDir, "apps/server/dist/brain-runtime.mjs"),
+    "export {};\n",
+  );
   yield* fs.writeFileString(nativePath, "native-binary");
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
