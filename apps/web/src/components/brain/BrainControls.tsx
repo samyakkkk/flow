@@ -71,14 +71,16 @@ export function CreateBrainDialog({
   state,
   send,
   onCreated,
+  initialName = "",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   state: BrainState | null;
   send: SendBrainCommand;
   onCreated: (id: string) => void;
+  initialName?: string;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [cli, setCli] = useState<BrainCli | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -95,7 +97,7 @@ export function CreateBrainDialog({
       }
       onCreated(result.createdWorkspaceId);
       onOpenChange(false);
-      setName("");
+      setName(initialName);
     } finally {
       setBusy(false);
     }
