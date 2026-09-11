@@ -1,6 +1,6 @@
 # Flow — Design System
 
-Warm, editorial, confident. Cream paper, one yellow accent, serif headlines, mono
+Warm, editorial, confident. Cream paper, one blue accent, serif headlines, mono
 labels. Adapted from the Edra reference. Used across the dashboard, the Ask view,
 and the landing page — Flow should feel like one considered product.
 
@@ -19,12 +19,12 @@ are the color; the chrome stays quiet.
 --ink          rgb(54, 55, 38)      near-black, dark surfaces & strong headings
 --text         rgb(73, 73, 57)      body text
 --text-muted   rgb(133, 134, 122)   secondary text, labels
---accent       rgb(255, 247, 129)   THE yellow — primary actions, highlights, live state
+--accent       rgb(100, 180, 255)   THE blue — primary actions, highlights, live state
 --line         rgba(0,0,0,0.06)     hairline borders (border-black/5)
 
 Semantic (used sparingly, muted to fit the palette):
 --ok           rgb(90, 140, 90)     healthy / up-to-date
---busy         the accent yellow    indexing / catching-up / live
+--busy         the accent blue    indexing / catching-up / live
 --warn         rgb(184, 134, 60)    needs attention / propose
 --danger       rgb(168, 80, 70)     error (desaturated brick, not pure red)
 ```
