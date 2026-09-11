@@ -1,161 +1,144 @@
-# Flow
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./apps/web/public/brand-wordmark-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./apps/web/public/brand-wordmark-on-light.svg">
+    <img alt="Flow" src="./apps/web/public/brand-wordmark-on-light.svg" width="180">
+  </picture>
 
-This branch establishes Flow's agent workspace on the T3 Code foundation. It is
-an independent fork, with T3's original Git history retained. The web and desktop
-interface includes a local Brain backed by native FalkorDB. Open **Brain** in the
-sidebar, use the selector and **New brain** inside that page, and choose Claude Code,
-Codex, or OpenCode as its default indexing CLI. Connect GitHub repositories or a
-local Git folder through the source cards. Public repositories
-work without GitHub sign-in; private repositories use the selected computer's
-existing GitHub CLI sign-in (managed in Settings → Source control).
+  <h3>Coding harness with a brain.</h3>
 
-Indexing uses Flow's original graph-builder instructions and graph gateway,
-including provenance, duplicate detection, usage contracts, cross-repository
-links, and incremental Git updates. Builders write directly to FalkorDB as they
-explore; the graph and per-repository activity logs refresh every two seconds
-while the page is visible. The selected CLI uses its existing credentials and
-Flow's indexing model defaults (overridable with GRAPH_BUILDER_MODEL).
-Session capture feeds Flow's original checkpoint and memory pipeline.
-Linear/Fireflies/notes/Slack workers and cloud Brain migration remain deferred. Older prototype graphs are retained for reference;
-reindex their sources to build them with the full Flow pipeline.
+  <p>Run your coding agents. Flow remembers the work.</p>
+</div>
 
-When adding a project in the web or desktop UI, choose its brain (or create one).
-The repository is registered as a source automatically. Change the connection
-in **Brain → Projects**; disconnecting a project retains the old brain's source.
-Agent sessions receive Flow's original instructions and full `orient` result,
-then use the original graph, memory and source tools for retrieval. Session
-restart, compaction and Brain changes refresh orientation; no per-turn memory
-injection is added. Mobile project creation does not yet have a Brain picker.
+Flow is an open-source workspace for coding agents. Start a task with the provider
+you already use, and Flow captures the session into a project Brain: a searchable
+knowledge graph, retained conversation notes, living documentation, and reusable
+skills that improve as the project evolves.
 
-The root contains T3's web, desktop, mobile, and server applications. The existing
-Flow implementation is preserved under [`flow/`](flow/README.md) as a migration
-reference. The active shared Brain packages live under
-[`flow-t3/shared/`](flow-t3/README.md); public cloud interfaces live under
-`flow-t3/cloud/`. T3 builds from the shared packages without requiring the Flow CLI.
+You keep coding while Flow maintains the context agents usually lose between
+sessions. When another agent picks up the work, it can orient itself from the same
+Brain instead of asking you to explain the codebase and its decisions again.
 
-The first integration target is the complete free local developer setup. A
-workspace has one brain, initially running locally; a future cloud migration
-will transfer its data and change its endpoint. Agent execution location is
-independent of brain location.
+## Download
 
-The intended local experience is to launch the app and create projects in the UI,
-without running `flow up`. Local workspaces in one app server share an app-managed FalkorDB instance with
-separate workspace graphs and one lazily loaded embedding model. No Docker or
-`flow up` is used. Native FalkorDB binaries support Apple Silicon macOS 15+ and Linux
-x64; other platforms are not supported by this native integration yet. On macOS,
-the app downloads a checksum-verified upstream binary bundle with its native
-libraries (no Homebrew or Python interpreter required). The graph
-storage directory is derived from the installation home under `~/.flow-brain/`
-(to keep Unix socket paths short); workspace settings and model files are kept
-in that installation’s `userdata/brain/`. The UI uses the selected computer’s
-authenticated connection. Moving a brain independently to a remote backend is
-still a future integration.
+| Platform                  | Availability                                                                                                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS 15+ · Apple Silicon | **[Download Flow 0.1.2 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.2/Flow-0.1.2-arm64.dmg)** · signed, notarized, and auto-updating |
+| macOS · Intel             | Coming soon                                                                                                                                                           |
+| Linux · x64               | [Install from source](./docs/user/install.md#install-from-a-checkout) · Ubuntu 24.04 or compatible                                                                    |
+| Windows                   | Planned                                                                                                                                                               |
 
-This branch does not migrate installed data, configure Flow Cloud, or change
-existing installations. Use the Flow installation instructions below to run
-this fork. See [NOTICE.md](NOTICE.md) for attribution and license boundaries.
+See the [Flow 0.1.2 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.2)
+for checksums and updater assets. The macOS app checks for updates automatically;
+installing from source requires manual updates.
 
-## Upstream T3 Code
+## Why Flow
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Most coding harnesses remember a chat. Flow builds project knowledge from the work
+inside every chat.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
+- **Bring your own agent.** Use Codex, Claude Code, Cursor, Grok Build, OpenCode,
+  or Google Antigravity with the accounts and subscriptions already configured on
+  your machine.
+- **One Brain per workspace.** Flow indexes your repositories into a graph of
+  services, capabilities, APIs, resources, and the relationships between them.
+- **Context that survives sessions.** Each agent can orient itself, search the
+  graph, retrieve past decisions, and follow the evidence back to code.
+- **Auto-Docs and Auto-Skills.** Flow turns work into maintained documentation and
+  reusable procedures. You do not have to keep rewriting project instructions or
+  manually curate a folder of skills.
+- **Parallel work without losing control.** Run multiple threads and worktrees,
+  inspect diffs, use integrated terminals, and restore checkpointed workspace
+  state.
+- **Local by default.** Your projects, provider credentials, agent processes, and
+  local Brain stay on the machine that owns the workspace.
+- **Remote ready.** Connect from another browser, desktop, or phone while execution
+  remains on the host machine.
 
-## "Wait, what are you selling me?"
+## How the Brain works
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
-
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
-
-## Installation
-
-Install Flow on an Apple Silicon Mac running macOS 15 or newer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
-open "$HOME/Applications/Flow.app"
+```mermaid
+flowchart LR
+    A[Agent sessions] --> B[Flow Brain]
+    R[Repositories] --> B
+    B --> G[Knowledge graph]
+    B --> N[Conversation notes]
+    B --> D[Auto-Docs]
+    B --> S[Auto-Skills]
+    G --> C[Better context for every agent]
+    N --> C
+    D --> C
+    S --> C
 ```
 
-The installer downloads a ready-built app with its own Node runtime, server,
-web interface, and native Brain libraries. No Node, npm, Homebrew, Docker, or
-local build is required. Open **Flow** from your Applications folder whenever
-you want to use it; its interface opens in your browser. You can drag its icon
-to the Dock. Configure your provider and Brain in the app.
+Flow passively captures the evidence already produced during a coding session. It
+uses that evidence to keep conversation notes, project knowledge, documentation,
+and skills current. Agents consult the Brain before working and can trace recalled
+context back to its source instead of relying on a loose prompt summary.
 
-The `flow` terminal command is also installed in `~/.local/bin`. See the
-[source-checkout instructions](./docs/user/install.md#install-from-a-checkout)
-for development and Linux installations.
+The local app manages the Brain runtime for you. There is no separate `flow up`
+lifecycle to operate, and creating another project does not start another database
+or load another embedding model.
 
-The installer follows published browser releases. Pushes to the `release` branch
-build and publish the next version after release checks pass.
+## Coming soon
 
-### Updates
+- Shared team Brains, so knowledge follows the project across teammates
+- Linear integration for issues, decisions, and delivery context
+- Slack integration for searchable conversations and shared project context
+- Native installers for macOS Intel and Linux x64
 
-Flow checks for updates in the background at startup and every six hours while
-running. Updates are downloaded and verified in a separate directory. When one is ready, the sidebar
-shows **Update ready · Restart to update**. Confirm the restart to apply it; the
-page reloads when Flow reconnects. Running sessions are not restarted without
-your action. A prepared update also takes effect when you next start the stopped
-app. Use `flow update` to prepare an update immediately, or `flow update --check`
-to check without downloading it.
+## Get started
 
-See [installation and provider setup](./docs/user/install.md) and
-[updating Flow](./docs/user/updating.md) for details. The upstream `npx t3`
-package and T3 desktop downloads install upstream T3 Code.
+1. Install Flow and open the app.
+2. Add a local project.
+3. Choose or create its Brain.
+4. Select a coding provider and start a thread.
 
-## Some notes
+The Brain indexes the repository and grows as you work. Open **Brain** in the
+sidebar to explore its **Knowledge Graph**, **Auto-Skills**, and retained context.
 
-We are very very early in this project. Expect bugs.
+Flow works with:
 
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
+| Provider    | Setup                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| Codex       | [Install Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`        |
+| Claude Code | [Install Claude Code](https://claude.com/product/claude-code), then run `claude auth login` |
+| Cursor      | [Install Cursor CLI](https://cursor.com/cli), then run `agent login`                        |
+| Grok Build  | [Install Grok Build CLI](https://x.ai/cli), then run `grok login`                           |
+| OpenCode    | [Install OpenCode](https://opencode.ai), then run `opencode auth login`                     |
+| Antigravity | Install and sign in with Google from Flow's provider settings                               |
+
+Provider CLIs run on the environment that owns the project. See
+[installation and provider setup](./docs/user/install.md) for binary paths,
+multiple accounts, and remote environments.
 
 ## Documentation
 
-Full docs live in [docs/](./docs). There's no docs site yet.
-
-- [Install and first run](./docs/user/install.md)
+- [Browser app and source installation](./docs/user/install.md)
+- [Working with threads](./docs/user/thread-sidebar.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Project settings](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
+- [Project settings and Brain](./docs/user/project-settings.md)
+- [Remote access](./docs/user/remote-access.md)
+- [Updating Flow](./docs/user/updating.md)
 - [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- [Run T3 Code as a background service](./docs/user/background-service.md)
 
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+Building from source? Start with the [development guide](./docs/operations/development.md)
+and read [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-Publishing Flow? Use the repository's [$deploy-flow skill](./.agents/skills/deploy-flow/SKILL.md)
-and [browser release guide](./docs/operations/release.md#flow-browser-releases).
+## Project status
 
-## If you REALLY want to contribute still.... read this first
+Flow is early. Expect rough edges and frequent changes. Small fixes are welcome;
+please report problems and propose changes in
+[GitHub Issues](https://github.com/samyakkkk/flow/issues).
 
-### Install `vp`
+## Built on T3 Code
 
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
+Flow uses the open-source [T3 Code](https://github.com/pingdotgg/t3code) agent
+harness as its interface and runtime foundation. T3's original Git history and
+license notices are preserved. Flow's active Brain packages live under
+[`flow-t3/shared/`](./flow-t3/README.md), while the original Flow implementation is
+kept under [`flow/`](./flow/README.md) as a historical reference.
 
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
-
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+See [NOTICE.md](./NOTICE.md) and [LICENSE](./LICENSE) for attribution and license
+details.
