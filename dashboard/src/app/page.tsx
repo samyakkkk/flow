@@ -230,7 +230,7 @@ export default function HomePage() {
           <div>
             <Kicker>{mode === "prod" ? "Production" : "Local mode"}</Kicker>
             <Heading as="h1" className="text-[30px] mt-1 font-medium">
-              {isIndexing ? "Flow is learning." : "Flow builds your brain."}
+              {isIndexing ? "Flow is learning." : "Flow builds your memory."}
             </Heading>
           </div>
           {hasSources && graphNodeCount > 0 && (
