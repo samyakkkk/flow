@@ -207,6 +207,7 @@ jobs:
 
           xcrun stapler staple "${dmgs[0]}"
           xcrun stapler validate "${dmgs[0]}"
+          node scripts/refresh-update-manifest.ts release/latest-mac.yml release macOS
 
           zip_dir="$RUNNER_TEMP/flow-zip"
           ditto -x -k "${zips[0]}" "$zip_dir"
@@ -257,7 +258,19 @@ jobs:
       - name: Checkout release scripts
         uses: actions/checkout@v6
         with:
-          sparse-checkout: scripts
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
 
       - name: Download release assets
         uses: actions/download-artifact@v8
