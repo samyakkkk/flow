@@ -55,17 +55,28 @@ Orientation refreshes after an agent session restarts, after compaction, or when
 connected brain. It is not repeated on every message. Disconnecting stops further reads and
 capture, but cannot erase knowledge already in the conversation; start a new chat for a clean context.
 
-### Conversation notes, memories, and skills
+### Add sources to a brain
+
+Open **Brain → Sources** to add the code and context Flow can learn from. Connect a GitHub
+repository or choose a local folder. Public GitHub repositories work without signing in; private
+repositories use the selected machine's GitHub CLI authentication from **Settings → Source control**.
+
+Linear, Fireflies.ai, meeting notes, and the Slack bot are shown as upcoming source types and cannot
+be connected from this page yet.
+
+![Flow Brain sources, including GitHub repositories, local folders, and upcoming integrations](../images/flow-brain-sources.webp)
+
+### Conversation notes, Auto-Docs, and Auto-Skills
 
 The chat's **Flow** panel starts conversation notes with your first message. As you work,
 Flow maintains a readable account of the task, progress, corrections, and unfinished work so
 an agent can recover after compaction. Your agent can retrieve it with `get_chat_memories`.
 
-The same background process learns reusable memories and skills from the conversation and
-its recorded tool evidence. Memories capture decisions, preferences, lessons, and useful
-context. Skills describe procedures that were actually demonstrated, such as reproducing a
-failure and verifying its fix. Related skills are refined as later conversations add evidence.
-Notes always have a section; memories and skills appear when the chat has contributed them.
+The same background process maintains Auto-Docs and Auto-Skills from the conversation and
+its recorded tool evidence. Auto-Docs preserve decisions, lessons, and useful project context.
+Auto-Skills describe procedures that were actually demonstrated, such as reproducing a failure
+and verifying its fix. Related documents are refined as later conversations add evidence. Notes
+always have a section; Auto-Docs and Auto-Skills appear when the chat has contributed them.
 
 Notes update after completed turns and about every 60 seconds while new activity arrives.
 Busy extraction coalesces later activity into a follow-up. The panel shows pending work or an
@@ -87,12 +98,14 @@ saved notes and access to earlier evidence.
 
 ### Find and use what your brain learned
 
-Open **Brain** and choose **Auto-Skills** or **Memories** to browse what the connected brain
+Open **Brain** and choose **Auto-Docs** or **Auto-Skills** to browse what the connected brain
 has learned. **Knowledge Graph** contains its code map and source connections. Search by
 name or purpose and open a document to read it fully. **Updated** is when the document was
 edited; **Evidence from** is when its newest supporting conversation evidence was recorded.
 Older procedures can depend on an earlier branch or runtime, so check their stated scope.
 Time-sensitive memories become less prominent with age; lasting rules and useful fixes remain.
+
+![Flow Brain knowledge graph showing the entities and relationships learned from connected sources](../images/flow-knowledge-graph.webp)
 
 Open a skill and choose **Copy chat prompt** to ask your agent to read and use its latest
 version in a chat connected to that brain. You can also ask for a skill by purpose: orientation

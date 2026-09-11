@@ -19,6 +19,10 @@ You keep coding while Flow maintains the context agents usually lose between
 sessions. When another agent picks up the work, it can orient itself from the same
 Brain instead of asking you to explain the codebase and its decisions again.
 
+<p align="center">
+  <img src="./docs/images/flow-workspace.webp" alt="Flow workspace with an agent session, Auto-Skills, and conversation notes" width="1200">
+</p>
+
 ## Download
 
 | Platform                  | Availability                                                                                                                                                          |
@@ -79,6 +83,10 @@ context back to its source instead of relying on a loose prompt summary.
 The local app manages the Brain runtime for you. There is no separate `flow up`
 lifecycle to operate, and creating another project does not start another database
 or load another embedding model.
+
+<p align="center">
+  <img src="./docs/images/flow-knowledge-graph.webp" alt="Flow Brain knowledge graph showing project entities and relationships" width="1200">
+</p>
 
 ## Coming soon
 
