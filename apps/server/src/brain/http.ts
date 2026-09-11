@@ -14,6 +14,20 @@ import {
 import { ServerSettingsService } from "../serverSettings.ts";
 import { BrainService } from "./BrainService.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
+
+const ANALYTICS_COMMANDS = new Set([
+  "start",
+  "refreshGithub",
+  "bindProject",
+  "create",
+  "configure",
+  "import",
+  "reindex",
+  "importFolder",
+  "removeSource",
+  "cancel",
+]);
 
 export const brainHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -22,6 +36,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
     const service = yield* BrainService;
     const projections = yield* ProjectionSnapshotQuery;
     const settings = yield* ServerSettingsService;
+    const analytics = yield* AnalyticsService;
     return handlers.handle(
       "request",
       Effect.fn("environment.brain.request")(function* (args) {
@@ -134,6 +149,28 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
               ),
             })
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
+        if (ANALYTICS_COMMANDS.has(command.action)) {
+          yield* analytics.record("brain.command.completed", {
+            action: command.action,
+            success: response.error === null,
+            ...(command.action === "create" || command.action === "configure"
+              ? { cli: command.cli }
+              : {}),
+            ...(command.action === "bindProject"
+              ? { connected: command.workspaceId !== null }
+              : {}),
+            workspaceCount: response.state.workspaces.length,
+            sourceCount: response.state.workspaces.reduce(
+              (total, workspace) => total + workspace.sources.length,
+              0,
+            ),
+            indexedSourceCount: response.state.workspaces.reduce(
+              (total, workspace) =>
+                total + workspace.sources.filter((source) => source.status === "ready").length,
+              0,
+            ),
+          });
         }
         return response;
       }),

@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ServerConfig } from "../config.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { SharedBrainRuntime, serveSharedBrain, type BrainClient } from "./shared-runtime.ts";
 import { BrainRuntime } from "./BrainRuntime.ts";
 import { makeBrainCurator } from "./curator.ts";
@@ -28,6 +29,9 @@ export class BrainService extends Context.Service<
       const platform = yield* HostProcessPlatform;
       const architecture = yield* HostProcessArchitecture;
       const projections = yield* ProjectionSnapshotQuery;
+      const analytics = yield* AnalyticsService;
+      const context = yield* Effect.context<Effect.Services<ReturnType<typeof analytics.record>>>();
+      const run = Effect.runPromiseWith(context);
       const registerProjects = (runtime: BrainClient) =>
         Effect.gen(function* () {
           const snapshot = yield* projections
@@ -61,6 +65,7 @@ export class BrainService extends Context.Service<
         platform,
         architecture,
         runCurator,
+        recordAnalytics: (event, properties) => run(analytics.record(event, properties)),
       });
       yield* Effect.addFinalizer(() => Effect.promise(() => runtime.close()));
       yield* Effect.tryPromise({

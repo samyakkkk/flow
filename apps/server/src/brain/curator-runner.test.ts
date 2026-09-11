@@ -7,6 +7,7 @@ import * as Stream from "effect/Stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { ServerConfig } from "../config.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime.ts";
 import { makeBrainCurator } from "./curator.ts";
 import type { BrainCuratorRun } from "@flow/brain-runtime";
@@ -97,7 +98,11 @@ it.effect(
           expect(starts).toEqual(["codex", "claude"]);
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(ServerSettingsService.layerTest(), OpenCodeRuntimeLive).pipe(
+            Layer.mergeAll(
+              ServerSettingsService.layerTest(),
+              OpenCodeRuntimeLive,
+              AnalyticsService.layerTest,
+            ).pipe(
               Layer.provideMerge(ServerConfig.layerTest("/tmp", "/tmp")),
               Layer.provideMerge(NodeServices.layer),
             ),

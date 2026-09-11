@@ -124,10 +124,17 @@ describe("native brain persistence", () => {
         yield* Effect.promise(async () => {
           const directory = await NodeFSP.mkdtemp("/tmp/flow-brain-test-");
           directories.push(directory);
+          const analyticsEvents: Array<{
+            event: string;
+            properties: Readonly<Record<string, string | number | boolean>>;
+          }> = [];
           const runtime = new BrainRuntime(NodePath.join(directory, "state"), {
             databasePath: NodePath.join(directory, "db"),
             platform,
             architecture,
+            recordAnalytics: async (event, properties) => {
+              analyticsEvents.push({ event, properties });
+            },
           });
           runtimes.push(runtime);
           await runtime.initialize();
@@ -258,6 +265,38 @@ describe("native brain persistence", () => {
           expect((await runtime.state()).workspaces[1]!.sources[0]!.status).toBe("cancelled");
           expect((await runtime.state()).workspaces[0]!.sources[0]!.status).toBe("error");
           expect((await runtime.state()).workspaces[0]!.knowledge.entities).toHaveLength(3);
+          expect(analyticsEvents).toEqual([
+            expect.objectContaining({
+              event: "brain.source.indexed",
+              properties: expect.objectContaining({
+                success: true,
+                cancelled: false,
+                incremental: false,
+                sourceType: "github",
+                cli: "claude",
+              }),
+            }),
+            expect.objectContaining({
+              event: "brain.source.indexed",
+              properties: expect.objectContaining({
+                success: false,
+                cancelled: false,
+                incremental: true,
+                sourceType: "github",
+                cli: "claude",
+              }),
+            }),
+            expect.objectContaining({
+              event: "brain.source.indexed",
+              properties: expect.objectContaining({
+                success: false,
+                cancelled: true,
+                incremental: false,
+                sourceType: "github",
+                cli: "codex",
+              }),
+            }),
+          ]);
           await runtime.close();
           runtimes.pop();
           // A full Brain read now also loads its conversation documents, so

@@ -9,6 +9,7 @@ import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { BrainService } from "./BrainService.ts";
 import { originalBrainTools } from "./session-worker.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 
 const encodeChatMemories = Schema.encodeEffect(Schema.fromJsonString(ChatMemoryList));
 
@@ -19,6 +20,7 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
     const registry = yield* McpServer.McpServer;
     const service = yield* BrainService;
     const projections = yield* ProjectionSnapshotQuery;
+    const analytics = yield* AnalyticsService;
     const tools = yield* Effect.promise(originalBrainTools);
     const chatMemoryTool = {
       name: "get_chat_memories",
@@ -74,6 +76,12 @@ export const BrainToolkitRegistrationLive = Layer.effectDiscard(
                 error instanceof Error ? error.message : "The connected brain is unavailable.",
             });
           }).pipe(
+            Effect.tap(() =>
+              analytics.record("brain.tool.completed", { tool: tool.name, success: true }),
+            ),
+            Effect.tapError(() =>
+              analytics.record("brain.tool.completed", { tool: tool.name, success: false }),
+            ),
             Effect.catch((error) =>
               Effect.succeed(
                 new McpSchema.CallToolResult({

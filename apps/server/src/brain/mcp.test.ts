@@ -16,6 +16,7 @@ import type { BrainRuntime } from "./BrainRuntime.ts";
 import { BrainToolkitRegistrationLive } from "./mcp.ts";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 
 const encodeToolResult = Schema.encodeEffect(McpSchema.CallToolResult);
 const client = McpSchema.McpServerClient.of({
@@ -44,6 +45,10 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const readProjects: string[] = [];
+        const analyticsEvents: Array<{
+          event: string;
+          properties?: Readonly<Record<string, unknown>>;
+        }> = [];
         const runtime = {
           chatMemories: async (id: ProjectId, session: string) => {
             expect(id).toBe(projectId);
@@ -71,6 +76,21 @@ it.effect(
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provideMerge(Layer.succeed(BrainService, { ready: Effect.succeed(runtime) })),
           Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projections)),
+          Layer.provideMerge(
+            Layer.succeed(
+              AnalyticsService.AnalyticsService,
+              AnalyticsService.AnalyticsService.of({
+                record: (event, properties) =>
+                  Effect.sync(() =>
+                    analyticsEvents.push({
+                      event,
+                      ...(properties === undefined ? {} : { properties }),
+                    }),
+                  ),
+                flush: Effect.void,
+              }),
+            ),
+          ),
         );
         yield* Effect.gen(function* () {
           const server = yield* McpServer.McpServer;
@@ -114,6 +134,24 @@ it.effect(
           );
           expect(denied.isError).toBe(true);
           expect(readProjects).toEqual([projectId]);
+          expect(analyticsEvents).toEqual([
+            {
+              event: "brain.tool.completed",
+              properties: { tool: "search_knowledge", success: true },
+            },
+            {
+              event: "brain.tool.completed",
+              properties: { tool: "get_chat_memories", success: true },
+            },
+            {
+              event: "brain.tool.completed",
+              properties: { tool: "get_chat_memories", success: false },
+            },
+            {
+              event: "brain.tool.completed",
+              properties: { tool: "search_knowledge", success: false },
+            },
+          ]);
         }).pipe(Effect.provide(layer));
       }),
     ),
