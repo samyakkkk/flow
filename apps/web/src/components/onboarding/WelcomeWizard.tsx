@@ -961,7 +961,7 @@ function ImportStep({
   const { environments } = useEnvironments();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const connectBrain = useAtomCommand(brainCommand, { reportFailure: false });
-  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
+  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice({ required: true });
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const projects = useProjects();
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string> | null>(null);
@@ -974,6 +974,7 @@ function ImportStep({
   const projectAttemptsRef = useRef(
     new Map<string, { readonly projectId: ProjectId; readonly commandId: CommandId }>(),
   );
+  const brainChoicesRef = useRef(new Map<EnvironmentId, string>());
   const importGenerationRef = useRef(0);
 
   // Ignore command completions after leaving the import step.
@@ -1067,10 +1068,19 @@ function ImportStep({
       }
       if (importedProjects.has(candidate.key)) continue;
       let projectId = resolveOnboardingProjectId(readProjects(), environmentId, candidate);
-      const brainChoice = await chooseBrain(environmentId, candidate.title, projectId ?? undefined);
-      if (!brainChoice) {
-        setIsImporting(false);
-        return;
+      let workspaceId = brainChoicesRef.current.get(environmentId);
+      if (workspaceId === undefined) {
+        const brainChoice = await chooseBrain(
+          environmentId,
+          candidate.title,
+          projectId ?? undefined,
+        );
+        if (!brainChoice?.workspaceId) {
+          setIsImporting(false);
+          return;
+        }
+        workspaceId = brainChoice.workspaceId;
+        brainChoicesRef.current.set(environmentId, workspaceId);
       }
       if (importGeneration !== importGenerationRef.current) return;
       if (projectId === null) {
@@ -1113,12 +1123,12 @@ function ImportStep({
       {
         const connection = await connectBrain({
           environmentId,
-          input: { action: "bindProject", projectId, workspaceId: brainChoice.workspaceId },
+          input: { action: "bindProject", projectId, workspaceId },
         });
         if (connection._tag === "Failure" || connection.value.error) {
           setIsImporting(false);
           setImportError(
-            "Project saved, but its brain could not be connected. Retry or connect it from the Brain page.",
+            "Project saved, but its brain could not be connected. Retry to finish setup.",
           );
           return;
         }

@@ -273,25 +273,15 @@ function BrainController({
             </div>
           </header>
         }
+        docs={workspace && environmentId && (
+          <BrainDocumentLibrary kind="doc" key={`docs:${environmentId}:${workspace.id}`} documents={workspace.knowledge.documents ?? []} environmentId={environmentId} workspaceId={workspace.id} />
+        )}
         skills={
           workspace &&
           environmentId && (
             <BrainDocumentLibrary
               kind="skill"
               key={`skills:${environmentId}:${workspace.id}`}
-              documents={workspace.knowledge.documents ?? []}
-              legacyMemories={workspace.knowledge.memories}
-              environmentId={environmentId}
-              workspaceId={workspace.id}
-            />
-          )
-        }
-        memories={
-          workspace &&
-          environmentId && (
-            <BrainDocumentLibrary
-              kind="memory"
-              key={`documents:${environmentId}:${workspace.id}`}
               documents={workspace.knowledge.documents ?? []}
               legacyMemories={workspace.knowledge.memories}
               environmentId={environmentId}

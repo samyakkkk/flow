@@ -17,7 +17,7 @@ import {
 
 type Choice = { workspaceId: string | null } | null;
 /** One confirmation for every folder/clone entry point, before project creation. */
-export function useProjectBrainChoice() {
+export function useProjectBrainChoice({ required = false }: { required?: boolean } = {}) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const [target, setTarget] = useState<{ environmentId: EnvironmentId; title: string } | null>(
     null,
@@ -42,9 +42,10 @@ export function useProjectBrainChoice() {
       resolver.current?.(null);
       const request = ++generation.current;
       setTarget({ environmentId, title });
-      setSelected("none");
+      setSelected(required ? "" : "none");
       setState(null);
       setError("");
+      setCreateOpen(false);
       setLoading(true);
       void execute({
         environmentId,
@@ -54,21 +55,25 @@ export function useProjectBrainChoice() {
         setLoading(false);
         if (result._tag === "Success" && !result.value.error) {
           setState(result.value.state);
-          if (projectId)
-            setSelected(
-              result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
-                ?.id ?? "none",
-            );
+          const boundBrain = projectId
+            ? result.value.state.workspaces.find((brain) => brain.projectIds?.includes(projectId))
+            : undefined;
+          setSelected(
+            boundBrain?.id ?? result.value.state.workspaces[0]?.id ?? (required ? "" : "none"),
+          );
+          if (required && result.value.state.workspaces.length === 0) setCreateOpen(true);
         } else
           setError(
-            "Could not load brains from this computer. You can retry, or continue without a brain.",
+            required
+              ? "Could not load brains from this computer. Retry to continue setting up this project."
+              : "Could not load brains from this computer. You can retry, or continue without a brain.",
           );
       });
       return new Promise((resolve) => {
         resolver.current = resolve;
       });
     },
-    [execute],
+    [execute, required],
   );
   const finish = (choice: Choice) => {
     generation.current++;
@@ -94,10 +99,11 @@ export function useProjectBrainChoice() {
       >
         <DialogPopup className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Connect project to a brain</DialogTitle>
+            <DialogTitle>{required ? "Choose a brain" : "Connect project to a brain"}</DialogTitle>
             <DialogDescription>
               {target?.title} will use the selected brain for knowledge, and its repository will be
-              added as a source. You can also continue without a brain and connect one later.
+              added as a source.
+              {!required ? " You can also continue without a brain and connect one later." : null}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
@@ -107,7 +113,7 @@ export function useProjectBrainChoice() {
                 value={selected}
                 disabled={loading}
                 options={[
-                  { value: "none", label: "No brain" },
+                  ...(!required ? [{ value: "none", label: "No brain" }] : []),
                   ...(state?.workspaces ?? []).map((brain) => ({
                     value: brain.id,
                     label: brain.name,
@@ -149,10 +155,10 @@ export function useProjectBrainChoice() {
               Cancel
             </Button>
             <Button
-              disabled={loading}
+              disabled={loading || (required && !selected)}
               onClick={() => finish({ workspaceId: selected === "none" ? null : selected })}
             >
-              {selected === "none" ? "Continue without a brain" : "Connect brain"}
+              {!required && selected === "none" ? "Continue without a brain" : "Connect brain"}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -162,7 +168,11 @@ export function useProjectBrainChoice() {
         onOpenChange={setCreateOpen}
         state={state}
         send={send}
-        onCreated={setSelected}
+        initialName={required ? "My brain" : ""}
+        onCreated={(id) => {
+          if (required) finish({ workspaceId: id });
+          else setSelected(id);
+        }}
       />
     </>
   );

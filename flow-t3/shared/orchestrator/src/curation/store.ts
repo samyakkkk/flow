@@ -2,6 +2,7 @@ import * as NodeCrypto from "node:crypto";
 import type Database from "better-sqlite3";
 import { meaningfulTokens } from "../memory/search-query.js";
 import { redactSecrets } from "./transcript.js";
+import { noteChunks, type NoteChunk } from "./notes.js";
 import type {
   BrainDocument,
   BrainDocumentSummary,
@@ -12,13 +13,13 @@ import type {
   SaveDocument,
 } from "./types.js";
 
-const COLUMNS = `id, kind, name, description, revision, session_id AS sessionId, repo,
+const COLUMNS = `id, kind, folder, name, description, revision, session_id AS sessionId, repo,
   lifecycle, status, half_life_days AS halfLifeDays, created_at AS createdAt, updated_at AS updatedAt,
   observed_at AS observedAt`;
 export const CURATION_SCHEMA = `
   CREATE INDEX IF NOT EXISTS t3_capture_session_sequence ON t3_capture(session, seq);
   CREATE TABLE IF NOT EXISTS brain_documents (
-    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('notes','memory','skill')),
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('notes','doc','memory','skill')),
     name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', text TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1, session_id TEXT NOT NULL, repo TEXT,
     lifecycle TEXT NOT NULL DEFAULT 'standing', status TEXT NOT NULL DEFAULT 'active',
@@ -30,6 +31,14 @@ export const CURATION_SCHEMA = `
     session_id TEXT NOT NULL, seq INTEGER NOT NULL,
     PRIMARY KEY(document_id, session_id, seq));
   CREATE INDEX IF NOT EXISTS brain_document_evidence_session ON brain_document_evidence(session_id, document_id);
+  CREATE TABLE IF NOT EXISTS brain_document_revisions (
+    document_id TEXT NOT NULL REFERENCES brain_documents(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL, snapshot TEXT NOT NULL,
+    PRIMARY KEY(document_id, revision));
+  CREATE TABLE IF NOT EXISTS brain_note_chunks (
+    document_id TEXT NOT NULL REFERENCES brain_documents(id) ON DELETE CASCADE,
+    entry_id TEXT NOT NULL, document_revision INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY(document_id, entry_id));
   CREATE TABLE IF NOT EXISTS brain_curation_sessions (
     session_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at INTEGER NOT NULL);
@@ -53,6 +62,34 @@ export class CurationStore {
         ), created_at))`);
       })();
     }
+    // Rebuild the old CHECK constraint without changing document IDs, rowids,
+    // evidence, or FTS references. Never run this migration inside a caller transaction.
+    const definition = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'brain_documents'").get() as { sql: string };
+    if (!definition.sql.includes("'doc'")) {
+      if (db.inTransaction) throw new Error("Document kind migration requires an outer connection.");
+      const foreignKeys = db.pragma("foreign_keys", { simple: true });
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.transaction(() => {
+          db.exec(definition.sql.replace("brain_documents", "brain_documents_next").replace("'notes'", "'notes','doc'"));
+          // Copy rowids directly: a later UPDATE can collide with another copied row.
+          const names = (db.pragma("table_info(brain_documents)") as Array<{ name: string }>).map(({ name }) => `"${name.replaceAll('"', '""')}"`).join(", ");
+          db.exec(`INSERT INTO brain_documents_next(rowid, ${names}) SELECT rowid, ${names} FROM brain_documents`);
+          // This trigger belongs to memories, so DROP TABLE does not remove it.
+          // Remove it during the swap; the constructor recreates it below.
+          db.exec("DROP TRIGGER IF EXISTS brain_documents_legacy_delete");
+          db.exec("DROP TABLE brain_documents");
+          db.exec("ALTER TABLE brain_documents_next RENAME TO brain_documents");
+          db.exec(CURATION_SCHEMA);
+          if ((db.pragma("foreign_key_check") as unknown[]).length)
+            throw new Error("Document migration would break evidence references.");
+        })();
+      } finally {
+        db.pragma(`foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+      }
+    }
+    if (!(db.pragma("table_info(brain_documents)") as Array<{ name: string }>).some(({ name }) => name === "folder"))
+      db.exec("ALTER TABLE brain_documents ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
     const indexed = db
       .prepare("SELECT 1 FROM sqlite_master WHERE name='brain_documents_fts'")
       .get();
@@ -142,11 +179,12 @@ export class CurationStore {
     query: string,
     kind?: DocumentKind,
     limit = 12,
-    scope: { notesSessionId?: string | false; includeLegacy?: boolean } = {},
+    scope: { notesSessionId?: string | false; includeLegacy?: boolean; excludeMemories?: boolean } = {},
   ): BrainDocumentSummary[] {
     const words = [...new Set(meaningfulTokens(query))].slice(0, 16);
     if (query.trim() && !words.length) return [];
     const clauses = ["status != 'superseded'"];
+    if (scope.excludeMemories) clauses.push("kind != 'memory'");
     const parameters: Array<string | number> = [];
     if (kind) {
       clauses.push("kind = ?");
@@ -172,7 +210,7 @@ export class CurationStore {
           )
           .all(...parameters) as BrainDocument[]);
     const indexedIds = new Set(rows.map((row) => row.id));
-    if (scope.includeLegacy !== false && (!kind || kind === "memory"))
+    if (!scope.excludeMemories && scope.includeLegacy !== false && (!kind || kind === "memory"))
       rows.push(...this.legacyDocuments());
     return rows
       .filter(
@@ -266,6 +304,8 @@ export class CurationStore {
     });
   }
   save(checkpoint: CurationCheckpoint, input: SaveDocument): BrainDocument {
+    if (input.kind === "memory")
+      throw new Error("Standalone memory writes are disabled. Maintain conversation notes, Auto-Docs or Auto-Skills.");
     return this.db.transaction(() => {
       const evidence = [...new Set(input.evidence)];
       let observedAt = 0;
@@ -305,10 +345,29 @@ export class CurationStore {
       }
       if (!text?.trim()) throw new Error("Document text cannot be empty.");
       text = redactSecrets(text);
-      if (input.kind === "memory" && text.length > 6000)
-        throw new Error(
-          "Keep a memory below 6K characters and focused on one reusable question. Consolidate repetitive evidence; conversation progress belongs in notes.",
-        );
+      const chunks = input.kind === "notes" ? noteChunks(text) : [];
+      for (const seq of new Set(chunks.flatMap((chunk) => chunk.evidence))) {
+        if (seq > checkpoint.through || !this.db.prepare("SELECT 1 FROM t3_capture WHERE session = ? AND seq = ?").get(checkpoint.sessionId, seq))
+          throw new Error(`Inline note evidence E${seq} is unavailable at this checkpoint.`);
+      }
+      const priorChunks = previous?.kind === "notes" ? noteChunks(previous.text) : [];
+      for (const prior of priorChunks.filter((chunk) => chunk.kind === "preference")) {
+        if (!chunks.some((chunk) => chunk.id === prior.id))
+          throw new Error(`Keep instruction ${prior.id}; revise or explicitly withdraw it instead of silently dropping it.`);
+      }
+      for (const chunk of chunks.filter((entry) => entry.kind === "preference")) {
+        const prior = priorChunks.find((entry) => entry.id === chunk.id);
+        if ((!prior && chunk.revision !== 1) || (prior && (chunk.revision < prior.revision || chunk.revision > prior.revision + 1)))
+          throw new Error(`Keep ${chunk.id}'s revision stable or advance it by one; new instructions start at 1.`);
+        const content = (value: string) => value.replace(/^Sources?:.*$/gim, "").trim();
+        if (prior && chunk.revision === prior.revision && content(chunk.text) !== content(prior.text))
+          throw new Error(`Instruction ${chunk.id} changed; increment its revision and retain old log references.`);
+      }
+      for (const reference of new Set(chunks.flatMap((chunk) => chunk.references))) {
+        if (![...chunks, ...priorChunks].some((chunk) => `${chunk.id}@${chunk.revision}` === reference) &&
+            !this.hasHistoricalInstruction(id, reference))
+          throw new Error(`Unknown instruction reference ${reference}; preserve its original revision.`);
+      }
       if (text.length > 24_000)
         throw new Error(
           "Consolidate this document below 24K characters; preserve decisions, corrections and useful evidence, not routine exploration.",
@@ -342,6 +401,9 @@ export class CurationStore {
           throw new Error("Consolidate this skill below 24K characters including its frontmatter.");
       }
       const now = this.now();
+      const folder = redactSecrets(input.folder ?? previous?.folder ?? "").split("/").map((part) => part.trim()).join("/");
+      if (folder.length > 240 || (folder && (input.kind !== "doc" || folder.split("/").some((part) => !part || part === "." || part === ".."))))
+        throw new Error("Use a topic folder path for Auto-Docs only, e.g. Company/Mission.");
       const lifecycle = input.lifecycle ?? previous?.lifecycle ?? "standing";
       const halfLifeDays =
         lifecycle === "temporal" ? (input.halfLifeDays ?? previous?.halfLifeDays ?? 30) : null;
@@ -353,6 +415,7 @@ export class CurationStore {
       const document: BrainDocument = {
         id,
         kind: input.kind,
+        folder,
         name,
         description,
         text,
@@ -375,17 +438,18 @@ export class CurationStore {
         previous.text === document.text &&
         previous.name === document.name &&
         previous.description === document.description &&
+        (previous.folder ?? "") === folder &&
         previous.lifecycle === document.lifecycle &&
         previous.status === document.status &&
         previous.halfLifeDays === document.halfLifeDays
       )
         throw new Error("No meaningful change; leave this document as it is.");
       this.db
-        .prepare(`INSERT INTO brain_documents(id, kind, name, description, text, revision, session_id,
+        .prepare(`INSERT INTO brain_documents(id, kind, folder, name, description, text, revision, session_id,
         repo, lifecycle, status, half_life_days, created_at, updated_at, observed_at)
-        VALUES (@id, @kind, @name, @description, @text, @revision, @sessionId, @repo, @lifecycle, @status,
+        VALUES (@id, @kind, @folder, @name, @description, @text, @revision, @sessionId, @repo, @lifecycle, @status,
         @halfLifeDays, @createdAt, @updatedAt, @observedAt) ON CONFLICT(id) DO UPDATE SET name=excluded.name,
-        description=excluded.description, text=excluded.text, revision=excluded.revision, lifecycle=excluded.lifecycle,
+        folder=excluded.folder, description=excluded.description, text=excluded.text, revision=excluded.revision, lifecycle=excluded.lifecycle,
         status=excluded.status, half_life_days=excluded.half_life_days, updated_at=excluded.updated_at,
         observed_at=excluded.observed_at`)
         .run(document);
@@ -408,6 +472,15 @@ export class CurationStore {
         "INSERT OR IGNORE INTO brain_document_evidence(document_id, session_id, seq) VALUES (?, ?, ?)",
       );
       for (const seq of evidence) cite.run(id, checkpoint.sessionId, seq);
+      const saveRevision = this.db.prepare("INSERT OR IGNORE INTO brain_document_revisions(document_id, revision, snapshot) VALUES (?, ?, ?)");
+      if (previous && previous.revision > 0) saveRevision.run(id, previous.revision, JSON.stringify(previous));
+      saveRevision.run(id, document.revision, JSON.stringify(document));
+      if (document.kind === "notes") {
+        // Only the current note revision participates in the active chunk index.
+        this.db.prepare("DELETE FROM brain_note_chunks WHERE document_id = ?").run(id);
+        const insert = this.db.prepare("INSERT INTO brain_note_chunks VALUES (?, ?, ?, ?)");
+        for (const chunk of chunks) insert.run(id, chunk.id, document.revision, JSON.stringify(chunk));
+      }
       return document;
     })();
   }
@@ -417,5 +490,25 @@ export class CurationStore {
         "SELECT session_id AS sessionId, seq FROM brain_document_evidence WHERE document_id = ? ORDER BY session_id, seq",
       )
       .all(id) as Array<{ sessionId: string; seq: number }>;
+  }
+  revision(id: string, revision: number): BrainDocument | undefined {
+    const current = this.get(id);
+    if (current?.revision === revision) return current;
+    const row = this.db.prepare("SELECT snapshot FROM brain_document_revisions WHERE document_id = ? AND revision = ?").get(id, revision) as { snapshot: string } | undefined;
+    return row ? JSON.parse(row.snapshot) as BrainDocument : undefined;
+  }
+  chunks(id: string): NoteChunk[] {
+    const document = this.get(id);
+    if (document?.kind !== "notes") return [];
+    const rows = this.db.prepare("SELECT payload FROM brain_note_chunks WHERE document_id = ? AND document_revision = ? ORDER BY rowid").all(id, document.revision) as Array<{ payload: string }>;
+    return rows.length ? rows.map(({ payload }) => JSON.parse(payload) as NoteChunk) : noteChunks(document.text);
+  }
+  private hasHistoricalInstruction(id: string, reference: string): boolean {
+    const rows = this.db.prepare("SELECT snapshot FROM brain_document_revisions WHERE document_id = ? ORDER BY revision DESC").iterate(id) as Iterable<{ snapshot: string }>;
+    for (const { snapshot } of rows) {
+      const document = JSON.parse(snapshot) as BrainDocument;
+      if (document.kind === "notes" && noteChunks(document.text).some((chunk) => `${chunk.id}@${chunk.revision}` === reference)) return true;
+    }
+    return false;
   }
 }

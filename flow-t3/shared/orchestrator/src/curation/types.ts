@@ -1,8 +1,9 @@
-export type DocumentKind = "notes" | "memory" | "skill";
+export type DocumentKind = "notes" | "doc" | "memory" | "skill";
 export type DocumentLifecycle = "standing" | "temporal" | "issue";
 export type DocumentStatus = "active" | "resolved" | "superseded";
 
 export interface BrainDocumentSummary {
+  folder?: string;
   id: string;
   kind: DocumentKind;
   name: string;
@@ -40,6 +41,7 @@ export interface CurationCheckpoint {
   through: number;
 }
 export interface SaveDocument {
+  folder?: string;
   id?: string;
   kind: DocumentKind;
   name?: string;
