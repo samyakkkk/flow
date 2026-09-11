@@ -47,3 +47,10 @@ Keep analytics payloads to product metadata and normalized measurements. Do not
 send prompts, authentication material, raw provider payloads, user-assigned device
 names, or conversation identifiers. Client metadata is best effort; invalid values
 must not reject a connection. PostHog person profiles remain disabled.
+
+Brain analytics use four event families. `brain.command.completed` measures setup and configuration
+operations after the server has processed them. Imports and reindexes are asynchronous, so use
+`brain.source.indexed` for their actual outcomes and duration. `brain.tool.completed` measures
+successful and failed agent consultations by fixed tool name. `brain.curation.completed` measures
+background extraction runs, context renewals, and available token totals. These events never include
+workspace, repository, source, chat, or document identifiers, nor tool arguments or extracted text.

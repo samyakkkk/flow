@@ -38,6 +38,7 @@ import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter.
 import type { ProviderAdapterError } from "../provider/Errors.ts";
 import { makeClaudeAdapter } from "../provider/Layers/ClaudeAdapter.ts";
 import { makeOpenCodeAdapter } from "../provider/Layers/OpenCodeAdapter.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { prepareOpenCodeCurator } from "./curator-opencode.ts";
 
 const decodeCodex = Schema.decodeUnknownEffect(CodexSettings);
@@ -305,6 +306,7 @@ const makeWorker = (request: BrainCuratorRun, settings: ServerSettings) =>
 
 /** Dedicated instances of T3's adapter; no orchestration thread or native event log. */
 export const makeBrainCurator = Effect.gen(function* () {
+  const analytics = yield* AnalyticsService;
   const context = yield* Effect.context<
     Effect.Services<ReturnType<typeof makeWorker>> | ServerSettingsService
   >();
@@ -337,10 +339,19 @@ export const makeBrainCurator = Effect.gen(function* () {
         throw error;
       }
     });
-    if (!entry) return { requiresContext: true };
+    if (!entry) {
+      await run(
+        analytics.record("brain.curation.completed", {
+          success: true,
+          renewed: request.renew,
+          requiresContext: true,
+        }),
+      ).catch(() => {});
+      return { requiresContext: true };
+    }
     const { worker } = entry;
     try {
-      return await run(
+      const result = await run(
         Effect.gen(function* () {
           worker.pending = yield* Deferred.make<BrainCuratorResult, CuratorError>();
           worker.assistantCharacters = 0;
@@ -352,7 +363,28 @@ export const makeBrainCurator = Effect.gen(function* () {
           return yield* Deferred.await(worker.pending);
         }).pipe(Effect.timeout("4 minutes")),
       );
+      await run(
+        analytics.record("brain.curation.completed", {
+          success: true,
+          renewed: request.renew,
+          requiresContext: false,
+          assistantCharacters: result.assistantCharacters,
+          ...(result.inputTokens === undefined ? {} : { inputTokens: result.inputTokens }),
+          ...(result.cachedInputTokens === undefined
+            ? {}
+            : { cachedInputTokens: result.cachedInputTokens }),
+          ...(result.outputTokens === undefined ? {} : { outputTokens: result.outputTokens }),
+        }),
+      ).catch(() => {});
+      return result;
     } catch (error) {
+      await run(
+        analytics.record("brain.curation.completed", {
+          success: false,
+          renewed: request.renew,
+          requiresContext: false,
+        }),
+      ).catch(() => {});
       await workers.discard(sessionKey);
       throw error;
     } finally {

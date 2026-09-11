@@ -37,6 +37,11 @@ type Workspace = {
   sources: Source[];
   projectIds: ProjectId[];
 };
+type BrainAnalyticsProperties = Readonly<Record<string, string | number | boolean>>;
+type BrainAnalyticsRecorder = (
+  event: string,
+  properties: BrainAnalyticsProperties,
+) => Promise<void>;
 const decodeWorkspaces = Schema.decodeUnknownSync(Schema.Array(WorkspaceSchema));
 const decodeStoredKnowledge = Schema.decodeUnknownSync(WorkspaceSchema.fields.knowledge);
 const decodeGithubRepositories = Schema.decodeUnknownSync(
@@ -95,6 +100,7 @@ export class BrainRuntime {
   readonly directory: string;
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
   private readonly runCurator: BrainCuratorRunner | undefined;
+  private readonly recordAnalytics: BrainAnalyticsRecorder | undefined;
   constructor(
     directory: string,
     options: {
@@ -102,12 +108,14 @@ export class BrainRuntime {
       platform: NodeJS.Platform;
       architecture: NodeJS.Architecture;
       runCurator?: BrainCuratorRunner;
+      recordAnalytics?: BrainAnalyticsRecorder;
     },
   ) {
     this.directory = directory;
     this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
     this.runCurator = options.runCurator;
+    this.recordAnalytics = options.recordAnalytics;
     // FalkorDBLite requires a <104-byte Unix socket path on macOS. Worktree
     // paths routinely exceed that. Stable hashed storage also isolates dev homes.
     this.databasePath =
@@ -118,6 +126,9 @@ export class BrainRuntime {
         NodeCrypto.createHash("sha256").update(directory).digest("hex").slice(0, 12),
       );
     this.embeddings = new BrainEmbeddings(NodePath.join(directory, "models"));
+  }
+  private async recordMetric(event: string, properties: BrainAnalyticsProperties) {
+    await this.recordAnalytics?.(event, properties).catch(() => {});
   }
   async initialize() {
     await this.projectBindings.initialize();
@@ -609,9 +620,29 @@ export class BrainRuntime {
     }
     this.queue = this.queue
       .then(async () => {
+        const startedAt = Date.now();
+        const incremental = Boolean(source.lastFlowCommit);
         try {
-          if (!controller.signal.aborted)
+          if (!controller.signal.aborted) {
             await this.index(workspace, source, cli, controller.signal);
+            await this.recordMetric("brain.source.indexed", {
+              success: true,
+              cancelled: false,
+              incremental,
+              sourceType: source.localPath ? "local" : "github",
+              cli,
+              durationMs: Date.now() - startedAt,
+            });
+          } else {
+            await this.recordMetric("brain.source.indexed", {
+              success: false,
+              cancelled: true,
+              incremental,
+              sourceType: source.localPath ? "local" : "github",
+              cli,
+              durationMs: Date.now() - startedAt,
+            });
+          }
         } catch (error) {
           source.status = this.closed
             ? "queued"
@@ -624,6 +655,14 @@ export class BrainRuntime {
               ? error.message
               : "Indexing failed. Retry to continue.";
           await this.save();
+          await this.recordMetric("brain.source.indexed", {
+            success: false,
+            cancelled: controller.signal.aborted,
+            incremental,
+            sourceType: source.localPath ? "local" : "github",
+            cli,
+            durationMs: Date.now() - startedAt,
+          });
         } finally {
           this.jobs.delete(source.id);
           if (source.reindexRequested && !this.closed && source.status !== "cancelled") {
