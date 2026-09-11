@@ -44,6 +44,8 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@flow/brain-graph-gateway": "workspace:*",
+    "@flow/brain-orchestrator": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/tailscale": "workspace:*",

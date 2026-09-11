@@ -535,6 +535,12 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
     devDependencies:
+      '@flow/brain-graph-gateway':
+        specifier: workspace:*
+        version: link:../../flow-t3/shared/graph-gateway
+      '@flow/brain-orchestrator':
+        specifier: workspace:*
+        version: link:../../flow-t3/shared/orchestrator
       '@effect/vitest':
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6))
