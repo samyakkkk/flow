@@ -21,7 +21,7 @@ export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? BRAND.name;
 export const APP_STAGE_LABEL =
   injectedDesktopAppBranding?.stageLabel ??
   HOSTED_APP_CHANNEL_LABEL ??
-  (import.meta.env.DEV ? "Dev" : "Alpha");
+  (import.meta.env.DEV ? "Dev" : "Latest");
 export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });

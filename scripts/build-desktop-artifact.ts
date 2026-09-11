@@ -56,7 +56,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 checkBranding();
 
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_APP_ID = "com.flow.desktop";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2493,9 +2493,14 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   updateChannel: "latest" | "nightly",
 ) {
   const env = yield* Config.all({
+    updateUrl: Config.string("T3CODE_DESKTOP_UPDATE_URL").pipe(Config.option),
     updateRepository: Config.string("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.string("GITHUB_REPOSITORY").pipe(Config.option),
   });
+  const updateUrl = Option.getOrUndefined(env.updateUrl)?.trim();
+  if (updateUrl) {
+    return { provider: "generic", url: new URL(updateUrl).href.replace(/\/$/u, "") };
+  }
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
@@ -2563,7 +2568,7 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? `${BRAND.name} (Nightly)`
-    : `${BRAND.name} (Alpha)`;
+    : BRAND.name;
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2633,7 +2638,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: BRAND.name,
-          schemes: ["t3code", "t3code-dev"],
+          schemes: ["flow", "flow-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -2672,21 +2677,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: "flow",
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // t3code:// OAuth callbacks to the app.
+      // flow:// OAuth callbacks to the app.
       protocols: [
         {
           name: BRAND.name,
-          schemes: ["t3code", "t3code-dev"],
+          schemes: ["flow", "flow-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: "flow",
         },
       },
     };
@@ -3600,10 +3605,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const hasExplicitMacPasskeyConfiguration = [
+    repoEnv.T3CODE_APPLE_TEAM_ID,
+    repoEnv.T3CODE_MACOS_PROVISIONING_PROFILE,
+    repoEnv.T3CODE_CLERK_PASSKEY_RP_DOMAINS,
+  ].some((value) => value?.trim());
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
+    options.platform === "mac" && options.signed && hasExplicitMacPasskeyConfiguration
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -3661,14 +3672,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: "flow-desktop",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: `${BRAND.name} desktop build`,
-    author: "T3 Tools",
+    author: "Flow",
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
