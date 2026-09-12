@@ -5,7 +5,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { verifyPackagedBundleIsSelfContained } from "./build-desktop-artifact.ts";
+import {
+  findPackagedAppArchives,
+  verifyPackagedBundleIsSelfContained,
+} from "./build-desktop-artifact.ts";
 
 const packagedFixture = Effect.fn("packagedFixture")(function* (
   includeDependency: boolean,
@@ -78,4 +81,36 @@ it.layer(NodeServices.layer)("packaged Brain startup", (it) => {
       assert.include(error.message, "flow-test-transitive");
     }).pipe(Effect.scoped),
   );
+});
+
+it.layer(NodeServices.layer)("packaged archive discovery", (it) => {
+  for (const platform of ["mac", "linux"] as const) {
+    it.effect(`finds the ${platform} archive beside installer files`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "flow-archive-discovery-" });
+        for (const file of ["Flow.dmg", "Flow.zip", "Flow.AppImage", "latest.yml"]) {
+          yield* fs.writeFileString(path.join(root, file), "installer");
+        }
+        const archive =
+          platform === "mac"
+            ? path.join(root, "mac-arm64/Flow.app/Contents/Resources/app.asar")
+            : path.join(root, "linux-unpacked/resources/app.asar");
+        yield* fs.makeDirectory(path.dirname(archive), { recursive: true });
+        yield* fs.writeFileString(archive, "archive");
+        assert.deepStrictEqual(
+          yield* findPackagedAppArchives({ stageDistDir: root, platform, productName: "Flow" }),
+          [archive],
+        );
+        yield* fs.remove(path.dirname(archive), { recursive: true });
+        const error = yield* findPackagedAppArchives({
+          stageDistDir: root,
+          platform,
+          productName: "Flow",
+        }).pipe(Effect.flip);
+        assert.equal(error._tag, "BundleNotSelfContainedError");
+      }).pipe(Effect.scoped),
+    );
+  }
 });

@@ -2046,6 +2046,34 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
+export const findPackagedAppArchives = Effect.fn("findPackagedAppArchives")(function* (input: {
+  readonly stageDistDir: string;
+  readonly platform: "mac" | "linux";
+  readonly productName: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const archives: string[] = [];
+  for (const entry of yield* fs.readDirectory(input.stageDistDir)) {
+    const directory = path.join(input.stageDistDir, entry);
+    // The output also contains DMGs, ZIPs and AppImages. Probing a child of
+    // those files raises ENOTDIR instead of returning false from exists().
+    if ((yield* fs.stat(directory)).type !== "Directory") continue;
+    const archive =
+      input.platform === "mac"
+        ? path.join(directory, `${input.productName}.app`, "Contents/Resources/app.asar")
+        : path.join(directory, "resources/app.asar");
+    if (yield* fs.exists(archive)) archives.push(archive);
+  }
+  if (archives.length === 0) {
+    return yield* new BundleNotSelfContainedError({
+      exitCode: -1,
+      output: `No packaged app.asar found in ${input.stageDistDir}.`,
+    });
+  }
+  return archives;
+});
+
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -3882,22 +3910,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (options.platform !== "win") {
-    const productName = resolveDesktopProductName(appVersion);
-    const packagedDirectories = yield* fs.readDirectory(stageDistDir);
-    const archives: string[] = [];
-    for (const directory of packagedDirectories) {
-      const archive =
-        options.platform === "mac"
-          ? path.join(stageDistDir, directory, `${productName}.app`, "Contents/Resources/app.asar")
-          : path.join(stageDistDir, directory, "resources/app.asar");
-      if (yield* fs.exists(archive)) archives.push(archive);
-    }
-    if (archives.length === 0) {
-      return yield* new BundleNotSelfContainedError({
-        exitCode: -1,
-        output: `No packaged app.asar found in ${stageDistDir}.`,
-      });
-    }
+    const archives = yield* findPackagedAppArchives({
+      stageDistDir,
+      platform: options.platform,
+      productName: resolveDesktopProductName(appVersion),
+    });
     for (const asarPath of archives) {
       yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: options.verbose });
     }
