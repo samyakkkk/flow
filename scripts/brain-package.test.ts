@@ -13,6 +13,7 @@ import {
 const packagedFixture = Effect.fn("packagedFixture")(function* (
   includeDependency: boolean,
   includeTransitiveDependency = true,
+  serverSource = 'console.log("1.0.0");',
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -20,7 +21,7 @@ const packagedFixture = Effect.fn("packagedFixture")(function* (
   const app = path.join(root, "app");
   const dist = path.join(app, "apps/server/dist");
   yield* fs.makeDirectory(dist, { recursive: true });
-  yield* fs.writeFileString(path.join(dist, "bin.mjs"), 'console.log("1.0.0");');
+  yield* fs.writeFileString(path.join(dist, "bin.mjs"), serverSource);
   yield* fs.writeFileString(
     path.join(dist, "brain-runtime.mjs"),
     'import "flow-test-catalog-dependency"; if (!process.argv.includes("--catalog")) process.exit(2);',
@@ -52,6 +53,21 @@ const packagedFixture = Effect.fn("packagedFixture")(function* (
 });
 
 it.layer(NodeServices.layer)("packaged Brain startup", (it) => {
+  it.effect("runs the supplied Electron runtime in Node mode", () =>
+    Effect.gen(function* () {
+      const asarPath = yield* packagedFixture(
+        true,
+        true,
+        'if (process.env.ELECTRON_RUN_AS_NODE !== "1") process.exit(9);',
+      );
+      yield* verifyPackagedBundleIsSelfContained({
+        asarPath,
+        verbose: false,
+        electronExecutable: process.execPath,
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("rejects a missing worker dependency even when the server version check passes", () =>
     Effect.gen(function* () {
       const asarPath = yield* packagedFixture(false);

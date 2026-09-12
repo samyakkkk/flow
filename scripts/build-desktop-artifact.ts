@@ -2075,7 +2075,11 @@ export const findPackagedAppArchives = Effect.fn("findPackagedAppArchives")(func
 });
 
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
-  function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
+  function* (input: {
+    readonly asarPath: string;
+    readonly verbose: boolean;
+    readonly electronExecutable?: string;
+  }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
@@ -2131,7 +2135,7 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
       // and emitted-bundle checks.
       yield* runCommand(
         ChildProcess.make(
-          process.execPath,
+          input.electronExecutable ?? process.execPath,
           // --no-global-search-paths because clearing NODE_PATH is not enough:
           // CommonJS resolution still falls back to $HOME/.node_modules,
           // $HOME/.node_libraries and the install prefix, so a globally installed
@@ -2144,7 +2148,12 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
             // NODE_PATH would let a createRequire call inside the bundle resolve
             // a missing external from outside the packaged tree, which is the
             // whole thing this is trying to rule out.
-            env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "" },
+            env: {
+              ...process.env,
+              NODE_PATH: "",
+              NODE_OPTIONS: "",
+              ...(input.electronExecutable ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+            },
           },
         ),
         {
@@ -3916,7 +3925,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       productName: resolveDesktopProductName(appVersion),
     });
     for (const asarPath of archives) {
-      yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: options.verbose });
+      yield* verifyPackagedBundleIsSelfContained({
+        asarPath,
+        verbose: options.verbose,
+        // An Intel app can be built on an ARM runner. Its own Electron selects
+        // the target-native dependencies; the runner's Node selects ARM ones.
+        ...(options.platform === "mac"
+          ? {
+              electronExecutable: path.join(
+                path.dirname(asarPath),
+                "../MacOS",
+                resolveDesktopProductName(appVersion),
+              ),
+            }
+          : {}),
+      });
     }
   }
 
