@@ -25,14 +25,14 @@ Brain instead of asking you to explain the codebase and its decisions again.
 
 ## Download
 
-| Platform                  | Availability                                                                                                                                                          |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS 15+ · Apple Silicon | **[Download Flow 0.1.2 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.2/Flow-0.1.2-arm64.dmg)** · signed, notarized, and auto-updating |
-| macOS · Intel             | Coming soon                                                                                                                                                           |
-| Linux · x64               | [Install from source](./docs/user/install.md#install-from-a-checkout) · Ubuntu 24.04 or compatible                                                                    |
-| Windows                   | Planned                                                                                                                                                               |
+| Platform                  | Availability                                                                                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS 15+ · Apple Silicon | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-arm64.dmg)** · signed, notarized, and auto-updating  |
+| macOS · Intel             | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x64.dmg)** · signed, notarized, and auto-updating    |
+| Linux · x64               | **[Download Flow 0.1.3 (.AppImage)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x86_64.AppImage)** · Ubuntu 24.04 or compatible |
+| Windows                   | Planned                                                                                                                                                                |
 
-See the [Flow 0.1.2 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.2)
+See the [Flow 0.1.3 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.3)
 for checksums and updater assets. The macOS app checks for updates automatically;
 installing from source requires manual updates.
 
