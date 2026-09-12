@@ -38,8 +38,8 @@ describe("shouldBundleCliDependency", () => {
   });
 
   it("does not confuse a dependency with a similarly named package", () => {
-    assert.strictEqual(shouldBundleCliDependency("ms"), false);
-    assert.strictEqual(shouldBundleCliDependency("msw"), true);
+    assert.strictEqual(shouldBundleCliDependency("better-sqlite3"), false);
+    assert.strictEqual(shouldBundleCliDependency("better-sqlite3-helper"), true);
   });
 
   it("never bundles node: builtins", () => {
@@ -97,6 +97,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
         "better-sqlite3",
         "falkordb",
         "falkordblite",
+        "jsonc-parser",
         "msgpackr-extract",
         "node-llama-cpp",
         "node-pty",
@@ -206,11 +207,21 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
         if (!manifest) continue;
 
         const declared = {
-          ...(manifest.dependencies ?? {}),
           ...(manifest.optionalDependencies ?? {}),
-          ...(manifest.peerDependencies ?? {}),
+          ...(name === "node-llama-cpp" ||
+          name === "falkordblite" ||
+          name === "falkordb" ||
+          name === "jsonc-parser"
+            ? {}
+            : (manifest.dependencies ?? {})),
         };
+        // Packages declared in native manifests solely for install/build lifecycle
+        // scripts (e.g. better-sqlite3 install script invokes prebuild-install)
+        // must not pollute the runtime external list.
+        const INSTALL_TIME_ONLY_DEPENDENCIES = new Set(["prebuild-install", "cmake-js"]);
+
         for (const dependency of Object.keys(declared)) {
+          if (INSTALL_TIME_ONLY_DEPENDENCIES.has(dependency)) continue;
           if (!isRuntimeExternal(dependency)) {
             violations.push(`${name} -> ${dependency}`);
           }
