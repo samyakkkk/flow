@@ -21,7 +21,7 @@ import type { BrainSnapshot } from "../../brain/repository";
 import { BrainPage } from "./BrainPage";
 import { BrainDocumentLibrary } from "./BrainDocuments";
 import { BrainSources, BrainIndexing } from "./BrainSources";
-import { BrainSelect, CreateBrainDialog, cliName } from "./BrainControls";
+import { BrainSelect, CreateBrainDialog, ConnectCloudDialog, cliName } from "./BrainControls";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -121,6 +121,7 @@ function BrainController({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const mounted = useRef(true);
   const pending = useRef<Promise<unknown> | null>(null);
@@ -231,8 +232,21 @@ function BrainController({
         hasBrain={Boolean(workspace)}
         isIndexing={isIndexing}
         loading={!state && Boolean(environmentId) && !error}
-        connectionNotice={connectionNotice}
-        error={connectionNotice ? null : (error ?? selectionError)}
+        connectionNotice={
+          workspace?.remote?.status === "error"
+            ? {
+                title: "Cloud Brain unavailable",
+                description:
+                  workspace.remote.message + " Reconnect to this server to access its knowledge.",
+              }
+            : connectionNotice
+        }
+        error={
+          connectionNotice
+            ? null
+            : (error ??
+              (workspace?.remote?.status === "error" ? workspace.remote.message : selectionError))
+        }
         onCreate={() => setCreateOpen(true)}
         indexing={workspace && <BrainIndexing workspace={workspace} send={send} busy={busy} />}
         toolbar={
@@ -250,10 +264,21 @@ function BrainController({
                 onChange={(value) => onSelectionChange(value, environmentId)}
               />
               <span className="text-xs text-muted-foreground">
-                {workspace ? "Shared knowledge for your projects" : "Workspace knowledge"}
+                {workspace?.remote
+                  ? `Cloud · ${workspace.remote.status === "ready" ? "Connected" : "Unavailable"}`
+                  : workspace
+                    ? "Shared knowledge for your projects"
+                    : "Workspace knowledge"}
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                disabled={!canRequest || busy}
+                onClick={() => setCloudOpen(true)}
+              >
+                Connect cloud
+              </Button>
               <Button
                 variant="ghost"
                 size="icon"
@@ -273,9 +298,18 @@ function BrainController({
             </div>
           </header>
         }
-        docs={workspace && environmentId && (
-          <BrainDocumentLibrary kind="doc" key={`docs:${environmentId}:${workspace.id}`} documents={workspace.knowledge.documents ?? []} environmentId={environmentId} workspaceId={workspace.id} />
-        )}
+        docs={
+          workspace &&
+          environmentId && (
+            <BrainDocumentLibrary
+              kind="doc"
+              key={`docs:${environmentId}:${workspace.id}`}
+              documents={workspace.knowledge.documents ?? []}
+              environmentId={environmentId}
+              workspaceId={workspace.id}
+            />
+          )
+        }
         skills={
           workspace &&
           environmentId && (
@@ -290,11 +324,23 @@ function BrainController({
           )
         }
       >
-        {workspace && state && environmentId && (
+        {workspace && workspace.remote?.status !== "error" && state && environmentId && (
           <BrainSources
             key={workspace.id}
             workspace={workspace}
-            state={state}
+            state={
+              workspace.remote
+                ? {
+                    ...state,
+                    github: workspace.remote.github ?? {
+                      connected: false,
+                      login: "",
+                      message: "Cloud unavailable",
+                    },
+                    clis: workspace.remote.clis ?? [],
+                  }
+                : state
+            }
             environmentId={environmentId}
             send={send}
             busy={busy}
@@ -371,6 +417,12 @@ function BrainController({
           </section>
         )}
       </BrainPage>
+      <ConnectCloudDialog
+        open={cloudOpen}
+        onOpenChange={setCloudOpen}
+        send={send}
+        onConnected={(id) => onSelectionChange(id, environmentId)}
+      />
       <CreateBrainDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
@@ -391,7 +443,40 @@ function BrainController({
               <p className="text-sm">Computer</p>
               {environmentSelector}
             </div>
-            {workspace && (
+            {workspace?.remote && (
+              <div className="space-y-2">
+                <p className="text-sm break-all">{workspace.remote.endpoint}</p>
+                <a
+                  href={workspace.remote.endpoint}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm underline"
+                >
+                  Open cloud dashboard
+                </a>
+                <p className="text-xs text-muted-foreground">
+                  Disconnecting removes this computer’s connection. The remote Brain and its data
+                  stay on the server.
+                </p>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    void send({ action: "disconnectCloud", workspaceId: workspace.id }).then(
+                      (result) => {
+                        if (result && !result.error) {
+                          setSettingsOpen(false);
+                          onSelectionChange(null, environmentId);
+                        }
+                      },
+                    );
+                  }}
+                >
+                  Disconnect cloud Brain
+                </Button>
+              </div>
+            )}
+            {workspace && !workspace.remote && (
               <div className="space-y-2">
                 <p className="text-sm">Default indexing CLI</p>
                 <BrainSelect

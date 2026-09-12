@@ -122,9 +122,9 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
               runtime.projectBindings.register(project.value);
               await runtime.bindProject(project.value, command.workspaceId);
             } else if (command.action === "listGithubRepositories") {
-              repositories = await runtime.listGithubRepositories();
+              repositories = await runtime.listGithubRepositories(command.workspaceId);
             } else if (command.action === "listGithubBranches") {
-              branches = await runtime.listGithubBranches(command.repository);
+              branches = await runtime.listGithubBranches(command.repository, command.workspaceId);
             } else createdWorkspaceId = await runtime.command(command);
           } catch (cause) {
             error = cause instanceof Error ? cause.message : "Brain operation failed.";

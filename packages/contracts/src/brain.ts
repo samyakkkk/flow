@@ -95,6 +95,20 @@ export const BrainWorkspace = Schema.Struct({
   cli: BrainCli,
   sources: Schema.Array(BrainSource),
   projectIds: Schema.optional(Schema.Array(ProjectId)),
+  remote: Schema.optionalKey(
+    Schema.Struct({
+      endpoint: Schema.String,
+      brainId: Schema.String,
+      status: Schema.Literals(["ready", "error"]),
+      message: Schema.String,
+      github: Schema.optionalKey(
+        Schema.Struct({ connected: Schema.Boolean, login: Schema.String, message: Schema.String }),
+      ),
+      clis: Schema.optionalKey(
+        Schema.Array(Schema.Struct({ id: BrainCli, installed: Schema.Boolean })),
+      ),
+    }),
+  ),
   knowledge: BrainKnowledge,
 });
 export type BrainWorkspace = typeof BrainWorkspace.Type;
@@ -136,6 +150,12 @@ export const ChatMemoryList = Schema.Struct({
 export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainCommand = Schema.Union([
   Schema.Struct({
+    action: Schema.Literal("connectCloud"),
+    endpoint: Schema.String,
+    token: Schema.String,
+  }),
+  Schema.Struct({ action: Schema.Literal("disconnectCloud"), workspaceId: Schema.String }),
+  Schema.Struct({
     action: Schema.Literal("read"),
     metadataOnly: Schema.optional(Schema.Boolean),
     projectId: Schema.optional(ProjectId),
@@ -151,9 +171,19 @@ export const BrainCommand = Schema.Union([
     workspaceId: Schema.String,
     documentId: Schema.String,
   }),
-  Schema.Struct({ action: Schema.Literal("refreshGithub") }),
-  Schema.Struct({ action: Schema.Literal("listGithubRepositories") }),
-  Schema.Struct({ action: Schema.Literal("listGithubBranches"), repository: Schema.String }),
+  Schema.Struct({
+    action: Schema.Literal("refreshGithub"),
+    workspaceId: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("listGithubRepositories"),
+    workspaceId: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("listGithubBranches"),
+    repository: Schema.String,
+    workspaceId: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({
     action: Schema.Literal("bindProject"),
     workspaceId: Schema.NullOr(Schema.String),

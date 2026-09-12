@@ -100,11 +100,11 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
           result = await runtime.state(undefined, input.metadataOnly);
           break;
         case "repositories":
-          result = await runtime.listGithubRepositories();
+          result = await runtime.listGithubRepositories(input.workspace);
           break;
         case "branches":
           if (!input.name) throw Error("Missing repository");
-          result = await runtime.listGithubBranches(input.name);
+          result = await runtime.listGithubBranches(input.name, input.workspace);
           break;
         case "command":
           if (!input.command || input.command.action === "bindProject")
@@ -330,11 +330,15 @@ export class SharedBrainRuntime implements BrainClient {
       await this.request("document", { workspace: workspaceId, name: documentId }),
     );
   }
-  async listGithubRepositories() {
-    return [...decodeRepositories(await this.request("repositories"))];
+  async listGithubRepositories(workspaceId?: string) {
+    return [...decodeRepositories(await this.request("repositories", { workspace: workspaceId }))];
   }
-  async listGithubBranches(repository: string) {
-    return [...decodeBranches(await this.request("branches", { name: repository }))];
+  async listGithubBranches(repository: string, workspaceId?: string) {
+    return [
+      ...decodeBranches(
+        await this.request("branches", { name: repository, workspace: workspaceId }),
+      ),
+    ];
   }
   async drainCapture() {
     await this.queue;

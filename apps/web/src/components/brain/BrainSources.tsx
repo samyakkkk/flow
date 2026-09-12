@@ -90,7 +90,10 @@ export function BrainSources({
     setLoadingRepositories(true);
     setError("");
     try {
-      const result = await send({ action: "listGithubRepositories" }, true);
+      const result = await send(
+        { action: "listGithubRepositories", workspaceId: workspace.id },
+        true,
+      );
       if (result?.repositories) {
         setRepositories(result.repositories);
         setRepositoriesLoaded(true);
@@ -104,7 +107,10 @@ export function BrainSources({
     setLoadingBranches((current) => ({ ...current, [name]: true }));
     setBranchErrors((current) => ({ ...current, [name]: "" }));
     try {
-      const result = await send({ action: "listGithubBranches", repository: name }, true);
+      const result = await send(
+        { action: "listGithubBranches", workspaceId: workspace.id, repository: name },
+        true,
+      );
       if (result?.branches)
         setBranchOptions((current) => ({ ...current, [name]: result.branches! }));
       else
@@ -172,7 +178,9 @@ export function BrainSources({
     },
     {
       name: "Local Folder",
-      description: "Code on this computer",
+      description: workspace.remote
+        ? "Use a checkout’s GitHub repository"
+        : "Code on this computer",
       icon: Folder,
       action: () => {
         setError("");
