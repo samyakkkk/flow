@@ -179,3 +179,113 @@ export function CreateBrainDialog({
     </Dialog>
   );
 }
+
+export function ConnectCloudDialog({
+  open,
+  onOpenChange,
+  send,
+  onConnected,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  send: SendBrainCommand;
+  onConnected: (id: string) => void;
+}) {
+  const [endpoint, setEndpoint] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function connect() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await send({
+        action: "connectCloud",
+        endpoint: endpoint.trim(),
+        token: token.trim(),
+      });
+      if (!result || result.error || !result.createdWorkspaceId) {
+        setError(result?.error ?? "Could not connect to the cloud Brain.");
+        return;
+      }
+      setToken("");
+      onConnected(result.createdWorkspaceId);
+      onOpenChange(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) {
+          setToken("");
+          setError("");
+          onOpenChange(next);
+        }
+      }}
+    >
+      <DialogPopup className="max-w-md">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void connect();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Connect cloud Brain</DialogTitle>
+            <DialogDescription>
+              Connect to a Brain hosted by your team. Knowledge and new memories are stored on that
+              server.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            <label className="block space-y-2 text-sm">
+              Server URL
+              <Input
+                required
+                type="url"
+                placeholder="https://brain.example.com"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+              />
+            </label>
+            <label className="block space-y-2 text-sm">
+              Access token
+              <Input
+                required
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </label>
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setToken("");
+                onOpenChange(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || !endpoint.trim() || !token.trim()}>
+              {busy ? "Connecting…" : "Connect Brain"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogPopup>
+    </Dialog>
+  );
+}

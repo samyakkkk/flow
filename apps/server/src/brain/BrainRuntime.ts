@@ -1,3 +1,5 @@
+import type { GithubAccess } from "../../../../flow-t3/shared/runtime/src/github.ts";
+import { CloudClient } from "./cloud-client.ts";
 import { ProjectBrainBindings } from "./project-bindings.ts";
 import { brainResourceEnvironment, type BrainCuratorRunner } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
@@ -36,6 +38,7 @@ type Workspace = {
   cli: BrainWorkspace["cli"];
   sources: Source[];
   projectIds: ProjectId[];
+  remote?: NonNullable<BrainWorkspace["remote"]>;
 };
 type BrainAnalyticsProperties = Readonly<Record<string, string | number | boolean>>;
 type BrainAnalyticsRecorder = (
@@ -63,6 +66,7 @@ const active = (source: Source) =>
 /** One owner per T3 installation, shared by every workspace and renderer. */
 export class BrainRuntime {
   private db: FalkorDB | undefined;
+  private cloudInstance = "";
   private sessionWorkers = new Map<
     string,
     Promise<Awaited<ReturnType<typeof startSessionWorker>>>
@@ -99,11 +103,13 @@ export class BrainRuntime {
   readonly projectBindings: ProjectBrainBindings;
   readonly directory: string;
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
+  private readonly githubAccess: GithubAccess | undefined;
   private readonly runCurator: BrainCuratorRunner | undefined;
   private readonly recordAnalytics: BrainAnalyticsRecorder | undefined;
   constructor(
     directory: string,
     options: {
+      githubAccess?: GithubAccess;
       databasePath?: string;
       platform: NodeJS.Platform;
       architecture: NodeJS.Architecture;
@@ -115,6 +121,7 @@ export class BrainRuntime {
     this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
     this.runCurator = options.runCurator;
+    this.githubAccess = options.githubAccess;
     this.recordAnalytics = options.recordAnalytics;
     // FalkorDBLite requires a <104-byte Unix socket path on macOS. Worktree
     // paths routinely exceed that. Stable hashed storage also isolates dev homes.
@@ -132,6 +139,15 @@ export class BrainRuntime {
   }
   async initialize() {
     await this.projectBindings.initialize();
+    await NodeFSP.mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const instanceFile = NodePath.join(this.directory, "cloud-instance");
+    try {
+      this.cloudInstance = (await NodeFSP.readFile(instanceFile, "utf8")).trim();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      this.cloudInstance = NodeCrypto.randomUUID();
+      await NodeFSP.writeFile(instanceFile, this.cloudInstance, { mode: 0o600 });
+    }
     await NodeFSP.mkdir(this.directory, { recursive: true, mode: 0o700 });
     try {
       const saved = decodeWorkspaces(
@@ -163,10 +179,15 @@ export class BrainRuntime {
     await this.refreshGithub();
     await this.start();
     if (this.db?.isRunning)
-      await Promise.all(this.workspaces.map((workspace) => this.ensureWorkspaceGraph(workspace)));
+      await Promise.all(
+        this.workspaces
+          .filter((w) => !w.remote)
+          .map((workspace) => this.ensureWorkspaceGraph(workspace)),
+      );
     if (this.db?.isRunning) {
-      for (const workspace of this.workspaces) this.queueCapture(workspace);
-      for (const workspace of this.workspaces)
+      for (const workspace of this.workspaces.filter((w) => !w.remote))
+        this.queueCapture(workspace);
+      for (const workspace of this.workspaces.filter((w) => !w.remote))
         for (const source of workspace.sources)
           if (source.status === "queued") await this.enqueue(workspace, source);
     }
@@ -265,6 +286,18 @@ export class BrainRuntime {
     return this.starting;
   }
   private async refreshGithub() {
+    if (this.githubAccess) {
+      try {
+        this.github = await this.githubAccess.status();
+      } catch (error) {
+        this.github = {
+          connected: false,
+          login: "",
+          message: error instanceof Error ? error.message : "GitHub unavailable",
+        };
+      }
+      return;
+    }
     try {
       const value = JSON.parse(await run("gh", ["api", "user", "--jq", "{login: .login}"])) as {
         login?: string;
@@ -434,17 +467,74 @@ export class BrainRuntime {
             (workspace) =>
               projectId === undefined || this.projectBrainId(projectId) === workspace.id,
           )
-          .map(async (workspace) => ({
-            ...workspace,
-            projectIds: this.projectBindings.idsFor(
-              workspace.id,
-              (id) => this.legacyProjectBrainId(id),
-              workspace.projectIds,
-            ),
-            sources: workspace.sources.map((source) => ({ ...source })),
-            knowledge: metadataOnly ? emptyKnowledge() : await this.readKnowledge(workspace),
-          })),
+          .map(async (workspace) => {
+            let result: BrainWorkspace = { ...workspace, knowledge: emptyKnowledge() };
+            if (workspace.remote) {
+              try {
+                const remoteState = await (await this.cloud(workspace)).state(metadataOnly);
+                if (remoteState.database.status !== "ready")
+                  throw new Error(remoteState.database.message);
+                const remote = remoteState.workspaces.find(
+                  (w) => w.id === workspace.remote!.brainId,
+                );
+                if (!remote) throw new Error("The connected cloud Brain no longer exists.");
+                result = {
+                  ...remote,
+                  id: workspace.id,
+                  remote: {
+                    ...workspace.remote,
+                    status: "ready",
+                    message: "Connected to cloud",
+                    github: remoteState.github,
+                    clis: remoteState.clis,
+                  },
+                };
+              } catch (error) {
+                result = {
+                  ...result,
+                  remote: {
+                    ...workspace.remote,
+                    status: "error",
+                    message: error instanceof Error ? error.message : "Cloud Brain unavailable",
+                  },
+                };
+              }
+            } else
+              result = {
+                ...workspace,
+                sources: workspace.sources.map((source) => ({ ...source })),
+                knowledge: metadataOnly ? emptyKnowledge() : await this.readKnowledge(workspace),
+              };
+            return {
+              ...result,
+              projectIds: this.projectBindings.idsFor(
+                workspace.id,
+                (id) => this.legacyProjectBrainId(id),
+                workspace.projectIds,
+              ),
+            };
+          }),
       ),
+    };
+  }
+  private async cloud(workspace: Workspace) {
+    if (!workspace.remote) throw new Error("Brain is not remote.");
+    const token = await NodeFSP.readFile(
+      NodePath.join(this.directory, "cloud-credentials", workspace.id),
+      "utf8",
+    );
+    return new CloudClient(
+      workspace.remote.endpoint,
+      token,
+      this.cloudInstance,
+      workspace.remote.brainId,
+    );
+  }
+  private async remoteContext(context: BrainSessionContext) {
+    const { workspaceRoot, ...rest } = context;
+    return {
+      ...rest,
+      ...(workspaceRoot ? { repo: await this.sessionRepository(workspaceRoot) } : {}),
     };
   }
   command(command: BrainCommand) {
@@ -454,6 +544,67 @@ export class BrainRuntime {
   }
   private async executeCommand(command: BrainCommand) {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
+    if (command.action === "connectCloud") {
+      const client = new CloudClient(command.endpoint, command.token, this.cloudInstance);
+      const remote = await client.state(true);
+      if (remote.database.status !== "ready" || remote.workspaces.length !== 1)
+        throw new Error("The cloud endpoint must serve exactly one ready Brain.");
+      const brain = remote.workspaces[0]!;
+      if (
+        this.workspaces.some(
+          (w) => w.remote?.brainId === brain.id && w.remote.endpoint === client.endpoint,
+        )
+      )
+        throw new Error("This cloud Brain is already connected.");
+      const id = NodeCrypto.randomUUID();
+      const dir = NodePath.join(this.directory, "cloud-credentials");
+      await NodeFSP.mkdir(dir, { recursive: true, mode: 0o700 });
+      await NodeFSP.writeFile(NodePath.join(dir, id), command.token, { mode: 0o600 });
+      const workspace: Workspace = {
+        id,
+        name: brain.name,
+        cli: brain.cli,
+        sources: [],
+        projectIds: [],
+        remote: {
+          endpoint: client.endpoint,
+          brainId: brain.id,
+          status: "ready",
+          message: "Connected to cloud",
+        },
+      };
+      this.workspaces.push(workspace);
+      try {
+        await this.save();
+      } catch (error) {
+        this.workspaces = this.workspaces.filter((w) => w.id !== id);
+        await NodeFSP.rm(NodePath.join(dir, id), { force: true });
+        throw error;
+      }
+      return id;
+    }
+    if (command.action === "disconnectCloud") {
+      const workspace = this.workspace(command.workspaceId);
+      if (!workspace.remote) throw new Error("This Brain is local.");
+      const ids = this.projectBindings.idsFor(
+        workspace.id,
+        (id) => this.legacyProjectBrainId(id),
+        workspace.projectIds,
+      );
+      for (const id of ids) await this.projectBindings.bind(id, null);
+      const previous = this.workspaces;
+      this.workspaces = this.workspaces.filter((w) => w !== workspace);
+      try {
+        await this.save();
+      } catch (error) {
+        this.workspaces = previous;
+        throw error;
+      }
+      await NodeFSP.rm(NodePath.join(this.directory, "cloud-credentials", workspace.id), {
+        force: true,
+      });
+      return null;
+    }
     if (command.action === "read") return null;
     if (command.action === "readChat") throw new Error("Chat must be resolved by the server.");
     if (command.action === "readDocument")
@@ -467,6 +618,13 @@ export class BrainRuntime {
       return null;
     }
     if (command.action === "refreshGithub") {
+      if (command.workspaceId) {
+        const workspace = this.workspace(command.workspaceId);
+        if (workspace.remote) {
+          await (await this.cloud(workspace)).command({ action: "refreshGithub" });
+          return null;
+        }
+      }
       await this.refreshGithub();
       return null;
     }
@@ -499,6 +657,22 @@ export class BrainRuntime {
       return workspace.id;
     }
     const workspace = this.workspace(command.workspaceId);
+    if (workspace.remote) {
+      const client = await this.cloud(workspace);
+      if (command.action === "importFolder") {
+        const folder = await this.inspectFolder(command.path);
+        if (folder.localPath)
+          throw new Error(
+            "Cloud Brains require a GitHub repository. Push this folder to GitHub first.",
+          );
+        await client.command({
+          action: "import",
+          workspaceId: workspace.remote.brainId,
+          repository: folder.repository,
+        });
+      } else await client.command({ ...command, workspaceId: workspace.remote.brainId });
+      return null;
+    }
     if (command.action === "configure") {
       if (!this.clis.some((cli) => cli.id === command.cli && cli.installed))
         throw new Error(`Install ${command.cli} before choosing it.`);
@@ -710,7 +884,28 @@ export class BrainRuntime {
     const result = this.commands.then(async () => {
       if (this.closed) throw new Error("Brain runtime is shutting down.");
       const workspace = workspaceId ? this.workspace(workspaceId) : null;
-      if (workspace) {
+      if (workspace?.remote) {
+        const remote = await (await this.cloud(workspace)).state(true);
+        if (remote.database.status !== "ready") throw new Error("Cloud Brain is unavailable.");
+        const folder = await this.inspectFolder(project.workspaceRoot);
+        if (folder.localPath)
+          throw new Error("Push this repository to GitHub before connecting it to a cloud Brain.");
+        const brain = remote.workspaces.find((entry) => entry.id === workspace.remote!.brainId);
+        if (!brain) throw new Error("Cloud Brain no longer exists.");
+        if (
+          !brain.sources.some(
+            (source) => source.repository.toLowerCase() === folder.repository.toLowerCase(),
+          )
+        )
+          await (
+            await this.cloud(workspace)
+          ).command({
+            action: "import",
+            workspaceId: workspace.remote.brainId,
+            repository: folder.repository,
+          });
+      }
+      if (workspace && !workspace.remote) {
         const folder = await this.inspectFolder(project.workspaceRoot);
         const existing = workspace.sources.find((source) =>
           folder.localPath
@@ -765,7 +960,7 @@ export class BrainRuntime {
             ...brainResourceEnvironment({
               graphName: `flow_brain_${workspace.id.replaceAll("-", "")}`,
               databaseSocket: this.db.socketPath,
-              embeddingUrl: bridge.url,
+              embeddingUrl: `${bridge.url}/embed`,
               embeddingToken: bridge.token,
             }),
             // Explicit LLM configuration is safe to share; resource ownership
@@ -839,12 +1034,14 @@ export class BrainRuntime {
   async brainMemories(workspaceId: string, session: string, revision?: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Brain is not available");
+    if (workspace.remote) return (await this.cloud(workspace)).memories(session, revision);
     const worker = await this.sessionWorker(workspace);
     return worker.memories(session, revision);
   }
   async brainDocument(workspaceId: string, documentId: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Brain is not available");
+    if (workspace.remote) return (await this.cloud(workspace)).document(documentId);
     return (await this.sessionWorker(workspace)).document(documentId);
   }
   async callProjectTool(
@@ -867,6 +1064,8 @@ export class BrainRuntime {
     context: BrainSessionContext,
   ) {
     const workspace = this.workspace(workspaceId);
+    if (workspace.remote)
+      return (await this.cloud(workspace)).call(name, args, await this.remoteContext(context));
     if (
       (name === "source_read" || name === "source_search") &&
       !workspace.sources.some((source) => source.repository === args.repo)
@@ -905,6 +1104,12 @@ export class BrainRuntime {
   async captureBrainEvent(workspaceId: string, input: BrainCapture) {
     const occurredAt = input.occurredAt ?? Date.now();
     const workspace = this.workspace(workspaceId);
+    if (workspace.remote) {
+      await (
+        await this.cloud(workspace)
+      ).capture({ ...input, occurredAt, context: await this.remoteContext(input.context) });
+      return;
+    }
     const repo = input.context.workspaceRoot
       ? await this.sessionRepository(input.context.workspaceRoot)
       : input.context.repo;
@@ -954,8 +1159,13 @@ export class BrainRuntime {
       [...this.sessionWorkers.values()].map(async (pending) => (await pending).drain()),
     );
   }
-  async listGithubBranches(repository: string) {
+  async listGithubBranches(repository: string, workspaceId?: string) {
+    if (workspaceId) {
+      const workspace = this.workspace(workspaceId);
+      if (workspace.remote) return (await this.cloud(workspace)).branches(repository);
+    }
     const name = githubRepository(repository);
+    if (this.githubAccess) return this.githubAccess.branches(name);
     const rows = await run("gh", [
       "api",
       `repos/${name}/branches?per_page=100`,
@@ -972,7 +1182,12 @@ export class BrainRuntime {
       ),
     ];
   }
-  async listGithubRepositories() {
+  async listGithubRepositories(workspaceId?: string) {
+    if (workspaceId) {
+      const workspace = this.workspace(workspaceId);
+      if (workspace.remote) return (await this.cloud(workspace)).repositories();
+    }
+    if (this.githubAccess) return this.githubAccess.repositories();
     await this.refreshGithub();
     if (!this.github.connected)
       throw new Error(
@@ -1012,24 +1227,27 @@ export class BrainRuntime {
       () => true,
       () => false,
     );
+    const gitEnv = await this.githubAccess?.gitEnvironment();
     if (exists) {
       // Only app-owned clones live here; users' work folders are never checked out.
       await run("git", ["fetch", "--prune", "origin", ...(source.branch ? [source.branch] : [])], {
         cwd: repoPath,
+        ...(gitEnv ? { env: gitEnv } : {}),
         signal,
         timeout: 5 * 60_000,
       });
       await run("git", ["checkout", "-B", source.branch || "main", "FETCH_HEAD"], {
         cwd: repoPath,
+        ...(gitEnv ? { env: gitEnv } : {}),
         signal,
       });
     } else if (source.localPath) {
       await run(
         "git",
         ["clone", "--no-local", "--single-branch", "--no-tags", "--", source.localPath, repoPath],
-        { signal, timeout: 5 * 60_000 },
+        { signal, timeout: 5 * 60_000, ...(gitEnv ? { env: gitEnv } : {}) },
       );
-    } else if (this.github.connected) {
+    } else if (this.github.connected && !this.githubAccess) {
       await run(
         "gh",
         [
@@ -1042,7 +1260,7 @@ export class BrainRuntime {
           "--no-tags",
           ...(source.branch ? ["--branch", source.branch] : []),
         ],
-        { signal, timeout: 5 * 60_000 },
+        { signal, timeout: 5 * 60_000, ...(gitEnv ? { env: gitEnv } : {}) },
       );
     } else {
       await run(
@@ -1056,7 +1274,7 @@ export class BrainRuntime {
           `https://github.com/${source.repository}.git`,
           repoPath,
         ],
-        { signal, timeout: 5 * 60_000 },
+        { signal, timeout: 5 * 60_000, ...(gitEnv ? { env: gitEnv } : {}) },
       );
     }
     const commit = await run("git", ["rev-parse", "HEAD"], { cwd: repoPath, signal });
