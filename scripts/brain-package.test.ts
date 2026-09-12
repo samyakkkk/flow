@@ -7,7 +7,10 @@ import * as Path from "effect/Path";
 
 import { verifyPackagedBundleIsSelfContained } from "./build-desktop-artifact.ts";
 
-const packagedFixture = Effect.fn("packagedFixture")(function* (includeDependency: boolean) {
+const packagedFixture = Effect.fn("packagedFixture")(function* (
+  includeDependency: boolean,
+  includeTransitiveDependency = true,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "flow-brain-package-test-" });
@@ -26,7 +29,19 @@ const packagedFixture = Effect.fn("packagedFixture")(function* (includeDependenc
       path.join(dependency, "package.json"),
       '{"name":"flow-test-catalog-dependency","type":"module","exports":"./index.js"}',
     );
-    yield* fs.writeFileString(path.join(dependency, "index.js"), "export const tools = [];");
+    yield* fs.writeFileString(
+      path.join(dependency, "index.js"),
+      'import "flow-test-transitive"; export const tools = [];',
+    );
+    if (includeTransitiveDependency) {
+      const transitive = path.join(dependency, "node_modules/flow-test-transitive");
+      yield* fs.makeDirectory(transitive, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(transitive, "package.json"),
+        '{"name":"flow-test-transitive","type":"module","exports":"./index.js"}',
+      );
+      yield* fs.writeFileString(path.join(transitive, "index.js"), "export const value = 1;");
+    }
   }
   const archive = path.join(root, "app.asar");
   yield* Effect.promise(() => createPackage(app, archive));
@@ -50,6 +65,17 @@ it.layer(NodeServices.layer)("packaged Brain startup", (it) => {
     Effect.gen(function* () {
       const asarPath = yield* packagedFixture(true);
       yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: false });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects an external package whose transitive dependency was not shipped", () =>
+    Effect.gen(function* () {
+      const asarPath = yield* packagedFixture(true, false);
+      const error = yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: false }).pipe(
+        Effect.flip,
+      );
+      assert.equal(error._tag, "BundleNotSelfContainedError");
+      assert.include(error.message, "flow-test-transitive");
     }).pipe(Effect.scoped),
   );
 });

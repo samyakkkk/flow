@@ -1,194 +1,39 @@
 /**
- * The single source of truth for packages the server CLI bundle must NOT inline.
+ * Packages that must load from disk: native addons, their loaders, and packages
+ * whose runtime-relative imports cannot be bundled safely. The CLI bundler and
+ * desktop packager share this list so each external root is staged on disk.
  *
- * Two consumers derive from this list, and they must never disagree:
+ * The package manager installs each root's transitive dependencies. Ordinary JS
+ * dependencies may also be bundled where the CLI imports them; marking the whole
+ * closure external instead creates bare imports that pnpm cannot resolve from
+ * the CLI workspace. Artifact checks verify native loaders stay external and
+ * that both the server and Brain catalog load from the isolated packaged tree.
  *
- * - apps/server/vite.config.ts decides what stays external to the bundle.
- * - scripts/build-desktop-artifact.ts selects the runtime dependency roots for
- *   the Windows server sidecar.
- *
- * A runtime package that is external but absent from the sidecar fails as soon
- * as Node resolves it from the emitted bundle. Keeping both consumers on one
- * list prevents packaging from drifting away from the bundle boundary.
- *
- * Scoped families and node-gyp-build match prefixes; ordinary package names
- * match exactly (including subpaths). In particular, externalizing `ms` must
- * not accidentally externalize `msw` and its unrelated dependency closure.
- */
-/**
- * External because Node actually loads them from disk at runtime.
- *
- * Native addons (.node), the JS wrappers that dlopen them by real path, and —
- * critically — the ordinary JS packages those wrappers require. An external
- * package is loaded from the real filesystem, so its own `require` also
- * resolves from the real filesystem; a dependency that was bundled away exists
- * only inside the emitted bundle and is unreachable there. This closure is
- * enforced by a test, not by inspection.
+ * Scoped families and node-gyp-build match prefixes; ordinary names match only
+ * the package and its subpaths, not similarly named packages.
  */
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "better-sqlite3",
-  // Native SQLite's published dependency closure must also be in the sidecar.
-  "base64-js",
-  "bl",
-  "buffer",
-  "decompress-response",
-  "end-of-stream",
-  "expand-template",
-  "fs-constants",
-  "github-from-package",
-  "ieee754",
-  "inherits",
-  "mimic-response",
-  "mkdirp-classic",
-  "napi-build-utils",
-  "node-abi",
-  "once",
-  "prebuild-install",
-  "pump",
-  "readable-stream",
-  "safe-buffer",
-  "simple-concat",
-  "simple-get",
-  "string_decoder",
-  "tar-fs",
-  "tar-stream",
-  "tunnel-agent",
-  "util-deprecate",
-  "wrappy",
   "bindings",
   "file-uri-to-path",
-  // Native Brain runtime and its filesystem dependency closure. Keep these
-  // external so binary/module resolution works in the desktop sidecar.
   "@falkordblite/",
-  "@huggingface/jinja",
-  "@isaacs/fs-minipass",
-  "@js-temporal/polyfill",
-  "@kwsites/file-exists",
-  "@kwsites/promise-deferred",
-  "@node-llama-cpp/",
-  "@node-rs/",
-  "@opentelemetry/api",
-  "at-least-node",
-  "clone",
-  "defaults",
-  "get-east-asian-width",
-  "has-flag",
-  "mimic-fn",
-  "supports-color",
-  "type-fest",
-  "typescript",
-  "wcwidth",
-  "@redis/bloom",
-  "@redis/client",
-  "@redis/json",
-  "@redis/search",
-  "@redis/time-series",
-  "@reflink/",
-  "@simple-git/args-pathspec",
-  "@simple-git/argv-parser",
-  "@tinyhttp/content-disposition",
-  "ansi-escapes",
-  "ansi-regex",
-  "ansi-styles",
-  "async-retry",
-  "bytes",
-  "chalk",
-  "chmodrp",
-  "chownr",
-  "ci-info",
-  "cli-cursor",
-  "cli-spinners",
-  "cliui",
-  "cluster-key-slot",
-  "cmake-js",
-  "color-convert",
-  "color-name",
-  "commander",
-  "cross-spawn",
-  "debug",
-  "deep-extend",
-  "emoji-regex",
-  "env-var",
-  "escalade",
-  "eventemitter3",
   "falkordb",
   "falkordblite",
-  "filename-reserved-regex",
-  "filenamify",
-  "fs-extra",
-  "generic-pool",
-  "get-caller-file",
-  "graceful-fs",
-  "ignore",
-  "ini",
-  "ipull",
-  "is-fullwidth-code-point",
-  "is-interactive",
-  "is-unicode-supported",
-  "isexe",
-  "jsbi",
-  "jsonfile",
-  "lifecycle-utils",
-  "lodash",
-  "lodash.debounce",
-  "log-symbols",
-  "lowdb",
-  "mimic-function",
-  "minimist",
-  "minipass",
-  "minizlib",
-  "ms",
-  "nanoid",
-  "node-api-headers",
+  "@node-llama-cpp/",
   "node-llama-cpp",
-  "onetime",
-  "ora",
-  "parse-ms",
-  "path-key",
-  "pretty-bytes",
-  "pretty-ms",
-  "proper-lockfile",
-  "rc",
-  "redis",
-  "require-directory",
-  "restore-cursor",
-  "retry",
-  "semver",
-  "shebang-command",
-  "shebang-regex",
-  "signal-exit",
-  "simple-git",
-  "sleep-promise",
-  "slice-ansi",
-  "stdin-discarder",
-  "stdout-update",
-  "steno",
-  "string-width",
-  "strip-ansi",
-  "strip-json-comments",
-  "tar",
-  "universalify",
-  "url-join",
-  "validate-npm-package-name",
-  "which",
-  "wrap-ansi",
-  "y18n",
-  "yallist",
-  "yargs",
-  "yargs-parser",
-  "yoctocolors",
-
   "node-pty",
   "ffi-rs",
   "@yuuang/",
   "@ff-labs/",
   "@clerk/electron-passkeys",
   "@msgpackr-extract/",
+  // Its UMD entry keeps runtime-relative requires (e.g. ./impl/format) when
+  // bundled by Rolldown. Keep the package intact alongside those modules.
+  "jsonc-parser",
   "msgpackr-extract",
   "node-gyp-build",
   "node-addon-api",
-  // Required by node-gyp-build-optional-packages. Not native, but in the
-  // closure: without it, WSL gets MODULE_NOT_FOUND while Windows is fine.
+  // Keep libc detection alongside the native loader that selects Linux builds.
   "detect-libc",
   // ws's optional accelerators. Nothing in this repo declares them, so they are
   // not in the staged production install and the packaged app does not ship
