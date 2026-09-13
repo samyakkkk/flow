@@ -1,7 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import { ProviderInstanceId, ServerSettings } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { selectCuratorProvider, curatorSessionKey } from "./curator.ts";
+import { selectCuratorProvider, selectLocalCuratorCli, curatorSessionKey } from "./curator.ts";
 import { CuratorSessions } from "./curator-sessions.ts";
 
 const settings = Schema.decodeUnknownSync(ServerSettings)({
@@ -10,6 +10,19 @@ const settings = Schema.decodeUnknownSync(ServerSettings)({
     "claude-work": { driver: "claudeAgent", enabled: true, config: {} },
   },
   defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+});
+
+it("uses this environment's preferred provider for a remote Brain's local extraction", () => {
+  expect(selectLocalCuratorCli(settings)).toBe("codex");
+  expect(
+    selectLocalCuratorCli({
+      ...settings,
+      defaultModelSelection: {
+        instanceId: ProviderInstanceId.make("claude-work"),
+        model: "sonnet",
+      },
+    }),
+  ).toBe("claude");
 });
 
 it.each([

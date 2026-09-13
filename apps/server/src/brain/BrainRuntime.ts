@@ -30,6 +30,10 @@ import { BrainEmbeddings } from "./embeddings.ts";
 import { indexRepository } from "./indexer.ts";
 import { startBuilderBridge } from "./builder-bridge.ts";
 import { githubRepository, run } from "./process.ts";
+import type {
+  BrainDocumentSync,
+  BrainDocumentSyncAck,
+} from "../../../../flow-t3/shared/orchestrator/src/curation/types.ts";
 
 type Source = { -readonly [K in keyof BrainSource]: BrainSource[K] };
 type Workspace = {
@@ -75,6 +79,12 @@ export class BrainRuntime {
   private captureQueue: Promise<void> = Promise.resolve();
   private captureRetry: ReturnType<typeof setTimeout> | undefined;
   private captureBacklog = new Map<string, Workspace>();
+  private documentSyncQueue: Promise<void> = Promise.resolve();
+  private documentSyncRetry: ReturnType<typeof setTimeout> | undefined;
+  private documentSyncBacklog = new Map<string, Workspace>();
+  private documentSyncQueued = new Set<string>();
+  private documentSyncAgain = new Set<string>();
+  private documentSyncErrors = new Map<string, string>();
   private captureSequence = 0;
   private projectRepositories = new Map<string, Promise<string>>();
   private starting: Promise<void> | undefined;
@@ -105,6 +115,9 @@ export class BrainRuntime {
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
   private readonly githubAccess: GithubAccess | undefined;
   private readonly runCurator: BrainCuratorRunner | undefined;
+  private readonly runIndexer: BrainCuratorRunner | undefined;
+  private readonly localCuratorCli: (() => Promise<"claude" | "codex" | "opencode">) | undefined;
+  private readonly captureToolActivity: boolean;
   private readonly recordAnalytics: BrainAnalyticsRecorder | undefined;
   constructor(
     directory: string,
@@ -114,6 +127,9 @@ export class BrainRuntime {
       platform: NodeJS.Platform;
       architecture: NodeJS.Architecture;
       runCurator?: BrainCuratorRunner;
+      runIndexer?: BrainCuratorRunner;
+      localCuratorCli?: () => Promise<"claude" | "codex" | "opencode">;
+      captureToolActivity?: boolean;
       recordAnalytics?: BrainAnalyticsRecorder;
     },
   ) {
@@ -121,6 +137,9 @@ export class BrainRuntime {
     this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
     this.runCurator = options.runCurator;
+    this.runIndexer = options.runIndexer;
+    this.localCuratorCli = options.localCuratorCli;
+    this.captureToolActivity = options.captureToolActivity ?? true;
     this.githubAccess = options.githubAccess;
     this.recordAnalytics = options.recordAnalytics;
     // FalkorDBLite requires a <104-byte Unix socket path on macOS. Worktree
@@ -185,11 +204,12 @@ export class BrainRuntime {
           .map((workspace) => this.ensureWorkspaceGraph(workspace)),
       );
     if (this.db?.isRunning) {
-      for (const workspace of this.workspaces.filter((w) => !w.remote))
-        this.queueCapture(workspace);
+      for (const workspace of this.workspaces) this.queueCapture(workspace);
       for (const workspace of this.workspaces.filter((w) => !w.remote))
         for (const source of workspace.sources)
           if (source.status === "queued") await this.enqueue(workspace, source);
+      for (const workspace of this.workspaces.filter((w) => w.remote))
+        this.queueDocumentSync(workspace);
     }
   }
   private async ensureWorkspaceGraph(workspace: Workspace) {
@@ -955,6 +975,8 @@ export class BrainRuntime {
         const directory = NodePath.join(this.directory, "workspaces", workspace.id);
         await NodeFSP.mkdir(directory, { recursive: true });
         await this.writeSessionSources(workspace);
+        // The chat-owning environment selects its own installed provider. Cloud
+        // availability and its maintenance CLI must not gate local capture.
         return startSessionWorker(
           {
             ...brainResourceEnvironment({
@@ -985,17 +1007,23 @@ export class BrainRuntime {
             FLOW_SOURCE_REGISTRY: NodePath.join(directory, "repos.json"),
             FLOW_ADMIN_TOKEN: NodeCrypto.randomBytes(32).toString("hex"),
             INDEXER_RUNTIME: workspace.cli,
+            FLOW_CURATOR_SOURCE_TOOLS: workspace.remote ? "0" : "1",
           },
           false,
           undefined,
           this.runCurator
-            ? (request) =>
+            ? async (request) =>
                 this.runCurator!({
                   ...request,
-                  cli: workspace.cli,
+                  cli: workspace.remote
+                    ? ((await this.localCuratorCli?.()) ??
+                      this.clis.find((cli) => cli.installed)?.id ??
+                      workspace.cli)
+                    : workspace.cli,
                   sessionId: `${workspace.id}:${request.sessionId}`,
                 })
             : undefined,
+          workspace.remote ? () => this.queueDocumentSync(workspace) : undefined,
         );
       })();
       this.sessionWorkers.set(workspace.id, pending);
@@ -1034,14 +1062,32 @@ export class BrainRuntime {
   async brainMemories(workspaceId: string, session: string, revision?: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Brain is not available");
-    if (workspace.remote) return (await this.cloud(workspace)).memories(session, revision);
+    if (workspace.remote) {
+      // This chat's extraction state lives here. A remote fetch must not delay
+      // note retrieval; the shared library and graph use the cloud connection.
+      const local = await (await this.sessionWorker(workspace)).memories(session, revision);
+      const syncError = this.documentSyncErrors.get(workspace.id);
+      return {
+        ...local,
+        ...(syncError
+          ? {
+              extractionError:
+                local.extractionError || `Cloud synchronization pending: ${syncError}`,
+            }
+          : {}),
+      };
+    }
     const worker = await this.sessionWorker(workspace);
     return worker.memories(session, revision);
   }
   async brainDocument(workspaceId: string, documentId: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Brain is not available");
-    if (workspace.remote) return (await this.cloud(workspace)).document(documentId);
+    if (workspace.remote)
+      return (
+        (await (await this.sessionWorker(workspace)).document(documentId)) ??
+        (await this.cloud(workspace)).document(documentId)
+      );
     return (await this.sessionWorker(workspace)).document(documentId);
   }
   async callProjectTool(
@@ -1064,8 +1110,25 @@ export class BrainRuntime {
     context: BrainSessionContext,
   ) {
     const workspace = this.workspace(workspaceId);
-    if (workspace.remote)
-      return (await this.cloud(workspace)).call(name, args, await this.remoteContext(context));
+    if (workspace.remote && name !== "remember") {
+      const result = await (
+        await this.cloud(workspace)
+      ).call(name, args, await this.remoteContext(context));
+      if (name === "find_entity" && this.captureToolActivity) {
+        let nodeIds: ReadonlyArray<string> = [];
+        try {
+          nodeIds = decodeConsultedNodeIds(result._meta?.[FLOW_NODE_IDS_META_KEY] ?? []);
+        } catch {}
+        if (nodeIds.length)
+          await this.captureBrainEvent(workspace.id, {
+            context,
+            receipt: `graph-${NodeCrypto.randomUUID()}`,
+            kind: "graph",
+            data: { verb: name, nodeIds },
+          }).catch(() => {});
+      }
+      return result;
+    }
     if (
       (name === "source_read" || name === "source_search") &&
       !workspace.sources.some((source) => source.repository === args.repo)
@@ -1078,7 +1141,7 @@ export class BrainRuntime {
       : context.repo;
     const resolvedContext = { ...context, ...(repo ? { repo } : {}) };
     const result = await worker.call(name, args, resolvedContext);
-    if (name === "find_entity") {
+    if (name === "find_entity" && this.captureToolActivity) {
       let nodeIds: ReadonlyArray<string> = [];
       try {
         nodeIds = decodeConsultedNodeIds(result._meta?.[FLOW_NODE_IDS_META_KEY] ?? []);
@@ -1104,12 +1167,6 @@ export class BrainRuntime {
   async captureBrainEvent(workspaceId: string, input: BrainCapture) {
     const occurredAt = input.occurredAt ?? Date.now();
     const workspace = this.workspace(workspaceId);
-    if (workspace.remote) {
-      await (
-        await this.cloud(workspace)
-      ).capture({ ...input, occurredAt, context: await this.remoteContext(input.context) });
-      return;
-    }
     const repo = input.context.workspaceRoot
       ? await this.sessionRepository(input.context.workspaceRoot)
       : input.context.repo;
@@ -1121,6 +1178,45 @@ export class BrainRuntime {
     await NodeFSP.writeFile(file + ".tmp", JSON.stringify(input), { mode: 0o600 });
     await NodeFSP.rename(file + ".tmp", file);
     this.queueCapture(workspace);
+  }
+  private queueDocumentSync(workspace: Workspace) {
+    if (this.closed || !workspace.remote) return;
+    if (this.documentSyncQueued.has(workspace.id)) {
+      this.documentSyncAgain.add(workspace.id);
+      return;
+    }
+    this.documentSyncQueued.add(workspace.id);
+    this.documentSyncQueue = this.documentSyncQueue
+      .then(async () => {
+        const worker = await this.sessionWorker(workspace);
+        for (;;) {
+          const items = await worker.pendingSync();
+          if (!items.length) break;
+          const acknowledgements = await (await this.cloud(workspace)).sync(items);
+          await worker.acknowledgeSync(acknowledgements);
+        }
+        this.documentSyncBacklog.delete(workspace.id);
+        this.documentSyncErrors.delete(workspace.id);
+      })
+      .catch((error: unknown) => {
+        this.documentSyncBacklog.set(workspace.id, workspace);
+        this.documentSyncErrors.set(
+          workspace.id,
+          error instanceof Error ? error.message : "Cloud Brain unavailable.",
+        );
+        if (!this.documentSyncRetry && !this.closed) {
+          this.documentSyncRetry = setTimeout(() => {
+            this.documentSyncRetry = undefined;
+            for (const entry of this.documentSyncBacklog.values()) this.queueDocumentSync(entry);
+          }, 5_000);
+          this.documentSyncRetry.unref();
+        }
+      })
+      .finally(() => {
+        this.documentSyncQueued.delete(workspace.id);
+        // A write can land just after pendingSync returned an empty batch.
+        if (this.documentSyncAgain.delete(workspace.id)) this.queueDocumentSync(workspace);
+      });
   }
   private queueCapture(workspace: Workspace) {
     if (this.closed) return;
@@ -1158,6 +1254,22 @@ export class BrainRuntime {
     await Promise.all(
       [...this.sessionWorkers.values()].map(async (pending) => (await pending).drain()),
     );
+    for (const workspace of this.workspaces.filter((entry) => entry.remote))
+      this.queueDocumentSync(workspace);
+    let syncing;
+    do {
+      syncing = this.documentSyncQueue;
+      await syncing;
+    } while (syncing !== this.documentSyncQueue);
+  }
+  async syncBrainDocuments(
+    workspaceId: string,
+    origin: string,
+    items: BrainDocumentSync[],
+  ): Promise<BrainDocumentSyncAck[]> {
+    const workspace = this.workspace(workspaceId);
+    if (workspace.remote) throw new Error("Cannot synchronize through another cloud Brain.");
+    return (await this.sessionWorker(workspace)).syncDocuments(origin, items);
   }
   async listGithubBranches(repository: string, workspaceId?: string) {
     if (workspaceId) {
@@ -1291,6 +1403,7 @@ export class BrainRuntime {
     try {
       const result = await indexRepository(cli, source.repository, repoPath, directory, signal, {
         platform: this.host.platform,
+        runAgent: this.runIndexer,
         graph: `flow_brain_${workspace.id.replaceAll("-", "")}`,
         socket: this.db!.socketPath,
         embedUrl: bridge.url,
@@ -1351,11 +1464,13 @@ export class BrainRuntime {
   async close() {
     this.closed = true;
     if (this.captureRetry) clearTimeout(this.captureRetry);
+    if (this.documentSyncRetry) clearTimeout(this.documentSyncRetry);
     await this.commands;
     for (const controller of this.jobs.values()) controller.abort();
     await this.starting;
     await this.queue;
     await this.captureQueue;
+    await this.documentSyncQueue;
     await Promise.allSettled(
       [...this.sessionWorkers.values()].map(async (worker) => (await worker).close()),
     );

@@ -112,6 +112,20 @@ export function selectCuratorProvider(settings: ServerSettings, cli: BrainCurato
   return { instanceId: ProviderInstanceId.make(selected[0]), instance: selected[1] };
 }
 
+export function selectLocalCuratorCli(settings: ServerSettings): "codex" | "claude" | "opencode" {
+  const entries = Object.entries(deriveProviderInstanceConfigMap(settings));
+  const preferred = settings.defaultModelSelection?.instanceId;
+  const enabled = entries.filter(
+    ([, entry]) =>
+      resolveProviderInstanceEnabled(entry) &&
+      ["codex", "claudeAgent", "opencode"].includes(entry.driver),
+  );
+  const driver = (enabled.find(([id]) => id === preferred) ?? enabled[0])?.[1].driver;
+  if (!driver)
+    throw new Error("Enable a local Codex, Claude Code or OpenCode provider for extraction.");
+  return driver === "claudeAgent" ? "claude" : driver === "opencode" ? "opencode" : "codex";
+}
+
 const makeWorker = (request: BrainCuratorRun, settings: ServerSettings) =>
   Effect.gen(function* () {
     const { instanceId, instance } = yield* Effect.try({
@@ -332,6 +346,7 @@ export const makeBrainCurator = Effect.gen(function* () {
       try {
         const worker = await run(
           makeWorker(request, settings).pipe(Effect.provideService(Scope.Scope, scope)),
+          request.signal ? { signal: request.signal } : undefined,
         );
         return { scope, worker };
       } catch (error) {
@@ -361,7 +376,8 @@ export const makeBrainCurator = Effect.gen(function* () {
             modelSelection: worker.modelSelection,
           });
           return yield* Deferred.await(worker.pending);
-        }).pipe(Effect.timeout("4 minutes")),
+        }).pipe(Effect.timeout(request.timeoutMs ?? 240_000)),
+        request.signal ? { signal: request.signal } : undefined,
       );
       await run(
         analytics.record("brain.curation.completed", {

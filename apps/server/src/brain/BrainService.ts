@@ -9,7 +9,8 @@ import { ServerConfig } from "../config.ts";
 import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { SharedBrainRuntime, serveSharedBrain, type BrainClient } from "./shared-runtime.ts";
 import { BrainRuntime } from "./BrainRuntime.ts";
-import { makeBrainCurator } from "./curator.ts";
+import { makeBrainCurator, selectLocalCuratorCli } from "./curator.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime.ts";
 
 class BrainServiceError extends Schema.TaggedErrorClass<BrainServiceError>()("BrainServiceError", {
@@ -61,10 +62,12 @@ export class BrainService extends Context.Service<
         return BrainService.of({ ready: Effect.succeed(shared) });
       }
       const runCurator = yield* makeBrainCurator.pipe(Effect.provide(OpenCodeRuntimeLive));
+      const providerSettings = yield* ServerSettingsService;
       const runtime = new BrainRuntime(path.join(config.stateDir, "brain"), {
         platform,
         architecture,
         runCurator,
+        localCuratorCli: async () => selectLocalCuratorCli(await run(providerSettings.getSettings)),
         recordAnalytics: (event, properties) => run(analytics.record(event, properties)),
       });
       yield* Effect.addFinalizer(() => Effect.promise(() => runtime.close()));
