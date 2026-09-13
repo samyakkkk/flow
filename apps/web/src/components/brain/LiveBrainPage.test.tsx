@@ -69,6 +69,7 @@ vi.mock("../ui/dialog", () => ({
 }));
 vi.mock("./BrainControls", () => ({
   BrainSelect: () => null,
+  ConnectCloudDialog: () => null,
   CreateBrainDialog: () => null,
   cliName: (id: string) => id,
 }));
