@@ -173,10 +173,13 @@ export async function startSessionWorker(
     if (!child.connected) throw new Error("Flow brain is not connected");
     const id = ++nextId;
     return new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error("Flow brain request timed out"));
-      }, 30000);
+      const timeout = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new Error("Flow brain request timed out"));
+        },
+        method === "integration" ? 300_000 : 30_000,
+      );
       pending.set(id, {
         resolve: (result) => {
           clearTimeout(timeout);
@@ -197,6 +200,8 @@ export async function startSessionWorker(
   }
   return {
     tools,
+    configureIntegration: (config: unknown) => request("integrationConfigure", config),
+    integration: (action: string) => request("integration", { action }),
     get alive() {
       return child.connected && !exited;
     },
@@ -214,7 +219,10 @@ export async function startSessionWorker(
     syncDocuments: async (origin: string, items: BrainDocumentSync[]) =>
       (await request("syncDocuments", { origin, items })) as BrainDocumentSyncAck[],
     async close() {
-      if (!catalog && child.connected) await request("drain", {}).catch(() => {});
+      if (!catalog && child.connected) {
+        await request("integrationStop", {}).catch(() => {});
+        await request("drain", {}).catch(() => {});
+      }
       if (child.connected) child.disconnect();
       const timeout = setTimeout(() => {
         if (!exited) child.kill();
