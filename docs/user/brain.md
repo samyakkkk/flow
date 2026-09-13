@@ -12,8 +12,9 @@ them. The local knowledge graph is rebuilt from repositories rather than copied.
 
 The Brain page shows transfer progress and offers **Retry transfer** on failure. Restarting
 Flow resumes a pending transfer. Conversation activity arriving during the move is queued
-until Cloud acknowledges it. Brain tools become available again after the move completes.
-The original local Brain data remains as a backup. Transfers currently support snapshots up to
+until Cloud confirms the transfer. Brain tools become available again after the move completes.
+Local conversation history is retained, and new conversation activity continues to be curated
+locally. Updated notes, docs, and skills synchronize to Cloud. Transfers currently support snapshots up to
 256 MB; larger snapshots report an error and leave local data intact.
 
 Afterward, every project attached to that Brain uses the shared Cloud knowledge. The app's
