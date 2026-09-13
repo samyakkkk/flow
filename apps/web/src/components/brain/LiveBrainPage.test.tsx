@@ -31,6 +31,7 @@ vi.mock("../../state/environments", () => ({
   }),
 }));
 vi.mock("../../state/session", () => ({
+  environmentSession: { preparedConnectionValueAtom: Symbol("prepared-connection") },
   usePreparedConnection: () => (runtime.prepared ? Option.some({}) : Option.none()),
 }));
 vi.mock("../../state/brain", () => ({ brainCommand: Symbol("brain") }));
@@ -72,7 +73,6 @@ vi.mock("./BrainControls", () => ({
   cliName: (id: string) => id,
 }));
 vi.mock("./BrainSources", () => ({ BrainSources: () => null, BrainIndexing: () => null }));
-vi.mock("./BrainGraph", () => ({ BrainGraph: () => <div>Knowledge graph content</div> }));
 
 import { LiveBrainPage } from "./LiveBrainPage";
 
@@ -236,7 +236,7 @@ describe("Brain startup", () => {
     runtime.prepared = false;
     await render("local", "brain");
     expect(content()).toContain("Reconnecting to your brain…");
-    expect(content()).toContain("Knowledge graph content");
+    expect(content()).toContain("Drag to explore · Scroll to zoom");
     expect(runtime.execute).toHaveBeenCalledTimes(1);
     runtime.phase = "connected";
     runtime.prepared = true;

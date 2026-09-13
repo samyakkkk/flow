@@ -1,0 +1,96 @@
+.flow-brain-experience { display: grid; width: 100%; max-width: 1152px; gap: 24px; margin: 0 auto; padding: 24px 32px; color: var(--foreground); font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif); }
+.flow-brain-notice, .flow-brain-error { margin: 0; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 30%, transparent); padding: 12px; color: var(--muted-foreground); font-size: 13px; }
+.flow-brain-error { border-color: color-mix(in srgb, var(--destructive) 30%, transparent); background: color-mix(in srgb, var(--destructive) 5%, transparent); color: var(--destructive); }
+.flow-brain-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.flow-brain-tabs > button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; outline: 0; background: transparent; padding: 12px 16px; color: var(--muted-foreground); cursor: pointer; font: inherit; font-size: 13px; }
+.flow-brain-tabs > button:hover { color: var(--foreground); }
+.flow-brain-tabs > button:focus-visible { border-radius: 6px 6px 0 0; box-shadow: inset 0 0 0 2px var(--ring); }
+.flow-brain-tabs > button.active { border-bottom-color: var(--primary); color: var(--foreground); }
+.flow-brain-tab-panel { display: grid; gap: 24px; }
+.flow-brain-graph-card { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.flow-brain-graph-card > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); padding: 16px 20px; }
+.flow-brain-graph-card > header h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 500; }
+.flow-brain-graph-card > header p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.flow-brain-graph-card > header > span { color: var(--muted-foreground); font-size: 11px; white-space: nowrap; }
+.flow-brain-graph-canvas { position: relative; height: 340px; overflow: hidden; }
+.flow-brain-graph-canvas.compact { height: 220px; }
+.flow-brain-graph-host { position: absolute; inset: 0; background: var(--card); color: var(--foreground); }
+.flow-brain-canvas-element { display: block; position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+.flow-brain-alert { position: absolute; top: 16px; right: 16px; left: 16px; margin: 0; color: var(--destructive); font-size: 13px; }
+.flow-brain-node-details { position: absolute; z-index: 2; right: 16px; bottom: 16px; width: min(288px, calc(100% - 32px)); max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); padding: 16px; color: var(--popover-foreground); box-shadow: 0 12px 32px rgb(0 0 0 / 14%); }
+.flow-brain-node-details-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; color: var(--muted-foreground); font-size: 11px; }
+.flow-brain-node-details button, .flow-brain-document-section > header > button, .flow-brain-dialog > header > button { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; padding: 5px; color: var(--muted-foreground); cursor: pointer; }
+.flow-brain-node-details button:hover, .flow-brain-document-section > header > button:hover, .flow-brain-dialog > header > button:hover { background: var(--muted); color: var(--foreground); }
+.flow-brain-node-details h3 { margin: 4px 0 0; font-size: 13px; font-weight: 500; }
+.flow-brain-node-details p, .flow-brain-node-details dl { margin: 8px 0 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.55; }
+.flow-brain-node-details dl div { margin-top: 8px; }
+.flow-brain-node-details dt { color: var(--foreground); font-weight: 500; text-transform: capitalize; }
+.flow-brain-node-details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.flow-brain-node-details a { display: inline-block; margin-top: 10px; color: var(--foreground); font-size: 11px; text-decoration: underline; }
+.flow-brain-graph-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; min-height: 34px; border-top: 1px solid var(--border); padding: 8px 16px; color: var(--muted-foreground); font-size: 10px; }
+.flow-brain-graph-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.flow-brain-graph-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.flow-brain-color-0 { background: #d39c38; }
+.flow-brain-color-1 { background: #64a58a; }
+.flow-brain-color-2 { background: #8296d9; }
+.flow-brain-color-3 { background: #b28bc5; }
+.flow-brain-color-4 { background: #62a5bb; }
+.flow-brain-color-5 { background: #c48180; }
+.flow-brain-graph-help { margin-left: auto; }
+.flow-brain-empty-graph { display: flex; height: 340px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
+.flow-brain-empty-graph > svg { color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+.flow-brain-empty-graph h3 { margin: 0; font-size: 13px; font-weight: 500; }
+.flow-brain-empty-graph p { max-width: 384px; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.55; }
+.flow-brain-button, .flow-brain-icon-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 6px 11px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 500; }
+.flow-brain-button.outline, .flow-brain-icon-button { border-color: var(--border); background: var(--background); color: var(--foreground); }
+.flow-brain-button:hover, .flow-brain-icon-button:hover { background: var(--muted); }
+.flow-brain-icon-button { width: 32px; padding: 0; }
+.flow-brain-sources { display: grid; gap: 16px; }
+.flow-brain-sources > header h2 { margin: 0; font-size: 13px; font-weight: 500; }
+.flow-brain-sources > header p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.flow-brain-source-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.flow-brain-source-grid > article { display: flex; min-width: 0; min-height: 158px; flex-direction: column; align-items: flex-start; gap: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 16px; }
+.flow-brain-source-icon { color: var(--muted-foreground); }
+.flow-brain-source-icon svg { width: 20px; height: 20px; }
+.flow-brain-source-grid article > div { flex: 1; }
+.flow-brain-source-grid h3 { margin: 0; font-size: 11px; font-weight: 500; }
+.flow-brain-source-grid p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.flow-brain-source-grid footer { display: flex; width: 100%; gap: 7px; }
+.flow-brain-source-grid footer .flow-brain-button { min-width: 0; flex: 1; }
+.flow-brain-source-status { color: var(--muted-foreground); font-size: 10px; }
+.flow-brain-document-search { display: flex; width: min(448px, 100%); align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 8px 12px; color: var(--muted-foreground); }
+.flow-brain-document-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--foreground); font: inherit; font-size: 13px; }
+.flow-brain-document-section { display: grid; gap: 12px; }
+.flow-brain-document-section > header { display: flex; align-items: flex-start; gap: 8px; }
+.flow-brain-document-section > header > svg { margin-top: 2px; color: var(--primary); }
+.flow-brain-document-section > header > div { min-width: 0; flex: 1; }
+.flow-brain-document-section h2 { margin: 0; font-size: 13px; font-weight: 500; }
+.flow-brain-document-section h2 span { margin-left: 6px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
+.flow-brain-document-section > header p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.flow-brain-document-section > header button svg { transition: transform .15s ease; }
+.flow-brain-document-section > header button svg.expanded { transform: rotate(180deg); }
+.flow-brain-document-grid { display: grid; max-height: 512px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; overflow-y: auto; }
+.flow-brain-document-grid > button { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 16px; color: var(--foreground); cursor: pointer; font: inherit; text-align: left; }
+.flow-brain-document-grid > button:hover { background: color-mix(in srgb, var(--muted) 60%, var(--card)); }
+.flow-brain-document-grid > button > span { display: flex; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 10px; }
+.flow-brain-document-grid > button > span svg { color: var(--primary); }
+.flow-brain-document-grid strong { display: block; margin-top: 10px; overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.flow-brain-document-grid p { display: -webkit-box; margin: 6px 0 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.flow-brain-empty-library { grid-column: 1 / -1; margin: 0; border: 1px dashed var(--border); border-radius: 12px; padding: 48px 24px; color: var(--muted-foreground); font-size: 12px; text-align: center; }
+.flow-brain-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--background) 60%, transparent); padding: 20px; backdrop-filter: blur(2px); }
+.flow-brain-dialog { display: flex; width: min(768px, 100%); max-height: min(760px, calc(100vh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--popover); color: var(--popover-foreground); box-shadow: 0 24px 80px rgb(0 0 0 / 24%); }
+.flow-brain-dialog > header { position: relative; border-bottom: 1px solid var(--border); padding: 20px 48px 18px 20px; }
+.flow-brain-dialog > header > span { display: flex; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 10px; }
+.flow-brain-dialog > header > span svg { color: var(--primary); }
+.flow-brain-dialog > header > button { position: absolute; top: 14px; right: 14px; }
+.flow-brain-dialog h2 { margin: 10px 0 0; font-size: 16px; font-weight: 550; }
+.flow-brain-dialog header p { margin: 5px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.flow-brain-dialog-content { overflow-y: auto; padding: 20px; font-size: 13px; line-height: 1.7; }
+.flow-brain-dialog-content pre { margin: 0; overflow-wrap: anywhere; font: inherit; white-space: pre-wrap; }
+@media (max-width: 1100px) { .flow-brain-source-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) {
+  .flow-brain-experience { padding: 20px 16px; }
+  .flow-brain-graph-card > header { align-items: flex-start; flex-direction: column; }
+  .flow-brain-source-grid, .flow-brain-document-grid { grid-template-columns: 1fr; }
+  .flow-brain-graph-help { display: none !important; }
+}

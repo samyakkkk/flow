@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BrainSourceCatalog } from "@flow/brain-ui";
 import { Link } from "@tanstack/react-router";
 import type {
   BrainWorkspace,
@@ -16,7 +17,6 @@ import {
   Layers,
   ArrowUp,
   ChevronRight,
-  ListIcon,
   Trash2Icon,
   LoaderCircle,
 } from "lucide-react";
@@ -187,57 +187,22 @@ export function BrainSources({
   ];
   return (
     <section className="space-y-4" aria-label="Brain sources">
-      <div>
-        <h2 className="text-sm font-medium">Sources</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Add the code and context that contribute to {workspace.name}.
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        {cards.map((card) => (
-          <article
-            key={card.name}
-            className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-4"
-          >
-            <card.icon size={20} className="text-muted-foreground" />
-            <div className="flex-1">
-              <h3 className="text-xs font-medium">{card.name}</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {card.description}
-              </p>
-            </div>
-            {card.action ? (
-              <div className="flex w-full items-center gap-2">
-                <Button
-                  aria-label={card.label}
-                  variant="outline"
-                  size="sm"
-                  className="min-w-0 flex-1 text-xs"
-                  onClick={card.action}
-                >
-                  {card.name === "GitHub Repos" ? "Connect" : "Browse"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label={
-                    card.name === "GitHub Repos"
-                      ? "Connected GitHub repositories"
-                      : "Connected local folders"
-                  }
-                  onClick={() =>
-                    setConnectedModal(card.name === "GitHub Repos" ? "github" : "folder")
-                  }
-                >
-                  <ListIcon size={16} />
-                </Button>
-              </div>
-            ) : (
-              <span className="text-[11px] text-muted-foreground">Coming later</span>
-            )}
-          </article>
-        ))}
-      </div>
+      <BrainSourceCatalog
+        description={`Add the code and context that contribute to ${workspace.name}.`}
+        cards={cards.map((card) => ({
+          id: card.name,
+          name: card.name,
+          description: card.description,
+          icon: <card.icon size={20} />,
+          ...(card.action
+            ? {
+                actionLabel: card.name === "GitHub Repos" ? "Connect" : "Browse",
+                onAction: card.action,
+                onList: () => setConnectedModal(card.name === "GitHub Repos" ? "github" : "folder"),
+              }
+            : { status: "Coming later" }),
+        }))}
+      />
       <Dialog
         open={connectedModal !== null}
         onOpenChange={(open) => !open && setConnectedModal(null)}
