@@ -44,6 +44,8 @@ const MODE: "session" | "builder" | "full" =
 // The graph-builder surface: exactly what the old .opencode/tools/graph.ts
 // plugin exposed, now served over MCP so workspaces need no npm install.
 const BUILDER_VERBS = new Set([
+  "source_read",
+  "source_search",
   "find_entity",
   "get_entity",
   "read_query",

@@ -14,6 +14,8 @@ import {
 } from "../../../../flow-t3/shared/orchestrator/src/job-activity.ts";
 import { builderAsset, builderMcpCommand } from "./builder-assets.ts";
 import { run, runStreaming } from "./process.ts";
+import type { BrainCuratorRunner } from "@flow/brain-runtime";
+import { startAgentMcpBridge } from "../../../../flow-t3/shared/orchestrator/src/agent-mcp-bridge.ts";
 
 export interface BuilderContext {
   platform: NodeJS.Platform;
@@ -26,6 +28,7 @@ export interface BuilderContext {
   previousCommit?: string | undefined;
   previousBranch?: string | undefined;
   onActivity: (activity: ReturnType<typeof activityForRepo>) => void;
+  runAgent?: BrainCuratorRunner | undefined;
 }
 
 // Same ancestor/diff-size gate as Flow's original incrementalContext.
@@ -200,6 +203,52 @@ export async function indexRepository(
     });
   try {
     await maintain();
+    if (context.runAgent) {
+      const commit = await run("git", ["rev-parse", "HEAD"], { cwd: repoPath });
+      const registry = NodePath.join(jobPath, "sources.json");
+      await NodeFSP.writeFile(
+        registry,
+        JSON.stringify({
+          repos: [
+            {
+              name: repository,
+              localPath: repoPath,
+              kind: "code",
+              lastIndexedCommit: commit.trim(),
+            },
+          ],
+        }),
+        { mode: 0o600 },
+      );
+      const files = await run("git", ["ls-tree", "-r", "--name-only", "HEAD"], { cwd: repoPath });
+      const bridge = await startAgentMcpBridge({
+        ...spec,
+        cwd: context.workspace,
+        env: { ...env, FLOW_SOURCE_REGISTRY: registry },
+      });
+      try {
+        const result = await context.runAgent({
+          cli,
+          sessionId: `index-${jobId}`,
+          cwd: jobPath,
+          renew: true,
+          endpoint: bridge.endpoint,
+          token: bridge.token,
+          signal,
+          timeoutMs: 45 * 60_000,
+          instructions: `${instructions}\nUse the injected t3-code MCP tools for graph operations and source_read/source_search for committed repository source. Shell and file editing tools are unavailable.`,
+          input: `${prompt}\nRepository files (bounded):\n${files.slice(0, 40_000)}`,
+        });
+        if ("requiresContext" in result) throw new Error("The Brain task requires fresh context.");
+        summary = `T3 ${cli} indexing completed (${result.nativeThreadId}).`;
+        await NodeFSP.writeFile(NodePath.join(jobPath, "summary.md"), summary, { mode: 0o600 });
+        await maintain();
+        success = true;
+        return { summary, incremental: Boolean(inc) };
+      } finally {
+        await bridge.close();
+      }
+    }
     await runStreaming(cli, args, {
       platform: context.platform,
       cwd: context.workspace,

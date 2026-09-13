@@ -6,6 +6,10 @@ import { indexRepository, incrementalContext, type BuilderContext } from "./inde
 import { builderAsset } from "./builder-assets.ts";
 import { run, runStreaming } from "./process.ts";
 import { indexRepoPrompt } from "../../../../flow-t3/shared/orchestrator/src/index-prompt.ts";
+import { startAgentMcpBridge } from "../../../../flow-t3/shared/orchestrator/src/agent-mcp-bridge.ts";
+vi.mock("../../../../flow-t3/shared/orchestrator/src/agent-mcp-bridge.ts", () => ({
+  startAgentMcpBridge: vi.fn(),
+}));
 vi.mock("./process.ts", async (original) => ({
   ...(await original<typeof import("./process.ts")>()),
   run: vi.fn(async (executable: string, args: string[], options: Parameters<typeof run>[2]) => {
@@ -27,6 +31,65 @@ async function temp() {
 }
 
 describe("original Flow builder", () => {
+  it("runs an injected T3 task against committed source and closes its gateway on failure", async () => {
+    const root = await temp();
+    await run("git", ["init", "-b", "main"], { cwd: root });
+    await run(
+      "git",
+      [
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "fixture",
+      ],
+      { cwd: root },
+    );
+    const close = vi.fn(async () => {});
+    vi.mocked(startAgentMcpBridge).mockResolvedValue({
+      endpoint: "http://localhost/mcp",
+      token: "fixture",
+      close,
+    });
+    const runAgent = vi.fn(async () => ({ requiresContext: true as const }));
+    await expect(
+      indexRepository(
+        "opencode",
+        "example/api",
+        root,
+        NodePath.join(root, "job"),
+        new AbortController().signal,
+        {
+          platform: "linux",
+          graph: "isolated",
+          socket: "/tmp/fixture.sock",
+          embedUrl: "http://localhost",
+          embedToken: "fixture",
+          workspace: root,
+          branch: "main",
+          onActivity: () => {},
+          runAgent,
+        },
+      ),
+    ).rejects.toThrow("requires fresh context");
+    expect(runStreaming).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    const registry = JSON.parse(
+      await NodeFSP.readFile(NodePath.join(root, "job", "sources.json"), "utf8"),
+    );
+    expect(registry.repos[0].lastIndexedCommit).toMatch(/^[a-f0-9]{40}$/);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cli: "opencode",
+        renew: true,
+        endpoint: "http://localhost/mcp",
+        timeoutMs: 45 * 60_000,
+      }),
+    );
+  });
   it.each(["claude", "codex", "opencode"] as const)(
     "uses the authoritative prompt, graph tools and streaming activity for %s",
     async (cli) => {

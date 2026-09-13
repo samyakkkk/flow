@@ -120,6 +120,68 @@ NodeTest.test("first-message notes, optimistic revisions and checkpoint provenan
   f.db.close();
 });
 
+NodeTest.test("curated documents stream idempotently without copying transcript rows", () => {
+  const local = fixture();
+  local.store.bootstrap({ ...local.cp, through: 1 }, "Keep raw source local.");
+  NodeAssert.equal(local.store.pendingSync().length, 0);
+  const note = local.store.save(local.cp, {
+    kind: "notes", text: "Keep raw source local; synchronize curated documents.", evidence: [2], expectedRevision: 1,
+  });
+  const doc = local.store.save(local.cp, {
+    kind: "doc",
+    name: "Shared Brain boundary",
+    description: "Where conversation evidence and curated knowledge live.",
+    text: "Conversation evidence stays on its T3 environment; curated output is shared.",
+    evidence: [2],
+  });
+  NodeAssert.deepEqual(
+    new Set(local.store.pendingSync().map(({ document }) => document.id)),
+    new Set([note.id, doc.id]),
+  );
+
+  const remoteDb = new Database(":memory:");
+  remoteDb.pragma("foreign_keys = ON");
+  remoteDb.exec(
+    "CREATE TABLE t3_capture(seq INTEGER PRIMARY KEY, session TEXT, kind TEXT, data TEXT, ts INTEGER)",
+  );
+  const remote = new CurationStore(remoteDb);
+  const batch = local.store.pendingSync();
+  const first = remote.applySync("desktop-one", batch);
+  const repeated = remote.applySync("desktop-one", batch);
+  NodeAssert.deepEqual(repeated, first);
+  NodeAssert.equal(
+    remote.get("notes:desktop-one:chat-a")?.text.includes("Keep raw source local"),
+    true,
+  );
+  NodeAssert.equal(remote.get(doc.id)?.text, doc.text);
+  NodeAssert.deepEqual(
+    remoteDb.prepare("SELECT COUNT(*) AS count FROM t3_capture").get(),
+    { count: 0 },
+  );
+  NodeAssert.deepEqual(remote.evidence(doc.id), [
+    { sessionId: "desktop-one:chat-a", seq: 2 },
+  ]);
+
+  local.store.acknowledgeSync(first);
+  NodeAssert.equal(local.store.pendingSync().length, 0);
+  const updated = local.store.save(local.cp, {
+    kind: "doc", id: doc.id, expectedRevision: doc.revision,
+    text: "The next curated revision is shared after reconnecting.", evidence: [2],
+  });
+  local.store.acknowledgeSync(first);
+  NodeAssert.equal(local.store.pendingSync()[0]?.document.revision, updated.revision);
+  remote.applySync("desktop-one", local.store.pendingSync());
+  remote.applySync("desktop-one", batch);
+  NodeAssert.equal(remote.get(doc.id)?.text, updated.text);
+  NodeAssert.throws(() => remote.applySync("desktop-two", local.store.pendingSync()), /different source/);
+  NodeAssert.equal(remote.pendingSync().length, 0);
+  const t3Note = { ...note, id: "notes:t3-thread", sessionId: "t3-thread" };
+  remote.applySync("desktop-one", [{ document: t3Note, evidence: [] }]);
+  NodeAssert.equal(remote.get("notes:t3-desktop-one:thread")?.sessionId, "t3-desktop-one:thread");
+  local.db.close();
+  remoteDb.close();
+});
+
 NodeTest.test("a later chat refines an existing skill, with provenance in both chats", () => {
   const f = fixture();
   const skill = f.store.save(f.cp, {

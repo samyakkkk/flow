@@ -26,6 +26,10 @@ export interface BrainCuratorRun {
   token: string;
   cwd: string;
   renew: boolean;
+  /** Host-local cancellation; never serialized into a remote Brain request. */
+  signal?: AbortSignal;
+  /** Host-selected budget; indexing needs longer than a curation checkpoint. */
+  timeoutMs?: number;
 }
 export interface BrainCuratorResult {
   nativeThreadId: string;
