@@ -151,8 +151,31 @@ if (process.argv.includes("--catalog")) {
     };
   };
   const catalog = await session("catalog");
-  process.send?.({ ready: true, tools: [...(await catalog.client.listTools()).tools,...CURATION_PUBLIC_TOOLS] });
+  const sessionTools = [...(await catalog.client.listTools()).tools, ...CURATION_PUBLIC_TOOLS];
+  process.send?.({ ready: true, tools: sessionTools });
   await catalog.close();
+  let hostedIntegration: import("./integration.js").BrainWorkerIntegration | undefined;
+  let integrationStarting: Promise<NonNullable<typeof hostedIntegration>> | undefined;
+  const integration = () => integrationStarting ??= (async () => {
+      const entry = process.env.FLOW_BRAIN_INTEGRATION;
+      if (!entry) throw new Error("This Brain host has no integration configured.");
+      const { createIntegration } = await import(entry) as { createIntegration: import("./integration.js").BrainWorkerIntegrationFactory };
+      hostedIntegration = await createIntegration({
+        database: db,
+        tools: sessionTools,
+        async call(name, args, sessionId) {
+          const result = publicDocuments.call(name, args, `t3-${sessionId}`);
+          if (result) return result;
+          const pair = await session(`t3:${sessionId}`);
+          try {
+            const lookup = (arguments_: Record<string, unknown>) => sessionContext.run({ session: `t3-${sessionId}` }, () => pair.client.callTool({ name, arguments: arguments_ }));
+            const value = name === "get_entity" ? await publicDocuments.batch(args, `t3-${sessionId}`, lookup) : undefined;
+            return publicDocuments.augment(name, args, value ?? await lookup(args));
+          } finally { await pair.close(); }
+        },
+      });
+    return hostedIntegration;
+  })().catch(error => { integrationStarting = undefined; throw error; });
   process.on("message", async (message: { id: number; method: string; params: Record<string, unknown>; curatorReply?:number;result?:BrainCuratorReply;error?:string }) => {
     if (message.curatorReply !== undefined) {
       const pending = curatorRequests.get(message.curatorReply);
@@ -172,6 +195,13 @@ if (process.argv.includes("--catalog")) {
       } else if (message.method === "importBrain") {
         result = importBrain(db, JSON.parse(await readFile(String(message.params.path), "utf8")),
           String(message.params.instance), String(message.params.source));
+      } else if (message.method === "integrationStop") {
+        await hostedIntegration?.close();
+        result = { stopped: true };
+      } else if (message.method === "integrationConfigure") {
+        result = await (await integration()).configure(message.params);
+      } else if (message.method === "integration") {
+        result = await (await integration()).action(String(message.params.action));
       } else if (message.method === "chatMemories") {
         const sessionId = `t3-${String(message.params.session)}`;
         result = readMemories(sessionId);
@@ -243,6 +273,6 @@ if (process.argv.includes("--catalog")) {
     curator.close();
     for (const request of curatorRequests.values()) request.reject(new Error("The extraction host disconnected."));
     curatorRequests.clear();
-    void drainRemembers().finally(() => process.exit(0));
+    void Promise.all([hostedIntegration?.close(), drainRemembers()]).finally(() => process.exit(0));
   });
 }
