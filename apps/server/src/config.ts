@@ -217,6 +217,19 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
 export const layerTest = (cwd: string, baseDirOrPrefix: string | { readonly prefix: string }) =>
   Layer.effect(ServerConfig, makeTest(cwd, baseDirOrPrefix));
 
+/** Filesystem/configuration context for embedded provider adapters, without a UI server. */
+export const layerHeadless = (cwd: string, baseDir: string) =>
+  Layer.effect(
+    ServerConfig,
+    makeTest(cwd, baseDir).pipe(
+      Effect.map((config) => ({
+        ...config,
+        noBrowser: true,
+        startupPresentation: "headless" as const,
+      })),
+    ),
+  );
+
 export const resolveStaticDir = Effect.fn(function* () {
   const { join, resolve } = yield* Path.Path;
   const { exists } = yield* FileSystem.FileSystem;

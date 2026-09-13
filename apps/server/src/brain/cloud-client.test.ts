@@ -17,19 +17,11 @@ describe("cloud transport", () => {
     expect(cloudEndpoint("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
   });
   it("scopes requests and sends credentials only as an authorization header", async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ result: null })));
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ result: [] })));
     vi.stubGlobal("fetch", fetcher);
-    await new CloudClient(
-      "https://brain.example",
-      "test-secret",
-      "desktop-one",
-      "brain-one",
-    ).capture({
-      receipt: "r1",
-      kind: "user_prompt",
-      context: { session: "chat-one" },
-      data: "hello",
-    });
+    await new CloudClient("https://brain.example", "test-secret", "desktop-one", "brain-one").sync(
+      [],
+    );
     const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe("https://brain.example/v1/brain");
     expect(init.redirect).toBe("error");
@@ -38,7 +30,8 @@ describe("cloud transport", () => {
       version: 1,
       instance: "desktop-one",
       brainId: "brain-one",
-      capture: { receipt: "r1", context: { session: "chat-one" } },
+      method: "sync",
+      items: [],
     });
     expect(init.body).not.toContain("test-secret");
   });

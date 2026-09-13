@@ -3,7 +3,11 @@ import * as Schema from "effect/Schema";
 import { BrainState, BrainDocument, ChatMemoryList } from "@t3tools/contracts";
 import { McpSchema } from "effect/unstable/ai";
 import type { BrainCommand, BrainTransferRequest } from "@t3tools/contracts";
-import type { BrainCapture, BrainSessionContext } from "@flow/brain-runtime";
+import type { BrainSessionContext } from "@flow/brain-runtime";
+import type {
+  BrainDocumentSync,
+  BrainDocumentSyncAck,
+} from "../../../../flow-t3/shared/orchestrator/src/curation/types.ts";
 
 export function cloudEndpoint(value: string) {
   const url = new URL(value);
@@ -30,6 +34,11 @@ const reply = Schema.decodeUnknownSync(
   }),
 );
 const strings = Schema.decodeUnknownSync(Schema.Array(Schema.String));
+const syncAcks = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({ id: Schema.String, revision: Schema.Number, remoteId: Schema.String }),
+  ),
+);
 const repos = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ name: Schema.String, private: Schema.Boolean })),
 );
@@ -77,8 +86,19 @@ export class CloudClient {
   async call(name: string, args: Record<string, unknown>, context: BrainSessionContext) {
     return tool(await this.request("call", { name, args, context }));
   }
-  async capture(capture: BrainCapture) {
-    await this.request("capture", { capture });
+  async sync(items: BrainDocumentSync[]): Promise<BrainDocumentSyncAck[]> {
+    const acknowledgements = [...syncAcks(await this.request("sync", { items }))];
+    if (
+      acknowledgements.length !== items.length ||
+      items.some(
+        ({ document }) =>
+          !acknowledgements.some(
+            (ack) => ack.id === document.id && ack.revision === document.revision,
+          ),
+      )
+    )
+      throw new Error("Cloud Brain did not acknowledge the complete document batch.");
+    return acknowledgements;
   }
   async memories(session: string, revision?: string) {
     return memories(await this.request("memories", { context: { session }, revision }));

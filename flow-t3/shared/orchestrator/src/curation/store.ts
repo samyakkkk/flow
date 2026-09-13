@@ -5,6 +5,8 @@ import { redactSecrets } from "./transcript.js";
 import { noteChunks, type NoteChunk } from "./notes.js";
 import type {
   BrainDocument,
+  BrainDocumentSync,
+  BrainDocumentSyncAck,
   BrainDocumentSummary,
   CaptureRow,
   CurationCheckpoint,
@@ -42,6 +44,16 @@ export const CURATION_SCHEMA = `
   CREATE TABLE IF NOT EXISTS brain_curation_sessions (
     session_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS brain_import_evidence (
+    origin TEXT NOT NULL, session TEXT NOT NULL, source_seq INTEGER NOT NULL, target_seq INTEGER NOT NULL,
+    PRIMARY KEY(origin, session, source_seq));
+  CREATE TABLE IF NOT EXISTS brain_document_sync_outbox (
+    document_id TEXT PRIMARY KEY REFERENCES brain_documents(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL, payload TEXT NOT NULL, queued_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS brain_document_sync_origins (
+    origin TEXT NOT NULL, source_id TEXT NOT NULL, source_revision INTEGER NOT NULL,
+    document_id TEXT NOT NULL REFERENCES brain_documents(id) ON DELETE CASCADE,
+    PRIMARY KEY(origin, source_id), UNIQUE(document_id));
 `;
 
 export class CurationStore {
@@ -295,13 +307,19 @@ export class CurationStore {
   bootstrap(checkpoint: CurationCheckpoint, text: string): BrainDocument {
     const existing = this.get(`notes:${checkpoint.sessionId}`);
     if (existing) return existing;
-    return this.save(checkpoint, {
+    return this.db.transaction(() => {
+    const document = this.save(checkpoint, {
       kind: "notes",
       name: "Conversation notes",
       description: "The original request, captured before extraction.",
       text: `The conversation began with this request:\n\n> ${text.trim().slice(0, 10_000).replaceAll("\n", "\n> ")}${text.length > 10_000 ? "\n\n[Request excerpt; the full message is available in the conversation.]" : ""}`,
       evidence: [checkpoint.through],
     });
+    // Bootstrap is a local recovery note containing the original prompt. Publish
+    // only after the curator has produced an actual note revision.
+    this.db.prepare("DELETE FROM brain_document_sync_outbox WHERE document_id = ?").run(document.id);
+    return document;
+    })();
   }
   save(checkpoint: CurationCheckpoint, input: SaveDocument): BrainDocument {
     if (input.kind === "memory")
@@ -481,8 +499,176 @@ export class CurationStore {
         const insert = this.db.prepare("INSERT INTO brain_note_chunks VALUES (?, ?, ?, ?)");
         for (const chunk of chunks) insert.run(id, chunk.id, document.revision, JSON.stringify(chunk));
       }
+      if (document.kind !== "memory") {
+        const payload: BrainDocumentSync = { document, evidence: this.evidence(id) };
+        this.db.prepare(`INSERT INTO brain_document_sync_outbox(document_id, revision, payload, queued_at)
+          VALUES (?, ?, ?, ?) ON CONFLICT(document_id) DO UPDATE SET revision=excluded.revision,
+          payload=excluded.payload, queued_at=excluded.queued_at`)
+          .run(id, document.revision, JSON.stringify(payload), now);
+      }
       return document;
     })();
+  }
+  pendingSync(limit = 50): BrainDocumentSync[] {
+    const rows = this.db
+      .prepare("SELECT payload FROM brain_document_sync_outbox ORDER BY queued_at, document_id LIMIT ?")
+      .all(Math.max(1, Math.min(limit, 100))) as Array<{ payload: string }>;
+    return rows.map(({ payload }) => JSON.parse(payload) as BrainDocumentSync);
+  }
+  acknowledgeSync(acks: ReadonlyArray<Pick<BrainDocumentSyncAck, "id" | "revision">>): void {
+    const remove = this.db.prepare(
+      "DELETE FROM brain_document_sync_outbox WHERE document_id = ? AND revision <= ?",
+    );
+    this.db.transaction(() => {
+      for (const ack of acks) remove.run(ack.id, ack.revision);
+    })();
+  }
+  /** Import curated output without importing the source transcript or re-enqueueing it. */
+  applySync(origin: string, items: ReadonlyArray<BrainDocumentSync>): BrainDocumentSyncAck[] {
+    if (!/^[a-zA-Z0-9-]{1,100}$/.test(origin)) throw new Error("Invalid sync origin.");
+    if (items.length > 100) throw new Error("Sync batches may contain at most 100 documents.");
+    return this.db.transaction(() =>
+      items.map((item) => {
+        const source = item.document;
+        if (!source || !["notes", "doc", "skill"].includes(source.kind))
+          throw new Error("Only notes, Auto-Docs, and Auto-Skills may be synchronized.");
+        if (
+          typeof source.id !== "string" ||
+          !source.id ||
+          source.id.length > 240 ||
+          typeof source.sessionId !== "string" ||
+          !source.sessionId ||
+          source.sessionId.length > 240 ||
+          !Number.isSafeInteger(source.revision) ||
+          source.revision < 1
+        )
+          throw new Error("Invalid synchronized document identity.");
+        if (!Array.isArray(item.evidence) || item.evidence.length > 1000)
+          throw new Error("Invalid synchronized document evidence.");
+        const scopeSession = (id: string) => id.startsWith("t3-")
+          ? `t3-${origin}:${id.slice(3)}` : `${origin}:${id}`;
+        const remoteSession = scopeSession(source.sessionId);
+        const ownership = this.db
+          .prepare(`SELECT source_revision AS sourceRevision, document_id AS documentId
+            FROM brain_document_sync_origins WHERE origin = ? AND source_id = ?`)
+          .get(origin, source.id) as { sourceRevision: number; documentId: string } | undefined;
+        if (ownership && source.revision <= ownership.sourceRevision)
+          return { id: source.id, revision: source.revision, remoteId: ownership.documentId };
+        const remoteId = ownership?.documentId ?? (source.kind === "notes" ? `notes:${remoteSession}` : source.id);
+        if (remoteId.length > 500 || remoteSession.length > 500)
+          throw new Error("Synchronized document identity is too long.");
+        const migrated = this.db.prepare("SELECT 1 FROM brain_import_evidence WHERE origin=? LIMIT 1").get(origin);
+        const sequences = new Map<number, number>(
+          (this.db.prepare("SELECT source_seq, target_seq FROM brain_import_evidence WHERE origin=? AND session=?").all(origin, source.sessionId) as Array<{source_seq:number;target_seq:number}>)
+            .map((row) => [row.source_seq, row.target_seq]),
+        );
+        const evidenceRows = item.evidence.map((evidence) => {
+          if (typeof evidence?.sessionId !== "string" || !evidence.sessionId ||
+              evidence.sessionId.length > 240 || !Number.isSafeInteger(evidence.seq) || evidence.seq < 0)
+            throw new Error("Invalid synchronized evidence reference.");
+          if (!migrated || evidence.seq === 0) return evidence;
+          let mapped = this.db.prepare("SELECT target_seq AS seq FROM brain_import_evidence WHERE origin=? AND session=? AND source_seq=?")
+            .get(origin, evidence.sessionId, evidence.seq) as { seq: number } | undefined;
+          if (!mapped) {
+            // Reserve a destination evidence ID without claiming the local transcript was uploaded.
+            const sid = scopeSession(evidence.sessionId);
+            const receipt = `sync-reference:${evidence.seq}`;
+            this.db.prepare("INSERT OR IGNORE INTO agent_sessions(id,backend,repo,cwd,title,status,created_at,updated_at) VALUES (?,'ext:t3',NULL,'','','idle',?,?)").run(sid, this.now(), this.now());
+            this.db.prepare("INSERT OR IGNORE INTO t3_capture(session,receipt,kind,data,ts) VALUES (?,?,'evidence_reference',?,?)")
+              .run(sid, receipt, JSON.stringify({ origin, session: evidence.sessionId, sourceSeq: evidence.seq, transcript: "retained_on_source" }), this.now());
+            mapped = this.db.prepare("SELECT seq FROM t3_capture WHERE session=? AND receipt=?").get(sid, receipt) as { seq: number };
+            this.db.prepare("INSERT INTO brain_import_evidence VALUES (?,?,?,?)").run(origin, evidence.sessionId, evidence.seq, mapped.seq);
+          }
+          sequences.set(evidence.seq, mapped.seq);
+          return { ...evidence, seq: mapped.seq };
+        });
+        const existing = this.get(remoteId);
+        if (existing && !ownership && existing.sessionId !== remoteSession)
+          throw new Error("A different source already owns this document ID.");
+        if (typeof source.text !== "string" || !source.text.trim() || source.text.length > 24_000)
+          throw new Error("Synchronized document text must contain at most 24K characters.");
+        const name = redactSecrets(source.name).trim();
+        const description = redactSecrets(source.description).trim();
+        const text = redactSecrets(source.text).replace(/\bE([1-9]\d*)\b/g, (original, n: string) => sequences.has(Number(n)) ? `E${sequences.get(Number(n))}` : original);
+        const folder = redactSecrets(source.folder ?? "")
+          .split("/")
+          .map((part) => part.trim())
+          .join("/");
+        if (!name || name.length > 160 || description.length > 600 || folder.length > 240)
+          throw new Error("Invalid synchronized document metadata.");
+        if (source.kind === "skill" && !description)
+          throw new Error("Synchronized skills require a description.");
+        if (!["standing", "temporal", "issue"].includes(source.lifecycle))
+          throw new Error("Invalid synchronized document lifecycle.");
+        if (!["active", "resolved", "superseded"].includes(source.status))
+          throw new Error("Invalid synchronized document status.");
+        const now = this.now();
+        const createdAt = Math.min(now, Math.max(0, Number(source.createdAt) || now));
+        const updatedAt = Math.min(now, Math.max(createdAt, Number(source.updatedAt) || createdAt));
+        const observedAt = Math.min(now, Math.max(0, Number(source.observedAt) || createdAt));
+        const revision = existing ? Math.max(existing.revision + 1, source.revision) : source.revision;
+        const document: BrainDocument = {
+          ...source,
+          id: remoteId,
+          sessionId: remoteSession,
+          name,
+          description,
+          text,
+          folder,
+          revision,
+          repo: typeof source.repo === "string" ? source.repo : null,
+          halfLifeDays:
+            source.lifecycle === "temporal" && Number.isFinite(source.halfLifeDays)
+              ? Math.max(1, Math.min(3650, Number(source.halfLifeDays)))
+              : null,
+          createdAt: existing?.createdAt ?? createdAt,
+          updatedAt,
+          observedAt,
+        };
+        if (existing && existing.revision > 0)
+          this.db.prepare(`INSERT OR IGNORE INTO brain_document_revisions(document_id, revision, snapshot)
+            VALUES (?, ?, ?)`)
+            .run(remoteId, existing.revision, JSON.stringify(existing));
+        this.db.prepare(`INSERT INTO brain_documents(id, kind, folder, name, description, text, revision,
+          session_id, repo, lifecycle, status, half_life_days, created_at, updated_at, observed_at)
+          VALUES (@id, @kind, @folder, @name, @description, @text, @revision, @sessionId, @repo,
+          @lifecycle, @status, @halfLifeDays, @createdAt, @updatedAt, @observedAt)
+          ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, folder=excluded.folder, name=excluded.name,
+          description=excluded.description, text=excluded.text, revision=excluded.revision,
+          session_id=excluded.session_id, repo=excluded.repo, lifecycle=excluded.lifecycle,
+          status=excluded.status, half_life_days=excluded.half_life_days,
+          updated_at=excluded.updated_at, observed_at=excluded.observed_at`)
+          .run(document);
+        this.db.prepare(`INSERT OR REPLACE INTO brain_document_revisions(document_id, revision, snapshot)
+          VALUES (?, ?, ?)`)
+          .run(remoteId, revision, JSON.stringify(document));
+        this.db.prepare("DELETE FROM brain_document_evidence WHERE document_id = ?").run(remoteId);
+        const cite = this.db.prepare(
+          "INSERT OR IGNORE INTO brain_document_evidence(document_id, session_id, seq) VALUES (?, ?, ?)",
+        );
+        for (const evidence of evidenceRows) {
+          if (
+            typeof evidence?.sessionId !== "string" ||
+            evidence.sessionId.length > 240 ||
+            !Number.isSafeInteger(evidence.seq) ||
+            evidence.seq < 0
+          )
+            throw new Error("Invalid synchronized evidence reference.");
+          cite.run(remoteId, scopeSession(evidence.sessionId), evidence.seq);
+        }
+        if (document.kind === "notes") {
+          this.db.prepare("DELETE FROM brain_note_chunks WHERE document_id = ?").run(remoteId);
+          const insert = this.db.prepare("INSERT INTO brain_note_chunks VALUES (?, ?, ?, ?)");
+          for (const chunk of noteChunks(document.text))
+            insert.run(remoteId, chunk.id, revision, JSON.stringify(chunk));
+        }
+        this.db.prepare(`INSERT INTO brain_document_sync_origins(origin, source_id, source_revision, document_id)
+          VALUES (?, ?, ?, ?) ON CONFLICT(origin, source_id) DO UPDATE SET
+          source_revision=excluded.source_revision, document_id=excluded.document_id`)
+          .run(origin, source.id, source.revision, remoteId);
+        return { id: source.id, revision: source.revision, remoteId };
+      }),
+    )();
   }
   evidence(id: string): Array<{ sessionId: string; seq: number }> {
     return this.db

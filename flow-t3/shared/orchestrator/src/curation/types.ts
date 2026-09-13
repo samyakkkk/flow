@@ -21,6 +21,16 @@ export interface BrainDocumentSummary {
 export interface BrainDocument extends BrainDocumentSummary {
   text: string;
 }
+/** Curated output that may leave the chat-owning environment. Raw capture never does. */
+export interface BrainDocumentSync {
+  document: BrainDocument;
+  evidence: Array<{ sessionId: string; seq: number }>;
+}
+export interface BrainDocumentSyncAck {
+  id: string;
+  revision: number;
+  remoteId: string;
+}
 export interface CaptureRow {
   seq: number;
   kind: string;

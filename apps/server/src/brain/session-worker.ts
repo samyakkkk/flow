@@ -13,6 +13,10 @@ import type {
   BrainCuratorRun,
   BrainCuratorRunner,
 } from "@flow/brain-runtime";
+import type {
+  BrainDocumentSync,
+  BrainDocumentSyncAck,
+} from "../../../../flow-t3/shared/orchestrator/src/curation/types.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -37,6 +41,7 @@ export async function startSessionWorker(
   catalog = false,
   entry?: string,
   runCurator?: BrainCuratorRunner,
+  onDocumentsChanged?: () => void,
 ) {
   if (!catalog)
     brainResourceEnvironment({
@@ -122,8 +127,11 @@ export async function startSessionWorker(
         error?: string;
         curatorRequest?: number;
         curatorRun?: BrainCuratorRun;
+        documentsChanged?: boolean;
       }) => {
-        if (message.curatorRequest !== undefined && message.curatorRun) {
+        if (message.documentsChanged) {
+          onDocumentsChanged?.();
+        } else if (message.curatorRequest !== undefined && message.curatorRun) {
           const curatorRequest = message.curatorRequest;
           const execute =
             runCurator ??
@@ -204,6 +212,10 @@ export async function startSessionWorker(
       request("importBrain", { path, instance, source }),
     drain: () => request("drain", {}),
     capture: (input: BrainCapture) => request("capture", input),
+    pendingSync: async () => (await request("pendingSync", {})) as BrainDocumentSync[],
+    acknowledgeSync: (acks: BrainDocumentSyncAck[]) => request("ackSync", { acks }),
+    syncDocuments: async (origin: string, items: BrainDocumentSync[]) =>
+      (await request("syncDocuments", { origin, items })) as BrainDocumentSyncAck[],
     async close() {
       if (!catalog && child.connected) await request("drain", {}).catch(() => {});
       if (child.connected) child.disconnect();

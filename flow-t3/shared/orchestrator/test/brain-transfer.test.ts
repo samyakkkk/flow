@@ -146,3 +146,28 @@ test("retains chronological revisions and rebuilds note citations for future cur
   source.db.close();
   target.db.close();
 });
+
+test("post-migration sync updates imported documents and keeps evidence identities stable", () => {
+  const source = fixture(), target = fixture();
+  seed(target, "t3-team");
+  const original = seed(source);
+  importBrain(target.db, exportBrain(source.db), "a", "brain");
+  target.store.applySync("a", source.store.pendingSync());
+  assert.equal(target.store.list().length, 6);
+  const next = Number(source.db.prepare("INSERT INTO t3_capture(session,receipt,kind,data,ts) VALUES ('t3-chat','next','user_prompt','{}',200)").run().lastInsertRowid);
+  source.store.save({ sessionId: "t3-chat", repo: "org/repo", after: 0, through: next }, {
+    kind: "doc", id: original.doc.id, expectedRevision: original.doc.revision,
+    name: "Migration", text: `Continue E${original.seq} with E${next}.`, evidence: [original.seq, next],
+  });
+  const pending = source.store.pendingSync();
+  target.store.applySync("a", pending);
+  target.store.applySync("a", pending);
+  const id = `import:a:brain:${original.doc.id}`;
+  assert.equal(target.store.list().length, 6);
+  assert.equal(target.store.get(id)?.revision, 2);
+  assert.equal(target.store.get(id)?.text, "Continue E2 with E3.");
+  assert.deepEqual(target.store.evidence(id).map(e => e.seq), [2,3]);
+  assert.equal(target.store.revision(id, 1)?.text, "Decision from E2.");
+  assert.equal((target.db.prepare("SELECT kind FROM t3_capture WHERE seq=3").get() as {kind:string}).kind, "evidence_reference");
+  source.db.close(); target.db.close();
+});

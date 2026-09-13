@@ -7,6 +7,7 @@ import { CurationCoordinator } from "./curation/coordinator.js";
 import { CurationStore } from "./curation/store.js";
 import { registerCuratorMcp } from "./curation/tools.js";
 import { CURATION_PUBLIC_TOOLS, CurationPublicTools } from "./curation/public-tools.js";
+import type { BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
 import type { BrainCuratorReply, BrainCuratorRun } from "../../runtime/src/contracts.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -84,7 +85,7 @@ if (process.argv.includes("--catalog")) {
     const occurredAt = typeof input.occurredAt === "number" && Number.isFinite(input.occurredAt) && input.occurredAt > 0
       ? Math.min(input.occurredAt, now) : now;
     db.prepare(`INSERT INTO agent_sessions (id, backend, repo, cwd, title, status, created_at, updated_at)
-      VALUES (?, 'ext:t3', ?, '', '', 'idle', ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at`).run(id, input.context.repo ?? null, Date.now(), Date.now());
+      VALUES (?, 'ext:t3', ?, '', '', 'idle', ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at`).run(id, input.context.repo ?? "", Date.now(), Date.now());
     db.prepare("INSERT OR IGNORE INTO t3_capture(session, receipt, kind, data, ts) VALUES (?, 't3:created', 'created', ?, ?)").run(id, JSON.stringify({ repo: input.context.repo, branch: input.context.branch, backend: "ext:t3" }), occurredAt);
     db.prepare("INSERT OR IGNORE INTO t3_capture(session, receipt, kind, data, ts) VALUES (?, ?, ?, ?, ?)").run(id, input.receipt, input.kind, JSON.stringify(input.data), occurredAt);
     const row = db.prepare("SELECT seq FROM t3_capture WHERE session = ? AND receipt = ?").get(id, input.receipt) as { seq: number };
@@ -110,8 +111,10 @@ if (process.argv.includes("--catalog")) {
     });
   };
   const curator = new CurationCoordinator(documents,{run:runCurator,endpoint:url,token,
-    sourceReader:(name,args)=>gateway.callVerb(name,{...args,graph:process.env.GRAPH_NAME}),
-    cwd:process.env.OPENCODE_WORKSPACE_DIR ?? process.cwd()});
+    sourceReader:process.env.FLOW_CURATOR_SOURCE_TOOLS === "0" ? undefined :
+      (name,args)=>gateway.callVerb(name,{...args,graph:process.env.GRAPH_NAME}),
+    cwd:process.env.OPENCODE_WORKSPACE_DIR ?? process.cwd(),
+    onResult:()=>process.send?.({documentsChanged:true})});
   registerCuratorMcp(app,curator.activeTools);
   await app.ready();
   if (process.env.FLOW_DISTILLER !== "0") curator.recover();
@@ -185,7 +188,10 @@ if (process.argv.includes("--catalog")) {
         const stored = capture(input);
         if (input.kind === "user_prompt") {
           const text=(input.data as {text?:unknown}).text;
-          if (typeof text === "string") documents.bootstrap({sessionId:stored.id,repo:input.context.repo??null,after:0,through:stored.sequence},text);
+          if (typeof text === "string") {
+            documents.bootstrap({sessionId:stored.id,repo:input.context.repo??null,after:0,through:stored.sequence},text);
+            process.send?.({documentsChanged:true});
+          }
         }
         if (process.env.FLOW_DISTILLER !== "0" && input.kind !== "graph") {
           curator.capture(stored.id,input.context.repo ?? null,stored.sequence,Boolean(input.closed));
@@ -195,6 +201,16 @@ if (process.argv.includes("--catalog")) {
         await drainRemembers();
         await curator.flush();
         result = { drained: true };
+      } else if (message.method === "pendingSync") {
+        result = documents.pendingSync();
+      } else if (message.method === "ackSync") {
+        documents.acknowledgeSync(message.params.acks as BrainDocumentSyncAck[]);
+        result = { acknowledged: true };
+      } else if (message.method === "syncDocuments") {
+        result = documents.applySync(
+          String(message.params.origin),
+          message.params.items as BrainDocumentSync[],
+        );
       } else if (message.method === "documents") {
         const id = typeof message.params.id === "string" ? message.params.id : undefined;
         result = id ? documents.get(id) ?? null : documents.list().filter(doc=>doc.kind!=="notes");

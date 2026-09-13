@@ -106,6 +106,7 @@ export function importBrain(
           : `import:${origin}:${row.id}`,
       ]),
     );
+    db.prepare("INSERT OR IGNORE INTO brain_import_evidence VALUES (?,'',0,0)").run(instance);
     const sequences = new Map<number, number>();
     for (const row of snapshot.tables.t3_capture) {
       const sid = session(String(row.session));
@@ -118,6 +119,7 @@ export function importBrain(
         .prepare("SELECT seq FROM t3_capture WHERE session=? AND receipt=?")
         .get(sid, row.receipt) as { seq: number };
       sequences.set(Number(row.seq), target.seq);
+      db.prepare("INSERT INTO brain_import_evidence VALUES (?,?,?,?)").run(instance, row.session, row.seq, target.seq);
     }
     const seq = (n: number) => {
       if (n === 0) return 0;
@@ -166,6 +168,8 @@ export function importBrain(
         insert.run(...columns.map((c) => row[c]!));
       }
     }
+    for (const row of snapshot.tables.brain_documents)
+      db.prepare("INSERT INTO brain_document_sync_origins VALUES (?,?,?,?)").run(instance, row.id, row.revision, ids.get(String(row.id)));
     const documents = snapshot.tables.brain_documents.length;
     db.prepare("INSERT INTO brain_imports VALUES (?,?,?)").run(origin, digest, documents);
     return { digest, documents };
