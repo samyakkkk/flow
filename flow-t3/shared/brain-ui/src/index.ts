@@ -17,3 +17,4 @@ export type {
   BrainWorkspaceViewProps,
 } from "./types.ts";
 import "./styles.css";
+export { BrainCliSelect } from "./BrainCliSelect.tsx";

@@ -133,3 +133,4 @@
   .flow-brain-source-grid, .flow-brain-document-grid { grid-template-columns: 1fr; }
   .flow-brain-graph-help { display: none !important; }
 }
+.flow-brain-cli-select { border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); padding: 8px 12px; min-width: 160px; max-width: 100%; font: inherit; }

@@ -1,4 +1,5 @@
 import { BrainIcon } from "./BrainIcon";
+import { BrainCliSelect } from "@flow/brain-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BrainCommand,
@@ -21,7 +22,7 @@ import type { BrainSnapshot } from "../../brain/repository";
 import { BrainPage } from "./BrainPage";
 import { BrainDocumentLibrary } from "./BrainDocuments";
 import { BrainSources, BrainIndexing } from "./BrainSources";
-import { BrainSelect, CreateBrainDialog, ConnectCloudDialog, cliName } from "./BrainControls";
+import { BrainSelect, CreateBrainDialog, ConnectCloudDialog } from "./BrainControls";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -479,14 +480,9 @@ function BrainController({
             {workspace && !workspace.remote && (
               <div className="space-y-2">
                 <p className="text-sm">Default indexing CLI</p>
-                <BrainSelect
-                  label="Default indexing CLI"
+                <BrainCliSelect
                   value={workspace.cli}
-                  options={(state?.clis ?? []).map((entry) => ({
-                    value: entry.id,
-                    label: cliName(entry.id),
-                    disabled: !entry.installed,
-                  }))}
+                  clis={state?.clis ?? []}
                   disabled={busy}
                   onChange={(value) =>
                     void send({

@@ -16,6 +16,7 @@ vi.mock("./process.ts", async (original) => ({
 }));
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   vi.mocked(runStreaming).mockReset();
   for (const root of roots.splice(0)) await NodeFSP.rm(root, { recursive: true, force: true });
 });
@@ -29,6 +30,7 @@ describe("original Flow builder", () => {
   it.each(["claude", "codex", "opencode"] as const)(
     "uses the authoritative prompt, graph tools and streaming activity for %s",
     async (cli) => {
+      vi.stubEnv("FLOW_OPENCODE_INDEXER_MODEL", "openrouter/test/tool-model");
       const root = await temp();
       const events: string[] = [];
       const context: BuilderContext = {
@@ -95,6 +97,8 @@ describe("original Flow builder", () => {
       expect(events).toContain("graph_upsert_entity svc:api");
       const [exe, args, opts] = vi.mocked(runStreaming).mock.calls[0]!;
       expect(exe).toBe(cli);
+      if (cli === "opencode") expect(args).toContain("openrouter/test/tool-model");
+      else expect(args).not.toContain("openrouter/test/tool-model");
       expect(opts.env.FLOW_FIXED_GRAPH).toBe("isolated_brain");
       expect(opts.env.FLOW_EMBED_URL).toBe("http://127.0.0.1:1/embed");
       expect(args).not.toContain("--tools");

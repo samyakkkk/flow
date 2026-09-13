@@ -110,7 +110,10 @@ export async function indexRepository(
     GH_PROMPT_DISABLED: "1",
   };
   delete childEnv.FLOW_ADMIN_TOKEN;
-  const model = process.env.GRAPH_BUILDER_MODEL ?? INDEXER_DEFAULT_MODELS[cli];
+  const model =
+    (cli === "opencode" ? process.env.FLOW_OPENCODE_INDEXER_MODEL : undefined) ??
+    process.env.GRAPH_BUILDER_MODEL ??
+    INDEXER_DEFAULT_MODELS[cli];
   if (cli === "claude") {
     args = [
       "-p",
