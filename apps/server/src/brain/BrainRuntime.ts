@@ -114,6 +114,8 @@ export class BrainRuntime {
   readonly directory: string;
   readonly host: { platform: NodeJS.Platform; architecture: NodeJS.Architecture };
   private readonly githubAccess: GithubAccess | undefined;
+  private readonly integrationEntry: string | undefined;
+  private readonly integrationConfigurations = new Map<string, unknown>();
   private readonly runCurator: BrainCuratorRunner | undefined;
   private readonly runIndexer: BrainCuratorRunner | undefined;
   private readonly localCuratorCli: (() => Promise<"claude" | "codex" | "opencode">) | undefined;
@@ -127,6 +129,8 @@ export class BrainRuntime {
       platform: NodeJS.Platform;
       architecture: NodeJS.Architecture;
       runCurator?: BrainCuratorRunner;
+      /** Trusted host-owned worker module; never selected by a client or model. */
+      integrationEntry?: string;
       runIndexer?: BrainCuratorRunner;
       localCuratorCli?: () => Promise<"claude" | "codex" | "opencode">;
       captureToolActivity?: boolean;
@@ -137,6 +141,7 @@ export class BrainRuntime {
     this.projectBindings = new ProjectBrainBindings(directory);
     this.host = options;
     this.runCurator = options.runCurator;
+    this.integrationEntry = options.integrationEntry;
     this.runIndexer = options.runIndexer;
     this.localCuratorCli = options.localCuratorCli;
     this.captureToolActivity = options.captureToolActivity ?? true;
@@ -977,7 +982,7 @@ export class BrainRuntime {
         await this.writeSessionSources(workspace);
         // The chat-owning environment selects its own installed provider. Cloud
         // availability and its maintenance CLI must not gate local capture.
-        return startSessionWorker(
+        const worker = await startSessionWorker(
           {
             ...brainResourceEnvironment({
               graphName: `flow_brain_${workspace.id.replaceAll("-", "")}`,
@@ -1000,6 +1005,7 @@ export class BrainRuntime {
                 process.env[key] === undefined ? [] : [[key, process.env[key]!]],
               ),
             ),
+            ...(this.integrationEntry ? { FLOW_BRAIN_INTEGRATION: this.integrationEntry } : {}),
             FLOW_PROJECT_NAME: workspace.name,
             DB_PATH: NodePath.join(directory, "flow.db"),
             JOURNAL_PATH: NodePath.join(directory, "journal.jsonl"),
@@ -1025,6 +1031,9 @@ export class BrainRuntime {
             : undefined,
           workspace.remote ? () => this.queueDocumentSync(workspace) : undefined,
         );
+        const configuration = this.integrationConfigurations.get(workspace.id);
+        if (configuration !== undefined) await worker.configureIntegration(configuration);
+        return worker;
       })();
       this.sessionWorkers.set(workspace.id, pending);
       pending.catch(() => {
@@ -1033,6 +1042,19 @@ export class BrainRuntime {
       });
     }
     return pending;
+  }
+  /** Cloud-only administration; never exposed to Brain tools or auto-enabled locally. */
+  async configureIntegration(workspaceId: string, config: unknown) {
+    const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace || workspace.remote) throw new Error("Integrations require an owned Brain.");
+    const worker = await this.sessionWorker(workspace);
+    this.integrationConfigurations.set(workspaceId, config);
+    return worker.configureIntegration(config);
+  }
+  async integration(workspaceId: string, action: string) {
+    const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace || workspace.remote) throw new Error("Integrations require an owned Brain.");
+    return (await this.sessionWorker(workspace)).integration(action);
   }
   private async writeSessionSources(workspace: Workspace) {
     const directory = NodePath.join(this.directory, "workspaces", workspace.id);
@@ -1463,6 +1485,7 @@ export class BrainRuntime {
   }
   async close() {
     this.closed = true;
+    this.integrationConfigurations.clear();
     if (this.captureRetry) clearTimeout(this.captureRetry);
     if (this.documentSyncRetry) clearTimeout(this.documentSyncRetry);
     await this.commands;
