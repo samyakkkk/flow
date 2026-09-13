@@ -325,6 +325,16 @@ function BrainController({
           )
         }
       >
+        {workspace?.migration && (
+          <div role="status" className="rounded-lg border p-4 text-sm">
+            <p>{workspace.migration.message}</p>
+            {workspace.migration.status === "error" && (
+              <Button variant="outline" onClick={() => setCloudOpen(true)}>
+                Retry transfer
+              </Button>
+            )}
+          </div>
+        )}
         {workspace && workspace.remote?.status !== "error" && state && environmentId && (
           <BrainSources
             key={workspace.id}
@@ -419,6 +429,7 @@ function BrainController({
         )}
       </BrainPage>
       <ConnectCloudDialog
+        workspace={workspace && !workspace.remote ? workspace : undefined}
         open={cloudOpen}
         onOpenChange={setCloudOpen}
         send={send}

@@ -2,7 +2,7 @@
 import * as Schema from "effect/Schema";
 import { BrainState, BrainDocument, ChatMemoryList } from "@t3tools/contracts";
 import { McpSchema } from "effect/unstable/ai";
-import type { BrainCommand } from "@t3tools/contracts";
+import type { BrainCommand, BrainTransferRequest } from "@t3tools/contracts";
 import type { BrainCapture, BrainSessionContext } from "@flow/brain-runtime";
 
 export function cloudEndpoint(value: string) {
@@ -16,6 +16,9 @@ export function cloudEndpoint(value: string) {
     throw new Error("Cloud Brain connections require HTTPS.");
   return url.toString().replace(/\/$/, "");
 }
+const transferReceipt = Schema.decodeUnknownSync(
+  Schema.Struct({ digest: Schema.String, documents: Schema.Number }),
+);
 const state = Schema.decodeUnknownSync(BrainState);
 const tool = Schema.decodeUnknownSync(McpSchema.CallToolResult);
 const memories = Schema.decodeUnknownSync(ChatMemoryList);
@@ -64,6 +67,9 @@ export class CloudClient {
     const body = reply(payload);
     if (!response.ok || body.error) throw new Error(body.error ?? "Cloud Brain is unavailable.");
     return body.result;
+  }
+  async transfer(transfer: BrainTransferRequest) {
+    return transferReceipt(await this.request("transfer", { transfer }));
   }
   async state(metadataOnly = false) {
     return state(await this.request("state", { metadataOnly }));

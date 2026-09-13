@@ -89,7 +89,31 @@ export const BrainSource = Schema.Struct({
   summary: Schema.optional(Schema.String),
 });
 export type BrainSource = typeof BrainSource.Type;
+export const BrainMigration = Schema.Struct({
+  endpoint: Schema.String,
+  brainId: Schema.String,
+  status: Schema.Literals(["transferring", "error"]),
+  message: Schema.String,
+});
+export const BrainTransferRequest = Schema.Struct({
+  repositories: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        repository: Schema.String,
+        branch: Schema.String,
+        localOnly: Schema.Boolean,
+      }),
+    ),
+  ),
+  source: Schema.String,
+  digest: Schema.String,
+  count: Schema.Number,
+  index: Schema.optionalKey(Schema.Number),
+  data: Schema.optionalKey(Schema.String),
+});
+export type BrainTransferRequest = typeof BrainTransferRequest.Type;
 export const BrainWorkspace = Schema.Struct({
+  migration: Schema.optionalKey(BrainMigration),
   id: Schema.String,
   name: Schema.String,
   cli: BrainCli,
@@ -113,6 +137,7 @@ export const BrainWorkspace = Schema.Struct({
 });
 export type BrainWorkspace = typeof BrainWorkspace.Type;
 export const BrainState = Schema.Struct({
+  transferVersion: Schema.optionalKey(Schema.Literal(1)),
   configuredProjectIds: Schema.optional(Schema.Array(ProjectId)),
   database: Schema.Struct({
     status: Schema.Literals(["stopped", "ready", "error"]),
@@ -151,6 +176,7 @@ export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainCommand = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("connectCloud"),
+    workspaceId: Schema.optionalKey(Schema.String),
     endpoint: Schema.String,
     token: Schema.String,
   }),
