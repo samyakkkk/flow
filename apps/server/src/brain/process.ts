@@ -2,6 +2,16 @@
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
 import * as NodeChildProcess from "node:child_process";
 
+export class BrainCliUnavailableError extends Error {
+  constructor(executable: string) {
+    super(
+      executable === "gh"
+        ? "GitHub CLI (`gh`) was not found on PATH. Install it on the machine running Flow to use GitHub-specific features, then refresh Settings → Source control. Local repository indexing does not require it."
+        : "Git (`git`) was not found on PATH. Install Git on the machine running Flow to clone or index repositories. GitHub CLI cannot replace Git for these operations.",
+    );
+  }
+}
+
 export function run(
   executable: string,
   args: string[],
@@ -35,6 +45,12 @@ export function run(
               "This Codex version cannot read current model metadata. Update Codex in Settings → Providers, or choose Claude Code.",
             ),
           );
+        } else if (
+          error &&
+          (executable === "gh" || executable === "git") &&
+          error.code === "ENOENT"
+        ) {
+          reject(new BrainCliUnavailableError(executable));
         } else if (error)
           reject(
             new Error(

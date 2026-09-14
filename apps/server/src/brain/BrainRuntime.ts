@@ -30,7 +30,7 @@ import * as NodePath from "node:path";
 import { BrainEmbeddings } from "./embeddings.ts";
 import { indexRepository } from "./indexer.ts";
 import { startBuilderBridge } from "./builder-bridge.ts";
-import { githubRepository, run } from "./process.ts";
+import { BrainCliUnavailableError, githubRepository, run } from "./process.ts";
 import type {
   BrainDocumentSync,
   BrainDocumentSyncAck,
@@ -291,7 +291,8 @@ export class BrainRuntime {
       repositories: workspace.sources.map((s) => ({
         repository: s.repository,
         branch: s.branch,
-        localOnly: Boolean(s.localPath),
+        // GitHub folders retain owner/repository identity even when indexed locally.
+        localOnly: Boolean(s.localPath) && !s.repository.includes("/"),
       })),
     });
     if (receipt.digest !== digest) throw new Error("Cloud did not confirm the Brain snapshot.");
@@ -509,12 +510,14 @@ export class BrainRuntime {
         login: value.login,
         message: "Using this machine’s GitHub CLI sign-in. Repository access is read-only.",
       };
-    } catch {
+    } catch (error) {
       this.github = {
         connected: false,
         login: "",
         message:
-          "Public repositories work now. For private repositories, sign in to GitHub in Settings → Source control, then refresh here.",
+          error instanceof Error
+            ? error.message
+            : "GitHub is unavailable. Check Settings → Source control.",
       };
     }
   }
@@ -895,7 +898,7 @@ export class BrainRuntime {
       const client = await this.cloud(workspace);
       if (command.action === "importFolder") {
         const folder = await this.inspectFolder(command.path);
-        if (folder.localPath)
+        if (!folder.github)
           throw new Error(
             "Cloud Brains require a GitHub repository. Push this folder to GitHub first.",
           );
@@ -1104,12 +1107,16 @@ export class BrainRuntime {
     }
     const hasCommit = await run("git", ["rev-parse", "--verify", "HEAD"], { cwd: localPath }).then(
       () => true,
-      () => false,
+      (error) => {
+        if (error instanceof BrainCliUnavailableError) throw error;
+        return false;
+      },
     );
     return {
       repository,
-      localPath: github ? undefined : localPath,
-      hasCommit: github || hasCommit,
+      localPath,
+      github,
+      hasCommit,
     };
   }
   /** Resolve the path from T3's project record, never from an agent's arguments. */
@@ -1122,7 +1129,7 @@ export class BrainRuntime {
         const remote = await (await this.cloud(workspace)).state(true);
         if (remote.database.status !== "ready") throw new Error("Cloud Brain is unavailable.");
         const folder = await this.inspectFolder(project.workspaceRoot);
-        if (folder.localPath)
+        if (!folder.github)
           throw new Error("Push this repository to GitHub before connecting it to a cloud Brain.");
         const brain = remote.workspaces.find((entry) => entry.id === workspace.remote!.brainId);
         if (!brain) throw new Error("Cloud Brain no longer exists.");
@@ -1141,12 +1148,7 @@ export class BrainRuntime {
       }
       if (workspace && !workspace.remote) {
         const folder = await this.inspectFolder(project.workspaceRoot);
-        const existing = workspace.sources.find((source) =>
-          folder.localPath
-            ? source.localPath === folder.localPath
-            : !source.localPath &&
-              source.repository.toLowerCase() === folder.repository.toLowerCase(),
-        );
+        const existing = workspace.sources.find((source) => source.localPath === folder.localPath);
         if (!existing)
           await this.executeCommand({
             action: "importFolder",
@@ -1514,22 +1516,56 @@ export class BrainRuntime {
     }
     const name = githubRepository(repository);
     if (this.githubAccess) return this.githubAccess.branches(name);
-    const rows = await run("gh", [
-      "api",
-      `repos/${name}/branches?per_page=100`,
-      "--paginate",
-      "--jq",
-      ".[].name",
-    ]);
-    return [
-      ...new Set(
-        rows
-          .split("\n")
-          .map((branch) => branch.trim())
-          .filter(Boolean),
-      ),
-    ];
+    let gitError: unknown;
+    for (const url of [`https://github.com/${name}.git`, `git@github.com:${name}.git`]) {
+      try {
+        const refs = await run("git", ["ls-remote", "--heads", "--", url]);
+        return [
+          ...new Set(
+            refs.split("\n").flatMap((line) => {
+              const ref = line.split("\t")[1];
+              return ref?.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] : [];
+            }),
+          ),
+        ];
+      } catch (error) {
+        gitError = error;
+        if (error instanceof BrainCliUnavailableError) break;
+      }
+    }
+    try {
+      const rows = await run("gh", [
+        "api",
+        `repos/${name}/branches?per_page=100`,
+        "--paginate",
+        "--jq",
+        ".[].name",
+      ]);
+      return [
+        ...new Set(
+          rows
+            .split("\n")
+            .map((branch) => branch.trim())
+            .filter(Boolean),
+        ),
+      ];
+    } catch (error) {
+      if (
+        gitError instanceof BrainCliUnavailableError &&
+        error instanceof BrainCliUnavailableError
+      ) {
+        throw new Error(
+          "Install Git or GitHub CLI (`gh`) on the machine running Flow to list GitHub branches. Neither was found on PATH.",
+          { cause: error },
+        );
+      }
+      throw new Error(
+        "Could not list repository branches using Git or GitHub CLI. Check repository access through Git (HTTPS or SSH), or sign in with `gh auth login`.",
+        { cause: error },
+      );
+    }
   }
+
   async listGithubRepositories(workspaceId?: string) {
     if (workspaceId) {
       const workspace = this.workspace(workspaceId);
@@ -1537,10 +1573,7 @@ export class BrainRuntime {
     }
     if (this.githubAccess) return this.githubAccess.repositories();
     await this.refreshGithub();
-    if (!this.github.connected)
-      throw new Error(
-        "Connect GitHub in Settings → Source control to browse private repositories.",
-      );
+    if (!this.github.connected) throw new Error(this.github.message);
     const rows = await run("gh", [
       "api",
       "user/repos?per_page=100&sort=pushed",
@@ -1575,15 +1608,24 @@ export class BrainRuntime {
       () => true,
       () => false,
     );
-    const gitEnv = await this.githubAccess?.gitEnvironment();
+    const gitEnv = source.localPath ? undefined : await this.githubAccess?.gitEnvironment();
     if (exists) {
       // Only app-owned clones live here; users' work folders are never checked out.
-      await run("git", ["fetch", "--prune", "origin", ...(source.branch ? [source.branch] : [])], {
-        cwd: repoPath,
-        ...(gitEnv ? { env: gitEnv } : {}),
-        signal,
-        timeout: 5 * 60_000,
-      });
+      await run(
+        "git",
+        [
+          "fetch",
+          "--prune",
+          source.localPath || "origin",
+          ...(source.branch ? [source.branch] : []),
+        ],
+        {
+          cwd: repoPath,
+          ...(gitEnv ? { env: gitEnv } : {}),
+          signal,
+          timeout: 5 * 60_000,
+        },
+      );
       await run("git", ["checkout", "-B", source.branch || "main", "FETCH_HEAD"], {
         cwd: repoPath,
         ...(gitEnv ? { env: gitEnv } : {}),
@@ -1596,6 +1638,7 @@ export class BrainRuntime {
         { signal, timeout: 5 * 60_000, ...(gitEnv ? { env: gitEnv } : {}) },
       );
     } else if (this.github.connected && !this.githubAccess) {
+      await run("git", ["--version"], { signal });
       await run(
         "gh",
         [

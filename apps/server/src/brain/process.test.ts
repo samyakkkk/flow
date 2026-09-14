@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
-import { runStreaming } from "./process.ts";
+import { run, runStreaming } from "./process.ts";
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await NodeFSP.rm(root, { recursive: true, force: true });
@@ -41,5 +41,25 @@ it.effect("streams activity before completion and cancels the CLI's MCP process 
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await NodeFSP.readFile(`${root}/transcript.jsonl`, "utf8")).toContain(String(pid));
     });
+  }),
+);
+
+it.effect("explains missing GitHub CLI without requiring it for local indexing", () =>
+  Effect.promise(async () => {
+    const root = await NodeFSP.mkdtemp("/tmp/flow-missing-gh-");
+    roots.push(root);
+    await expect(run("gh", ["api", "user"], { env: { PATH: root } })).rejects.toThrow(
+      "GitHub CLI (`gh`) was not found on PATH",
+    );
+  }),
+);
+
+it.effect("identifies missing Git without suggesting that gh can replace it", () =>
+  Effect.promise(async () => {
+    const root = await NodeFSP.mkdtemp("/tmp/flow-missing-git-");
+    roots.push(root);
+    await expect(run("git", ["--version"], { env: { PATH: root } })).rejects.toThrow(
+      "Git (`git`) was not found on PATH",
+    );
   }),
 );
