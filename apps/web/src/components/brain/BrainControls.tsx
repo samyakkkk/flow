@@ -80,21 +80,33 @@ export function CreateBrainDialog({
   onCreated: (id: string) => void;
   initialName?: string;
 }) {
+  const [location, setLocation] = useState<"local" | "remote">("local");
+  const [endpoint, setEndpoint] = useState("");
+  const [token, setToken] = useState("");
   const [name, setName] = useState(initialName);
   const [cli, setCli] = useState<BrainCli | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const selected = cli ?? state?.clis.find((entry) => entry.installed)?.id;
   async function create() {
-    if (!selected || busy || !name.trim()) return;
+    if (
+      busy ||
+      (location === "local" ? !selected || !name.trim() : !endpoint.trim() || !token.trim())
+    )
+      return;
     setBusy(true);
     setError("");
     try {
-      const result = await send({ action: "create", name, cli: selected });
+      const result = await send(
+        location === "remote"
+          ? { action: "connectCloud", endpoint: endpoint.trim(), token: token.trim() }
+          : { action: "create", name, cli: selected! },
+      );
       if (!result || result.error || !result.createdWorkspaceId) {
         setError(result?.error ?? "Could not create the brain. Check the connection and retry.");
         return;
       }
+      setToken("");
       onCreated(result.createdWorkspaceId);
       onOpenChange(false);
       setName(initialName);
@@ -103,7 +115,16 @@ export function CreateBrainDialog({
     }
   }
   return (
-    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) {
+          setToken("");
+          setError("");
+          onOpenChange(next);
+        }
+      }}
+    >
       <DialogPopup className="max-w-md">
         <form
           className="flex min-h-0 flex-col"
@@ -115,46 +136,97 @@ export function CreateBrainDialog({
           <DialogHeader>
             <DialogTitle>Create a brain</DialogTitle>
             <DialogDescription>
-              Connect sources to build shared knowledge for your projects.
+              Create a local Brain or connect to an existing remote Brain.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-5">
-            <label className="block space-y-2 text-sm">
-              Brain name
-              <Input
-                autoFocus
-                required
-                maxLength={80}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="e.g. Acme platform"
-              />
-            </label>
-            <fieldset className="space-y-2">
-              <legend className="mb-2 text-sm">Build knowledge with</legend>
-              {state?.clis.map((entry) => (
-                <label
-                  key={entry.id}
-                  className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
-                >
+            <fieldset className="flex gap-4" disabled={busy}>
+              <legend className="mb-2 text-sm">Brain location</legend>
+              {(["local", "remote"] as const).map((value) => (
+                <label key={value} className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
-                    name="brain-cli"
-                    checked={selected === entry.id}
-                    disabled={!entry.installed || busy}
-                    onChange={() => setCli(entry.id)}
+                    name="brain-location"
+                    checked={location === value}
+                    onChange={() => {
+                      setLocation(value);
+                      setError("");
+                      setToken("");
+                    }}
                   />
-                  <span>
-                    <span className="block font-medium">{cliName(entry.id)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {entry.installed
-                        ? "Uses your existing CLI sign-in"
-                        : "Not installed on this computer"}
-                    </span>
-                  </span>
+                  {value === "local" ? "This computer" : "Remote Brain"}
                 </label>
               ))}
             </fieldset>
+            {location === "remote" ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Enter your remote Brain’s URL and access token. Its shared knowledge will be
+                  available to your projects.
+                </p>
+                <label className="block space-y-2 text-sm">
+                  Server URL
+                  <Input
+                    required
+                    type="url"
+                    placeholder="https://brain.example.com"
+                    value={endpoint}
+                    disabled={busy}
+                    onChange={(event) => setEndpoint(event.target.value)}
+                  />
+                </label>
+                <label className="block space-y-2 text-sm">
+                  Access token
+                  <Input
+                    required
+                    type="password"
+                    autoComplete="off"
+                    value={token}
+                    disabled={busy}
+                    onChange={(event) => setToken(event.target.value)}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="block space-y-2 text-sm">
+                  Brain name
+                  <Input
+                    autoFocus
+                    required
+                    maxLength={80}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="e.g. Acme platform"
+                  />
+                </label>
+                <fieldset className="space-y-2">
+                  <legend className="mb-2 text-sm">Build knowledge with</legend>
+                  {state?.clis.map((entry) => (
+                    <label
+                      key={entry.id}
+                      className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                    >
+                      <input
+                        type="radio"
+                        name="brain-cli"
+                        checked={selected === entry.id}
+                        disabled={!entry.installed || busy}
+                        onChange={() => setCli(entry.id)}
+                      />
+                      <span>
+                        <span className="block font-medium">{cliName(entry.id)}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {entry.installed
+                            ? "Uses your existing CLI sign-in"
+                            : "Not installed on this computer"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
+              </>
+            )}
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -166,12 +238,30 @@ export function CreateBrainDialog({
               type="button"
               variant="outline"
               disabled={busy}
-              onClick={() => onOpenChange(false)}
+              onClick={() => {
+                setToken("");
+                setError("");
+                onOpenChange(false);
+              }}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !name.trim() || !selected}>
-              {busy ? "Creating…" : "Create brain"}
+            <Button
+              type="submit"
+              disabled={
+                busy ||
+                (location === "local"
+                  ? !name.trim() || !selected
+                  : !endpoint.trim() || !token.trim())
+              }
+            >
+              {location === "remote"
+                ? busy
+                  ? "Connecting cloud…"
+                  : "Connect remote Brain"
+                : busy
+                  ? "Creating…"
+                  : "Create brain"}
             </Button>
           </DialogFooter>
         </form>
