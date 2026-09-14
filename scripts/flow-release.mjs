@@ -395,6 +395,15 @@ export async function prepareAutomaticUpdate(home) {
 }
 
 export async function main(args) {
+  if (args[0] === "setup" || args[0] === "agents") {
+    if (args[0] === "setup" && !args.includes("--state-dir")) {
+      await main(["--no-open"]);
+      args = [...args, "--state-dir", join(process.env.FLOW_INSTANCE_HOME, "instances/primary/data/userdata")];
+    }
+    const connector = await import("../flow-t3/shared/bin/harness/agent-connector.mjs");
+    return connector.main(args[0] === "agents" ? args.slice(1) : args);
+  }
+
   const [major, minor, patch] = process.versions.node.split(".").map(Number);
   if (major !== 24 || minor < 13 || (minor === 13 && patch < 1))
     throw Error("Install Node.js 24.13.1+ (24.x) first.");

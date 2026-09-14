@@ -124,6 +124,17 @@ export function normalizeHook(
     if (answer) events.push(agentChunk(answer));
     // Antigravity has no SessionEnd hook — its Stop is the strongest
     // end-of-turn signal it offers; the idle sweep handles final distill.
+  } else if (["PostToolUse", "postToolUse", "AfterTool"].includes(eventName)) {
+    const error = str(payload.error);
+    events.push({ kind: "update", data: {
+      sessionUpdate: "tool_call_update",
+      toolCallId: str(payload.tool_use_id) ?? str(payload.tool_call_id) ?? str(payload.toolCallId),
+      title: str(payload.tool_name) ?? str(payload.toolName) ?? "Tool call",
+      status: error || payload.status === "failed" ? "failed" : "completed",
+      rawInput: cap(JSON.stringify(payload.tool_input ?? payload.toolInput ?? {})),
+      rawOutput: cap(JSON.stringify(payload.tool_response ?? payload.toolResponse ?? error ?? {})),
+    } });
+    if (error) events.push({ kind: "error", data: { text: cap(error), source: eventName } });
   } else {
     // Unknown/uninteresting event (PreToolUse, Notification, …): capture
     // nothing, but the caller still bumps updated_at so the idle sweep sees

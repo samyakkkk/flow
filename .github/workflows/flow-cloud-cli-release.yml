@@ -1,0 +1,70 @@
+name: Flow Cloud CLI release
+on:
+  push:
+    tags: ['flow-cloud-cli-v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: flow-cloud-cli-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#flow-cloud-cli-v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "FLOW_VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/cloud-source"
+          git archive HEAD -- . ':(exclude).repos' | tar -xf - -C "$RUNNER_TEMP/cloud-source"
+      - name: Build and verify platform bundle
+        run: node scripts/build-browser-bundle.mjs "$RUNNER_TEMP/cloud-source" "$GITHUB_WORKSPACE/cloud-assets" "$FLOW_VERSION"
+      - name: Verify Cloud-specific behavior
+        working-directory: ${{ runner.temp }}/cloud-source
+        run: runtime/bin/node --test scripts/flow-cloud-cli.test.mjs flow-t3/shared/bin/test/*.test.mjs
+      - name: Smoke test isolated installation without replacing a Mac launcher
+        shell: bash
+        run: |
+          test_home="$RUNNER_TEMP/cloud-cli-user"
+          mkdir -p "$test_home/.local/bin" "$test_home/staging"
+          printf 'existing Mac launcher\n' > "$test_home/.local/bin/flow"
+          archive=$(find cloud-assets -name 'flow-browser-*.tar.gz' -print -quit)
+          digest=$(cut -d ' ' -f 1 "$archive.sha256")
+          tar -xzf "$archive" -C "$test_home/staging"
+          HOME="$test_home" "$test_home/staging/runtime/bin/node" "$test_home/staging/scripts/flow-cloud-cli.mjs" install-bundle "$test_home/staging" "$digest"
+          test "$(cat "$test_home/.local/bin/flow")" = 'existing Mac launcher'
+          test ! -e "$test_home/Applications/Flow.app"
+          HOME="$test_home" "$test_home/.local/share/flow-cloud-cli/bin/flow" status
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-cli-${{ matrix.os }}
+          path: cloud-assets/flow-browser-*.tar.gz*
+          if-no-files-found: error
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cloud-cli-*
+          merge-multiple: true
+          path: cloud-assets
+      - name: Publish independent Cloud CLI channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" cloud-assets/* --verify-tag --latest=false --title "Flow Cloud CLI ${TAG#flow-cloud-cli-v}" --notes "Cloud-connected coding tools. Separate from Mac desktop and browser update channels."

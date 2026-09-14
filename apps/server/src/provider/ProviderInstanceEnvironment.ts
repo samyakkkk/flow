@@ -7,7 +7,7 @@ export function mergeProviderInstanceEnvironment(
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   if (!environment || environment.length === 0) {
-    return baseEnv;
+    return { ...baseEnv, FLOW_SESSION_ID: "t3-managed" };
   }
 
   const next: NodeJS.ProcessEnv = { ...baseEnv };
@@ -18,5 +18,6 @@ export function mergeProviderInstanceEnvironment(
         ? expandHomePath(variable.value)
         : variable.value;
   }
-  return next;
+  // T3 captures these sessions directly; external hooks must not capture them again.
+  return { ...next, FLOW_SESSION_ID: "t3-managed" };
 }

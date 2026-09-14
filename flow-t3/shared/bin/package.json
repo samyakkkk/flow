@@ -1,0 +1,14 @@
+{
+  "name": "@flow/brain-setup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    "./connector": "./harness/agent-connector.mjs",
+    "./replay": "./harness/capture-replay.mjs"
+  },
+  "dependencies": {
+    "jsonc-parser": "3.3.1"
+  }
+}
