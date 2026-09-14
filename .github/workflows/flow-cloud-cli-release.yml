@@ -49,10 +49,15 @@ jobs:
           test "$(cat "$test_home/.local/bin/flow")" = 'existing Mac launcher'
           test ! -e "$test_home/Applications/Flow.app"
           HOME="$test_home" "$test_home/.local/share/flow-cloud-cli/bin/flow" status
+      - name: Package Cloud CLI installer
+        shell: bash
+        run: sed "s/__FLOW_CLOUD_CLI_VERSION__/$FLOW_VERSION/g" scripts/install-cloud-cli.sh > cloud-assets/install-cloud.sh
       - uses: actions/upload-artifact@v4
         with:
           name: cloud-cli-${{ matrix.os }}
-          path: cloud-assets/flow-browser-*.tar.gz*
+          path: |
+            cloud-assets/flow-browser-*.tar.gz*
+            cloud-assets/install-cloud.sh
           if-no-files-found: error
   publish:
     needs: package
