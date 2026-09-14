@@ -94,6 +94,7 @@ export class CloudReadCache<S, D extends Summary> {
 
   async state(): Promise<S> {
     await this.loaded;
+    if (this.stopped) throw new Error(this.error ?? "Cloud cache is closed.");
     if (this.snapshot === undefined) return this.refresh();
     if ((this.options.now ?? Date.now)() - this.checkedAt >= (this.options.refreshMs ?? 10_000))
       void this.refresh().catch(() => {});
@@ -187,6 +188,19 @@ export class CloudReadCache<S, D extends Summary> {
     this.stopped = true;
     this.generation++;
     await this.drain();
+  }
+
+  /** Known authorization failures must not keep serving a previously authorized replica. */
+  async revoke(message: string) {
+    await this.loaded;
+    this.stopped = true;
+    this.generation++;
+    this.snapshot = undefined;
+    this.summaries.clear();
+    this.documents.clear();
+    this.error = message;
+    this.writes = this.writes.catch(() => {}).then(() => NodeFSP.rm(this.options.file, { force: true }));
+    await this.writes;
   }
 
   async drain() {

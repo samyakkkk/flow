@@ -223,6 +223,24 @@ describe("cloud cache adapter", () => {
     return { directory, snapshot, fetcher, client };
   }
 
+  it("removes the replica and denies cached reads when authentication is revoked", async () => {
+    const f = await setup();
+    await f.client.state();
+    await f.client.cache?.drain();
+    f.fetcher.mockImplementation(async () => new Response("Unauthorized", { status: 401 }));
+    await expect(f.client.state(true)).rejects.toThrow("Sign in again");
+    await expect(f.client.state()).rejects.toThrow("Sign in again");
+    await expect(f.client.cache?.document("secret")).rejects.toThrow("closed");
+    const reopened = new CloudClient(
+      "https://brain.example",
+      "fixture-one",
+      "instance",
+      "brain",
+      f.directory,
+    );
+    await expect(reopened.state()).rejects.toThrow("Sign in again");
+  });
+
   it("caches full state but keeps metadata checks live and invalidates commands", async () => {
     const f = await setup();
     await f.client.state();

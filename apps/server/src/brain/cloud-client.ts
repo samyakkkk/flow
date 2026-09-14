@@ -157,8 +157,14 @@ export class CloudClient {
       }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (response.status === 401)
-      throw new Error("Cloud Brain authentication failed. Sign in again to reconnect.");
+    if (
+      response.status === 401 ||
+      (response.status === 403 && ["state", "document"].includes(method))
+    ) {
+      const message = "Cloud Brain authentication failed. Sign in again to reconnect.";
+      await this.cache?.revoke(message);
+      throw new Error(message);
+    }
     const payload = await response.json().catch(() => {
       throw new Error(`Cloud Brain is unavailable (HTTP ${response.status}).`);
     });
