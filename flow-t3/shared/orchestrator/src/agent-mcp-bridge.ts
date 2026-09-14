@@ -10,6 +10,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 /** Adapt the existing job-scoped gateway to the HTTP MCP transport used by T3 providers. */
 export async function startAgentMcpBridge(spec: {
   command: string; args: string[]; env: Record<string, string>; cwd: string;
+  onToolCall?: (name: string, args: Record<string, unknown>) => void;
 }) {
   const client = new Client({ name: "flow-brain-task", version: "1" });
   const stdio = new StdioClientTransport({ ...spec, stderr: "pipe" });
@@ -39,7 +40,11 @@ export async function startAgentMcpBridge(spec: {
       server = new Server({ name: "flow-builder", version: "1" }, { capabilities: { tools: {} } });
       connections.add(server);
       server.setRequestHandler(ListToolsRequestSchema, () => client.listTools());
-      server.setRequestHandler(CallToolRequestSchema, (call) => client.callTool(call.params));
+      server.setRequestHandler(CallToolRequestSchema, async (call) => {
+        const result = await client.callTool(call.params);
+        spec.onToolCall?.(call.params.name, call.params.arguments ?? {});
+        return result;
+      });
       const transport = new StreamableHTTPServerTransport({
         enableJsonResponse: true,
       });

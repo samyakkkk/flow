@@ -65,10 +65,17 @@ export function finishActivity(jobId: string, status: "done" | "failed"): void {
 }
 
 export function recordActivityLine(jobId: string, backend: string, line: string): void {
+  const extracted = extract(backend, line);
+  if (extracted) recordActivity(jobId, extracted);
+}
+
+export function recordToolActivity(jobId: string, tool: string, input: Record<string, unknown>): void {
+  recordActivity(jobId, build(tool, input));
+}
+
+function recordActivity(jobId: string, extracted: Extracted): void {
   const a = byJob.get(jobId);
   if (!a) return;
-  const extracted = extract(backend, line);
-  if (!extracted) return;
   a.counts.toolCalls++;
   if (extracted.kind === "file") a.counts.filesRead++;
   if (extracted.kind === "graph") a.counts.graphWrites += isGraphWrite(extracted.tool) ? 1 : 0;
@@ -154,7 +161,7 @@ function extractCodex(obj: Record<string, unknown>): Extracted | null {
 // Label building — one terse line from a tool name + its input.
 // ------------------------------------------------------------------
 
-const FILE_TOOLS = new Set(["read", "glob", "grep", "list", "ls"]);
+const FILE_TOOLS = new Set(["read", "glob", "grep", "list", "ls", "source_read", "source_search"]);
 
 function isGraphTool(tool: string): boolean {
   return tool.startsWith("graph_") || tool.startsWith("mcp__flow-graph__") || tool.startsWith("flow-graph_");
@@ -166,7 +173,9 @@ function isGraphWrite(tool: string): boolean {
 }
 
 function build(tool: string, input: Record<string, unknown>): Extracted {
-  const t = tool.toLowerCase();
+  const normalized = tool.toLowerCase().replace(/^(mcp__t3[-_]code__|t3[-_]code_)/, "");
+  const t = ["source_read", "source_search"].includes(normalized) ? normalized :
+    ["upsert_entity", "upsert_relation", "relate", "merge_entities"].includes(normalized) ? `graph_${normalized}` : normalized;
   const kind: ActivityKind = isGraphTool(t)
     ? "graph"
     : FILE_TOOLS.has(t)

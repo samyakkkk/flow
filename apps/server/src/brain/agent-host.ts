@@ -13,6 +13,10 @@ import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime.ts";
 import { makeBrainCurator } from "./curator.ts";
 
+class BrainAgentError extends Schema.TaggedErrorClass<BrainAgentError>()("BrainAgentError", {
+  message: Schema.String,
+}) {}
+
 class BrainAgent extends Context.Service<BrainAgent, BrainCuratorRunner>()(
   "t3/brain/agent-host/BrainAgent",
 ) {}
@@ -42,7 +46,13 @@ export function createBrainAgentHost(directory: string, settings: () => unknown)
     run: (request: BrainCuratorRun, signal?: AbortSignal) =>
       runtime.runPromise(
         Effect.flatMap(BrainAgent, (run) =>
-          Effect.tryPromise(() => run({ ...request, ...(signal ? { signal } : {}) })),
+          Effect.tryPromise({
+            try: () => run({ ...request, ...(signal ? { signal } : {}) }),
+            catch: (error) =>
+              new BrainAgentError({
+                message: error instanceof Error ? error.message : String(error),
+              }),
+          }),
         ),
         signal ? { signal } : undefined,
       ),

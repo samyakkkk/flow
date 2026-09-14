@@ -1,4 +1,4 @@
-import { BrainWorkspaceView } from "@flow/brain-ui";
+import { BrainWorkspaceView, type BrainWorkspaceViewProps } from "@flow/brain-ui";
 import { BrainCircuit } from "lucide-react";
 import type { ReactNode } from "react";
 import type { BrainSnapshot } from "../../brain/repository";
@@ -15,6 +15,9 @@ export function BrainPage({
   error,
   toolbar,
   indexing,
+  indexingFailures,
+  onRetryIndexing,
+  indexingBusy,
   docs,
   skills,
   children,
@@ -28,6 +31,9 @@ export function BrainPage({
   error: string | null;
   toolbar: ReactNode;
   indexing: ReactNode;
+  indexingFailures: NonNullable<BrainWorkspaceViewProps["indexingFailures"]>;
+  onRetryIndexing: (sourceId: string) => void;
+  indexingBusy: boolean;
   docs?: ReactNode;
   skills?: ReactNode;
   memories?: ReactNode;
@@ -56,6 +62,9 @@ export function BrainPage({
           error={error}
           toolbar={toolbar}
           indexing={indexing}
+          indexingFailures={indexingFailures}
+          onRetryIndexing={onRetryIndexing}
+          indexingBusy={indexingBusy}
           sources={children}
           docs={docs}
           skills={skills}
