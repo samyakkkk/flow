@@ -43,3 +43,24 @@ test('rejects insecure origins and unavailable existing connections', async () =
     { id: 'local', remote: { endpoint: 'https://brain.example', brainId: 'remote', status: 'error' } },
   ] })), /unavailable/);
 });
+
+test('redeems dashboard enrollment before connecting and does not send the enrollment to Brain RPC', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flow-enrollment-'));
+  try {
+    const enrollmentFile=join(dir,'grant');await writeFile(enrollmentFile,'one-use-fixture');
+    const calls=[];
+    const id=await connectCloud({endpoint:'https://brain.example',brainId:'expected',stateDir:dir,enrollmentFile},async(_,method,fields)=>{
+      if(method==='state')return {workspaces:[]};
+      assert.equal(fields.command.token,'connection-fixture');return 'bound';
+    },async(url,init)=>{
+      calls.push(url.pathname);
+      if(url.pathname==='/auth/enroll'){
+        assert.equal(JSON.parse(init.body).token,'one-use-fixture');
+        return Response.json({token:'connection-fixture',brainId:'expected'});
+      }
+      assert.equal(init.headers.authorization,'Bearer connection-fixture');
+      return Response.json({result:{workspaces:[{id:'expected'}]}});
+    });
+    assert.equal(id,'bound');assert.deepEqual(calls,['/auth/enroll','/v1/brain']);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
