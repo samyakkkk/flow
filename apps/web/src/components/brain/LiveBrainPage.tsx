@@ -275,10 +275,12 @@ function BrainController({
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
-                disabled={!canRequest || busy}
+                disabled={!canRequest || busy || workspace?.migration?.status === "transferring"}
                 onClick={() => setCloudOpen(true)}
               >
-                Connect cloud
+                {workspace?.migration?.status === "transferring"
+                  ? "Connecting cloud…"
+                  : "Connect cloud"}
               </Button>
               <Button
                 variant="ghost"

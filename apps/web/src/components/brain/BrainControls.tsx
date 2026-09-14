@@ -285,7 +285,7 @@ export function ConnectCloudDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !endpoint.trim() || !token.trim()}>
-              {busy ? "Connecting…" : "Connect Brain"}
+              {busy ? "Connecting cloud…" : "Connect Brain"}
             </Button>
           </DialogFooter>
         </form>
