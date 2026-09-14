@@ -11,7 +11,9 @@ export const BrainEntity = Schema.Struct({
   source: Schema.String,
   properties: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
+export const BrainContributor = Schema.Struct({ id: Schema.String, email: Schema.String });
 export const BrainMemory = Schema.Struct({
+  contributors: Schema.optionalKey(Schema.Array(BrainContributor)),
   id: Schema.String,
   kind: Schema.Literals(["Decision", "Preference", "Gotcha"]),
   title: Schema.String,
@@ -20,6 +22,7 @@ export const BrainMemory = Schema.Struct({
   entityIds: Schema.Array(Schema.String),
 });
 export const BrainDocumentSummary = Schema.Struct({
+  contributors: Schema.optionalKey(Schema.Array(BrainContributor)),
   folder: Schema.optionalKey(Schema.String),
   id: Schema.String,
   kind: Schema.Literals(["notes", "doc", "memory", "skill"]),
@@ -90,6 +93,7 @@ export const BrainSource = Schema.Struct({
 });
 export type BrainSource = typeof BrainSource.Type;
 export const BrainMigration = Schema.Struct({
+  account: Schema.optionalKey(BrainContributor),
   endpoint: Schema.String,
   brainId: Schema.String,
   status: Schema.Literals(["transferring", "error"]),
@@ -121,6 +125,7 @@ export const BrainWorkspace = Schema.Struct({
   projectIds: Schema.optional(Schema.Array(ProjectId)),
   remote: Schema.optionalKey(
     Schema.Struct({
+      account: Schema.optionalKey(BrainContributor),
       endpoint: Schema.String,
       brainId: Schema.String,
       status: Schema.Literals(["ready", "error"]),
@@ -178,7 +183,8 @@ export const BrainCommand = Schema.Union([
     action: Schema.Literal("connectCloud"),
     workspaceId: Schema.optionalKey(Schema.String),
     endpoint: Schema.String,
-    token: Schema.String,
+    email: Schema.String,
+    password: Schema.String,
   }),
   Schema.Struct({ action: Schema.Literal("disconnectCloud"), workspaceId: Schema.String }),
   Schema.Struct({

@@ -46,6 +46,7 @@ export interface BrainWorkspaceViewProps {
 }
 
 export interface BrainUiDocumentSummary {
+  contributors?: readonly { id: string; email: string }[];
   readonly id: string;
   readonly kind: "notes" | "doc" | "memory" | "skill";
   readonly name: string;

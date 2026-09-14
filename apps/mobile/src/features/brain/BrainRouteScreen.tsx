@@ -8,6 +8,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -209,6 +210,29 @@ function BrainScreenContent({
           <Text accessibilityRole="alert" className="text-red-500">
             {error}
           </Text>
+        )}
+        {!threadId && connected && environmentId && (
+          <CloudBrainSignIn environmentId={environmentId} onConnected={() => reload.current()} />
+        )}
+        {!threadId && workspace?.remote && environmentId && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              void execute({
+                environmentId,
+                input: { action: "disconnectCloud", workspaceId: workspace.id },
+              }).then((result) => {
+                if (result._tag === "Failure") setError("Could not disconnect this Brain.");
+                else if (result.value.error) setError(result.value.error);
+                else {
+                  setWorkspaceId(null);
+                  reload.current();
+                }
+              });
+            }}
+          >
+            <Text className="text-blue-500">Disconnect remote Brain</Text>
+          </Pressable>
         )}
         {workspace && (
           <View className="gap-2">
@@ -490,6 +514,12 @@ function MobileBrainDocumentContent({
           contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
         >
           <Text className="text-2xl font-t3-bold text-foreground">{document?.name}</Text>
+          {!!(loaded ?? document)?.contributors?.length && (
+            <Text className="text-xs text-foreground-muted">
+              Contributors:{" "}
+              {(loaded ?? document)?.contributors?.map((user) => user.email).join(", ")}
+            </Text>
+          )}
           {!!error && (
             <Text accessibilityRole="alert" className="text-red-500">
               {error}
@@ -540,5 +570,108 @@ function MobileBrainDocumentContent({
         </ScrollView>
       </View>
     </Modal>
+  );
+}
+
+function CloudBrainSignIn({
+  environmentId,
+  onConnected,
+}: {
+  environmentId: EnvironmentId;
+  onConnected: () => void;
+}) {
+  const execute = useAtomCommand(brainCommand, { reportFailure: false });
+  const [open, setOpen] = useState(false);
+  const [endpoint, setEndpoint] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const connect = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await execute({
+        environmentId,
+        input: { action: "connectCloud", endpoint: endpoint.trim(), email: email.trim(), password },
+      });
+      if (result._tag === "Failure") throw Error("Could not sign in to this Brain.");
+      if (result.value.error) throw Error(result.value.error);
+      setPassword("");
+      setOpen(false);
+      onConnected();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View className="gap-3">
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => {
+          setOpen(!open);
+          setPassword("");
+        }}
+      >
+        <Text className="text-blue-500">
+          {open ? "Cancel connection" : "Connect or sign in to remote Brain"}
+        </Text>
+      </Pressable>
+      {open && (
+        <View className="gap-3">
+          <Text className="text-sm text-foreground-muted">
+            Connect on this computer using your Brain URL or invitation link. New members choose a
+            password of at least 12 characters. Ask an administrator for password resets.
+          </Text>
+          <TextInput
+            accessibilityLabel="Brain URL or invitation link"
+            placeholder="Brain URL or invitation link"
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={endpoint}
+            onChangeText={setEndpoint}
+            editable={!busy}
+            className="rounded-lg bg-surface p-3 text-foreground"
+          />
+          <TextInput
+            accessibilityLabel="Email"
+            placeholder="Email"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            keyboardType="email-address"
+            value={email}
+            onChangeText={setEmail}
+            editable={!busy}
+            className="rounded-lg bg-surface p-3 text-foreground"
+          />
+          <TextInput
+            accessibilityLabel="Password"
+            placeholder="Password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="current-password"
+            value={password}
+            onChangeText={setPassword}
+            editable={!busy}
+            className="rounded-lg bg-surface p-3 text-foreground"
+          />
+          {!!error && (
+            <Text accessibilityRole="alert" className="text-red-500">
+              {error}
+            </Text>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy || !endpoint.trim() || !email.trim() || !password}
+            onPress={() => void connect()}
+          >
+            <Text className="text-blue-500">{busy ? "Connecting…" : "Sign in and connect"}</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
   );
 }

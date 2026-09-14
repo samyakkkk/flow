@@ -5,6 +5,7 @@ import { redactSecrets } from "./transcript.js";
 import { noteChunks, type NoteChunk } from "./notes.js";
 import type {
   BrainDocument,
+  BrainContributor,
   BrainDocumentSync,
   BrainDocumentSyncAck,
   BrainDocumentSummary,
@@ -28,6 +29,12 @@ export const CURATION_SCHEMA = `
     half_life_days REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
     observed_at INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS brain_documents_kind ON brain_documents(kind, status, updated_at);
+  CREATE TABLE IF NOT EXISTS brain_document_contributors (
+    document_id TEXT NOT NULL REFERENCES brain_documents(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL, email TEXT NOT NULL, PRIMARY KEY(document_id, user_id));
+  CREATE TABLE IF NOT EXISTS brain_session_contributors (
+    session_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL,
+    PRIMARY KEY(session_id, user_id));
   CREATE TABLE IF NOT EXISTS brain_document_evidence (
     document_id TEXT NOT NULL REFERENCES brain_documents(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -126,12 +133,29 @@ export class CurationStore {
       END`);
     }
   }
+  private withContributors<T extends BrainDocumentSummary>(documents: T[]): T[] {
+    if (!documents.length) return documents;
+    const rows = this.db.prepare(`SELECT document_id AS documentId, user_id AS id, email
+      FROM brain_document_contributors WHERE document_id IN (${documents.map(() => "?").join(",")}) ORDER BY email`).all(...documents.map((d) => d.id)) as Array<BrainContributor & { documentId: string }>;
+    const contributors = new Map<string, BrainContributor[]>();
+    for (const row of rows) {
+      const values = contributors.get(row.documentId) ?? [];
+      values.push({ id: row.id, email: row.email }); contributors.set(row.documentId, values);
+    }
+    return documents.map((document) => ({ ...document, contributors: contributors.get(document.id) ?? [] }));
+  }
+  private inheritContributors(id: string) {
+    this.db.prepare(`INSERT OR IGNORE INTO brain_document_contributors(document_id,user_id,email)
+      SELECT ?, c.user_id, c.email FROM brain_session_contributors c
+      JOIN brain_document_evidence e ON e.session_id=c.session_id WHERE e.document_id=?`).run(id,id);
+  }
   get(id: string): BrainDocument | undefined {
-    return (
+    const document = (
       (this.db.prepare(`SELECT ${COLUMNS}, text FROM brain_documents WHERE id = ?`).get(id) as
         | BrainDocument
         | undefined) ?? this.legacyDocuments(id)[0]
     );
+    return document ? this.withContributors([document])[0] : undefined;
   }
   private legacyDocuments(id?: string): BrainDocument[] {
     if (
@@ -182,10 +206,10 @@ export class CurationStore {
       values.push(input.sessionId);
     }
     if (!input.includeInactive) clauses.push("status != 'superseded'");
-    return this.db
+    return this.withContributors(this.db
       .prepare(`SELECT ${COLUMNS} FROM brain_documents
       ${clauses.length ? "WHERE " + clauses.join(" AND ") : ""} ORDER BY updated_at DESC, id`)
-      .all(...values) as BrainDocumentSummary[];
+      .all(...values) as BrainDocumentSummary[]);
   }
   search(
     query: string,
@@ -224,7 +248,7 @@ export class CurationStore {
     const indexedIds = new Set(rows.map((row) => row.id));
     if (!scope.excludeMemories && scope.includeLegacy !== false && (!kind || kind === "memory"))
       rows.push(...this.legacyDocuments());
-    return rows
+    return this.withContributors(rows
       .filter(
         (document) =>
           document.kind !== "notes" ||
@@ -253,7 +277,7 @@ export class CurationStore {
       .filter((row) => row.score > 0)
       .sort((a, b) => b.score - a.score || b.document.updatedAt - a.document.updatedAt)
       .slice(0, Math.max(1, Math.min(limit, 30)))
-      .map(({ document: { text: _text, ...summary } }) => summary);
+      .map(({ document: { text: _text, ...summary } }) => summary));
   }
   readCapture(sessionId: string, after = 0, through = Number.MAX_SAFE_INTEGER): CaptureRow[] {
     const rows = this.db
@@ -490,6 +514,8 @@ export class CurationStore {
         "INSERT OR IGNORE INTO brain_document_evidence(document_id, session_id, seq) VALUES (?, ?, ?)",
       );
       for (const seq of evidence) cite.run(id, checkpoint.sessionId, seq);
+      this.inheritContributors(id);
+      document.contributors = this.withContributors([document])[0]!.contributors;
       const saveRevision = this.db.prepare("INSERT OR IGNORE INTO brain_document_revisions(document_id, revision, snapshot) VALUES (?, ?, ?)");
       if (previous && previous.revision > 0) saveRevision.run(id, previous.revision, JSON.stringify(previous));
       saveRevision.run(id, document.revision, JSON.stringify(document));
@@ -524,8 +550,9 @@ export class CurationStore {
     })();
   }
   /** Import curated output without importing the source transcript or re-enqueueing it. */
-  applySync(origin: string, items: ReadonlyArray<BrainDocumentSync>): BrainDocumentSyncAck[] {
+  applySync(origin: string, items: ReadonlyArray<BrainDocumentSync>, contributor?: BrainContributor): BrainDocumentSyncAck[] {
     if (!/^[a-zA-Z0-9-]{1,100}$/.test(origin)) throw new Error("Invalid sync origin.");
+    if (contributor && (!contributor.id || contributor.id.length > 100 || !contributor.email || contributor.email.length > 254)) throw new Error("Invalid authenticated contributor.");
     if (items.length > 100) throw new Error("Sync batches may contain at most 100 documents.");
     return this.db.transaction(() =>
       items.map((item) => {
@@ -609,6 +636,7 @@ export class CurationStore {
         const revision = existing ? Math.max(existing.revision + 1, source.revision) : source.revision;
         const document: BrainDocument = {
           ...source,
+          contributors: existing?.contributors ?? [],
           id: remoteId,
           sessionId: remoteSession,
           name,
@@ -639,6 +667,12 @@ export class CurationStore {
           status=excluded.status, half_life_days=excluded.half_life_days,
           updated_at=excluded.updated_at, observed_at=excluded.observed_at`)
           .run(document);
+        if (contributor) {
+          this.db.prepare("INSERT OR IGNORE INTO brain_document_contributors VALUES (?,?,?)").run(remoteId, contributor.id, contributor.email);
+          this.db.prepare("INSERT OR IGNORE INTO brain_session_contributors VALUES (?,?,?)").run(remoteSession, contributor.id, contributor.email);
+        }
+        this.inheritContributors(remoteId);
+        document.contributors = this.withContributors([document])[0]!.contributors;
         this.db.prepare(`INSERT OR REPLACE INTO brain_document_revisions(document_id, revision, snapshot)
           VALUES (?, ?, ?)`)
           .run(remoteId, revision, JSON.stringify(document));

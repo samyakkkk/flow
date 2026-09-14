@@ -20,6 +20,63 @@ export function cloudEndpoint(value: string) {
     throw new Error("Cloud Brain connections require HTTPS.");
   return url.toString().replace(/\/$/, "");
 }
+/** Invitation fragments stay in the authentication exchange, never in saved endpoints. */
+export function cloudSignInTarget(value: string) {
+  const url = new URL(value);
+  const invitation = url.pathname === "/invite" ? url.hash.slice(1) : undefined;
+  if (url.pathname !== "/" && url.pathname !== "/invite")
+    throw new Error("Enter the Brain's base URL or invitation link.");
+  if (url.search || url.username || url.password || (url.hash && !invitation))
+    throw new Error("Enter a valid Brain URL or invitation link.");
+  if (url.pathname === "/invite" && !/^[a-f0-9]{64}$/.test(invitation ?? ""))
+    throw new Error("The invitation link is incomplete.");
+  return { endpoint: cloudEndpoint(url.origin), invitation };
+}
+const decodeCredentials = Schema.decodeUnknownSync(
+  Schema.Struct({
+    token: Schema.String,
+    user: Schema.Struct({ id: Schema.String, email: Schema.String }),
+  }),
+);
+export async function signInToCloud(
+  value: string,
+  email: string,
+  password: string,
+  legacy?: { instance: string; legacyToken: string },
+) {
+  const { endpoint, invitation } = cloudSignInTarget(value);
+  const response = await fetch(`${endpoint}/auth/connect`, {
+    method: "POST",
+    redirect: "error",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password, invitation, ...legacy }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const result: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    // Do not forward arbitrary remote response text: it could echo the password.
+    if (response.status === 401) throw new Error("Email or password is incorrect.");
+    if (response.status === 403)
+      throw new Error("Access denied. Check the invited email or contact your administrator.");
+    if (response.status === 410)
+      throw new Error(
+        "This invitation expired or was revoked. Ask your administrator for a new link.",
+      );
+    if (response.status === 429) throw new Error("Too many sign-in attempts. Retry in a minute.");
+    throw new Error(
+      "Cloud sign-in failed. Check the URL and use a password between 12 and 256 characters.",
+    );
+  }
+  let credentials;
+  try {
+    credentials = decodeCredentials(result);
+  } catch {
+    throw new Error("Invalid Cloud connection credential.");
+  }
+  if (!/^[a-f0-9]{64}$/.test(credentials.token))
+    throw new Error("Invalid Cloud connection credential.");
+  return { endpoint, token: credentials.token, account: credentials.user };
+}
 const transferReceipt = Schema.decodeUnknownSync(
   Schema.Struct({ digest: Schema.String, documents: Schema.Number }),
 );
@@ -69,7 +126,7 @@ export class CloudClient {
       signal: AbortSignal.timeout(60_000),
     });
     if (response.status === 401)
-      throw new Error("Cloud Brain authentication failed. Check its access token.");
+      throw new Error("Cloud Brain authentication failed. Sign in again to reconnect.");
     const payload = await response.json().catch(() => {
       throw new Error(`Cloud Brain is unavailable (HTTP ${response.status}).`);
     });

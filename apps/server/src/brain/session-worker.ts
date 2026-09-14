@@ -14,6 +14,7 @@ import type {
   BrainCuratorRunner,
 } from "@flow/brain-runtime";
 import type {
+  BrainContributor,
   BrainDocumentSync,
   BrainDocumentSyncAck,
 } from "../../../../flow-t3/shared/orchestrator/src/curation/types.ts";
@@ -219,8 +220,11 @@ export async function startSessionWorker(
     capture: (input: BrainCapture) => request("capture", input),
     pendingSync: async () => (await request("pendingSync", {})) as BrainDocumentSync[],
     acknowledgeSync: (acks: BrainDocumentSyncAck[]) => request("ackSync", { acks }),
-    syncDocuments: async (origin: string, items: BrainDocumentSync[]) =>
-      (await request("syncDocuments", { origin, items })) as BrainDocumentSyncAck[],
+    syncDocuments: async (
+      origin: string,
+      items: BrainDocumentSync[],
+      contributor?: BrainContributor,
+    ) => (await request("syncDocuments", { origin, items, contributor })) as BrainDocumentSyncAck[],
     async close() {
       if (!catalog && child.connected) {
         await request("integrationStop", {}).catch(() => {});

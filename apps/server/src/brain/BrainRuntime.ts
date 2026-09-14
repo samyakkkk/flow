@@ -1,5 +1,5 @@
 import type { GithubAccess } from "../../../../flow-t3/shared/runtime/src/github.ts";
-import { CloudClient } from "./cloud-client.ts";
+import { cloudSignInTarget, signInToCloud, CloudClient } from "./cloud-client.ts";
 import { ProjectBrainBindings } from "./project-bindings.ts";
 import { brainResourceEnvironment, type BrainCuratorRunner } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
@@ -32,6 +32,7 @@ import { indexRepository } from "./indexer.ts";
 import { startBuilderBridge } from "./builder-bridge.ts";
 import { BrainCliUnavailableError, githubRepository, run } from "./process.ts";
 import type {
+  BrainContributor,
   BrainDocumentSync,
   BrainDocumentSyncAck,
 } from "../../../../flow-t3/shared/orchestrator/src/curation/types.ts";
@@ -303,6 +304,7 @@ export class BrainRuntime {
     }
     const previous = workspace.migration!;
     workspace.remote = {
+      ...(migration.account ? { account: migration.account } : {}),
       endpoint: migration.endpoint,
       brainId: migration.brainId,
       status: "ready",
@@ -750,11 +752,51 @@ export class BrainRuntime {
   private async executeCommand(command: BrainCommand) {
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "connectCloud") {
-      const client = new CloudClient(command.endpoint, command.token, this.cloudInstance);
+      const target = cloudSignInTarget(command.endpoint);
+      const previous = this.workspaces.find(
+        (w) => (w.remote?.endpoint ?? w.migration?.endpoint) === target.endpoint,
+      );
+      const legacyToken = previous
+        ? await NodeFSP.readFile(
+            NodePath.join(this.directory, "cloud-credentials", previous.id),
+            "utf8",
+          ).catch(() => undefined)
+        : undefined;
+      const credentials = await signInToCloud(
+        command.endpoint,
+        command.email,
+        command.password,
+        legacyToken ? { instance: this.cloudInstance, legacyToken } : undefined,
+      );
+
+      if (previous?.remote?.account && previous.remote.account.id !== credentials.account.id)
+        throw new Error(
+          `This connection belongs to ${previous.remote.account.email}. Disconnect it before using a different account.`,
+        );
+      const client = new CloudClient(credentials.endpoint, credentials.token, this.cloudInstance);
       const remote = await client.state(true);
       if (remote.database.status !== "ready" || remote.workspaces.length !== 1)
         throw new Error("The cloud endpoint must serve exactly one ready Brain.");
       const brain = remote.workspaces[0]!;
+      const connected = this.workspaces.find(
+        (w) => w.remote?.brainId === brain.id && w.remote.endpoint === client.endpoint,
+      );
+      if (connected && (!command.workspaceId || command.workspaceId === connected.id)) {
+        await NodeFSP.writeFile(
+          NodePath.join(this.directory, "cloud-credentials", connected.id),
+          credentials.token,
+          { mode: 0o600 },
+        );
+        connected.remote = {
+          ...connected.remote!,
+          account: credentials.account,
+          status: "ready",
+          message: "Connected to cloud",
+        };
+        await this.save();
+        this.queueDocumentSync(connected);
+        return connected.id;
+      }
       if (command.workspaceId) {
         if (remote.transferVersion !== 1)
           throw new Error("Update the Cloud Brain before moving local knowledge to it.");
@@ -769,8 +811,11 @@ export class BrainRuntime {
         // Freeze new local writes before taking the snapshot; capture keeps its durable outbox.
         const dir = NodePath.join(this.directory, "cloud-credentials");
         await NodeFSP.mkdir(dir, { recursive: true, mode: 0o700 });
-        await NodeFSP.writeFile(NodePath.join(dir, workspace.id), command.token, { mode: 0o600 });
+        await NodeFSP.writeFile(NodePath.join(dir, workspace.id), credentials.token, {
+          mode: 0o600,
+        });
         workspace.migration = {
+          account: credentials.account,
           endpoint: client.endpoint,
           brainId: brain.id,
           status: "transferring",
@@ -790,7 +835,7 @@ export class BrainRuntime {
       const id = NodeCrypto.randomUUID();
       const dir = NodePath.join(this.directory, "cloud-credentials");
       await NodeFSP.mkdir(dir, { recursive: true, mode: 0o700 });
-      await NodeFSP.writeFile(NodePath.join(dir, id), command.token, { mode: 0o600 });
+      await NodeFSP.writeFile(NodePath.join(dir, id), credentials.token, { mode: 0o600 });
       const workspace: Workspace = {
         id,
         name: brain.name,
@@ -798,6 +843,7 @@ export class BrainRuntime {
         sources: [],
         projectIds: [],
         remote: {
+          account: credentials.account,
           endpoint: client.endpoint,
           brainId: brain.id,
           status: "ready",
@@ -1504,10 +1550,11 @@ export class BrainRuntime {
     workspaceId: string,
     origin: string,
     items: BrainDocumentSync[],
+    contributor?: BrainContributor,
   ): Promise<BrainDocumentSyncAck[]> {
     const workspace = this.workspace(workspaceId);
     if (workspace.remote) throw new Error("Cannot synchronize through another cloud Brain.");
-    return (await this.sessionWorker(workspace)).syncDocuments(origin, items);
+    return (await this.sessionWorker(workspace)).syncDocuments(origin, items, contributor);
   }
   async listGithubBranches(repository: string, workspaceId?: string) {
     if (workspaceId) {
