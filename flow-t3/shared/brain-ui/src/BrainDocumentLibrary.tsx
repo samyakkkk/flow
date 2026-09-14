@@ -52,6 +52,7 @@ export function BrainDocumentLibrary({
                 <span><Icon size={15} /> {documentLifecycle(document)}</span>
                 <strong>{document.name}</strong>
                 <p>{document.description}</p>
+                {!!document.contributors?.length && <small>Contributors: {document.contributors.map((user) => user.email).join(", ")}</small>}
               </button>
             ))}
             {!visible.length && <p className="flow-brain-empty-library">{query ? "No matching documents." : `No ${label.toLowerCase()} yet. They will appear as your team works in connected chats.`}</p>}
@@ -103,6 +104,7 @@ function BrainDocumentDialog({
           <button type="button" aria-label="Close document" onClick={onClose}><XIcon size={15} /></button>
           <h2 id="flow-brain-document-title">{document.name}</h2>
           <p>{document.description}</p>
+                {!!document.contributors?.length && <small>Contributors: {document.contributors.map((user) => user.email).join(", ")}</small>}
         </header>
         <div className="flow-brain-dialog-content">
           {error && <p role="alert" className="flow-brain-error">{error}</p>}

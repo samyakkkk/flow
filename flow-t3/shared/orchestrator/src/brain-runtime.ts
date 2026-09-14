@@ -7,7 +7,7 @@ import { CurationCoordinator } from "./curation/coordinator.js";
 import { CurationStore } from "./curation/store.js";
 import { registerCuratorMcp } from "./curation/tools.js";
 import { CURATION_PUBLIC_TOOLS, CurationPublicTools } from "./curation/public-tools.js";
-import type { BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
+import type { BrainContributor, BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
 import type { BrainCuratorReply, BrainCuratorRun } from "../../runtime/src/contracts.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -240,6 +240,7 @@ if (process.argv.includes("--catalog")) {
         result = documents.applySync(
           String(message.params.origin),
           message.params.items as BrainDocumentSync[],
+          message.params.contributor as BrainContributor | undefined,
         );
       } else if (message.method === "documents") {
         const id = typeof message.params.id === "string" ? message.params.id : undefined;
@@ -255,7 +256,7 @@ if (process.argv.includes("--catalog")) {
         const name=String(message.params.name), args=message.params.arguments as Record<string,unknown>;
         result = publicDocuments.call(name,args,`t3-${context.session}`);
         if (!result) {
-          const pair = await session(`t3:${context.session}`);
+          const pair = await session(context.actor ?? `t3:${context.session}`);
           try {
             const lookup = (arguments_:Record<string,unknown>) => sessionContext.run({ ...context, session: `t3-${context.session}` }, () => pair.client.callTool({name, arguments:arguments_}));
             result = name === "get_entity" ? await publicDocuments.batch(args,`t3-${context.session}`,lookup) : undefined;

@@ -237,8 +237,7 @@ function BrainController({
           workspace?.remote?.status === "error"
             ? {
                 title: "Cloud Brain unavailable",
-                description:
-                  workspace.remote.message + " Reconnect to this server to access its knowledge.",
+                description: workspace.remote.message,
               }
             : connectionNotice
         }
@@ -436,7 +435,7 @@ function BrainController({
         )}
       </BrainPage>
       <ConnectCloudDialog
-        workspace={workspace && !workspace.remote ? workspace : undefined}
+        workspace={workspace}
         open={cloudOpen}
         onOpenChange={setCloudOpen}
         send={send}
@@ -465,6 +464,9 @@ function BrainController({
             {workspace?.remote && (
               <div className="space-y-2">
                 <p className="text-sm break-all">{workspace.remote.endpoint}</p>
+                {workspace.remote.account && (
+                  <p className="text-sm">Signed in as {workspace.remote.account.email}</p>
+                )}
                 <a
                   href={workspace.remote.endpoint}
                   target="_blank"
@@ -473,6 +475,15 @@ function BrainController({
                 >
                   Open cloud dashboard
                 </a>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setCloudOpen(true);
+                  }}
+                >
+                  Sign in again
+                </Button>
                 <p className="text-xs text-muted-foreground">
                   Disconnecting removes this computer’s connection. The remote Brain and its data
                   stay on the server.

@@ -1,7 +1,7 @@
 # Move your Brain to Cloud
 
 In **Brain**, select the local Brain you want to move, then choose **Connect cloud**.
-Enter your team's Cloud URL and app access token. The dialog names the Brain being moved;
+Enter your team's Cloud URL or invitation link, email, and password. The dialog names the Brain being moved;
 other local Brains stay separate. Cloud must support Brain transfers.
 
 Flow transfers its Auto-Docs, Auto-Skills, conversation notes, revisions, and supporting
@@ -25,5 +25,9 @@ With no local Brain selected, **Connect cloud** joins an existing Cloud Brain wi
 local data. Cloud administration and repository access are configured in its dashboard.
 
 To start with a remote Brain, choose **Create a brain → Remote Brain**, then enter its URL
-and access token. This also works when selecting a Brain for a new project or in project settings.
+and your email/password. New invitees choose a password; existing members sign in. This also works when selecting a Brain for a new project or in project settings.
 The remote Brain must already be running.
+
+Your administrator creates invitations with your email and permissions. Open an invitation in a browser to join the Cloud dashboard, or paste the same link into **Connect cloud** in Flow. After joining, use the Brain URL and your account to connect from additional devices. Administrators manage password resets by sharing a reset link; completing a reset signs out your dashboard and connected apps. Use **Brain settings → Sign in again** to reconnect.
+
+Remote document details show the contributors recorded when people publish their work. Historical content without recorded authorship remains unattributed.
