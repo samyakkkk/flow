@@ -159,3 +159,45 @@ it("opens a one-action creation flow and connects the new brain", async () => {
   });
   expect(text(renderer!.root)).toContain("brain-created");
 });
+
+it("connects a remote brain from creation without requiring a local CLI or creating a local brain", async () => {
+  const empty = { ...brainState([]), clis: [] };
+  state.execute
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { state: empty, error: null, createdWorkspaceId: null },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { state: empty, error: null, createdWorkspaceId: "remote-brain" },
+    });
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  await start();
+  await act(async () => {
+    renderer!.root
+      .findAllByType("input")
+      .filter((node) => node.props.name === "brain-location")[1]!
+      .props.onChange();
+  });
+  await act(async () => {
+    renderer!.root
+      .findAllByType("input")
+      .find((node) => node.props.type === "url")!
+      .props.onChange({ target: { value: "https://brain.example.com" } });
+    renderer!.root
+      .findAllByType("input")
+      .find((node) => node.props.type === "password")!
+      .props.onChange({ target: { value: "test-access" } });
+  });
+  expect(findButton("Connect remote Brain").props.disabled).toBe(false);
+  await act(async () => {
+    renderer!.root.findByType("form").props.onSubmit({ preventDefault: vi.fn() });
+  });
+  expect(state.execute).toHaveBeenLastCalledWith({
+    environmentId,
+    input: { action: "connectCloud", endpoint: "https://brain.example.com", token: "test-access" },
+  });
+  expect(text(renderer!.root)).toContain("remote-brain");
+});
