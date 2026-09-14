@@ -73,6 +73,7 @@ const active = (source: Source) =>
 export class BrainRuntime {
   private db: FalkorDB | undefined;
   private cloudInstance = "";
+  private cloudClients = new Map<string, { token: string; client: CloudClient }>();
   private migrations = new Map<string, Promise<void>>();
   private sessionWorkers = new Map<
     string,
@@ -676,7 +677,8 @@ export class BrainRuntime {
             let result: BrainWorkspace = { ...workspace, knowledge: emptyKnowledge() };
             if (workspace.remote) {
               try {
-                const remoteState = await (await this.cloud(workspace)).state(metadataOnly);
+                const client = await this.cloud(workspace);
+                const remoteState = await client.state(metadataOnly);
                 if (remoteState.database.status !== "ready")
                   throw new Error(remoteState.database.message);
                 const remote = remoteState.workspaces.find(
@@ -688,8 +690,11 @@ export class BrainRuntime {
                   id: workspace.id,
                   remote: {
                     ...workspace.remote,
-                    status: "ready",
-                    message: "Connected to cloud",
+                    status: !metadataOnly && client.cache?.error ? "error" : "ready",
+                    message:
+                      !metadataOnly && client.cache?.error
+                        ? `Showing cached cloud data. ${client.cache.error}`
+                        : "Connected to cloud",
                     github: remoteState.github,
                     clis: remoteState.clis,
                   },
@@ -728,12 +733,23 @@ export class BrainRuntime {
       NodePath.join(this.directory, "cloud-credentials", workspace.id),
       "utf8",
     );
-    return new CloudClient(
+    const cached = this.cloudClients.get(workspace.id);
+    if (
+      cached?.token === token &&
+      cached.client.endpoint === workspace.remote.endpoint &&
+      cached.client.brainId === workspace.remote.brainId
+    )
+      return cached.client;
+    void cached?.client.cache?.close();
+    const client = new CloudClient(
       workspace.remote.endpoint,
       token,
       this.cloudInstance,
       workspace.remote.brainId,
+      NodePath.join(this.directory, "cloud-cache", workspace.id),
     );
+    this.cloudClients.set(workspace.id, { token, client });
+    return client;
   }
   private async remoteContext(context: BrainSessionContext) {
     const { workspaceRoot, ...rest } = context;
@@ -831,6 +847,13 @@ export class BrainRuntime {
         this.workspaces = previous;
         throw error;
       }
+      const cloud = this.cloudClients.get(workspace.id)?.client;
+      this.cloudClients.delete(workspace.id);
+      await cloud?.cache?.close();
+      await NodeFSP.rm(NodePath.join(this.directory, "cloud-cache", workspace.id), {
+        recursive: true,
+        force: true,
+      });
       await NodeFSP.rm(NodePath.join(this.directory, "cloud-credentials", workspace.id), {
         force: true,
       });
@@ -1752,6 +1775,7 @@ export class BrainRuntime {
     await this.queue;
     await this.captureQueue;
     await this.documentSyncQueue;
+    await Promise.all([...this.cloudClients.values()].map(({ client }) => client.cache?.close()));
     await Promise.allSettled(
       [...this.sessionWorkers.values()].map(async (worker) => (await worker).close()),
     );
