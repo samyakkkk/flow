@@ -246,3 +246,120 @@ describe("Brain startup", () => {
     expect(content()).not.toContain("Reconnecting to your brain…");
   });
 });
+
+it.each(["transferring", "error"] as const)(
+  "reflects %s migration state in the cloud button",
+  async (status) => {
+    runtime.isReady = true;
+    runtime.phase = "connected";
+    runtime.prepared = true;
+    await render("local", "brain");
+    await act(() =>
+      finishRead(
+        AsyncResult.success({
+          error: null,
+          createdWorkspaceId: null,
+          state: {
+            ...emptyState,
+            workspaces: [
+              {
+                id: "brain",
+                name: "Flow",
+                cli: "opencode",
+                sources: [],
+                knowledge: { entities: [], edges: [], memories: [], documents: [] },
+                migration: {
+                  endpoint: "https://brain.example.com",
+                  brainId: "remote",
+                  status,
+                  message: "Transferring",
+                },
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const label = status === "transferring" ? "Connecting cloud…" : "Connect cloud";
+    const button = renderer!.root
+      .findAllByType("button")
+      .find((node) => node.children.includes(label));
+    expect(button).toBeDefined();
+    expect(button!.props.disabled).toBe(status === "transferring");
+  },
+);
+
+it.each([false, true])(
+  "keeps indexing failures visible and supports recovery (remote=%s)",
+  async (remote) => {
+    runtime.isReady = true;
+    runtime.phase = "connected";
+    runtime.prepared = true;
+    const response = (status: "error" | "indexing"): BrainResponse => ({
+      error: null,
+      createdWorkspaceId: null,
+      state: {
+        ...emptyState,
+        workspaces: [
+          {
+            id: "brain",
+            name: "Flow",
+            cli: "opencode",
+            ...(remote
+              ? {
+                  remote: {
+                    endpoint: "https://brain.example.com",
+                    brainId: "cloud",
+                    status: "ready" as const,
+                    message: "Connected",
+                  },
+                }
+              : {}),
+            sources: [
+              {
+                id: "repo",
+                repository: "team/private",
+                branch: "main",
+                commit: "",
+                revision: "",
+                status,
+                message: "GitHub denied repository access.",
+                indexedAt: null,
+              },
+            ],
+            knowledge: { entities: [], edges: [], memories: [], documents: [] },
+          },
+        ],
+      },
+    });
+    await render("local", "brain");
+    await act(() => finishRead(AsyncResult.success(response("error"))));
+    expect(
+      renderer!.root.findByProps({ "aria-label": "Repository indexing failed" }),
+    ).toBeDefined();
+    expect(content()).toContain("team/private");
+    expect(content()).toContain("GitHub denied repository access.");
+    await act(() =>
+      renderer!.root
+        .findAllByProps({ role: "tab" })
+        .find((tab) => tab.children.includes("Auto-Docs"))!
+        .props.onClick(),
+    );
+    expect(renderer!.root.findByProps({ role: "alert" })).toBeDefined();
+    await act(() =>
+      renderer!.root.findByProps({ "aria-label": "Retry indexing team/private" }).props.onClick(),
+    );
+    expect(runtime.execute.mock.calls.at(-1)?.[0]?.input).toMatchObject({
+      action: "reindex",
+      workspaceId: "brain",
+      sourceId: "repo",
+    });
+    expect(
+      renderer!.root.findByProps({ "aria-label": "Retry indexing team/private" }).props.disabled,
+    ).toBe(true);
+    await act(() => finishRead(AsyncResult.success(response("indexing"))));
+    expect(
+      renderer!.root.findAllByProps({ "aria-label": "Repository indexing failed" }),
+    ).toHaveLength(0);
+  },
+);

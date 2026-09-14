@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
-import { runStreaming } from "./process.ts";
+import { run, runStreaming } from "./process.ts";
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await NodeFSP.rm(root, { recursive: true, force: true });
@@ -40,6 +40,25 @@ it.effect("streams activity before completion and cancels the CLI's MCP process 
       await expect(running).rejects.toThrow("cancelled");
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await NodeFSP.readFile(`${root}/transcript.jsonl`, "utf8")).toContain(String(pid));
+    });
+  }),
+);
+
+it.effect("identifies repository access failures without exposing Git stderr", () =>
+  Effect.gen(function* () {
+    const platform = yield* HostProcessPlatform;
+    if (platform === "win32") return;
+    yield* Effect.promise(async () => {
+      const root = await NodeFSP.mkdtemp("/tmp/flow-git-error-");
+      roots.push(root);
+      await NodeFSP.writeFile(
+        root + "/git",
+        "#!/bin/sh\necho 'Repository not found. credential-value' >&2\nexit 128\n",
+        { mode: 0o700 },
+      );
+      await expect(
+        run("git", ["ls-remote"], { env: { ...process.env, PATH: root } }),
+      ).rejects.toThrow("GitHub denied repository access.");
     });
   }),
 );

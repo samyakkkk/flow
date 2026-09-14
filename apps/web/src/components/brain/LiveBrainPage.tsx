@@ -249,6 +249,11 @@ function BrainController({
               (workspace?.remote?.status === "error" ? workspace.remote.message : selectionError))
         }
         onCreate={() => setCreateOpen(true)}
+        indexingFailures={workspace?.sources.filter((source) => source.status === "error") ?? []}
+        indexingBusy={busy || !canRequest || workspace?.remote?.status === "error"}
+        onRetryIndexing={(sourceId) => {
+          if (workspace) void send({ action: "reindex", workspaceId: workspace.id, sourceId });
+        }}
         indexing={workspace && <BrainIndexing workspace={workspace} send={send} busy={busy} />}
         toolbar={
           <header className="flex flex-wrap items-center justify-between gap-4">

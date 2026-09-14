@@ -134,3 +134,10 @@
   .flow-brain-graph-help { display: none !important; }
 }
 .flow-brain-cli-select { border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); padding: 8px 12px; min-width: 160px; max-width: 100%; font: inherit; }
+
+.flow-brain-indexing-failures { border: 1px solid var(--destructive); border-left: 4px solid var(--destructive); border-radius: 10px; padding: 16px; background: color-mix(in srgb, var(--destructive) 8%, var(--background)); }
+.flow-brain-indexing-failures h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--destructive); font-size: 16px; }
+.flow-brain-indexing-failures p { margin: 8px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.flow-brain-indexing-failures ul { list-style: none; margin: 12px 0 0; padding: 0; }
+.flow-brain-indexing-failures li { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid color-mix(in srgb, var(--destructive) 25%, transparent); }
+.flow-brain-indexing-failures li > div { flex: 1; min-width: min(220px, 100%); overflow-wrap: anywhere; }

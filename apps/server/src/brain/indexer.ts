@@ -9,6 +9,7 @@ import { indexRepoPrompt } from "../../../../flow-t3/shared/orchestrator/src/ind
 import {
   startActivity,
   recordActivityLine,
+  recordToolActivity,
   finishActivity,
   activityForRepo,
 } from "../../../../flow-t3/shared/orchestrator/src/job-activity.ts";
@@ -225,6 +226,10 @@ export async function indexRepository(
         ...spec,
         cwd: context.workspace,
         env: { ...env, FLOW_SOURCE_REGISTRY: registry },
+        onToolCall(name, args) {
+          recordToolActivity(jobId, name, args);
+          context.onActivity(activityForRepo(activityKey));
+        },
       });
       try {
         const result = await context.runAgent({
