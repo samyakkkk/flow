@@ -1,4 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - Native cloud cache adapter owns its filesystem paths.
 // @effect-diagnostics globalFetch:off - Explicit remote Brain transport.
+import { CloudReadCache } from "../../../../flow-t3/shared/runtime/src/cloud-read-cache.ts";
+import * as NodeCrypto from "node:crypto";
+import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import { BrainState, BrainDocument, ChatMemoryList } from "@t3tools/contracts";
 import { McpSchema } from "effect/unstable/ai";
@@ -104,12 +108,40 @@ export class CloudClient {
   private readonly token: string;
   readonly instance: string;
   readonly brainId: string | undefined;
-  constructor(endpoint: string, token: string, instance: string, brainId?: string) {
+  readonly cache: CloudReadCache<BrainState, BrainDocument> | undefined;
+  constructor(
+    endpoint: string,
+    token: string,
+    instance: string,
+    brainId?: string,
+    cacheDirectory?: string,
+  ) {
     this.token = token;
     this.instance = instance;
     this.brainId = brainId;
     this.endpoint = cloudEndpoint(endpoint);
     if (!token.trim()) throw new Error("Enter the cloud access token.");
+    if (cacheDirectory && brainId) {
+      const scope = NodeCrypto.createHash("sha256")
+        .update(JSON.stringify([this.endpoint, brainId, instance, token]))
+        .digest("hex");
+      this.cache = new CloudReadCache({
+        file: NodePath.join(cacheDirectory, `${scope}.json`),
+        state: async () => {
+          const result = state(await this.request("state", { metadataOnly: false }));
+          if (result.database.status !== "ready") throw new Error(result.database.message);
+          if (!result.workspaces.some((workspace) => workspace.id === brainId))
+            throw new Error("The connected cloud Brain no longer exists.");
+          return result;
+        },
+        document: async (id) => document(await this.request("document", { name: id })),
+        summaries: (snapshot) =>
+          snapshot.workspaces.find((workspace) => workspace.id === brainId)?.knowledge.documents ??
+          [],
+        decodeState: state,
+        decodeDocument: Schema.decodeUnknownSync(BrainDocument),
+      });
+    }
   }
   async request(method: string, input: Record<string, unknown> = {}) {
     const response = await fetch(`${this.endpoint}/v1/brain`, {
@@ -135,10 +167,14 @@ export class CloudClient {
     return body.result;
   }
   async transfer(transfer: BrainTransferRequest) {
-    return transferReceipt(await this.request("transfer", { transfer }));
+    const receipt = transferReceipt(await this.request("transfer", { transfer }));
+    this.cache?.invalidate();
+    return receipt;
   }
   async state(metadataOnly = false) {
-    return state(await this.request("state", { metadataOnly }));
+    return !metadataOnly && this.cache
+      ? this.cache.state()
+      : state(await this.request("state", { metadataOnly }));
   }
   async call(name: string, args: Record<string, unknown>, context: BrainSessionContext) {
     return tool(await this.request("call", { name, args, context }));
@@ -155,16 +191,20 @@ export class CloudClient {
       )
     )
       throw new Error("Cloud Brain did not acknowledge the complete document batch.");
+    this.cache?.invalidate();
     return acknowledgements;
   }
   async memories(session: string, revision?: string) {
     return memories(await this.request("memories", { context: { session }, revision }));
   }
   async document(id: string) {
-    return document(await this.request("document", { name: id }));
+    return this.cache
+      ? this.cache.document(id)
+      : document(await this.request("document", { name: id }));
   }
   async command(command: BrainCommand) {
     await this.request("command", { command });
+    this.cache?.invalidate();
   }
   async repositories() {
     return [...repos(await this.request("repositories"))];

@@ -237,8 +237,7 @@ function BrainController({
           workspace?.remote?.status === "error"
             ? {
                 title: "Cloud Brain unavailable",
-                description:
-                  workspace.remote.message + " Reconnect to this server to access its knowledge.",
+                description: workspace.remote.message,
               }
             : connectionNotice
         }
