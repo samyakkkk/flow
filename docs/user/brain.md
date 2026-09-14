@@ -23,3 +23,7 @@ Cloud Brain is shown as unavailable; Flow does not silently switch back to local
 
 With no local Brain selected, **Connect cloud** joins an existing Cloud Brain without importing
 local data. Cloud administration and repository access are configured in its dashboard.
+
+To start with a remote Brain, choose **Create a brain → Remote Brain**, then enter its URL
+and access token. This also works when selecting a Brain for a new project or in project settings.
+The remote Brain must already be running.

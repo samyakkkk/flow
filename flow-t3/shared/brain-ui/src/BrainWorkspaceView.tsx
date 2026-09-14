@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BrainCircuit, Network, PlusIcon } from "lucide-react";
+import { AlertTriangle, BrainCircuit, Network, PlusIcon } from "lucide-react";
 import { BrainGraph } from "./BrainGraph.tsx";
 import type { BrainWorkspaceViewProps } from "./types.ts";
 
@@ -14,6 +14,9 @@ export function BrainWorkspaceView({
   error,
   toolbar,
   indexing,
+  indexingFailures = [],
+  onRetryIndexing,
+  indexingBusy = false,
   sources,
   connectedProjects,
   docs,
@@ -35,6 +38,18 @@ export function BrainWorkspaceView({
         </p>
       )}
       {error && <p role="alert" className="flow-brain-error">{error}</p>}
+      {hasBrain && indexingFailures.length > 0 && (
+        <section role="alert" aria-label="Repository indexing failed" className="flow-brain-indexing-failures">
+          <h2><AlertTriangle size={20} aria-hidden="true" /> {indexingFailures.length === 1 ? "Repository indexing failed" : `${indexingFailures.length} repositories failed to index`}</h2>
+          <p>Your brain’s knowledge may be incomplete or out of date. Resolve the errors below, then retry indexing.</p>
+          <ul>{indexingFailures.map((source) => (
+            <li key={source.id}>
+              <div><strong>{source.repository}</strong><p>{source.message || "Indexing failed. Retry to start a new run."}</p></div>
+              {onRetryIndexing && <button type="button" className="flow-brain-button outline" aria-label={`Retry indexing ${source.repository}`} disabled={indexingBusy} onClick={() => onRetryIndexing(source.id)}>Retry</button>}
+            </li>
+          ))}</ul>
+        </section>
+      )}
       <div className="flow-brain-tabs" role="tablist" aria-label="Brain views">
         {tabs.map(([value, label]) => (
           <button

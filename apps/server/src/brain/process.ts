@@ -51,6 +51,28 @@ export function run(
           error.code === "ENOENT"
         ) {
           reject(new BrainCliUnavailableError(executable));
+        } else if (
+          error &&
+          executable === "git" &&
+          /repository .*not found|repository not found|authentication failed|could not read Username/i.test(
+            stderr,
+          )
+        ) {
+          reject(
+            new Error(
+              "GitHub denied repository access. Check that this Cloud Brain’s GitHub App or token includes this repository.",
+            ),
+          );
+        } else if (
+          error &&
+          executable === "git" &&
+          /couldn't find remote ref|remote branch .* not found/i.test(stderr)
+        ) {
+          reject(
+            new Error(
+              "The selected branch does not exist on the remote repository. Choose an existing branch and retry.",
+            ),
+          );
         } else if (error)
           reject(
             new Error(

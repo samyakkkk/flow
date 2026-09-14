@@ -54,7 +54,21 @@ describe("original Flow builder", () => {
       token: "fixture",
       close,
     });
-    const runAgent = vi.fn(async () => ({ requiresContext: true as const }));
+    const onActivity = vi.fn();
+    const runAgent = vi.fn(async () => {
+      const bridge = vi.mocked(startAgentMcpBridge).mock.calls.at(-1)![0];
+      bridge.onToolCall?.("source_read", { path: "src/api.ts" });
+      bridge.onToolCall?.("upsert_entity", { id: "svc:api" });
+      bridge.onToolCall?.("relate", { from: "svc:api", to: "db:api" });
+      const activity = onActivity.mock.calls.at(-1)![0];
+      expect(activity.counts).toEqual({ toolCalls: 3, filesRead: 1, graphWrites: 2 });
+      expect(activity.events.map((event: { label: string }) => event.label)).toEqual([
+        "source_read src/api.ts",
+        "graph_upsert_entity svc:api",
+        "graph_relate",
+      ]);
+      return { requiresContext: true as const };
+    });
     await expect(
       indexRepository(
         "opencode",
@@ -70,7 +84,7 @@ describe("original Flow builder", () => {
           embedToken: "fixture",
           workspace: root,
           branch: "main",
-          onActivity: () => {},
+          onActivity,
           runAgent,
         },
       ),

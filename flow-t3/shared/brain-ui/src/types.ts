@@ -35,6 +35,9 @@ export interface BrainWorkspaceViewProps {
   readonly error: string | null;
   readonly toolbar: ReactNode;
   readonly indexing?: ReactNode;
+  readonly indexingFailures?: readonly { readonly id: string; readonly repository: string; readonly message: string }[];
+  readonly onRetryIndexing?: (sourceId: string) => void;
+  readonly indexingBusy?: boolean;
   readonly sources?: ReactNode;
   readonly connectedProjects?: ReactNode;
   readonly docs?: ReactNode;

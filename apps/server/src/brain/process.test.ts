@@ -63,3 +63,22 @@ it.effect("identifies missing Git without suggesting that gh can replace it", ()
     );
   }),
 );
+
+it.effect("identifies repository access failures without exposing Git stderr", () =>
+  Effect.gen(function* () {
+    const platform = yield* HostProcessPlatform;
+    if (platform === "win32") return;
+    yield* Effect.promise(async () => {
+      const root = await NodeFSP.mkdtemp("/tmp/flow-git-error-");
+      roots.push(root);
+      await NodeFSP.writeFile(
+        root + "/git",
+        "#!/bin/sh\necho 'Repository not found. credential-value' >&2\nexit 128\n",
+        { mode: 0o700 },
+      );
+      await expect(
+        run("git", ["ls-remote"], { env: { ...process.env, PATH: root } }),
+      ).rejects.toThrow("GitHub denied repository access.");
+    });
+  }),
+);
