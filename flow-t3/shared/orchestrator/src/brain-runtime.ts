@@ -1,5 +1,7 @@
 // App-owned host for the original Flow brain. No interactive ACP sessions or
 // integration pollers are started here. Database/model ownership stays with T3.
+import { readFile, writeFile, rename } from "node:fs/promises";
+import { exportBrain, importBrain } from "./curation/transfer.js";
 import * as NodeCrypto from "node:crypto";
 import { CurationCoordinator } from "./curation/coordinator.js";
 import { CurationStore } from "./curation/store.js";
@@ -185,7 +187,15 @@ if (process.argv.includes("--catalog")) {
     }
     try {
       let result: unknown;
-      if (message.method === "integrationStop") {
+      if (message.method === "exportBrain") {
+        const path = String(message.params.path);
+        await writeFile(path + ".tmp", JSON.stringify(exportBrain(db)), {mode:0o600});
+        await rename(path + ".tmp", path);
+        result = { exported: true };
+      } else if (message.method === "importBrain") {
+        result = importBrain(db, JSON.parse(await readFile(String(message.params.path), "utf8")),
+          String(message.params.instance), String(message.params.source));
+      } else if (message.method === "integrationStop") {
         await hostedIntegration?.close();
         result = { stopped: true };
       } else if (message.method === "integrationConfigure") {

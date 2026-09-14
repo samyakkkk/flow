@@ -212,6 +212,9 @@ export async function startSessionWorker(
       decodeChatMemories(await request("chatMemories", { session, revision })),
     document: async (id: string) => decodeDocument(await request("documents", { id })),
     knowledge: async () => decodeKnowledge(await request("knowledge", {})),
+    exportBrain: (path: string) => request("exportBrain", { path }),
+    importBrain: (path: string, instance: string, source: string) =>
+      request("importBrain", { path, instance, source }),
     drain: () => request("drain", {}),
     capture: (input: BrainCapture) => request("capture", input),
     pendingSync: async () => (await request("pendingSync", {})) as BrainDocumentSync[],

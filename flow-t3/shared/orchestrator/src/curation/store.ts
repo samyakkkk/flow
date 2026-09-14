@@ -44,6 +44,9 @@ export const CURATION_SCHEMA = `
   CREATE TABLE IF NOT EXISTS brain_curation_sessions (
     session_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS brain_import_evidence (
+    origin TEXT NOT NULL, session TEXT NOT NULL, source_seq INTEGER NOT NULL, target_seq INTEGER NOT NULL,
+    PRIMARY KEY(origin, session, source_seq));
   CREATE TABLE IF NOT EXISTS brain_document_sync_outbox (
     document_id TEXT PRIMARY KEY REFERENCES brain_documents(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL, payload TEXT NOT NULL, queued_at INTEGER NOT NULL);
@@ -545,15 +548,40 @@ export class CurationStore {
         const scopeSession = (id: string) => id.startsWith("t3-")
           ? `t3-${origin}:${id.slice(3)}` : `${origin}:${id}`;
         const remoteSession = scopeSession(source.sessionId);
-        const remoteId = source.kind === "notes" ? `notes:${remoteSession}` : source.id;
-        if (remoteId.length > 500 || remoteSession.length > 500)
-          throw new Error("Synchronized document identity is too long.");
         const ownership = this.db
           .prepare(`SELECT source_revision AS sourceRevision, document_id AS documentId
             FROM brain_document_sync_origins WHERE origin = ? AND source_id = ?`)
           .get(origin, source.id) as { sourceRevision: number; documentId: string } | undefined;
         if (ownership && source.revision <= ownership.sourceRevision)
           return { id: source.id, revision: source.revision, remoteId: ownership.documentId };
+        const remoteId = ownership?.documentId ?? (source.kind === "notes" ? `notes:${remoteSession}` : source.id);
+        if (remoteId.length > 500 || remoteSession.length > 500)
+          throw new Error("Synchronized document identity is too long.");
+        const migrated = this.db.prepare("SELECT 1 FROM brain_import_evidence WHERE origin=? LIMIT 1").get(origin);
+        const sequences = new Map<number, number>(
+          (this.db.prepare("SELECT source_seq, target_seq FROM brain_import_evidence WHERE origin=? AND session=?").all(origin, source.sessionId) as Array<{source_seq:number;target_seq:number}>)
+            .map((row) => [row.source_seq, row.target_seq]),
+        );
+        const evidenceRows = item.evidence.map((evidence) => {
+          if (typeof evidence?.sessionId !== "string" || !evidence.sessionId ||
+              evidence.sessionId.length > 240 || !Number.isSafeInteger(evidence.seq) || evidence.seq < 0)
+            throw new Error("Invalid synchronized evidence reference.");
+          if (!migrated || evidence.seq === 0) return evidence;
+          let mapped = this.db.prepare("SELECT target_seq AS seq FROM brain_import_evidence WHERE origin=? AND session=? AND source_seq=?")
+            .get(origin, evidence.sessionId, evidence.seq) as { seq: number } | undefined;
+          if (!mapped) {
+            // Reserve a destination evidence ID without claiming the local transcript was uploaded.
+            const sid = scopeSession(evidence.sessionId);
+            const receipt = `sync-reference:${evidence.seq}`;
+            this.db.prepare("INSERT OR IGNORE INTO agent_sessions(id,backend,repo,cwd,title,status,created_at,updated_at) VALUES (?,'ext:t3',NULL,'','','idle',?,?)").run(sid, this.now(), this.now());
+            this.db.prepare("INSERT OR IGNORE INTO t3_capture(session,receipt,kind,data,ts) VALUES (?,?,'evidence_reference',?,?)")
+              .run(sid, receipt, JSON.stringify({ origin, session: evidence.sessionId, sourceSeq: evidence.seq, transcript: "retained_on_source" }), this.now());
+            mapped = this.db.prepare("SELECT seq FROM t3_capture WHERE session=? AND receipt=?").get(sid, receipt) as { seq: number };
+            this.db.prepare("INSERT INTO brain_import_evidence VALUES (?,?,?,?)").run(origin, evidence.sessionId, evidence.seq, mapped.seq);
+          }
+          sequences.set(evidence.seq, mapped.seq);
+          return { ...evidence, seq: mapped.seq };
+        });
         const existing = this.get(remoteId);
         if (existing && !ownership && existing.sessionId !== remoteSession)
           throw new Error("A different source already owns this document ID.");
@@ -561,7 +589,7 @@ export class CurationStore {
           throw new Error("Synchronized document text must contain at most 24K characters.");
         const name = redactSecrets(source.name).trim();
         const description = redactSecrets(source.description).trim();
-        const text = redactSecrets(source.text);
+        const text = redactSecrets(source.text).replace(/\bE([1-9]\d*)\b/g, (original, n: string) => sequences.has(Number(n)) ? `E${sequences.get(Number(n))}` : original);
         const folder = redactSecrets(source.folder ?? "")
           .split("/")
           .map((part) => part.trim())
@@ -618,7 +646,7 @@ export class CurationStore {
         const cite = this.db.prepare(
           "INSERT OR IGNORE INTO brain_document_evidence(document_id, session_id, seq) VALUES (?, ?, ?)",
         );
-        for (const evidence of item.evidence) {
+        for (const evidence of evidenceRows) {
           if (
             typeof evidence?.sessionId !== "string" ||
             evidence.sessionId.length > 240 ||

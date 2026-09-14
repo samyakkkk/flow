@@ -181,11 +181,13 @@ export function CreateBrainDialog({
 }
 
 export function ConnectCloudDialog({
+  workspace,
   open,
   onOpenChange,
   send,
   onConnected,
 }: {
+  workspace?: { id: string; name: string } | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   send: SendBrainCommand;
@@ -202,6 +204,7 @@ export function ConnectCloudDialog({
     try {
       const result = await send({
         action: "connectCloud",
+        ...(workspace ? { workspaceId: workspace.id } : {}),
         endpoint: endpoint.trim(),
         token: token.trim(),
       });
@@ -237,8 +240,9 @@ export function ConnectCloudDialog({
           <DialogHeader>
             <DialogTitle>Connect cloud Brain</DialogTitle>
             <DialogDescription>
-              Connect to a Brain hosted by your team. Knowledge and new memories are stored on that
-              server.
+              {workspace
+                ? `Move “${workspace.name}” to your team's Cloud Brain. All docs, skills and conversation notes transfer automatically. Missing repositories will be indexed in Cloud. Your local data is kept as a backup.`
+                : "Connect to your team's Cloud Brain. Its shared knowledge will appear here."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">

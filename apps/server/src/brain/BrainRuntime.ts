@@ -14,6 +14,7 @@ import { prepareNativeFalkor } from "./native.ts";
 import {
   BrainWorkspace as WorkspaceSchema,
   type BrainCommand,
+  type BrainTransferRequest,
   type BrainState,
   type BrainSource,
   type BrainWorkspace,
@@ -43,6 +44,7 @@ type Workspace = {
   sources: Source[];
   projectIds: ProjectId[];
   remote?: NonNullable<BrainWorkspace["remote"]>;
+  migration?: NonNullable<BrainWorkspace["migration"]>;
 };
 type BrainAnalyticsProperties = Readonly<Record<string, string | number | boolean>>;
 type BrainAnalyticsRecorder = (
@@ -71,6 +73,7 @@ const active = (source: Source) =>
 export class BrainRuntime {
   private db: FalkorDB | undefined;
   private cloudInstance = "";
+  private migrations = new Map<string, Promise<void>>();
   private sessionWorkers = new Map<
     string,
     Promise<Awaited<ReturnType<typeof startSessionWorker>>>
@@ -208,14 +211,187 @@ export class BrainRuntime {
           .filter((w) => !w.remote)
           .map((workspace) => this.ensureWorkspaceGraph(workspace)),
       );
+    for (const workspace of this.workspaces)
+      if (workspace.migration) this.resumeMigration(workspace);
     if (this.db?.isRunning) {
       for (const workspace of this.workspaces) this.queueCapture(workspace);
       for (const workspace of this.workspaces.filter((w) => !w.remote))
         for (const source of workspace.sources)
-          if (source.status === "queued") await this.enqueue(workspace, source);
+          if (!workspace.migration && source.status === "queued")
+            await this.enqueue(workspace, source);
       for (const workspace of this.workspaces.filter((w) => w.remote))
         this.queueDocumentSync(workspace);
     }
+  }
+  private resumeMigration(workspace: Workspace) {
+    if (this.migrations.has(workspace.id)) return;
+    const pending = this.moveToCloud(workspace)
+      .catch(async (error: unknown) => {
+        if (workspace.migration) {
+          workspace.migration = {
+            ...workspace.migration,
+            status: "error",
+            message:
+              error instanceof Error ? error.message : "Brain transfer failed. Reconnect to retry.",
+          };
+          await this.save();
+        }
+      })
+      .finally(() => this.migrations.delete(workspace.id));
+    this.migrations.set(workspace.id, pending);
+  }
+  private async moveToCloud(workspace: Workspace) {
+    const migration = workspace.migration!;
+    const token = await NodeFSP.readFile(
+      NodePath.join(this.directory, "cloud-credentials", workspace.id),
+      "utf8",
+    );
+    const client = new CloudClient(
+      migration.endpoint,
+      token,
+      this.cloudInstance,
+      migration.brainId,
+    );
+    const directory = NodePath.join(this.directory, "migration", workspace.id);
+    await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+    const snapshot = NodePath.join(directory, "snapshot.json");
+    if (
+      !(await NodeFSP.stat(snapshot).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      await this.captureQueue;
+      const worker = await this.sessionWorker(workspace);
+      await worker.drain();
+      await worker.exportBrain(snapshot);
+    }
+    const bytes = await NodeFSP.readFile(snapshot);
+    const digest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+    const size = 256 * 1024;
+    const count = Math.ceil(bytes.length / size);
+    if (count > 1024) throw new Error("Brain transfer exceeds the supported 256 MB snapshot size.");
+    for (let index = 0; index < count; index++) {
+      await client.transfer({
+        source: workspace.id,
+        digest,
+        count,
+        index,
+        data: bytes.subarray(index * size, (index + 1) * size).toString("base64"),
+      });
+      workspace.migration = {
+        ...migration,
+        message: `Transferring Brain: ${index + 1} of ${count} parts…`,
+      };
+    }
+    const receipt = await client.transfer({
+      source: workspace.id,
+      digest,
+      count,
+      repositories: workspace.sources.map((s) => ({
+        repository: s.repository,
+        branch: s.branch,
+        localOnly: Boolean(s.localPath),
+      })),
+    });
+    if (receipt.digest !== digest) throw new Error("Cloud did not confirm the Brain snapshot.");
+    const worker = this.sessionWorkers.get(workspace.id);
+    if (worker) {
+      await (await worker).close();
+      this.sessionWorkers.delete(workspace.id);
+    }
+    const previous = workspace.migration!;
+    workspace.remote = {
+      endpoint: migration.endpoint,
+      brainId: migration.brainId,
+      status: "ready",
+      message: "Connected to cloud",
+    };
+    delete workspace.migration;
+    try {
+      await this.save();
+    } catch (error) {
+      delete workspace.remote;
+      workspace.migration = previous;
+      throw error;
+    }
+    // Resume local curation; its durable document outbox publishes subsequent revisions.
+    this.queueCapture(workspace);
+    this.queueDocumentSync(workspace);
+  }
+  async receiveTransfer(workspaceId: string, instance: string, transfer: BrainTransferRequest) {
+    const work = this.commands.then(async () => {
+      const workspace = this.workspace(workspaceId);
+      if (workspace.remote || workspace.migration)
+        throw new Error("Transfers require a local authoritative Brain.");
+      const { source, digest, count, index, data } = transfer;
+      if (
+        !/^[a-zA-Z0-9-]{1,100}$/.test(instance) ||
+        !/^[a-zA-Z0-9-]{1,100}$/.test(source) ||
+        !/^[a-f0-9]{64}$/.test(digest) ||
+        !Number.isInteger(count) ||
+        count < 1 ||
+        count > 1024
+      )
+        throw new Error("Invalid Brain transfer.");
+      const directory = NodePath.join(this.directory, "incoming", instance, source, digest);
+      await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+      if (index !== undefined) {
+        if (
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= count ||
+          typeof data !== "string" ||
+          data.length > 350000 ||
+          !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
+        )
+          throw new Error("Invalid Brain transfer part.");
+        await NodeFSP.writeFile(
+          NodePath.join(directory, String(index)),
+          Buffer.from(data, "base64"),
+          { mode: 0o600 },
+        );
+        return { digest, documents: 0 };
+      }
+      const parts = [];
+      for (let part = 0; part < count; part++)
+        parts.push(await NodeFSP.readFile(NodePath.join(directory, String(part))));
+      const bytes = Buffer.concat(parts);
+      if (NodeCrypto.createHash("sha256").update(bytes).digest("hex") !== digest)
+        throw new Error("Incomplete or corrupt Brain transfer.");
+      const path = NodePath.join(directory, "snapshot.json");
+      await NodeFSP.writeFile(path, bytes, { mode: 0o600 });
+      const receipt = await (
+        await this.sessionWorker(workspace)
+      ).importBrain(path, instance, source);
+      for (const repo of transfer.repositories ?? []) {
+        const repository = repo.localOnly ? repo.repository : githubRepository(repo.repository);
+        if (workspace.sources.some((s) => s.repository.toLowerCase() === repository.toLowerCase()))
+          continue;
+        const available =
+          !repo.localOnly && this.clis.some((c) => c.id === workspace.cli && c.installed);
+        const entry: Source = {
+          id: NodeCrypto.randomUUID(),
+          repository,
+          branch: repo.branch,
+          commit: "",
+          revision: "",
+          indexedAt: null,
+          status: available ? "queued" : "error",
+          message: repo.localOnly
+            ? "Push this local repository to GitHub and add it to Cloud."
+            : available
+              ? "Waiting for the shared indexer…"
+              : `Install ${workspace.cli} on Cloud, then reindex.`,
+        };
+        workspace.sources.push(entry);
+        if (available) await this.enqueue(workspace, entry);
+        else await this.save();
+      }
+      return receipt;
+    });
+    this.commands = work.catch(() => {});
+    return work;
   }
   private async ensureWorkspaceGraph(workspace: Workspace) {
     const graph = this.db!.selectGraph(`brain_${workspace.id.replaceAll("-", "")}`);
@@ -481,6 +657,7 @@ export class BrainRuntime {
         message: "FalkorDB stopped. Retry the local runtime; existing data has not been replaced.",
       };
     return {
+      transferVersion: 1,
       configuredProjectIds: this.projectBindings.configuredProjectIds(),
       database: this.database,
       embeddings: { status: this.embeddings.status, message: this.embeddings.message },
@@ -575,6 +752,32 @@ export class BrainRuntime {
       if (remote.database.status !== "ready" || remote.workspaces.length !== 1)
         throw new Error("The cloud endpoint must serve exactly one ready Brain.");
       const brain = remote.workspaces[0]!;
+      if (command.workspaceId) {
+        if (remote.transferVersion !== 1)
+          throw new Error("Update the Cloud Brain before moving local knowledge to it.");
+        const workspace = this.workspace(command.workspaceId);
+        if (workspace.remote) throw new Error("This Brain is already remote.");
+        if (
+          workspace.migration &&
+          (workspace.migration.endpoint !== client.endpoint ||
+            workspace.migration.brainId !== brain.id)
+        )
+          throw new Error("Resume this Brain's transfer to its original Cloud destination.");
+        // Freeze new local writes before taking the snapshot; capture keeps its durable outbox.
+        const dir = NodePath.join(this.directory, "cloud-credentials");
+        await NodeFSP.mkdir(dir, { recursive: true, mode: 0o700 });
+        await NodeFSP.writeFile(NodePath.join(dir, workspace.id), command.token, { mode: 0o600 });
+        workspace.migration = {
+          endpoint: client.endpoint,
+          brainId: brain.id,
+          status: "transferring",
+          message: "Preparing Brain transfer…",
+        };
+        await this.save();
+        for (const source of workspace.sources) this.jobs.get(source.id)?.abort();
+        this.resumeMigration(workspace);
+        return workspace.id;
+      }
       if (
         this.workspaces.some(
           (w) => w.remote?.brainId === brain.id && w.remote.endpoint === client.endpoint,
@@ -630,6 +833,12 @@ export class BrainRuntime {
       });
       return null;
     }
+    if (
+      "workspaceId" in command &&
+      command.workspaceId &&
+      this.workspace(command.workspaceId).migration
+    )
+      throw new Error("This Brain is moving to Cloud. Reconnect to retry if the transfer failed.");
     if (command.action === "read") return null;
     if (command.action === "readChat") throw new Error("Chat must be resolved by the server.");
     if (command.action === "readDocument")
@@ -1084,6 +1293,7 @@ export class BrainRuntime {
   async brainMemories(workspaceId: string, session: string, revision?: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Brain is not available");
+    if (workspace.migration) throw new Error("Brain is moving to Cloud.");
     if (workspace.remote) {
       // This chat's extraction state lives here. A remote fetch must not delay
       // note retrieval; the shared library and graph use the cloud connection.
@@ -1132,6 +1342,8 @@ export class BrainRuntime {
     context: BrainSessionContext,
   ) {
     const workspace = this.workspace(workspaceId);
+    if (workspace.migration)
+      throw new Error("Brain is moving to Cloud. Retry when transfer completes.");
     if (workspace.remote && name !== "remember") {
       const result = await (
         await this.cloud(workspace)
@@ -1241,7 +1453,7 @@ export class BrainRuntime {
       });
   }
   private queueCapture(workspace: Workspace) {
-    if (this.closed) return;
+    if (this.closed || workspace.migration) return;
     this.captureQueue = this.captureQueue
       .then(async () => {
         await this.flushCapture(workspace);
@@ -1264,6 +1476,7 @@ export class BrainRuntime {
       .filter((file) => file.endsWith(".json"))
       .sort();
     if (!files.length) return;
+    if (workspace.migration) return;
     const worker = await this.sessionWorker(workspace);
     for (const filename of files) {
       const file = NodePath.join(directory, filename);
@@ -1272,6 +1485,7 @@ export class BrainRuntime {
     }
   }
   async drainCapture() {
+    await Promise.all(this.migrations.values());
     await this.captureQueue;
     await Promise.all(
       [...this.sessionWorkers.values()].map(async (pending) => (await pending).drain()),
@@ -1489,6 +1703,7 @@ export class BrainRuntime {
     if (this.captureRetry) clearTimeout(this.captureRetry);
     if (this.documentSyncRetry) clearTimeout(this.documentSyncRetry);
     await this.commands;
+    await Promise.allSettled(this.migrations.values());
     for (const controller of this.jobs.values()) controller.abort();
     await this.starting;
     await this.queue;
