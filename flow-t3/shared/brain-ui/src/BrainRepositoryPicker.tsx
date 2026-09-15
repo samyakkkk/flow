@@ -63,7 +63,7 @@ export function BrainRepositoryPicker({ connectedRepositories, connection, loadR
       <label>Branch<input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Default branch" disabled={busy} /></label>
       <button className="flow-brain-button primary" disabled={busy || !repository.trim()}>Connect</button>
     </form>
-    <div className="flow-brain-repository-connection">{connection}<button type="button" className="flow-brain-button outline" disabled={loading || busy} onClick={() => void browse()}>{loading ? "Loading repositories…" : "Browse repositories"}</button></div>
+    <div className="flow-brain-repository-connection">{connection}<button type="button" className="flow-brain-button secondary" disabled={loading || busy} onClick={() => void browse()}>{loading ? "Loading repositories…" : "Browse repositories"}</button></div>
     {error && <p role="alert" className="flow-brain-error">{error}</p>}
     {loading && <p role="status">Loading repositories…</p>}
     {loaded && !loading && !repositories.length && <p>No repositories found for this account.</p>}
@@ -81,7 +81,7 @@ export function BrainRepositoryPicker({ connectedRepositories, connection, loadR
               {[...new Set([repo.defaultBranch || "", ...(options[repo.name] || [])])].map((value) => <option key={value} value={value}>{value || "Default branch"}{value && value === repo.defaultBranch ? " (default)" : ""}</option>)}
             </select>
             {branchLoading[repo.name] && <small role="status">Loading branches…</small>}
-            {branchErrors[repo.name] && <span role="alert">{branchErrors[repo.name]} <button type="button" className="flow-brain-button outline" onClick={() => void branches(repo.name)}>Retry</button></span>}
+            {branchErrors[repo.name] && <span role="alert">{branchErrors[repo.name]} <button type="button" className="flow-brain-button secondary" onClick={() => void branches(repo.name)}>Retry</button></span>}
           </label>}
         </article>)}
         {!visible.length && <p>No repositories match your search.</p>}

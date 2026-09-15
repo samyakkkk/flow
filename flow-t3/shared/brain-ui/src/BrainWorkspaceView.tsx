@@ -45,7 +45,7 @@ export function BrainWorkspaceView({
           <ul>{indexingFailures.map((source) => (
             <li key={source.id}>
               <div><strong>{source.repository}</strong><p>{source.message || "Indexing failed. Retry to start a new run."}</p></div>
-              {onRetryIndexing && <button type="button" className="flow-brain-button outline" aria-label={`Retry indexing ${source.repository}`} disabled={indexingBusy} onClick={() => onRetryIndexing(source.id)}>Retry</button>}
+              {onRetryIndexing && <button type="button" className="flow-brain-button secondary" aria-label={`Retry indexing ${source.repository}`} disabled={indexingBusy} onClick={() => onRetryIndexing(source.id)}>Retry</button>}
             </li>
           ))}</ul>
         </section>
@@ -91,7 +91,7 @@ export function BrainWorkspaceView({
                   {connectionNotice?.description ?? (loading ? "Loading your brains and their knowledge." : error && !hasBrain ? "Your brain could not be opened. Check the connection or choose another brain in Brain settings." : hasBrain ? isIndexing ? "Nodes and connections appear here as the indexer discovers them." : snapshot.sourceCount > 0 ? (sources ? "Check the connected sources below to start or retry indexing." : "Open Integrations to start or retry indexing.") : (sources ? "Connect a GitHub repository or local folder below." : "Open Integrations to connect a repository.") : "Choose a name and the CLI that will build its knowledge.")}
                 </p>
                 {!hasBrain && !loading && !connectionNotice && !error && onCreate && (
-                  <button type="button" className="flow-brain-button outline" onClick={onCreate}><PlusIcon size={14} /> New brain</button>
+                  <button type="button" className="flow-brain-button secondary" onClick={onCreate}><PlusIcon size={14} /> New brain</button>
                 )}
               </div>
             )}

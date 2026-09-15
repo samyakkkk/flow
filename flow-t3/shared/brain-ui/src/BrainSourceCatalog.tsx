@@ -20,7 +20,7 @@ export function BrainSourceCatalog({
             <div><h3>{card.name}</h3><p>{card.description}</p></div>
             {card.onAction ? (
               <footer>
-                <button type="button" className="flow-brain-button outline" onClick={card.onAction}>{card.actionLabel ?? "Connect"}</button>
+                <button type="button" className="flow-brain-button secondary" onClick={card.onAction}>{card.actionLabel ?? "Connect"}</button>
                 {card.onList && <button type="button" className="flow-brain-icon-button" aria-label={`Connected ${card.name}`} onClick={card.onList}><ListIcon size={16} /></button>}
               </footer>
             ) : <span className="flow-brain-source-status">{card.status ?? "Coming later"}</span>}

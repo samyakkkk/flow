@@ -41,8 +41,8 @@
 .flow-brain-empty-graph > svg { color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
 .flow-brain-empty-graph h3 { margin: 0; font-size: 13px; font-weight: 500; }
 .flow-brain-empty-graph p { max-width: 384px; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.55; }
-.flow-brain-button, .flow-brain-icon-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 6px 11px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 500; }
-.flow-brain-button.outline, .flow-brain-icon-button { border-color: var(--border); background: var(--background); color: var(--foreground); }
+.flow-brain-button, .flow-brain-icon-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; appearance: none; border: 1px solid transparent; border-radius: 8px; padding: 6px 11px; outline: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 500; }
+.flow-brain-button.secondary, .flow-brain-icon-button { border-color: var(--border); background: var(--background); color: var(--foreground); }
 .flow-brain-button:hover, .flow-brain-icon-button:hover { background: var(--muted); }
 .flow-brain-icon-button { width: 32px; padding: 0; }
 .flow-brain-sources { display: grid; gap: 16px; }
@@ -116,7 +116,7 @@
 .flow-brain-connected-sources summary { cursor: pointer; color: var(--muted-foreground); }
 .flow-brain-connected-sources details > div { max-height: 192px; overflow: auto; font-family: monospace; }
 .flow-brain-connected-sources details p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
-.flow-brain-connection-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--border); border-radius: 12px; padding: 0; background: var(--popover); color: var(--popover-foreground); box-shadow: 0 20px 70px #0003; }
+.flow-brain-connection-dialog { margin: auto; width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--border); border-radius: 12px; padding: 0; background: var(--popover); color: var(--popover-foreground); box-shadow: 0 20px 70px #0003; }
 .flow-brain-connection-dialog::backdrop { background: #0005; backdrop-filter: blur(2px); }
 .flow-brain-connection-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
 .flow-brain-connection-dialog > header, .flow-brain-connection-dialog > footer { flex-shrink: 0; }

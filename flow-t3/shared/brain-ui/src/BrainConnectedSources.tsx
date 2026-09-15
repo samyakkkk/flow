@@ -28,7 +28,7 @@ export function BrainConnectedSources({ sources, busy, onAction }: {
       {source.localPath && <p>{source.localPath}</p>}
     </div>
     <span className="flow-brain-source-status">{label(source.status)}</span>
-    <button type="button" className="flow-brain-button outline" disabled={busy} onClick={() => onAction(isBrainSourceIndexing(source.status) ? "cancel" : "reindex", source.id)}>{isBrainSourceIndexing(source.status) ? "Cancel" : source.status === "ready" ? "Reindex" : source.status === "waiting" ? "Index" : "Retry"}</button>
+    <button type="button" className="flow-brain-button secondary" disabled={busy} onClick={() => onAction(isBrainSourceIndexing(source.status) ? "cancel" : "reindex", source.id)}>{isBrainSourceIndexing(source.status) ? "Cancel" : source.status === "ready" ? "Reindex" : source.status === "waiting" ? "Index" : "Retry"}</button>
     {!isBrainSourceIndexing(source.status) && <button type="button" className="flow-brain-icon-button" disabled={busy} aria-label={`Delete ${source.repository} from brain`} onClick={() => onAction("removeSource", source.id)}><Trash2Icon size={14} /></button>}
     {(isBrainSourceIndexing(source.status) || source.activity || source.summary) && <details>
       <summary>Logs{source.activity ? ` · ${source.activity.filesRead} files read · ${source.activity.graphWrites} graph writes` : ""}</summary>
