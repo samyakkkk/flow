@@ -1,3 +1,4 @@
+import { Tabs } from "@base-ui/react/tabs";
 import { buildProviderInstanceUpdatePatch } from "../settings/SettingsPanels.logic";
 import { BRAND } from "@t3tools/shared/branding";
 import { useAuth } from "@clerk/react";
@@ -113,6 +114,7 @@ export function WelcomeWizard({
   const [selection, setSelection] = useState<ReadonlySet<EnvironmentId> | null>(null);
   const autoSelectedComputers = useRef(new Set<EnvironmentId>());
   const [setupIds, setSetupIds] = useState<readonly EnvironmentId[]>([]);
+  const [projectEnvironmentIds, setProjectEnvironmentIds] = useState<readonly EnvironmentId[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [brainChoices, setBrainChoices] = useState<
     ReadonlyMap<EnvironmentId, { id: string; name: string }>
@@ -147,7 +149,10 @@ export function WelcomeWizard({
   const [scanRoots, setScanRoots] = useState<ReadonlyMap<EnvironmentId, readonly string[]>>(
     new Map(),
   );
-  const scans = useProjectScans(step === "import" ? setupIds : NO_ENVIRONMENTS, scanRoots);
+  const scans = useProjectScans(
+    step === "import" ? projectEnvironmentIds : NO_ENVIRONMENTS,
+    scanRoots,
+  );
   const isLoadingProjects =
     step === "import" &&
     scans.every((scan) => scan.data === null) &&
@@ -172,7 +177,7 @@ export function WelcomeWizard({
             toastManager.close(completionErrorToastIdRef.current);
             completionErrorToastIdRef.current = null;
           }
-          const environmentId = projectRef?.environmentId ?? setupIds[0];
+          const environmentId = projectRef?.environmentId ?? projectEnvironmentIds[0];
           const brain = environmentId ? brainChoices.get(environmentId) : undefined;
           onDone(environmentId && brain ? { environmentId, brainId: brain.id } : undefined);
           return true;
@@ -198,7 +203,7 @@ export function WelcomeWizard({
       finishingPromiseRef.current = completion;
       return completion;
     },
-    [completeOnboarding, onDone, brainChoices, setupIds],
+    [completeOnboarding, onDone, brainChoices, projectEnvironmentIds],
   );
 
   return (
@@ -255,7 +260,10 @@ export function WelcomeWizard({
                 environmentIds={setupIds}
                 choices={brainChoices}
                 onChoose={chooseOnboardingBrain}
-                onContinue={() => setStep("import")}
+                onContinue={(environmentId) => {
+                  setProjectEnvironmentIds([environmentId]);
+                  setStep("import");
+                }}
               />
             ) : (
               <ImportStep
@@ -659,55 +667,67 @@ function AgentsStep({
   readonly environmentIds: readonly EnvironmentId[];
   readonly choices: ReadonlyMap<EnvironmentId, { id: string; name: string }>;
   readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
-  readonly onContinue: () => void;
+  readonly onContinue: (environmentId: EnvironmentId) => void;
 }) {
   const { environments } = useEnvironments();
+  const [selectedId, setSelectedId] = useState(
+    environmentIds.find((id) => choices.has(id)) ?? environmentIds[0],
+  );
+  const activeId =
+    selectedId && environmentIds.includes(selectedId) ? selectedId : environmentIds[0];
   return (
     <StepShell
       title="Create your Brain"
-      description="Name your Brain and choose the agent that will build and maintain its knowledge. Your other agents remain available in chats."
+      description="Give it a name and choose a CLI to build its knowledge."
     >
-      <ScrollArea
-        scrollFade
-        className="mt-5 h-auto max-h-96 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
+      <Tabs.Root
+        value={activeId}
+        onValueChange={(value) => {
+          const id = environmentIds.find((id) => id === value);
+          if (id) setSelectedId(id);
+        }}
       >
-        <div className="space-y-5 pr-3">
-          {environmentIds.map((environmentId) => (
+        {environmentIds.length > 1 ? (
+          <Tabs.List
+            aria-label="Brain location"
+            className="mt-4 flex gap-1 rounded-lg bg-muted p-1"
+          >
+            {environmentIds.map((id) => (
+              <Tabs.Tab
+                key={id}
+                value={id}
+                className="rounded-md px-3 py-2 text-sm data-[active]:bg-background data-[active]:shadow-sm"
+              >
+                {environments.find((environment) => environment.environmentId === id)?.label ??
+                  "Computer"}
+              </Tabs.Tab>
+            ))}
+          </Tabs.List>
+        ) : null}
+        {activeId ? (
+          <Tabs.Panel value={activeId}>
             <ConnectedAgentsStep
-              key={environmentId}
-              environmentId={environmentId}
-              choice={choices.get(environmentId)}
+              key={activeId}
+              environmentId={activeId}
+              choice={choices.get(activeId)}
               onChoose={onChoose}
-              machineLabel={
-                environments.find((environment) => environment.environmentId === environmentId)
-                  ?.label ?? "Computer"
-              }
+              onContinue={onContinue}
             />
-          ))}
-        </div>
-      </ScrollArea>
-      <div className="mt-6 flex justify-end">
-        <Button
-          autoFocus
-          disabled={!environmentIds.every((id) => choices.has(id))}
-          onClick={onContinue}
-        >
-          Continue
-          <ArrowRightIcon className="size-3.5" />
-        </Button>
-      </div>
+          </Tabs.Panel>
+        ) : null}
+      </Tabs.Root>
     </StepShell>
   );
 }
 
 function ConnectedAgentsStep({
   environmentId,
-  machineLabel,
   choice,
   onChoose,
+  onContinue,
 }: {
+  readonly onContinue: (id: EnvironmentId) => void;
   readonly environmentId: EnvironmentId;
-  readonly machineLabel: string;
   readonly choice: { id: string; name: string } | undefined;
   readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
 }) {
@@ -771,6 +791,7 @@ function ConnectedAgentsStep({
       }
       setBrainState(result.value.state);
       onChoose(environmentId, { id: result.value.createdWorkspaceId, name: name.trim() });
+      onContinue(environmentId);
     } finally {
       setBusy(false);
     }
@@ -780,168 +801,178 @@ function ConnectedAgentsStep({
     provider: byDriver.get(driver),
   }));
   return (
-    <section>
-      <h2 className="mb-2 text-sm font-medium">{machineLabel}</h2>
-      {brainState && brainState.workspaces.length > 0 ? (
-        <label className="mb-4 block space-y-2 text-sm">
-          Brain for this computer
-          <select
-            className="w-full rounded-md border bg-background p-2"
-            value={choice?.id ?? ""}
-            disabled={busy}
-            onChange={(event) => {
-              const brain = brainState.workspaces.find((item) => item.id === event.target.value);
-              if (brain) onChoose(environmentId, { id: brain.id, name: brain.name });
-            }}
-          >
-            <option value="" disabled>
-              Choose an existing Brain or create one below
-            </option>
-            {brainState.workspaces.map((brain) => (
-              <option key={brain.id} value={brain.id}>
-                {brain.name}
-                {brain.remote ? " (Cloud)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      {choice ? (
-        <p className="mb-3 text-sm text-success-foreground">
-          {choice.name} is ready. Next, choose its projects.
-        </p>
-      ) : (
-        <label className="mb-4 block space-y-2 text-sm">
-          Brain name
-          <Input
-            value={name}
-            maxLength={80}
-            disabled={busy}
-            placeholder="e.g. Acme platform"
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-      )}
-      {!choice ? <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p> : null}
-      <div className="space-y-1.5">
-        {primaryAgents.map(({ driver, provider }) => (
-          <div key={driver} className="flex items-center gap-2">
-            {!choice ? (
-              <input
-                type="radio"
-                name={`brain-cli-${environmentId}`}
-                aria-label={`Use ${driver === "claudeAgent" ? "Claude Code" : driver} for this Brain`}
-                checked={cli === (driver === "claudeAgent" ? "claude" : driver)}
-                disabled={busy || getOnboardingProviderState(provider) !== "ready"}
-                onChange={() => setCli(driver === "claudeAgent" ? "claude" : driver)}
-              />
-            ) : null}
-            <div className="min-w-0 flex-1">
-              <AgentCard
-                driver={driver}
-                provider={provider}
-                terminalOpen={terminalSession?.driver === driver}
-                terminalAvailable={serverConfig !== null}
-                onOpenTerminal={async () => {
-                  if (provider === undefined || serverConfig === null) return;
-                  if (!provider.enabled) {
-                    const settings = serverConfig.settings;
-                    const result = await updateProviderSettings({
-                      environmentId,
-                      input: {
-                        patch: buildProviderInstanceUpdatePatch({
-                          settings,
-                          instanceId: provider.instanceId,
-                          driver: provider.driver,
-                          isDefault: String(provider.instanceId) === String(provider.driver),
-                          instance: {
-                            ...settings.providerInstances[provider.instanceId],
-                            driver: provider.driver,
-                            enabled: true,
-                          },
-                        }),
-                      },
-                    });
-                    if (result._tag !== "Success") setError("Could not enable this agent. Retry.");
-                    else await refreshProviders({ environmentId, input: {} });
-                    return;
-                  }
-                  setTerminalSession({
-                    environmentId,
-                    driver,
-                    providerInstanceId: provider.instanceId,
-                    cwd: serverConfig.cwd,
-                    command: provider.installed
-                      ? resolveOnboardingProviderLoginCommand(
-                          provider,
-                          serverConfig.settings,
-                          serverConfig.environment.platform.os,
-                        )
-                      : resolveOnboardingProviderInstallCommand(
-                          driver,
-                          serverConfig.environment.platform.os,
-                        ),
-                    keybindings: serverConfig.keybindings,
-                  });
+    <>
+      <ScrollArea
+        scrollFade
+        className="mt-5 h-auto max-h-[28rem] [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
+      >
+        <section>
+          {brainState && brainState.workspaces.length > 0 ? (
+            <label className="mb-4 block space-y-2 text-sm">
+              Brain for this computer
+              <select
+                className="w-full rounded-md border bg-background p-2"
+                value={choice?.id ?? ""}
+                disabled={busy}
+                onChange={(event) => {
+                  const brain = brainState.workspaces.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  if (brain) onChoose(environmentId, { id: brain.id, name: brain.name });
                 }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-      {(providers ?? [])
-        .filter(
-          (provider) =>
-            provider.installed &&
-            !PRIMARY_AGENT_DRIVERS.some((driver) => driver === provider.driver),
-        )
-        .map((provider) => (
-          <p key={provider.instanceId} className="mt-2 text-xs text-muted-foreground">
-            {getDriverOption(provider.driver)?.label ?? provider.driver}: detected for chats.
-          </p>
-        ))}
-      {error ? (
-        <p role="alert" className="mt-3 text-sm text-destructive">
-          {error}
-          {!brainState ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setError("");
-                setReadAttempt((attempt) => attempt + 1);
-              }}
-            >
-              Retry
-            </Button>
+              >
+                <option value="" disabled>
+                  Choose an existing Brain or create one below
+                </option>
+                {brainState.workspaces.map((brain) => (
+                  <option key={brain.id} value={brain.id}>
+                    {brain.name}
+                    {brain.remote ? " (Cloud)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
           ) : null}
-        </p>
-      ) : null}
-      {!choice ? (
+          {choice ? (
+            <p className="mb-3 text-sm text-success-foreground">
+              {choice.name} is ready. Next, choose its projects.
+            </p>
+          ) : (
+            <label className="mb-4 block space-y-2 text-sm">
+              Brain name
+              <Input
+                value={name}
+                maxLength={80}
+                disabled={busy}
+                placeholder="e.g. Acme platform"
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+          )}
+          {!choice ? <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p> : null}
+          <div className="space-y-1.5">
+            {primaryAgents.map(({ driver, provider }) => (
+              <div key={driver} className="flex items-center gap-2">
+                {!choice ? (
+                  <input
+                    type="radio"
+                    name={`brain-cli-${environmentId}`}
+                    aria-label={`Use ${driver === "claudeAgent" ? "Claude Code" : driver} for this Brain`}
+                    checked={cli === (driver === "claudeAgent" ? "claude" : driver)}
+                    disabled={busy || getOnboardingProviderState(provider) !== "ready"}
+                    onChange={() => setCli(driver === "claudeAgent" ? "claude" : driver)}
+                  />
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <AgentCard
+                    driver={driver}
+                    provider={provider}
+                    terminalOpen={terminalSession?.driver === driver}
+                    terminalAvailable={serverConfig !== null}
+                    onOpenTerminal={async () => {
+                      if (provider === undefined || serverConfig === null) return;
+                      if (!provider.enabled) {
+                        const settings = serverConfig.settings;
+                        const result = await updateProviderSettings({
+                          environmentId,
+                          input: {
+                            patch: buildProviderInstanceUpdatePatch({
+                              settings,
+                              instanceId: provider.instanceId,
+                              driver: provider.driver,
+                              isDefault: String(provider.instanceId) === String(provider.driver),
+                              instance: {
+                                ...settings.providerInstances[provider.instanceId],
+                                driver: provider.driver,
+                                enabled: true,
+                              },
+                            }),
+                          },
+                        });
+                        if (result._tag !== "Success")
+                          setError("Could not enable this agent. Retry.");
+                        else await refreshProviders({ environmentId, input: {} });
+                        return;
+                      }
+                      setTerminalSession({
+                        environmentId,
+                        driver,
+                        providerInstanceId: provider.instanceId,
+                        cwd: serverConfig.cwd,
+                        command: provider.installed
+                          ? resolveOnboardingProviderLoginCommand(
+                              provider,
+                              serverConfig.settings,
+                              serverConfig.environment.platform.os,
+                            )
+                          : resolveOnboardingProviderInstallCommand(
+                              driver,
+                              serverConfig.environment.platform.os,
+                            ),
+                        keybindings: serverConfig.keybindings,
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          {(providers ?? [])
+            .filter(
+              (provider) =>
+                provider.installed &&
+                !PRIMARY_AGENT_DRIVERS.some((driver) => driver === provider.driver),
+            )
+            .map((provider) => (
+              <p key={provider.instanceId} className="mt-2 text-xs text-muted-foreground">
+                {getDriverOption(provider.driver)?.label ?? provider.driver}: detected for chats.
+              </p>
+            ))}
+          {error ? (
+            <p role="alert" className="mt-3 text-sm text-destructive">
+              {error}
+              {!brainState ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setError("");
+                    setReadAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  Retry
+                </Button>
+              ) : null}
+            </p>
+          ) : null}
+          {terminalSession !== null ? (
+            <AgentInstallTerminal
+              key={`${terminalSession.environmentId}:${terminalSession.providerInstanceId}:${terminalSession.driver}`}
+              session={terminalSession}
+              onClose={() => {
+                setTerminalSession(null);
+                void refreshProviders({ environmentId, input: {} });
+              }}
+            />
+          ) : null}
+        </section>
+      </ScrollArea>
+      <div className="mt-6 flex justify-end">
         <Button
-          className="mt-3"
           disabled={
             busy ||
-            !name.trim() ||
-            getOnboardingProviderState(byDriver.get(cli === "claude" ? "claudeAgent" : cli)) !==
-              "ready"
+            (!choice &&
+              (!name.trim() ||
+                getOnboardingProviderState(byDriver.get(cli === "claude" ? "claudeAgent" : cli)) !==
+                  "ready"))
           }
-          onClick={() => void createBrain()}
+          onClick={() => (choice ? onContinue(environmentId) : void createBrain())}
         >
-          {busy ? "Creating Brain…" : "Create Brain"}
+          {busy ? "Creating Brain…" : choice ? "Use this Brain" : "Create Brain"}
+          <ArrowRightIcon className="size-3.5" />
         </Button>
-      ) : null}
-      {terminalSession !== null ? (
-        <AgentInstallTerminal
-          key={`${terminalSession.environmentId}:${terminalSession.providerInstanceId}:${terminalSession.driver}`}
-          session={terminalSession}
-          onClose={() => {
-            setTerminalSession(null);
-            void refreshProviders({ environmentId, input: {} });
-          }}
-        />
-      ) : null}
-    </section>
+      </div>
+    </>
   );
 }
 
@@ -973,7 +1004,7 @@ function AgentCard({
         <span className="block text-sm font-medium text-foreground">{displayName}</span>
         <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
           {summary.headline}
-          {summary.detail ? ` · ${summary.detail}` : ""}
+          {providerState !== "ready" && summary.detail ? ` · ${summary.detail}` : ""}
         </p>
       </div>
       <div className="shrink-0">
