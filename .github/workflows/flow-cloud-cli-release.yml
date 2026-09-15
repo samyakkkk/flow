@@ -1,4 +1,4 @@
-name: Flow Cloud CLI release
+name: Flow CLI release
 on:
   push:
     tags: ['flow-cloud-cli-v*.*.*']
@@ -35,7 +35,7 @@ jobs:
         run: node scripts/build-browser-bundle.mjs "$RUNNER_TEMP/cloud-source" "$GITHUB_WORKSPACE/cloud-assets" "$FLOW_VERSION"
       - name: Verify Cloud-specific behavior
         working-directory: ${{ runner.temp }}/cloud-source
-        run: runtime/bin/node --test scripts/flow-cloud-cli.test.mjs flow-t3/shared/bin/test/*.test.mjs
+        run: runtime/bin/node --test scripts/flow-cloud-cli.test.mjs scripts/cli-brains.test.mjs flow-t3/shared/bin/test/*.test.mjs
       - name: Smoke test isolated installation without replacing a Mac launcher
         shell: bash
         run: |
@@ -75,4 +75,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" cloud-assets/* --verify-tag --latest=false --title "Flow Cloud CLI ${TAG#flow-cloud-cli-v}" --notes "Cloud-connected coding tools. Separate from Mac desktop and browser update channels."
+        run: gh release create "$TAG" cloud-assets/* --verify-tag --latest=false --title "Flow Cloud CLI ${TAG#flow-cloud-cli-v}" --notes "Local and Cloud Brains with a bundled Node runtime and browser UI. Desktop apps update separately."

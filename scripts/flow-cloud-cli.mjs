@@ -34,8 +34,36 @@ async function prepare(home) {
     await stageRelease(home, await latestCloudRelease());
   } finally { lock.close(); }
 }
+export const usage = `Flow — local and Cloud Brains, one browser app.
+flow [--web|--no-open]       Start or reuse Flow and open its browser UI
+flow setup --brain ID [--folder PATH] [--harness detected]
+flow setup --cloud URL --cloud-brain ID --enrollment-file FILE [--folder PATH]
+flow brains list
+flow brains create --name NAME --cli claude|codex|opencode
+flow agents status|doctor|flush|remove [--folder PATH]
+flow status | flow service status | flow stop | flow restart | flow update
+The packaged CLI includes Node. Desktop apps and their data are unchanged.`;
+
+export async function dispatch(args, run = runtimeMain) {
+  if (!args.length || (args.length === 1 && args[0] === '--web')) return run([]);
+  if (args.length === 1 && args[0] === '--no-open') return run(args);
+  if (args[0] === 'setup') {
+    if (args.includes('--local') && args.includes('--cloud')) throw Error('Choose --local or --cloud, not both.');
+    const setup = args.flatMap(arg => arg === '--local' ? ['--local', 'true'] : [arg]);
+    if (!setup.includes('--brain') && !setup.includes('--cloud')) return run([]);
+    if (!setup.includes('--harness')) setup.push('--harness', 'detected');
+    return run(setup);
+  }
+  if (['agents', 'brains'].includes(args[0])) return run(args);
+  if (args[0] === 'doctor') return run(['agents', ...args]);
+  if (['status', 'stop', 'restart'].includes(args[0])) return run([...args, '--no-open']);
+  throw Error(usage);
+}
+
 export async function main(args) {
-  const home = process.env.FLOW_CLOUD_CLI_HOME || join(homedir(), '.local/share/flow-cloud-cli');
+  if (['--help', 'help'].includes(args[0])) { console.log(usage); return; }
+  // Retain the shipped home/channel so existing Cloud installations adopt this CLI in place.
+  const home = process.env.FLOW_CLI_HOME || process.env.FLOW_CLOUD_CLI_HOME || join(homedir(), '.local/share/flow-cloud-cli');
   if (args[0] === 'service' && args[1] === 'status' && args.length === 2) {
     console.log(JSON.stringify(await discoverCloudService(home), null, 2));
     return;
@@ -66,11 +94,12 @@ export async function main(args) {
     const publicBin = join(homedir(), '.local/bin'); await fs.mkdir(publicBin, { recursive: true });
     try { await fs.writeFile(join(publicBin, 'flow'), launcher, { mode: 0o755, flag: 'wx' }); }
     catch (e) { if (e.code !== 'EEXIST') throw e; }
-    console.log(`Cloud CLI installed: ${join(bin, 'flow')}. Existing Flow commands and Mac apps are preserved.`);
+    console.log(`Flow CLI installed: ${join(bin, 'flow')}. Existing Flow commands and Mac apps are preserved.`);
     return;
   }
-  if (args[0] === 'update') { await prepare(home); console.log('Cloud CLI updated. Run flow restart to apply a prepared server update.'); return; }
+  if (args[0] === 'update') { await prepare(home); console.log('Flow CLI updated. Run flow restart to apply a prepared server update.'); return; }
   try {
+    if (process.env.FLOW_CLI_AUTO_UPDATE === '0') throw Error('Automatic updates disabled');
     const latest = await latestCloudRelease();
     const installed = await read(join(home, 'current/flow-release.json'));
     if (newerTag(latest.tag, installed.tag)) {
@@ -78,14 +107,10 @@ export async function main(args) {
       const child = spawn(process.execPath, [self, '--prepare-update'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: process.env });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref(); await log.close();
-      console.error('Downloading a Cloud CLI update in the background.');
+      console.error('Downloading a Flow CLI update in the background.');
     }
   } catch { /* Offline update checks must not block installed commands. */ }
-  if (args[0] === 'setup' && !args.includes('--cloud')) throw Error('This CLI connects to Cloud Brains. Copy the setup prompt from your Cloud dashboard.');
-  if (args[0] === 'setup' || args[0] === 'agents') return runtimeMain(args);
-  if (!args.length) { await runtimeMain(['--no-open']); console.log('Flow Cloud connector is running. Use your Cloud dashboard to connect project folders.'); return; }
-  if (['status', 'stop', 'restart'].includes(args[0])) return runtimeMain([...args, '--no-open']);
-  throw Error('Usage: flow | flow setup --cloud URL … | flow agents doctor|status|remove --folder PATH | flow service status | flow update | flow restart');
+  return dispatch(args);
 }
 if (process.argv[1] && pathToFileURL(await fs.realpath(process.argv[1])).href === import.meta.url)
   main(process.argv.slice(2)).catch(e => { console.error(e.message); process.exitCode = 1; });

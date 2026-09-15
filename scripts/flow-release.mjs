@@ -395,10 +395,14 @@ export async function prepareAutomaticUpdate(home) {
 }
 
 export async function main(args) {
-  if (args[0] === "setup" || args[0] === "agents") {
-    if (args[0] === "setup" && !args.includes("--state-dir")) {
+  if (args[0] === "setup" || args[0] === "agents" || args[0] === "brains") {
+    if ((args[0] === "setup" || args[0] === "brains") && !args.includes("--state-dir")) {
       await main(["--no-open"]);
       args = [...args, "--state-dir", join(process.env.FLOW_INSTANCE_HOME, "instances/primary/data/userdata")];
+    }
+    if (args[0] === "brains") {
+      const { manageBrains } = await import("./cli-brains.mjs");
+      return manageBrains(args.slice(1));
     }
     const connector = await import("../flow-t3/shared/bin/harness/agent-connector.mjs");
     return connector.main(args[0] === "agents" ? args.slice(1) : args);

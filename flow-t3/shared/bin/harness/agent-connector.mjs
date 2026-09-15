@@ -189,6 +189,7 @@ export async function main(argv) {
   const state = await request(entry, 'state', { metadataOnly: true });
   const brain = state.workspaces.find(item => item.id === options.brain);
   if (!brain) throw Error('Brain not found on this runtime');
+  if (options.local === 'true' && brain.remote) throw Error('The selected Brain is Cloud-connected. Choose a local Brain or omit --local.');
   entry.name = brain.name;
   const manifest = await readJson(join(home(), 'integrations.json'), {});
   const current = manifest.repos?.[folder];
