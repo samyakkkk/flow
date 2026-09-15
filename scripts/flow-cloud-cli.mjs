@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { adoptBundle, newerTag, stageRelease, main as runtimeMain } from './flow-release.mjs';
+import { discoverCloudService } from './instances/service-discovery.mjs';
 const self = fileURLToPath(import.meta.url);
 const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
 const read = async p => JSON.parse(await fs.readFile(p, 'utf8'));
@@ -35,6 +36,10 @@ async function prepare(home) {
 }
 export async function main(args) {
   const home = process.env.FLOW_CLOUD_CLI_HOME || join(homedir(), '.local/share/flow-cloud-cli');
+  if (args[0] === 'service' && args[1] === 'status' && args.length === 2) {
+    console.log(JSON.stringify(await discoverCloudService(home), null, 2));
+    return;
+  }
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   // This distribution must never discover or update the Mac/browser installation.
   process.env.FLOW_AGENT_HOME = join(home, 'agents');
@@ -80,7 +85,7 @@ export async function main(args) {
   if (args[0] === 'setup' || args[0] === 'agents') return runtimeMain(args);
   if (!args.length) { await runtimeMain(['--no-open']); console.log('Flow Cloud connector is running. Use your Cloud dashboard to connect project folders.'); return; }
   if (['status', 'stop', 'restart'].includes(args[0])) return runtimeMain([...args, '--no-open']);
-  throw Error('Usage: flow | flow setup --cloud URL … | flow agents doctor|status|remove --folder PATH | flow update | flow restart');
+  throw Error('Usage: flow | flow setup --cloud URL … | flow agents doctor|status|remove --folder PATH | flow service status | flow update | flow restart');
 }
 if (process.argv[1] && pathToFileURL(await fs.realpath(process.argv[1])).href === import.meta.url)
   main(process.argv.slice(2)).catch(e => { console.error(e.message); process.exitCode = 1; });
