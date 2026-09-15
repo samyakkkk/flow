@@ -1,3 +1,4 @@
+import { ProjectSourcePicker } from "./ProjectSourcePicker";
 import { Tabs } from "@base-ui/react/tabs";
 import { buildProviderInstanceUpdatePatch } from "../settings/SettingsPanels.logic";
 import { BRAND } from "@t3tools/shared/branding";
@@ -40,12 +41,10 @@ import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import {
-  groupOnboardingProjects,
   partitionOnboardingProjects,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
   resolveOnboardingProjectId,
-  type OnboardingProjectGroup,
 } from "../../onboarding/projectImport.logic";
 import {
   getOnboardingProviderState,
@@ -69,20 +68,17 @@ import { getProviderSummary } from "../settings/providerStatus";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
-import { ClaudeAI, OpenAI } from "../Icons";
 import { BrandWordmark } from "../BrandWordmark";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
-import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
 import { WizardPanel, WizardSteps } from "../ui/wizard";
 import { Dialog, DialogHeader, DialogPopup, DialogTitle } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
 import { cn } from "../../lib/utils";
-import { formatRelativeTime } from "../../timestampFormat";
 
 /**
  * First-run welcome wizard. Rendered over the workspace at `/welcome` on a
@@ -98,7 +94,6 @@ const NO_ENVIRONMENTS: readonly EnvironmentId[] = [];
 
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
 const ONBOARDING_STAGES = ["Connect", "Brain", "Projects"] as const;
-const SCAN_LIMIT_MESSAGE = "Scan limit reached. Some projects or conversations may be missing.";
 
 export function WelcomeWizard({
   localAvailable,
@@ -269,7 +264,9 @@ export function WelcomeWizard({
               <ImportStep
                 scans={scans}
                 onAddFolder={(id, folder) =>
-                  setScanRoots((current) => new Map(current).set(id, [folder]))
+                  setScanRoots((current) =>
+                    new Map(current).set(id, [...new Set([...(current.get(id) ?? []), folder])]),
+                  )
                 }
                 brainChoices={brainChoices}
                 isImporting={isImporting}
@@ -1210,7 +1207,9 @@ function ImportStep({
   const connectBrain = useAtomCommand(brainCommand, { reportFailure: false });
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const projects = useProjects();
-  const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string> | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [githubRepositories, setGithubRepositories] = useState<readonly string[]>([]);
   const [importError, setImportError] = useState("");
   const [landingProject, setLandingProject] = useState<ScopedProjectRef | null>(null);
   // Keep project creation attempts separate from completed history imports so both can retry.
@@ -1246,7 +1245,7 @@ function ImportStep({
     }
   }, [landingProject, onDone, projects, setIsImporting]);
 
-  const { available: candidates, recent } = useMemo(
+  const { available: candidates } = useMemo(
     () =>
       partitionOnboardingProjects(
         scans.flatMap((scan) =>
@@ -1259,10 +1258,7 @@ function ImportStep({
       ),
     [scans],
   );
-  const selectedKeys = useMemo(
-    () => selectedPaths ?? new Set(recent.map((candidate) => candidate.key)),
-    [selectedPaths, recent],
-  );
+  const selectedKeys = selectedPaths;
   const selected = candidates.filter((candidate) => selectedKeys.has(candidate.key));
 
   const finishAfterImport = () => {
@@ -1425,55 +1421,50 @@ function ImportStep({
     finishAfterImport();
   };
 
-  if (scans.every((scan) => scan.data === null) && scans.some((scan) => scan.isPending)) {
-    return (
-      <div className="flex h-full min-h-40 flex-col">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Your projects</h1>
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6">
-          <Spinner className="size-5 text-muted-foreground" />
-          <p className="text-center text-sm text-muted-foreground">
-            Looking for projects from Claude Code and Codex…
-          </p>
-        </div>
-        <div className="flex justify-end">
-          <Button variant="ghost-muted" onClick={() => void onDone()}>
-            Add projects later
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <StepShell
-      title="Connect projects to your Brain"
-      description="Choose the projects that belong to your Brain. Flow will index their repositories and import available Claude Code and Codex conversations."
+      title="Which projects belong to this Brain?"
+      description="Choose your projects. Available chat history is included automatically."
     >
-      {candidates.length > 0 ? (
-        <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span role="status">
-            {selected.length} of {candidates.length} selected
-          </span>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={isImporting || selected.length === candidates.length}
-              onClick={() => setSelectedPaths(new Set(candidates.map((item) => item.key)))}
-            >
-              Select all
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={isImporting || selected.length === 0}
-              onClick={() => setSelectedPaths(new Set())}
-            >
-              Select none
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <div className="mt-5 space-y-3">
+        {scans.map((scan) => (
+          <ProjectSourcePicker
+            key={scan.environmentId}
+            environmentId={scan.environmentId}
+            disabled={isImporting}
+            onFolder={(folder) => onAddFolder(scan.environmentId, folder)}
+            onGithub={async (repository) => {
+              const workspaceId = brainChoices.get(scan.environmentId)?.id;
+              if (!workspaceId) throw new Error("Choose a Brain first.");
+              const result = await connectBrain({
+                environmentId: scan.environmentId,
+                input: { action: "import", workspaceId, repository },
+              });
+              if (result._tag !== "Success" || result.value.error)
+                throw new Error(
+                  result._tag === "Success"
+                    ? (result.value.error ?? "Could not add repository.")
+                    : "Could not connect to this computer.",
+                );
+              setGithubRepositories((current) => [...current, repository]);
+            }}
+          />
+        ))}
+        {candidates.length > 0 ? (
+          <Input
+            aria-label="Search projects"
+            placeholder="Search projects…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        ) : null}
+        {githubRepositories.map((repository) => (
+          <p key={repository} className="text-sm">
+            <CheckIcon className="mr-2 inline size-4 text-success-foreground" />
+            {repository}
+          </p>
+        ))}
+      </div>
       <ScrollArea
         scrollFade
         className="mt-2 h-auto max-h-80 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
@@ -1481,7 +1472,9 @@ function ImportStep({
         <div className="space-y-5 pr-3">
           {scans.map((scan) => {
             const scanCandidates = candidates.filter(
-              (candidate) => candidate.environmentId === scan.environmentId,
+              (candidate) =>
+                candidate.environmentId === scan.environmentId &&
+                `${candidate.title} ${candidate.path}`.toLowerCase().includes(search.toLowerCase()),
             );
             const label =
               environments.find((environment) => environment.environmentId === scan.environmentId)
@@ -1512,15 +1505,11 @@ function ImportStep({
                   </div>
                 ) : scanCandidates.length === 0 ? (
                   <p className="py-2 text-sm text-muted-foreground">
-                    No existing Claude Code or Codex projects found.
+                    {search
+                      ? "No matching projects."
+                      : "Choose a folder or add a GitHub repository to get started."}
                   </p>
                 ) : null}
-                {scan.data?.truncated ? (
-                  <p className="text-xs text-muted-foreground" role="status">
-                    {SCAN_LIMIT_MESSAGE}
-                  </p>
-                ) : null}
-                <ProjectFolderInput onAdd={(folder) => onAddFolder(scan.environmentId, folder)} />
                 <ImportCandidateList
                   candidates={scanCandidates}
                   selectedKeys={selectedKeys}
@@ -1542,12 +1531,10 @@ function ImportStep({
         </Button>
         <Button
           autoFocus
-          disabled={isImporting || selected.length === 0}
+          disabled={isImporting || (selected.length === 0 && githubRepositories.length === 0)}
           onClick={() => void runImport(selected)}
         >
-          {isImporting
-            ? "Connecting projects…"
-            : `Connect ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
+          {isImporting ? "Connecting projects…" : "Open Brain"}
         </Button>
       </div>
     </StepShell>
@@ -1559,12 +1546,6 @@ type ImportCandidate = AgentSessionProjectCandidate & {
   readonly key: string;
 };
 
-/**
- * Repositories first, newest activity on top. Clones of one repository share
- * a group with a tri-state checkbox. Folders that are not git repositories
- * sit collapsed at the bottom so they stay reachable without adding noise.
- * Source icons appear only on repository rows so the columns stay still.
- */
 function ImportCandidateList({
   candidates,
   selectedKeys,
@@ -1574,201 +1555,29 @@ function ImportCandidateList({
   readonly selectedKeys: ReadonlySet<string>;
   readonly onSelectionChange: (next: ReadonlySet<string>) => void;
 }) {
-  const { repositories, other } = useMemo(() => groupOnboardingProjects(candidates), [candidates]);
-  const setKeys = (keys: ReadonlyArray<string>, checked: boolean) => {
-    const next = new Set(selectedKeys);
-    for (const key of keys) {
-      if (checked) next.add(key);
-      else next.delete(key);
-    }
-    onSelectionChange(next);
-  };
-  const otherSelected = other.filter((candidate) => selectedKeys.has(candidate.key)).length;
-
   return (
-    <>
-      {repositories.map((group) => (
-        <ImportRepositoryGroup
-          key={group.key}
-          group={group}
-          selectedKeys={selectedKeys}
-          onToggle={setKeys}
-        />
-      ))}
-      {other.length > 0 ? (
-        <Collapsible>
-          <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40">
-            <Checkbox
-              checked={otherSelected === other.length}
-              indeterminate={otherSelected > 0 && otherSelected < other.length}
-              onCheckedChange={(checked) =>
-                setKeys(
-                  other.map((candidate) => candidate.key),
-                  checked === true,
-                )
-              }
-            />
-            <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left">
-              <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-              <span className="truncate text-sm text-muted-foreground">Other folders</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                {other.length} {other.length === 1 ? "folder" : "folders"}
-              </span>
-            </CollapsibleTrigger>
-          </div>
-          <CollapsiblePanel>
-            {other.map((candidate) => (
-              <ImportCandidateRow
-                key={candidate.key}
-                candidate={candidate}
-                label={candidate.path}
-                nested
-                checked={selectedKeys.has(candidate.key)}
-                onCheckedChange={(checked) => setKeys([candidate.key], checked)}
-              />
-            ))}
-          </CollapsiblePanel>
-        </Collapsible>
-      ) : null}
-    </>
-  );
-}
-
-function ImportRepositoryGroup({
-  group,
-  selectedKeys,
-  onToggle,
-}: {
-  readonly group: OnboardingProjectGroup<ImportCandidate>;
-  readonly selectedKeys: ReadonlySet<string>;
-  readonly onToggle: (keys: ReadonlyArray<string>, checked: boolean) => void;
-}) {
-  const keys = group.candidates.map((candidate) => candidate.key);
-  const selectedCount = keys.filter((key) => selectedKeys.has(key)).length;
-  const single = group.candidates.length === 1;
-  const only = group.candidates[0];
-  if (single && only !== undefined) {
-    return (
-      <ImportCandidateRow
-        candidate={only}
-        label={group.label}
-        {...(group.repository === null ? {} : { secondary: only.path })}
-        checked={selectedKeys.has(only.key)}
-        onCheckedChange={(checked) => onToggle([only.key], checked)}
-      />
-    );
-  }
-  return (
-    <Collapsible defaultOpen>
-      <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40">
-        <Checkbox
-          checked={selectedCount === keys.length}
-          indeterminate={selectedCount > 0 && selectedCount < keys.length}
-          onCheckedChange={(checked) => onToggle(keys, checked === true)}
-        />
-        <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-          <span className="truncate text-sm font-medium">{group.label}</span>
-          <ImportRowMeta
-            sources={[...new Set(group.candidates.flatMap((c) => c.sources))]}
-            threadCount={group.threadCount}
-            lastActiveAt={group.lastActiveAt}
-          />
-        </CollapsibleTrigger>
-      </div>
-      <CollapsiblePanel>
-        {group.candidates.map((candidate) => (
-          <ImportCandidateRow
-            key={candidate.key}
-            candidate={candidate}
-            label={candidate.path}
-            nested
-            checked={selectedKeys.has(candidate.key)}
-            onCheckedChange={(checked) => onToggle([candidate.key], checked)}
-          />
-        ))}
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
-
-function ImportCandidateRow({
-  candidate,
-  label,
-  secondary,
-  nested = false,
-  checked,
-  onCheckedChange,
-}: {
-  readonly candidate: ImportCandidate;
-  readonly label: string;
-  readonly secondary?: string;
-  readonly nested?: boolean;
-  readonly checked: boolean;
-  readonly onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40 has-disabled:cursor-default",
-        nested && "pl-8",
-      )}
-    >
-      <Checkbox checked={checked} onCheckedChange={(value) => onCheckedChange(value === true)} />
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="flex min-w-0 flex-1 items-baseline gap-2 truncate" />}
+    <div className="divide-y rounded-lg border">
+      {candidates.map((candidate) => (
+        <label
+          key={candidate.key}
+          className="flex cursor-pointer items-center gap-3 p-3 hover:bg-muted/40"
         >
-          <span className={cn("truncate", nested ? "font-mono text-xs" : "text-sm font-medium")}>
-            {label}
+          <Checkbox
+            checked={selectedKeys.has(candidate.key)}
+            onCheckedChange={(checked) => {
+              const next = new Set(selectedKeys);
+              if (checked) next.add(candidate.key);
+              else next.delete(candidate.key);
+              onSelectionChange(next);
+            }}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">{candidate.title}</span>
+            <span className="block break-all text-xs text-muted-foreground">{candidate.path}</span>
           </span>
-          {secondary !== undefined ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {secondary}
-            </span>
-          ) : null}
-        </TooltipTrigger>
-        <TooltipPopup className="max-w-96 break-all font-mono">{candidate.path}</TooltipPopup>
-      </Tooltip>
-      <ImportRowMeta
-        sources={nested ? null : candidate.sources}
-        threadCount={candidate.threadCount}
-        lastActiveAt={candidate.lastActiveAt}
-      />
-    </label>
-  );
-}
-
-/**
- * Trailing columns shared by every import row: source icons, thread count,
- * last activity. Each column has a fixed width and each icon has its own slot
- * so nothing shifts between rows that differ in sources or digit count.
- */
-function ImportRowMeta({
-  sources,
-  threadCount,
-  lastActiveAt,
-}: {
-  readonly sources: ReadonlyArray<"claudeAgent" | "codex"> | null;
-  readonly threadCount: number;
-  readonly lastActiveAt: string | null;
-}) {
-  const relative = lastActiveAt === null ? null : formatRelativeTime(lastActiveAt);
-  // "just now" does not fit the fixed column, so collapse it.
-  const age = relative === null ? "" : relative.suffix === null ? "now" : relative.value;
-  return (
-    <span className="ml-auto grid shrink-0 grid-cols-[1rem_1rem_2.5rem_2.25rem] items-center gap-x-1 text-xs text-muted-foreground tabular-nums">
-      <span className="flex size-4 items-center justify-center">
-        {sources?.includes("claudeAgent") ? (
-          <ClaudeAI className="size-3" aria-label="Claude Code" />
-        ) : null}
-      </span>
-      <span className="flex size-4 items-center justify-center">
-        {sources?.includes("codex") ? <OpenAI className="size-3" aria-label="Codex" /> : null}
-      </span>
-      <span className="text-right">{threadCount}</span>
-      <span className="text-right whitespace-nowrap">{age}</span>
-    </span>
+        </label>
+      ))}
+    </div>
   );
 }
 
@@ -1826,36 +1635,6 @@ function CommandBlock({
         onClick={() => copyToClipboard(command, undefined)}
       >
         {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-      </Button>
-    </div>
-  );
-}
-
-function ProjectFolderInput({ onAdd }: { readonly onAdd: (folder: string) => void }) {
-  const [folder, setFolder] = useState("");
-  return (
-    <div className="my-3 space-y-2">
-      <label className="text-sm">
-        Add a project or parent folder
-        <Input
-          value={folder}
-          placeholder="/path/to/your/projects"
-          onChange={(event) => setFolder(event.target.value)}
-        />
-      </label>
-      <p className="text-xs text-muted-foreground">
-        Flow finds repositories inside this folder. Your files stay where they are.
-      </p>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={!folder.trim()}
-        onClick={() => {
-          onAdd(folder.trim());
-          setFolder("");
-        }}
-      >
-        Find projects
       </Button>
     </div>
   );
