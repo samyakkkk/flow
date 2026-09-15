@@ -28,3 +28,18 @@ export async function projectRepositories(root: string): Promise<string[]> {
   }
   return repositories.sort();
 }
+
+/** Reuse the default-branch GitHub source when onboarding later binds its local checkout. */
+export function hasProjectRepositorySource(
+  sources: readonly { localPath?: string | undefined; repository: string; branch: string }[],
+  folder: { localPath: string; repository: string; github: boolean },
+): boolean {
+  return sources.some(
+    (source) =>
+      source.localPath === folder.localPath ||
+      (folder.github &&
+        !source.localPath &&
+        !source.branch &&
+        source.repository.toLowerCase() === folder.repository.toLowerCase()),
+  );
+}

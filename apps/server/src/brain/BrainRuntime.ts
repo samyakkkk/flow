@@ -1,4 +1,4 @@
-import { projectRepositories } from "./project-repositories.ts";
+import { projectRepositories, hasProjectRepositorySource } from "./project-repositories.ts";
 import type { GithubAccess } from "../../../../flow-t3/shared/runtime/src/github.ts";
 import { cloudSignInTarget, signInToCloud, CloudClient } from "./cloud-client.ts";
 import { ProjectBrainBindings } from "./project-bindings.ts";
@@ -1218,7 +1218,8 @@ export class BrainRuntime {
         }
       } else if (workspace) {
         for (const path of repositories) {
-          if (workspace.sources.some((source) => source.localPath === path)) continue;
+          const folder = await this.inspectFolder(path);
+          if (hasProjectRepositorySource(workspace.sources, folder)) continue;
           await this.executeCommand({ action: "importFolder", workspaceId: workspace.id, path });
         }
       }

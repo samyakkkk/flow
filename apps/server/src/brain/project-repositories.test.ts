@@ -3,7 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it } from "vite-plus/test";
-import { projectRepositories } from "./project-repositories.ts";
+import { projectRepositories, hasProjectRepositorySource } from "./project-repositories.ts";
 
 it("finds independent repositories under one project and excludes plain folders and worktrees", async () => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "brain-project-tree-"));
@@ -22,7 +22,7 @@ it("finds independent repositories under one project and excludes plain folders 
     const paths = await projectRepositories(root);
     expect(
       paths.map((path) =>
-        path.slice(path.indexOf("brain-project-tree-")).split("/").slice(1).NodePath.join("/"),
+        path.slice(path.indexOf("brain-project-tree-")).split("/").slice(1).join("/"),
       ),
     ).toEqual(["team/api", "web"]);
     expect(await projectRepositories(NodePath.join(root, "notes"))).toEqual([]);
@@ -30,4 +30,13 @@ it("finds independent repositories under one project and excludes plain folders 
   } finally {
     await NodeFSP.rm(root, { recursive: true, force: true });
   }
+});
+
+it("reuses the GitHub default-branch source without duplicating a local checkout", () => {
+  const folder = { localPath: "/work/app", repository: "team/app", github: true };
+  expect(hasProjectRepositorySource([{ repository: "Team/App", branch: "" }], folder)).toBe(true);
+  expect(hasProjectRepositorySource([{ repository: "team/app", branch: "feature" }], folder)).toBe(
+    false,
+  );
+  expect(hasProjectRepositorySource([{ repository: "other/app", branch: "" }], folder)).toBe(false);
 });

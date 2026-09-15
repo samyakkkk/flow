@@ -45,6 +45,8 @@ import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import {
   projectIsWithinFolder,
   isSuggestedBrainProject,
+  githubRepositoryKey,
+  matchGithubProjects,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
   resolveOnboardingProjectId,
@@ -1489,17 +1491,75 @@ function ImportStep({
             onGithub={async (repository) => {
               const workspaceId = brainChoices.get(scan.environmentId)?.id;
               if (!workspaceId) throw new Error("Choose a Brain first.");
-              const result = await connectBrain({
-                environmentId: scan.environmentId,
-                input: { action: "import", workspaceId, repository },
-              });
-              if (result._tag !== "Success" || result.value.error)
+              const repositoryKey = githubRepositoryKey(repository);
+              if (!repositoryKey)
                 throw new Error(
-                  result._tag === "Success"
-                    ? (result.value.error ?? "Could not add repository.")
-                    : "Could not connect to this computer.",
+                  "Enter a GitHub repository URL, such as https://github.com/team/project.",
                 );
-              setGithubRepositories((current) => [...current, repository]);
+              if (
+                !githubRepositories.some((value) => githubRepositoryKey(value) === repositoryKey)
+              ) {
+                const result = await connectBrain({
+                  environmentId: scan.environmentId,
+                  input: { action: "import", workspaceId, repository },
+                });
+                if (result._tag !== "Success" || result.value.error)
+                  throw new Error(
+                    result._tag === "Success"
+                      ? (result.value.error ?? "Could not add repository.")
+                      : "Could not connect to this computer.",
+                  );
+                setGithubRepositories((current) => [...current, repository]);
+              }
+              const knownProjects = readProjects()
+                .filter((project) => project.environmentId === scan.environmentId)
+                .map((project) => ({
+                  path: project.workspaceRoot,
+                  title: project.title,
+                  projectId: project.id,
+                }));
+              const selectedProjects = chosenProjects.filter(
+                (project) => project.environmentId === scan.environmentId,
+              );
+              const roots = [
+                ...new Set([...chosenFolders, ...knownProjects.map((project) => project.path)]),
+              ];
+              const refreshed = await scanFolder({
+                environmentId: scan.environmentId,
+                input: { roots },
+              });
+              if (refreshed._tag !== "Success") {
+                setFolderMessage(
+                  "Repository added to Brain. Local folders could not be checked; use Choose folder to connect one.",
+                );
+                return;
+              }
+              const matches = matchGithubProjects(
+                repository,
+                refreshed.value.candidates,
+                [...selectedProjects, ...knownProjects],
+                chosenFolders,
+              );
+              const additions: ImportCandidate[] = matches.map((candidate) => ({
+                ...candidate,
+                environmentId: scan.environmentId,
+                key: onboardingProjectKey(scan.environmentId, candidate.path),
+                repositories: refreshed.value.candidates.filter(
+                  (repo) => repo.git !== null && projectIsWithinFolder(repo.path, candidate.path),
+                ),
+              }));
+              setChosenProjects((current) => {
+                const existing = new Set(current.map((project) => project.key));
+                return [...current, ...additions.filter((project) => !existing.has(project.key))];
+              });
+              setSelectedPaths(
+                (current) => new Set([...current, ...additions.map((project) => project.key)]),
+              );
+              setFolderMessage(
+                matches.length
+                  ? `Repository added to Brain. ${matches.length} matching local ${matches.length === 1 ? "project selected" : "projects selected"}.`
+                  : "Repository added to Brain. No matching local project found.",
+              );
             }}
           />
         ))}
