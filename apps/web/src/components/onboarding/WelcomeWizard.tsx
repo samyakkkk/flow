@@ -27,6 +27,8 @@ import {
   ChevronRightIcon,
   CloudIcon,
   CopyIcon,
+  FolderIcon,
+  GitBranchIcon,
   LinkIcon,
   MonitorIcon,
   TerminalIcon,
@@ -41,7 +43,6 @@ import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import {
-  partitionOnboardingProjects,
   projectIsWithinFolder,
   isSuggestedBrainProject,
   onboardingProjectKey,
@@ -1213,6 +1214,7 @@ function ImportStep({
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(new Set());
   const [search, setSearch] = useState("");
   const scanFolder = useAtomQueryRunner(agentSessionScan, { reportFailure: false, refresh: true });
+  const [chosenProjects, setChosenProjects] = useState<readonly ImportCandidate[]>([]);
   const [chosenFolders, setChosenFolders] = useState<readonly string[]>([]);
   const [folderMessage, setFolderMessage] = useState("");
   const [githubRepositories, setGithubRepositories] = useState<readonly string[]>([]);
@@ -1251,21 +1253,26 @@ function ImportStep({
     }
   }, [landingProject, onDone, projects, setIsImporting]);
 
-  const { available: candidates } = useMemo(
-    () =>
-      partitionOnboardingProjects(
-        scans.flatMap((scan) =>
-          (scan.data?.candidates ?? [])
-            .filter((candidate) => isSuggestedBrainProject(candidate.path, chosenFolders))
-            .map((candidate) => ({
-              ...candidate,
-              environmentId: scan.environmentId,
-              key: onboardingProjectKey(scan.environmentId, candidate.path),
-            })),
-        ),
-      ),
-    [scans, chosenFolders],
-  );
+  const candidates: readonly ImportCandidate[] = useMemo(() => {
+    const suggested = scans.flatMap((scan) =>
+      (scan.data?.candidates ?? [])
+        .filter((candidate) => isSuggestedBrainProject(candidate.path, chosenFolders))
+        .filter(
+          (candidate) =>
+            !chosenProjects.some(
+              (project) =>
+                project.environmentId === scan.environmentId &&
+                projectIsWithinFolder(candidate.path, project.path),
+            ),
+        )
+        .map((candidate) => ({
+          ...candidate,
+          environmentId: scan.environmentId,
+          key: onboardingProjectKey(scan.environmentId, candidate.path),
+        })),
+    );
+    return [...chosenProjects, ...suggested];
+  }, [scans, chosenFolders, chosenProjects]);
   const selectedKeys = selectedPaths;
   const selected = candidates.filter((candidate) => selectedKeys.has(candidate.key));
 
@@ -1432,7 +1439,7 @@ function ImportStep({
   return (
     <StepShell
       title="Which projects belong to this Brain?"
-      description="Choose your projects. Available chat history is included automatically."
+      description="Choose folders for your chats. Git repositories inside them will be indexed by your Brain."
     >
       <div className="mt-5 space-y-3">
         {scans.map((scan) => (
@@ -1452,24 +1459,31 @@ function ImportStep({
                   projectIsWithinFolder(candidate.path, folder) &&
                   isSuggestedBrainProject(candidate.path, [folder]),
               );
-              if (found.length === 0)
-                throw new Error(
-                  "No projects found in this folder. Choose a project folder instead.",
-                );
+              const key = onboardingProjectKey(scan.environmentId, folder);
+              const project: ImportCandidate = {
+                path: folder,
+                title: folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder,
+                sources: [],
+                threadCount: 0,
+                lastActiveAt: null,
+                alreadyImported: false,
+                git: found.find((item) => item.path === folder)?.git ?? null,
+                environmentId: scan.environmentId,
+                key,
+                repositories: found.filter((item) => item.git !== null),
+              };
+              setChosenProjects((current) => [
+                ...current.filter(
+                  (item) =>
+                    item.environmentId !== scan.environmentId ||
+                    !projectIsWithinFolder(item.path, folder),
+                ),
+                project,
+              ]);
               setChosenFolders((current) => [...new Set([...current, folder])]);
-              setSelectedPaths(
-                (current) =>
-                  new Set([
-                    ...current,
-                    ...found.map((candidate) =>
-                      onboardingProjectKey(scan.environmentId, candidate.path),
-                    ),
-                  ]),
-              );
-              setSearch(folder.replace(/^\/private\/tmp(?=\/|$)/, "/tmp"));
-              setFolderMessage(
-                `${found.length} ${found.length === 1 ? "project" : "projects"} selected from ${folder}`,
-              );
+              setSelectedPaths((current) => new Set([...current, key]));
+              setSearch("");
+              setFolderMessage(`Project added: ${project.title}`);
               onAddFolder(scan.environmentId, folder);
             }}
             onGithub={async (repository) => {
@@ -1590,6 +1604,7 @@ function ImportStep({
 type ImportCandidate = AgentSessionProjectCandidate & {
   readonly environmentId: EnvironmentId;
   readonly key: string;
+  readonly repositories?: readonly AgentSessionProjectCandidate[];
 };
 
 function ImportCandidateList({
@@ -1604,26 +1619,56 @@ function ImportCandidateList({
   return (
     <div className="divide-y rounded-lg border">
       {candidates.map((candidate) => (
-        <label
-          key={candidate.key}
-          className="flex cursor-pointer items-center gap-3 p-3 hover:bg-muted/40"
-        >
-          <Checkbox
-            checked={selectedKeys.has(candidate.key)}
-            onCheckedChange={(checked) => {
-              const next = new Set(selectedKeys);
-              if (checked) next.add(candidate.key);
-              else next.delete(candidate.key);
-              onSelectionChange(next);
-            }}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium">
-              {candidate.git?.repository ?? candidate.title}
+        <div key={candidate.key}>
+          <label className="flex cursor-pointer items-center gap-3 p-3 hover:bg-muted/40">
+            <Checkbox
+              checked={selectedKeys.has(candidate.key)}
+              onCheckedChange={(checked) => {
+                const next = new Set(selectedKeys);
+                if (checked) next.add(candidate.key);
+                else next.delete(candidate.key);
+                onSelectionChange(next);
+              }}
+            />
+            <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2 text-sm font-medium">
+                {candidate.title}
+                <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+                  Project
+                </span>
+              </span>
+              <span className="block break-all text-xs text-muted-foreground">
+                {candidate.path}
+              </span>
             </span>
-            <span className="block break-all text-xs text-muted-foreground">{candidate.path}</span>
-          </span>
-        </label>
+          </label>
+          <div className="mb-3 ml-12 mr-3 border-l pl-4">
+            {(candidate.repositories ?? (candidate.git ? [candidate] : [])).map((repo) => (
+              <div key={repo.path} className="flex items-start gap-2 py-1.5 text-xs">
+                <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block font-medium">{repo.git?.repository ?? repo.title}</span>
+                  <span className="break-all text-muted-foreground">
+                    {repo.path === candidate.path
+                      ? "Project repository"
+                      : repo.path
+                          .replace(/^\/private\/tmp(?=\/|$)/, "/tmp")
+                          .slice(
+                            candidate.path.replace(/^\/private\/tmp(?=\/|$)/, "/tmp").length + 1,
+                          )}{" "}
+                    · Brain indexing
+                  </span>
+                </span>
+              </div>
+            ))}
+            {(candidate.repositories ?? (candidate.git ? [candidate] : [])).length === 0 ? (
+              <p className="py-1 text-xs text-muted-foreground">
+                No Git repositories · Chat project only
+              </p>
+            ) : null}
+          </div>
+        </div>
       ))}
     </div>
   );

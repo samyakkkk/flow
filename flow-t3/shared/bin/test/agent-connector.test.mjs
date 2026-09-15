@@ -178,3 +178,15 @@ test('Cloud registry preserves the Mac registry and installed hooks work without
   assert.match(hook.stdout,/claude:cloud-session/);
   assert.equal(f.events.filter(e=>e.method==='hook').length,1);
 });
+
+
+test('plain folder setup and doctor work without initializing Git', async t => {
+  const f = await fixture(t);
+  await fs.rm(join(f.folder, '.git'), { recursive: true });
+  const setup = await f.setup();
+  assert.equal(setup.code, 0, setup.stderr);
+  const doctor = await f.run([connector, 'doctor', '--folder', f.folder]);
+  assert.equal(doctor.code, 0, doctor.stderr);
+  await assert.rejects(fs.stat(join(f.folder, '.git')), { code: 'ENOENT' });
+  assert.equal((await f.setup()).code, 0);
+});
