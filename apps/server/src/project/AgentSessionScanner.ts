@@ -1,3 +1,4 @@
+import { discoverProjectFolders } from "./discoverProjectFolders.ts";
 /**
  * AgentSessionScanner - discovery of projects a user already works on.
  *
@@ -188,6 +189,9 @@ export class AgentSessionScanner extends Context.Service<
      * error directly — there is no server-local context worth wrapping.
      */
     readonly scan: Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
+    readonly scanRoots: (
+      roots: readonly string[],
+    ) => Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
@@ -623,7 +627,9 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const baseDir = path.resolve(serverConfig.baseDir);
+  const baseDir = yield* fileSystem
+    .realPath(path.resolve(serverConfig.baseDir))
+    .pipe(Effect.orElseSucceed(() => path.resolve(serverConfig.baseDir)));
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
   // Windows filesystems are case-insensitive, so path prefix checks there
   // must case fold.
@@ -1196,132 +1202,157 @@ export const make = Effect.gen(function* () {
 
   let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
 
-  const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    const { candidates: raw, truncated } = yield* collectCandidates();
-    cachedCandidates = raw;
+  const scanRoots: AgentSessionScanner["Service"]["scanRoots"] = (roots) =>
+    Effect.gen(function* () {
+      const { candidates: raw, truncated } = yield* collectCandidates();
+      cachedCandidates = raw;
 
-    // Filesystem identity merges symlinks and case aliases without collapsing
-    // distinct case-sensitive directories.
-    const merged = new Map<
-      string,
-      {
-        path: string;
-        sources: Array<AgentSessionSource>;
-        threadCount: number;
-        lastActiveAtMs: number | null;
-        git: AgentSessionProjectCandidate["git"];
-      }
-    >();
-    const directoryKeys = new Map<string, string>();
-    const gitIdentities = new Map<string, AgentSessionProjectCandidate["git"]>();
-
-    for (const candidate of raw) {
-      const expanded = expandHomePath(candidate.cwd.trim());
-      if (!path.isAbsolute(expanded)) continue;
-      const resolved = path.resolve(expanded);
-      if (isExcludedProjectPath(resolved)) continue;
-      let key = directoryKeys.get(resolved);
-      if (key === undefined) {
-        const stats = yield* statOption(resolved);
-        // Directories that no longer exist can't be imported.
-        if (Option.isNone(stats) || stats.value.type !== "Directory") {
-          directoryKeys.set(resolved, "");
-          continue;
+      // Filesystem identity merges symlinks and case aliases without collapsing
+      // distinct case-sensitive directories.
+      const merged = new Map<
+        string,
+        {
+          path: string;
+          sources: Array<AgentSessionSource>;
+          threadCount: number;
+          lastActiveAtMs: number | null;
+          git: AgentSessionProjectCandidate["git"];
         }
-        const realPath = yield* fileSystem
-          .realPath(resolved)
-          .pipe(Effect.orElseSucceed(() => resolved));
-        // A symlink can point into the worktrees directory even when its own
-        // spelling doesn't; check again with links resolved.
-        if (isExcludedProjectPath(realPath)) {
-          key = "";
-        } else {
-          const gitIdentity = yield* readGitIdentity(resolved);
-          if (gitIdentity._tag === "Worktree") {
+      >();
+      const directoryKeys = new Map<string, string>();
+      const gitIdentities = new Map<string, AgentSessionProjectCandidate["git"]>();
+
+      for (const candidate of raw) {
+        const expanded = expandHomePath(candidate.cwd.trim());
+        if (!path.isAbsolute(expanded)) continue;
+        const resolved = path.resolve(expanded);
+        if (isExcludedProjectPath(resolved)) continue;
+        let key = directoryKeys.get(resolved);
+        if (key === undefined) {
+          const stats = yield* statOption(resolved);
+          // Directories that no longer exist can't be imported.
+          if (Option.isNone(stats) || stats.value.type !== "Directory") {
+            directoryKeys.set(resolved, "");
+            continue;
+          }
+          const realPath = yield* fileSystem
+            .realPath(resolved)
+            .pipe(Effect.orElseSucceed(() => resolved));
+          // A symlink can point into the worktrees directory even when its own
+          // spelling doesn't; check again with links resolved.
+          if (isExcludedProjectPath(realPath)) {
             key = "";
           } else {
-            key = yield* directoryIdentity(resolved, stats.value);
-            gitIdentities.set(key, gitIdentity._tag === "Repository" ? gitIdentity.git : null);
+            const gitIdentity = yield* readGitIdentity(resolved);
+            if (gitIdentity._tag === "Worktree") {
+              key = "";
+            } else {
+              key = yield* directoryIdentity(resolved, stats.value);
+              gitIdentities.set(key, gitIdentity._tag === "Repository" ? gitIdentity.git : null);
+            }
           }
+          directoryKeys.set(resolved, key);
         }
-        directoryKeys.set(resolved, key);
-      }
-      if (key === "") continue;
+        if (key === "") continue;
 
-      const existing = merged.get(key);
-      if (!existing) {
-        merged.set(key, {
-          path: resolved,
-          sources: [candidate.source],
-          threadCount: candidate.threadCount,
-          lastActiveAtMs: candidate.lastActiveAtMs,
-          git: gitIdentities.get(key) ?? null,
+        const existing = merged.get(key);
+        if (!existing) {
+          merged.set(key, {
+            path: resolved,
+            sources: [candidate.source],
+            threadCount: candidate.threadCount,
+            lastActiveAtMs: candidate.lastActiveAtMs,
+            git: gitIdentities.get(key) ?? null,
+          });
+          continue;
+        }
+        if (!existing.sources.includes(candidate.source)) {
+          existing.sources.push(candidate.source);
+        }
+        existing.threadCount += candidate.threadCount;
+        existing.lastActiveAtMs =
+          existing.lastActiveAtMs === null || candidate.lastActiveAtMs === null
+            ? (existing.lastActiveAtMs ?? candidate.lastActiveAtMs)
+            : Math.max(existing.lastActiveAtMs, candidate.lastActiveAtMs);
+      }
+
+      let folderScanTruncated = false;
+      for (const root of roots) {
+        const found = yield* discoverProjectFolders(path.resolve(expandHomePath(root))).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.mapError(
+            (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
+          ),
+        );
+        folderScanTruncated ||= found.truncated;
+        for (const directory of found.paths) {
+          const key = yield* directoryIdentity(directory);
+          if (merged.has(key)) continue;
+          const identity = yield* readGitIdentity(directory);
+          merged.set(key, {
+            path: directory,
+            sources: [],
+            threadCount: 0,
+            lastActiveAtMs: null,
+            git: identity._tag === "Repository" ? identity.git : null,
+          });
+        }
+      }
+
+      // Resolve persisted roots too. A project and a transcript can name
+      // different symlinks to the same directory.
+      const shellSnapshot = yield* projectionSnapshotQuery
+        .getShellSnapshot()
+        .pipe(
+          Effect.mapError(
+            (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
+          ),
+        );
+      const importedProjectsByRoot = new Map<string, (typeof shellSnapshot.projects)[number]>();
+      for (const project of shellSnapshot.projects) {
+        const projectRoot = path.resolve(expandHomePath(project.workspaceRoot));
+        importedProjectsByRoot.set(normalizeProjectPathForComparison(projectRoot), project);
+        importedProjectsByRoot.set(yield* directoryIdentity(projectRoot), project);
+      }
+
+      const candidates: Array<AgentSessionProjectCandidate> = [];
+      for (const [key, entry] of merged.entries()) {
+        // Keep the path key for missing roots and use filesystem identity for
+        // aliases that resolve to the same directory.
+        const importedProject =
+          importedProjectsByRoot.get(normalizeProjectPathForComparison(entry.path)) ??
+          importedProjectsByRoot.get(key);
+        const candidatePath = importedProject?.workspaceRoot ?? entry.path;
+        candidates.push({
+          path: candidatePath,
+          title: path.basename(candidatePath) || candidatePath,
+          ...(importedProject === undefined ? {} : { projectId: importedProject.id }),
+          sources: entry.sources,
+          threadCount: entry.threadCount,
+          lastActiveAt:
+            entry.lastActiveAtMs === null
+              ? null
+              : DateTime.formatIso(DateTime.makeUnsafe(entry.lastActiveAtMs)),
+          alreadyImported: importedProject !== undefined,
+          git: entry.git,
         });
-        continue;
       }
-      if (!existing.sources.includes(candidate.source)) {
-        existing.sources.push(candidate.source);
-      }
-      existing.threadCount += candidate.threadCount;
-      existing.lastActiveAtMs =
-        existing.lastActiveAtMs === null || candidate.lastActiveAtMs === null
-          ? (existing.lastActiveAtMs ?? candidate.lastActiveAtMs)
-          : Math.max(existing.lastActiveAtMs, candidate.lastActiveAtMs);
-    }
 
-    // Resolve persisted roots too. A project and a transcript can name
-    // different symlinks to the same directory.
-    const shellSnapshot = yield* projectionSnapshotQuery
-      .getShellSnapshot()
-      .pipe(
-        Effect.mapError(
-          (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
-        ),
-      );
-    const importedProjectsByRoot = new Map<string, (typeof shellSnapshot.projects)[number]>();
-    for (const project of shellSnapshot.projects) {
-      const projectRoot = path.resolve(expandHomePath(project.workspaceRoot));
-      importedProjectsByRoot.set(normalizeProjectPathForComparison(projectRoot), project);
-      importedProjectsByRoot.set(yield* directoryIdentity(projectRoot), project);
-    }
-
-    const candidates: Array<AgentSessionProjectCandidate> = [];
-    for (const [key, entry] of merged.entries()) {
-      // Keep the path key for missing roots and use filesystem identity for
-      // aliases that resolve to the same directory.
-      const importedProject =
-        importedProjectsByRoot.get(normalizeProjectPathForComparison(entry.path)) ??
-        importedProjectsByRoot.get(key);
-      const candidatePath = importedProject?.workspaceRoot ?? entry.path;
-      candidates.push({
-        path: candidatePath,
-        title: path.basename(candidatePath) || candidatePath,
-        ...(importedProject === undefined ? {} : { projectId: importedProject.id }),
-        sources: entry.sources,
-        threadCount: entry.threadCount,
-        lastActiveAt:
-          entry.lastActiveAtMs === null
-            ? null
-            : DateTime.formatIso(DateTime.makeUnsafe(entry.lastActiveAtMs)),
-        alreadyImported: importedProject !== undefined,
-        git: entry.git,
+      // Newest first, undated candidates last.
+      candidates.sort((left, right) => {
+        if (left.lastActiveAt === right.lastActiveAt) return left.path.localeCompare(right.path);
+        if (left.lastActiveAt === null) return 1;
+        if (right.lastActiveAt === null) return -1;
+        return right.lastActiveAt.localeCompare(left.lastActiveAt);
       });
-    }
 
-    // Newest first, undated candidates last.
-    candidates.sort((left, right) => {
-      if (left.lastActiveAt === right.lastActiveAt) return left.path.localeCompare(right.path);
-      if (left.lastActiveAt === null) return 1;
-      if (right.lastActiveAt === null) return -1;
-      return right.lastActiveAt.localeCompare(left.lastActiveAt);
+      return {
+        candidates,
+        scannedAt: DateTime.formatIso(yield* DateTime.now),
+        ...(truncated || folderScanTruncated ? { truncated: true } : {}),
+      };
     });
-
-    return {
-      candidates,
-      scannedAt: DateTime.formatIso(yield* DateTime.now),
-      ...(truncated ? { truncated: true } : {}),
-    };
-  });
 
   const prepareRecentThreads = Effect.fn("AgentSessionScanner.prepareRecentThreads")(function* (
     workspaceRoot: string,
@@ -1487,7 +1518,7 @@ export const make = Effect.gen(function* () {
     completedSources = [],
   ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
 
-  return AgentSessionScanner.of({ scan, recentThreads });
+  return AgentSessionScanner.of({ scan: scanRoots([]), scanRoots, recentThreads });
 });
 
 export const layer = Layer.effect(AgentSessionScanner, make);

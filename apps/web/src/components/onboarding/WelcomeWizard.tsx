@@ -1,8 +1,11 @@
+import { buildProviderInstanceUpdatePatch } from "../settings/SettingsPanels.logic";
 import { BRAND } from "@t3tools/shared/branding";
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   AgentSessionProjectCandidate,
+  BrainCli,
+  BrainState,
   EnvironmentId,
   ProjectId,
   ScopedProjectRef,
@@ -27,7 +30,7 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useProjectBrainChoice } from "../brain/useProjectBrainChoice";
+
 import { brainCommand } from "../../state/brain";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
@@ -93,7 +96,7 @@ type WizardStep = "connection" | "agents" | "import";
 const NO_ENVIRONMENTS: readonly EnvironmentId[] = [];
 
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
-const ONBOARDING_STAGES = ["Connect", "Agents", "Projects"] as const;
+const ONBOARDING_STAGES = ["Connect", "Brain", "Projects"] as const;
 const SCAN_LIMIT_MESSAGE = "Scan limit reached. Some projects or conversations may be missing.";
 
 export function WelcomeWizard({
@@ -102,7 +105,7 @@ export function WelcomeWizard({
 }: {
   /** Whether this client is authenticated to the server serving the app. */
   readonly localAvailable: boolean;
-  readonly onDone: (projectRef?: ScopedProjectRef) => void;
+  readonly onDone: (brain?: { environmentId: EnvironmentId; brainId: string }) => void;
 }) {
   const completeOnboarding = useCompleteOnboarding();
   const [step, setStep] = useState<WizardStep>("connection");
@@ -111,6 +114,15 @@ export function WelcomeWizard({
   const autoSelectedComputers = useRef(new Set<EnvironmentId>());
   const [setupIds, setSetupIds] = useState<readonly EnvironmentId[]>([]);
   const [isImporting, setIsImporting] = useState(false);
+  const [brainChoices, setBrainChoices] = useState<
+    ReadonlyMap<EnvironmentId, { id: string; name: string }>
+  >(new Map());
+  const chooseOnboardingBrain = useCallback(
+    (environmentId: EnvironmentId, brain: { id: string; name: string }) => {
+      setBrainChoices((current) => new Map(current).set(environmentId, brain));
+    },
+    [],
+  );
   const finishingPromiseRef = useRef<Promise<boolean> | null>(null);
   const completionErrorToastIdRef = useRef<ReturnType<typeof toastManager.add> | null>(null);
   const primaryEnvironment = usePrimaryEnvironment();
@@ -132,7 +144,10 @@ export function WelcomeWizard({
   }, [environments]);
   const selectedIds =
     selection ?? new Set(primaryEnvironment ? [primaryEnvironment.environmentId] : []);
-  const scans = useProjectScans(step === "import" ? setupIds : NO_ENVIRONMENTS);
+  const [scanRoots, setScanRoots] = useState<ReadonlyMap<EnvironmentId, readonly string[]>>(
+    new Map(),
+  );
+  const scans = useProjectScans(step === "import" ? setupIds : NO_ENVIRONMENTS, scanRoots);
   const isLoadingProjects =
     step === "import" &&
     scans.every((scan) => scan.data === null) &&
@@ -157,7 +172,9 @@ export function WelcomeWizard({
             toastManager.close(completionErrorToastIdRef.current);
             completionErrorToastIdRef.current = null;
           }
-          onDone(projectRef);
+          const environmentId = projectRef?.environmentId ?? setupIds[0];
+          const brain = environmentId ? brainChoices.get(environmentId) : undefined;
+          onDone(environmentId && brain ? { environmentId, brainId: brain.id } : undefined);
           return true;
         })
         .catch(() => {
@@ -181,7 +198,7 @@ export function WelcomeWizard({
       finishingPromiseRef.current = completion;
       return completion;
     },
-    [completeOnboarding, onDone],
+    [completeOnboarding, onDone, brainChoices, setupIds],
   );
 
   return (
@@ -234,10 +251,19 @@ export function WelcomeWizard({
                 }}
               />
             ) : step === "agents" ? (
-              <AgentsStep environmentIds={setupIds} onContinue={() => setStep("import")} />
+              <AgentsStep
+                environmentIds={setupIds}
+                choices={brainChoices}
+                onChoose={chooseOnboardingBrain}
+                onContinue={() => setStep("import")}
+              />
             ) : (
               <ImportStep
                 scans={scans}
+                onAddFolder={(id, folder) =>
+                  setScanRoots((current) => new Map(current).set(id, [folder]))
+                }
+                brainChoices={brainChoices}
                 isImporting={isImporting}
                 setIsImporting={setIsImporting}
                 onDone={finish}
@@ -604,7 +630,7 @@ function PairingForm({
 
 // ── Step 3: agents ───────────────────────────────────────────
 
-const PRIMARY_AGENT_DRIVERS = ["claudeAgent", "codex"] as const;
+const PRIMARY_AGENT_DRIVERS = ["claudeAgent", "codex", "opencode"] as const;
 type OnboardingAgentDriver = (typeof PRIMARY_AGENT_DRIVERS)[number];
 
 /** Setup values stay fixed while provider probes refresh the surrounding cards. */
@@ -626,14 +652,21 @@ interface AgentTerminalSession {
  */
 function AgentsStep({
   environmentIds,
+  choices,
+  onChoose,
   onContinue,
 }: {
   readonly environmentIds: readonly EnvironmentId[];
+  readonly choices: ReadonlyMap<EnvironmentId, { id: string; name: string }>;
+  readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
   readonly onContinue: () => void;
 }) {
   const { environments } = useEnvironments();
   return (
-    <StepShell title="Your agents" description="Agents available on your selected computers.">
+    <StepShell
+      title="Create your Brain"
+      description="Name your Brain and choose the agent that will build and maintain its knowledge. Your other agents remain available in chats."
+    >
       <ScrollArea
         scrollFade
         className="mt-5 h-auto max-h-96 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
@@ -643,6 +676,8 @@ function AgentsStep({
             <ConnectedAgentsStep
               key={environmentId}
               environmentId={environmentId}
+              choice={choices.get(environmentId)}
+              onChoose={onChoose}
               machineLabel={
                 environments.find((environment) => environment.environmentId === environmentId)
                   ?.label ?? "Computer"
@@ -652,7 +687,11 @@ function AgentsStep({
         </div>
       </ScrollArea>
       <div className="mt-6 flex justify-end">
-        <Button autoFocus onClick={onContinue}>
+        <Button
+          autoFocus
+          disabled={!environmentIds.every((id) => choices.has(id))}
+          onClick={onContinue}
+        >
           Continue
           <ArrowRightIcon className="size-3.5" />
         </Button>
@@ -664,9 +703,13 @@ function AgentsStep({
 function ConnectedAgentsStep({
   environmentId,
   machineLabel,
+  choice,
+  onChoose,
 }: {
   readonly environmentId: EnvironmentId;
   readonly machineLabel: string;
+  readonly choice: { id: string; name: string } | undefined;
+  readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -683,6 +726,55 @@ function ConnectedAgentsStep({
 
   const byDriver = useMemo(() => selectOnboardingProvidersByDriver(providers), [providers]);
 
+  const updateProviderSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    reportFailure: false,
+  });
+  const executeBrain = useAtomCommand(brainCommand, { reportFailure: false });
+  const [brainState, setBrainState] = useState<BrainState | null>(null);
+  const [name, setName] = useState("My Brain");
+  const [cli, setCli] = useState<BrainCli>("claude");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [readAttempt, setReadAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void executeBrain({ environmentId, input: { action: "read", metadataOnly: true } }).then(
+      (result) => {
+        if (!active) return;
+        if (result._tag === "Success" && !result.value.error) {
+          setBrainState(result.value.state);
+          const available = result.value.state.clis.find((item) => item.installed);
+          if (available) setCli(available.id);
+        } else setError("Could not load Brains from this computer.");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [environmentId, executeBrain, readAttempt]);
+  const createBrain = async () => {
+    if (busy || !name.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await executeBrain({
+        environmentId,
+        input: { action: "create", name: name.trim(), cli },
+      });
+      if (result._tag === "Failure" || result.value.error || !result.value.createdWorkspaceId) {
+        setError(
+          result._tag === "Success"
+            ? (result.value.error ?? "Could not create Brain. Retry.")
+            : "Could not create Brain. Check the connection and retry.",
+        );
+        return;
+      }
+      setBrainState(result.value.state);
+      onChoose(environmentId, { id: result.value.createdWorkspaceId, name: name.trim() });
+    } finally {
+      setBusy(false);
+    }
+  };
   const primaryAgents = PRIMARY_AGENT_DRIVERS.map((driver) => ({
     driver,
     provider: byDriver.get(driver),
@@ -690,37 +782,155 @@ function ConnectedAgentsStep({
   return (
     <section>
       <h2 className="mb-2 text-sm font-medium">{machineLabel}</h2>
+      {brainState && brainState.workspaces.length > 0 ? (
+        <label className="mb-4 block space-y-2 text-sm">
+          Brain for this computer
+          <select
+            className="w-full rounded-md border bg-background p-2"
+            value={choice?.id ?? ""}
+            disabled={busy}
+            onChange={(event) => {
+              const brain = brainState.workspaces.find((item) => item.id === event.target.value);
+              if (brain) onChoose(environmentId, { id: brain.id, name: brain.name });
+            }}
+          >
+            <option value="" disabled>
+              Choose an existing Brain or create one below
+            </option>
+            {brainState.workspaces.map((brain) => (
+              <option key={brain.id} value={brain.id}>
+                {brain.name}
+                {brain.remote ? " (Cloud)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {choice ? (
+        <p className="mb-3 text-sm text-success-foreground">
+          {choice.name} is ready. Next, choose its projects.
+        </p>
+      ) : (
+        <label className="mb-4 block space-y-2 text-sm">
+          Brain name
+          <Input
+            value={name}
+            maxLength={80}
+            disabled={busy}
+            placeholder="e.g. Acme platform"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+      )}
+      {!choice ? <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p> : null}
       <div className="space-y-1.5">
         {primaryAgents.map(({ driver, provider }) => (
-          <AgentCard
-            key={driver}
-            driver={driver}
-            provider={provider}
-            terminalOpen={terminalSession?.driver === driver}
-            terminalAvailable={serverConfig !== null}
-            onOpenTerminal={() => {
-              if (provider === undefined || serverConfig === null) return;
-              setTerminalSession({
-                environmentId,
-                driver,
-                providerInstanceId: provider.instanceId,
-                cwd: serverConfig.cwd,
-                command: provider.installed
-                  ? resolveOnboardingProviderLoginCommand(
-                      provider,
-                      serverConfig.settings,
-                      serverConfig.environment.platform.os,
-                    )
-                  : resolveOnboardingProviderInstallCommand(
-                      driver,
-                      serverConfig.environment.platform.os,
-                    ),
-                keybindings: serverConfig.keybindings,
-              });
-            }}
-          />
+          <div key={driver} className="flex items-center gap-2">
+            {!choice ? (
+              <input
+                type="radio"
+                name={`brain-cli-${environmentId}`}
+                aria-label={`Use ${driver === "claudeAgent" ? "Claude Code" : driver} for this Brain`}
+                checked={cli === (driver === "claudeAgent" ? "claude" : driver)}
+                disabled={busy || getOnboardingProviderState(provider) !== "ready"}
+                onChange={() => setCli(driver === "claudeAgent" ? "claude" : driver)}
+              />
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <AgentCard
+                driver={driver}
+                provider={provider}
+                terminalOpen={terminalSession?.driver === driver}
+                terminalAvailable={serverConfig !== null}
+                onOpenTerminal={async () => {
+                  if (provider === undefined || serverConfig === null) return;
+                  if (!provider.enabled) {
+                    const settings = serverConfig.settings;
+                    const result = await updateProviderSettings({
+                      environmentId,
+                      input: {
+                        patch: buildProviderInstanceUpdatePatch({
+                          settings,
+                          instanceId: provider.instanceId,
+                          driver: provider.driver,
+                          isDefault: String(provider.instanceId) === String(provider.driver),
+                          instance: {
+                            ...settings.providerInstances[provider.instanceId],
+                            driver: provider.driver,
+                            enabled: true,
+                          },
+                        }),
+                      },
+                    });
+                    if (result._tag !== "Success") setError("Could not enable this agent. Retry.");
+                    else await refreshProviders({ environmentId, input: {} });
+                    return;
+                  }
+                  setTerminalSession({
+                    environmentId,
+                    driver,
+                    providerInstanceId: provider.instanceId,
+                    cwd: serverConfig.cwd,
+                    command: provider.installed
+                      ? resolveOnboardingProviderLoginCommand(
+                          provider,
+                          serverConfig.settings,
+                          serverConfig.environment.platform.os,
+                        )
+                      : resolveOnboardingProviderInstallCommand(
+                          driver,
+                          serverConfig.environment.platform.os,
+                        ),
+                    keybindings: serverConfig.keybindings,
+                  });
+                }}
+              />
+            </div>
+          </div>
         ))}
       </div>
+      {(providers ?? [])
+        .filter(
+          (provider) =>
+            provider.installed &&
+            !PRIMARY_AGENT_DRIVERS.some((driver) => driver === provider.driver),
+        )
+        .map((provider) => (
+          <p key={provider.instanceId} className="mt-2 text-xs text-muted-foreground">
+            {getDriverOption(provider.driver)?.label ?? provider.driver}: detected for chats.
+          </p>
+        ))}
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-destructive">
+          {error}
+          {!brainState ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setError("");
+                setReadAttempt((attempt) => attempt + 1);
+              }}
+            >
+              Retry
+            </Button>
+          ) : null}
+        </p>
+      ) : null}
+      {!choice ? (
+        <Button
+          className="mt-3"
+          disabled={
+            busy ||
+            !name.trim() ||
+            getOnboardingProviderState(byDriver.get(cli === "claude" ? "claudeAgent" : cli)) !==
+              "ready"
+          }
+          onClick={() => void createBrain()}
+        >
+          {busy ? "Creating Brain…" : "Create Brain"}
+        </Button>
+      ) : null}
       {terminalSession !== null ? (
         <AgentInstallTerminal
           key={`${terminalSession.environmentId}:${terminalSession.providerInstanceId}:${terminalSession.driver}`}
@@ -775,7 +985,9 @@ function AgentCard({
         ) : providerState === "checking" ? (
           <span className="text-xs text-muted-foreground">Checking...</span>
         ) : providerState === "disabled" ? (
-          <span className="text-xs text-muted-foreground">Disabled</span>
+          <Button size="xs" variant="ghost" onClick={onOpenTerminal} disabled={!terminalAvailable}>
+            Enable
+          </Button>
         ) : providerState === "attention" ? (
           <span className="text-xs text-muted-foreground">{summary.headline}</span>
         ) : (
@@ -948,12 +1160,16 @@ function AgentInstallTerminal({
 // ── Step 4: import ───────────────────────────────────────────
 
 function ImportStep({
+  onAddFolder,
   scans,
+  brainChoices,
   isImporting,
   setIsImporting,
   onDone,
 }: {
   readonly scans: ReturnType<typeof useProjectScans>;
+  readonly onAddFolder: (id: EnvironmentId, folder: string) => void;
+  readonly brainChoices: ReadonlyMap<EnvironmentId, { id: string; name: string }>;
   readonly isImporting: boolean;
   readonly setIsImporting: (value: boolean) => void;
   readonly onDone: (projectRef?: ScopedProjectRef) => Promise<boolean>;
@@ -961,7 +1177,6 @@ function ImportStep({
   const { environments } = useEnvironments();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const connectBrain = useAtomCommand(brainCommand, { reportFailure: false });
-  const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice({ required: true });
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const projects = useProjects();
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string> | null>(null);
@@ -974,7 +1189,6 @@ function ImportStep({
   const projectAttemptsRef = useRef(
     new Map<string, { readonly projectId: ProjectId; readonly commandId: CommandId }>(),
   );
-  const brainChoicesRef = useRef(new Map<EnvironmentId, string>());
   const importGenerationRef = useRef(0);
 
   // Ignore command completions after leaving the import step.
@@ -1068,19 +1282,11 @@ function ImportStep({
       }
       if (importedProjects.has(candidate.key)) continue;
       let projectId = resolveOnboardingProjectId(readProjects(), environmentId, candidate);
-      let workspaceId = brainChoicesRef.current.get(environmentId);
-      if (workspaceId === undefined) {
-        const brainChoice = await chooseBrain(
-          environmentId,
-          candidate.title,
-          projectId ?? undefined,
-        );
-        if (!brainChoice?.workspaceId) {
-          setIsImporting(false);
-          return;
-        }
-        workspaceId = brainChoice.workspaceId;
-        brainChoicesRef.current.set(environmentId, workspaceId);
+      const workspaceId = brainChoices.get(environmentId)?.id;
+      if (!workspaceId) {
+        setImportError("Choose a Brain for this computer before connecting projects.");
+        setIsImporting(false);
+        return;
       }
       if (importGeneration !== importGenerationRef.current) return;
       if (projectId === null) {
@@ -1128,7 +1334,9 @@ function ImportStep({
         if (connection._tag === "Failure" || connection.value.error) {
           setIsImporting(false);
           setImportError(
-            "Project saved, but its brain could not be connected. Retry to finish setup.",
+            connection._tag === "Success" && connection.value.error
+              ? `Project saved, but its Brain could not be connected: ${connection.value.error}`
+              : "Project saved, but its Brain could not be connected. Retry to finish setup.",
           );
           return;
         }
@@ -1198,7 +1406,7 @@ function ImportStep({
         </div>
         <div className="flex justify-end">
           <Button variant="ghost-muted" onClick={() => void onDone()}>
-            Do not import projects
+            Add projects later
           </Button>
         </div>
       </div>
@@ -1207,10 +1415,9 @@ function ImportStep({
 
   return (
     <StepShell
-      title="Choose your projects"
-      description="Import projects and conversations from your selected computers."
+      title="Connect projects to your Brain"
+      description="Choose the projects that belong to your Brain. Flow will index their repositories and import available Claude Code and Codex conversations."
     >
-      {brainChoiceDialog}
       {candidates.length > 0 ? (
         <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span role="status">
@@ -1282,6 +1489,7 @@ function ImportStep({
                     {SCAN_LIMIT_MESSAGE}
                   </p>
                 ) : null}
+                <ProjectFolderInput onAdd={(folder) => onAddFolder(scan.environmentId, folder)} />
                 <ImportCandidateList
                   candidates={scanCandidates}
                   selectedKeys={selectedKeys}
@@ -1299,7 +1507,7 @@ function ImportStep({
           disabled={isImporting}
           onClick={importError ? finishAfterImport : () => void onDone()}
         >
-          {importError ? "Continue without the rest" : "Do not import projects"}
+          {importError ? "Continue without the rest" : "Add projects later"}
         </Button>
         <Button
           autoFocus
@@ -1307,8 +1515,8 @@ function ImportStep({
           onClick={() => void runImport(selected)}
         >
           {isImporting
-            ? "Importing…"
-            : `Import ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
+            ? "Connecting projects…"
+            : `Connect ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
         </Button>
       </div>
     </StepShell>
@@ -1587,6 +1795,36 @@ function CommandBlock({
         onClick={() => copyToClipboard(command, undefined)}
       >
         {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
+function ProjectFolderInput({ onAdd }: { readonly onAdd: (folder: string) => void }) {
+  const [folder, setFolder] = useState("");
+  return (
+    <div className="my-3 space-y-2">
+      <label className="text-sm">
+        Add a project or parent folder
+        <Input
+          value={folder}
+          placeholder="/path/to/your/projects"
+          onChange={(event) => setFolder(event.target.value)}
+        />
+      </label>
+      <p className="text-xs text-muted-foreground">
+        Flow finds repositories inside this folder. Your files stay where they are.
+      </p>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={!folder.trim()}
+        onClick={() => {
+          onAdd(folder.trim());
+          setFolder("");
+        }}
+      >
+        Find projects
       </Button>
     </div>
   );

@@ -69,6 +69,7 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
  * test, so the layer is built per run rather than shared.
  */
 interface ScannerTestInput {
+  readonly roots?: readonly string[];
   readonly claudeHomePath: string;
   readonly codexHomePath: string;
   readonly importedWorkspaceRoots?: ReadonlyArray<string>;
@@ -102,7 +103,7 @@ const makeScannerTestLayer = (input: ScannerTestInput) =>
 const runScan = (input: ScannerTestInput) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.scan;
+    return yield* scanner.scanRoots(input.roots ?? []);
   }).pipe(Effect.provide(makeScannerTestLayer(input)));
 
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
@@ -994,6 +995,32 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const result = yield* runScan({ claudeHomePath, codexHomePath, configBaseDir });
 
         expect(result.candidates).toEqual([]);
+      }),
+    );
+
+    it.effect("offers repositories found under an explicit parent without agent history", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const parent = yield* makeTempDir("flow-parent-");
+        const repository = path.join(parent, "team", "repo");
+        yield* fs.makeDirectory(path.join(repository, ".git"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(repository, ".git", "config"),
+          '[remote "origin"]\nurl = https://github.com/example/repo.git\n',
+        );
+        const result = yield* runScan({
+          roots: [parent],
+          claudeHomePath: yield* makeTempDir("flow-claude-"),
+          codexHomePath: yield* makeTempDir("flow-codex-"),
+        });
+        expect(result.candidates).toHaveLength(1);
+        expect(result.candidates[0]).toMatchObject({
+          title: "repo",
+          sources: [],
+          threadCount: 0,
+          git: { repository: "example/repo" },
+        });
       }),
     );
 
