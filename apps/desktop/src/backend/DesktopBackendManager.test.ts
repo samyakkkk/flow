@@ -1504,3 +1504,32 @@ describe("DesktopBackendManager", () => {
     ),
   );
 });
+
+it.effect("attaches to the existing Flow server without spawning or stopping it", () =>
+  Effect.gen(function* () {
+    let spawned = 0;
+    let ready = 0;
+    const instance = yield* makeTestInstance({
+      config: { ...baseConfig, externalBootstrap: async () => "pairing-token" },
+      spawnerLayer: Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.sync(() => {
+            spawned++;
+            return makeProcess();
+          }),
+        ),
+      ),
+      onReady: Effect.sync(() => {
+        ready++;
+      }),
+    });
+    yield* instance.start;
+    assert.equal((yield* instance.snapshot).ready, true);
+    assert.equal(ready, 1);
+    assert.equal(spawned, 0);
+    yield* instance.stop();
+    assert.equal((yield* instance.snapshot).ready, false);
+    assert.equal(spawned, 0);
+  }).pipe(Effect.scoped),
+);

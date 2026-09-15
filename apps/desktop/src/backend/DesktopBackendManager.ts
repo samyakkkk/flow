@@ -86,6 +86,7 @@ export interface BackendProcessContext {
 export type DesktopBackendBootstrapDelivery = "fd3" | "stdin";
 
 export interface DesktopBackendStartConfig extends BackendProcessContext {
+  readonly externalBootstrap?: () => Promise<string>;
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
   // When true the spawner merges the desktop process.env on top of `env`;
@@ -803,6 +804,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         yield* Ref.update(state, (latest) =>
           latest.preflightFailureAttempt === 0 ? latest : { ...latest, preflightFailureAttempt: 0 },
         );
+
+        if (config.value.externalBootstrap) {
+          yield* Ref.update(state, (latest) => ({ ...latest, ready: true, restartAttempt: 0 }));
+          yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
+          return;
+        }
 
         if (!entryExists) {
           yield* scheduleRestart(`missing server entry at ${config.value.entryPath}`);

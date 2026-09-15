@@ -1,4 +1,5 @@
 import BRAND from "../../../branding.json" with { type: "json" };
+import { BrainHarness } from "./brain.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
@@ -845,6 +846,9 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const ServerSettings = Schema.Struct({
+  brainAgentHarnesses: Schema.NullOr(Schema.Array(BrainHarness)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior opt-ins, resets to the buffered default.
@@ -1142,6 +1146,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  brainAgentHarnesses: Schema.optionalKey(Schema.NullOr(Schema.Array(BrainHarness))),
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),

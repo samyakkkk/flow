@@ -633,7 +633,10 @@ function AgentsStep({
 }) {
   const { environments } = useEnvironments();
   return (
-    <StepShell title="Your agents" description="Agents available on your selected computers.">
+    <StepShell
+      title="Your agents"
+      description="Use connected agents directly in Flow chat. You can also connect their own terminal and editor tools to a project’s Brain from Brain → Use this Brain."
+    >
       <ScrollArea
         scrollFade
         className="mt-5 h-auto max-h-96 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"

@@ -1,3 +1,4 @@
+import { flowServerAttachment } from "./flowServerAttachment.ts";
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
@@ -499,6 +500,15 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 
+    const attachment = yield* Effect.promise(() =>
+      flowServerAttachment(
+        environment.homeDirectory,
+        environment.isDevelopment,
+        environment.isDevelopment
+          ? environment.path.join(environment.appRoot, "apps/server/src/bin.ts")
+          : environment.backendEntryPath,
+      ),
+    );
     return {
       executablePath: process.execPath,
       args: [environment.backendEntryPath, "--bootstrap-fd", "3"],
@@ -510,9 +520,12 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
       extendEnv: true,
-      bootstrap,
+      bootstrap: attachment
+        ? { ...bootstrap, desktopBootstrapToken: attachment.rendererToken }
+        : bootstrap,
       bootstrapDelivery: "fd3",
-      httpBaseUrl: backendExposure.httpBaseUrl,
+      httpBaseUrl: attachment?.url ?? backendExposure.httpBaseUrl,
+      ...(attachment ? { externalBootstrap: attachment.mint } : {}),
       captureOutput: true,
       preflightFailure: Option.none(),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;

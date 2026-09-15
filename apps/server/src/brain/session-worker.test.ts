@@ -23,6 +23,13 @@ it.effect(
         "source_search",
       ]);
       expect(tools.find((tool) => tool.name === "remember")?.annotations?.readOnlyHint).toBe(false);
+      for (const name of ["read_note_context", "list_skills", "read_skill", "read_document"]) {
+        expect(tools.find((tool) => tool.name === name)?.annotations).toMatchObject({
+          readOnlyHint: true,
+          destructiveHint: false,
+          openWorldHint: false,
+        });
+      }
       expect(tools.find((tool) => tool.name === "source_read")?.inputSchema).toMatchObject({
         properties: { revision: { type: "string" } },
       });

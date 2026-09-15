@@ -1,5 +1,6 @@
+import { AgentIntegrations } from "./AgentIntegrations";
 import { BrainIcon } from "./BrainIcon";
-import { BrainCliSelect } from "@flow/brain-ui";
+import { BrainCliSelect, BrainAgentSetup } from "@flow/brain-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BrainCommand,
@@ -124,6 +125,7 @@ function BrainController({
   const [createOpen, setCreateOpen] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setup, setSetup] = useState<{ workspaceId: string; instructions: string } | null>(null);
   const mounted = useRef(true);
   const pending = useRef<Promise<unknown> | null>(null);
   const transportError = useRef(false);
@@ -278,6 +280,26 @@ function BrainController({
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {workspace?.remote && (
+                <Button
+                  variant="outline"
+                  disabled={!workspace || !canRequest || busy}
+                  onClick={() => {
+                    if (!workspace) return;
+                    void send({ action: "agentSetup", workspaceId: workspace.id }).then(
+                      (result) => {
+                        if (result?.agentSetup)
+                          setSetup({
+                            workspaceId: workspace.id,
+                            instructions: result.agentSetup.instructions,
+                          });
+                      },
+                    );
+                  }}
+                >
+                  Use this Brain
+                </Button>
+              )}
               <Button
                 variant="outline"
                 disabled={!canRequest || busy || workspace?.migration?.status === "transferring"}
@@ -342,39 +364,18 @@ function BrainController({
             )}
           </div>
         )}
-        {workspace && workspace.remote?.status !== "error" && state && environmentId && (
-          <BrainSources
-            key={workspace.id}
-            workspace={workspace}
-            state={
-              workspace.remote
-                ? {
-                    ...state,
-                    github: workspace.remote.github ?? {
-                      connected: false,
-                      login: "",
-                      message: "Cloud unavailable",
-                    },
-                    clis: workspace.remote.clis ?? [],
-                  }
-                : state
-            }
-            environmentId={environmentId}
-            send={send}
-            busy={busy}
-          />
-        )}
         {workspace && (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-medium">Connected projects</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Projects that use this brain's knowledge.
+                  Available in Flow chat and your installed coding tools. Tools are configured when
+                  you add a project.
                 </p>
               </div>
               <BrainSelect
-                label="Connect an existing project"
+                label="Add project"
                 value=""
                 disabled={busy}
                 options={projects
@@ -407,7 +408,12 @@ function BrainController({
                   return (
                     <div key={project.id} className="flex flex-wrap items-center gap-3 p-4">
                       <Folder size={16} className="text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-sm">{project.title}</span>
+                      <div className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{project.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {project.workspaceRoot}
+                        </span>
+                      </div>
                       <BrainSelect
                         label={`Brain for ${project.title}`}
                         value={connected?.id ?? "none"}
@@ -428,11 +434,38 @@ function BrainController({
                           })
                         }
                       />
+                      <AgentIntegrations
+                        key={`${project.id}:${connected?.id}`}
+                        projects={[project]}
+                        send={send}
+                      />
                     </div>
                   );
                 })}
             </div>
           </section>
+        )}
+        {workspace && workspace.remote?.status !== "error" && state && environmentId && (
+          <BrainSources
+            key={workspace.id}
+            workspace={workspace}
+            state={
+              workspace.remote
+                ? {
+                    ...state,
+                    github: workspace.remote.github ?? {
+                      connected: false,
+                      login: "",
+                      message: "Cloud unavailable",
+                    },
+                    clis: workspace.remote.clis ?? [],
+                  }
+                : state
+            }
+            environmentId={environmentId}
+            send={send}
+            busy={busy}
+          />
         )}
       </BrainPage>
       <ConnectCloudDialog
@@ -449,6 +482,38 @@ function BrainController({
         send={send}
         onCreated={(id) => onSelectionChange(id, environmentId)}
       />
+      <Dialog
+        open={setup !== null && setup.workspaceId === workspace?.id}
+        onOpenChange={(open) => {
+          if (!open) setSetup(null);
+        }}
+      >
+        <DialogPopup className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Use your agents with this Brain</DialogTitle>
+            <DialogDescription>
+              Work in Flow chat or in your connected coding tools.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <AgentIntegrations
+              projects={projects.filter((project) => workspace?.projectIds?.includes(project.id))}
+              send={send}
+            />
+            {setup && (
+              <details className="mt-5">
+                <summary className="cursor-pointer text-sm">Set up with an agent instead</summary>
+                <div className="mt-3">
+                  <BrainAgentSetup
+                    instructions={setup.instructions}
+                    downloadUrl="https://github.com/samyakkkk/flow/releases/latest"
+                  />
+                </div>
+              </details>
+            )}
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogPopup className="max-w-md">
           <DialogHeader>

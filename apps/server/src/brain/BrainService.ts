@@ -81,7 +81,7 @@ export class BrainService extends Context.Service<
             message: cause instanceof Error ? cause.message : "Could not open the brain.",
           }),
       });
-      if (process.env.FLOW_MANAGED_INSTANCE_ID) {
+      {
         const close = yield* Effect.tryPromise({
           try: () => serveSharedBrain(runtime, config.stateDir),
           catch: (cause) =>

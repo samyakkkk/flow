@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrainCommand, BrainState, EnvironmentId } from "@t3tools/contracts";
 import type { SidebarProjectGroupMember } from "../../sidebarProjectGrouping";
@@ -104,6 +105,22 @@ export function ProjectBrainSettings({
   }
   return (
     <SettingsSection title="Brain">
+      <SettingsRow
+        title="Use agents in Flow or in their own tools"
+        description="Choose a connected agent in Flow chat. To connect terminal and editor tools to this same Brain, open Brain and choose Use this Brain."
+        control={
+          <Link
+            to="/brain"
+            search={{
+              brain: selected !== "none" && selected !== "conflict" ? selected : undefined,
+              environment: targets[0]?.environmentId,
+            }}
+            className="text-sm underline"
+          >
+            Open Brain
+          </Link>
+        }
+      />
       <SettingsRow
         title="Project brain"
         description="One brain for this project, shared by its checkouts and chats. Connecting adds the repository as a source."

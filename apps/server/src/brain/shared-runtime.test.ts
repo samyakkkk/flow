@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off - Assert real transport timestamps against wall time.
 // @effect-diagnostics nodeBuiltinImport:off - Real local transport and persistence test.
 // @effect-diagnostics globalFetch:off - Verify authentication at the HTTP boundary.
 import { it, expect } from "vite-plus/test";
@@ -8,8 +9,6 @@ const { tmpdir } = NodeOS;
 import * as NodePath from "node:path";
 const { join } = NodePath;
 import * as Schema from "effect/Schema";
-import * as Clock from "effect/Clock";
-import * as Effect from "effect/Effect";
 import { ProjectId, BrainState } from "@t3tools/contracts";
 import { serveSharedBrain, SharedBrainRuntime } from "./shared-runtime.ts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
@@ -86,7 +85,7 @@ it("shares tools and capture over authenticated transport while isolating projec
     );
     expect((await a.state(decodeProjectId("unbound"))).workspaces).toEqual([]);
     await close();
-    const capturedAfter = await Effect.runPromise(Clock.currentTimeMillis);
+    const capturedAfter = Date.now();
     await a.captureProjectEvent(project, {
       context: { session: "same-thread" },
       receipt: "receipt-1",
@@ -99,9 +98,7 @@ it("shares tools and capture over authenticated transport while isolating projec
       await readFile(join(root, "a", "capture", pendingFiles[0]!), "utf8"),
     ) as { capture: BrainCapture };
     expect(pending.capture.occurredAt).toBeGreaterThanOrEqual(capturedAfter);
-    expect(pending.capture.occurredAt).toBeLessThanOrEqual(
-      await Effect.runPromise(Clock.currentTimeMillis),
-    );
+    expect(pending.capture.occurredAt).toBeLessThanOrEqual(Date.now());
     await a.close();
     close = await serveSharedBrain(runtime, source);
     a = new SharedBrainRuntime(source, join(root, "a"), "instance-a");
@@ -115,6 +112,67 @@ it("shares tools and capture over authenticated transport while isolating projec
   } finally {
     await a.close();
     await b.close();
+    await close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("normalizes external captures with native conversation identities and tool evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "flow-external-test-"));
+  const captures: BrainCapture[] = [];
+  const runtime = {
+    captureBrainEvent: async (_id: string, event: BrainCapture) => {
+      captures.push(event);
+    },
+  } as unknown as BrainRuntime;
+  const close = await serveSharedBrain(runtime, root);
+  try {
+    const endpoint = JSON.parse(await readFile(join(root, "brain-endpoint.json"), "utf8"));
+    const send = (harness: string, event: Record<string, unknown>) =>
+      fetch(endpoint.url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${endpoint.token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          method: "hook",
+          instance: "machine-a",
+          workspace: "brain-a",
+          context: { session: "ignored", repo: "team/repo" },
+          hook: { harness, receipt: "native-event", occurredAt: 1000, event },
+        }),
+      });
+    expect(
+      (
+        await send("claude", {
+          session_id: "chat-a",
+          hook_event_name: "UserPromptSubmit",
+          prompt: "Explain the code",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await send("codex", {
+          session_id: "chat-a",
+          hook_event_name: "PostToolUse",
+          tool_name: "shell",
+          tool_use_id: "call-a",
+          tool_input: { command: "test" },
+          tool_response: "passed",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(captures.map((event) => event.context.session)).toEqual([
+      "machine-a:claude:chat-a",
+      "machine-a:codex:chat-a",
+    ]);
+    expect(captures[1]?.data).toMatchObject({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-a",
+      status: "completed",
+    });
+    expect((await send("claude", { hook_event_name: "Stop" })).status).toBe(503);
+    expect(captures).toHaveLength(2);
+  } finally {
     await close();
     await rm(root, { recursive: true, force: true });
   }

@@ -354,6 +354,12 @@ export async function retireLegacyFlow({
       "Legacy integration registry is unreadable; scanning common repository folders instead.",
     );
   }
+  const currentConfig = JSON.parse((await read(join(home, ".flow/config.json"))) || "{}");
+  const modernProjects = new Set(
+    Object.entries(currentConfig.projects || {})
+      .filter(([, value]) => value?.connector && value?.workspace)
+      .map(([key]) => key),
+  );
   const repos = new Set([home, ...Object.keys(manifest.repos || {}).filter(isAbsolute)]);
   // Broken installs may have lost their registry. Look for repositories in the
   // usual user code folders without following symlinks or walking dependencies.
@@ -386,6 +392,7 @@ export async function retireLegacyFlow({
   ])
     await discover(join(home, name), 0);
   for (const repo of repos) {
+    if (modernProjects.has(manifest.repos?.[repo]?.project)) continue;
     for (const rel of configFiles) {
       const file = join(repo, rel),
         text = await read(file);
@@ -421,7 +428,7 @@ export async function retireLegacyFlow({
   // Old hooks in unregistered repositories become harmless, including when the
   // old Node executable is unavailable and the hook shim is executed directly.
   const shim = join(home, ".flow/bin/flow-hook");
-  if (await read(shim)) await edit(shim, "#!/bin/sh\n':' //; exit 0\n");
+  if (!modernProjects.size && (await read(shim))) await edit(shim, "#!/bin/sh\n':' //; exit 0\n");
   if (changed.length || stopped.length || warnings.length) {
     await fs.mkdir(backup, { recursive: true, mode: 0o700 });
     await fs.writeFile(

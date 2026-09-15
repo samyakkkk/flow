@@ -66,6 +66,24 @@ be connected from this page yet.
 
 ![Flow Brain sources, including GitHub repositories, local folders, and upcoming integrations](../images/flow-brain-sources.webp)
 
+### Use your coding agents outside Flow
+
+Adding a project to a Brain configures the supported coding tools detected on that computer.
+This works from Flow desktop and the local web app. Open **Brain → Connected projects** to see
+Flow chat and the configured tools for each project. Restart your tools and accept their connection
+prompts before using them outside Flow.
+
+Expand **Manage coding tools** on a project to change or disconnect its tools. Disconnecting tools
+leaves Flow chat available. Keep Flow’s background service running; the browser may be closed.
+When a Flow browser installation is already present, the Mac desktop app connects to its managed
+server and leaves it running when desktop closes. Projects and Brain bindings are shared.
+Each other computer needs its own project setup; copying a skill file does not establish access.
+
+Each external conversation has its own notes. Tools that expose the startup hook’s conversation
+handle can bind those notes through Flow’s MCP connection. If a tool does not expose that handle,
+project knowledge remains available, but conversation-note access requires a supported session
+integration. Background curation uses the Brain’s selected provider and requires its sign-in.
+
 ### Conversation notes, Auto-Docs, and Auto-Skills
 
 The chat's **Flow** panel starts conversation notes with your first message. As you work,

@@ -236,3 +236,26 @@ test("a single-line Flow function cannot consume the next shell function", () =>
     "# Retired legacy Flow: flow() { /missing/flow; }\n" + neighbor,
   );
 });
+
+test("preserves current app-managed agent integrations during legacy retirement", async (t) => {
+  const { home, write } = await fixture(t);
+  const repo = join(home, "Projects/current");
+  await write(
+    ".flow/config.json",
+    JSON.stringify({
+      projects: { current: { connector: "/flow/connector.mjs", workspace: "brain" } },
+    }),
+  );
+  await write(
+    ".flow/integrations.json",
+    JSON.stringify({ repos: { [repo]: { project: "current" } } }),
+  );
+  const settings = JSON.stringify({
+    mcpServers: { "flow-graph": { command: join(home, ".flow/bin/flow-mcp") } },
+  });
+  await write("Projects/current/.mcp.json", settings);
+  await write(".flow/bin/flow-hook", "#!/usr/bin/env node\n// current hook\n");
+  await retireLegacyFlow({ home, path: "", run: noTools, log: () => {} });
+  assert.equal(await fs.readFile(join(repo, ".mcp.json"), "utf8"), settings);
+  assert.match(await fs.readFile(join(home, ".flow/bin/flow-hook"), "utf8"), /current hook/);
+});

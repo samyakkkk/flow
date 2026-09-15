@@ -173,7 +173,45 @@ export const ChatMemoryList = Schema.Struct({
   extractionError: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type ChatMemoryList = typeof ChatMemoryList.Type;
+export const BrainHarness = Schema.Literals([
+  "claude",
+  "codex",
+  "cursor",
+  "gemini",
+  "opencode",
+  "copilot",
+  "antigravity",
+]);
+export type BrainHarness = typeof BrainHarness.Type;
+export const BrainAgentIntegration = Schema.Struct({
+  configured: Schema.Boolean,
+  harnesses: Schema.Array(BrainHarness),
+  detected: Schema.Array(BrainHarness),
+  brainName: Schema.NullOr(Schema.String),
+  workspaceId: Schema.NullOr(Schema.String),
+  pendingCaptures: Schema.Number,
+  message: Schema.String,
+});
+export type BrainAgentIntegration = typeof BrainAgentIntegration.Type;
+export const BrainAgentIntegrations = Schema.Struct({
+  harnesses: Schema.Array(BrainHarness),
+  detected: Schema.Array(BrainHarness),
+  projects: Schema.Array(
+    Schema.Struct({
+      projectId: ProjectId,
+      workspaceId: Schema.NullOr(Schema.String),
+      integration: Schema.NullOr(BrainAgentIntegration),
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+export type BrainAgentIntegrations = typeof BrainAgentIntegrations.Type;
 export const BrainCommand = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("agentIntegrations"),
+    operation: Schema.Literals(["status", "configure"]),
+    harnesses: Schema.optionalKey(Schema.Array(BrainHarness)),
+  }),
   Schema.Struct({
     action: Schema.Literal("connectCloud"),
     workspaceId: Schema.optionalKey(Schema.String),
@@ -190,6 +228,13 @@ export const BrainCommand = Schema.Union([
     action: Schema.Literal("readChat"),
     threadId: ThreadId,
     revision: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({ action: Schema.Literal("agentSetup"), workspaceId: Schema.String }),
+  Schema.Struct({
+    action: Schema.Literal("agentIntegration"),
+    projectId: ProjectId,
+    operation: Schema.Literals(["status", "configure", "remove", "retry"]),
+    harnesses: Schema.optionalKey(Schema.Array(BrainHarness)),
   }),
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({
@@ -247,6 +292,11 @@ export const BrainCommand = Schema.Union([
 export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
+  agentIntegration: Schema.optionalKey(BrainAgentIntegration),
+  agentIntegrations: Schema.optionalKey(BrainAgentIntegrations),
+  agentSetup: Schema.optionalKey(
+    Schema.Struct({ instructions: Schema.String, command: Schema.String }),
+  ),
   chatMemories: Schema.optional(ChatMemoryList),
   document: Schema.optionalKey(Schema.NullOr(BrainDocument)),
   error: Schema.NullOr(Schema.String),

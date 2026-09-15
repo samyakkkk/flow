@@ -177,6 +177,7 @@ export async function supervise(directory) {
   };
   try {
     const env = cleanEnvironment(process.env);
+    if (process.env.FLOW_AGENT_HOME) env.FLOW_AGENT_HOME = process.env.FLOW_AGENT_HOME;
     let source;
     if (config.from) {
       source = await control(join(registryRoot(), "instances", config.from));

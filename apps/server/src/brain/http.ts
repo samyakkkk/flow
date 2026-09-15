@@ -1,3 +1,10 @@
+import { ServerConfig } from "../config.ts";
+import {
+  agentSetupInstructions,
+  manageAgentIntegration,
+  manageAllAgentIntegrations,
+  bindProjectWithAgentTools,
+} from "./agent-setup.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -33,6 +40,7 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "brain",
   Effect.fnUntraced(function* (handlers) {
+    const config = yield* ServerConfig;
     const service = yield* BrainService;
     const projections = yield* ProjectionSnapshotQuery;
     const settings = yield* ServerSettingsService;
@@ -56,6 +64,91 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
           Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
         );
         const command = args.payload.command;
+        if (command.action === "agentIntegrations") {
+          if (command.operation === "configure" && command.harnesses === undefined)
+            return yield* failEnvironmentInternal(
+              "internal_error",
+              new Error("Choose coding tools."),
+            );
+          const preferences =
+            command.operation === "configure"
+              ? yield* settings.updateSettings({ brainAgentHarnesses: command.harnesses! })
+              : yield* settings.getSettings;
+          const snapshot = yield* projections
+            .getShellSnapshot()
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          for (const project of snapshot.projects) runtime.projectBindings.register(project);
+          return yield* Effect.tryPromise(async () => ({
+            state: await runtime.state(undefined, true),
+            agentIntegrations: await manageAllAgentIntegrations({
+              operation: command.operation,
+              stateDir: process.env.FLOW_SHARED_BRAIN_HOME ?? config.stateDir,
+              harnesses: preferences.brainAgentHarnesses,
+              projects: snapshot.projects.map((project) => ({
+                id: project.id,
+                workspaceRoot: project.workspaceRoot,
+                workspaceId: runtime.projectBrainId(project.id) ?? null,
+              })),
+            }),
+            error: null,
+            createdWorkspaceId: null,
+          })).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
+        if (command.action === "agentIntegration") {
+          const project = yield* projections
+            .getProjectShellById(command.projectId)
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+          if (Option.isNone(project))
+            return yield* failEnvironmentInternal(
+              "internal_error",
+              new Error("Project not found."),
+            );
+          runtime.projectBindings.register(project.value);
+          const folder = project.value.workspaceRoot;
+          return yield* Effect.tryPromise(async () => {
+            const workspaceId = runtime.projectBrainId(command.projectId);
+            try {
+              const agentIntegration = await manageAgentIntegration({
+                operation: command.operation,
+                folder,
+                stateDir: process.env.FLOW_SHARED_BRAIN_HOME ?? config.stateDir,
+                ...(workspaceId ? { workspaceId } : {}),
+                ...(command.harnesses ? { harnesses: command.harnesses } : {}),
+              });
+              return {
+                state: await runtime.state(undefined, true),
+                agentIntegration,
+                error: null,
+                createdWorkspaceId: null,
+              };
+            } catch (error) {
+              return {
+                state: await runtime.state(undefined, true),
+                error:
+                  error instanceof Error ? error.message : "Could not configure coding agents.",
+                createdWorkspaceId: null,
+              };
+            }
+          }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
+        if (command.action === "agentSetup") {
+          return yield* Effect.tryPromise(async () => {
+            const state = await runtime.state(undefined, true);
+            const workspace = state.workspaces.find((item) => item.id === command.workspaceId);
+            if (!workspace) throw Error("Brain not found");
+            return {
+              state,
+              error: null,
+              createdWorkspaceId: null,
+              agentSetup: agentSetupInstructions({
+                stateDir: process.env.FLOW_SHARED_BRAIN_HOME ?? config.stateDir,
+                workspaceId: workspace.id,
+                name: workspace.name,
+                repositories: workspace.sources.map((source) => source.repository),
+              }),
+            };
+          }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
         if (command.action === "readDocument") {
           return yield* Effect.tryPromise(async () => ({
             state: await runtime.state(undefined, true),
@@ -108,6 +201,15 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
                 .getProjectShellById(command.projectId)
                 .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)))
             : Option.none();
+        if (Option.isSome(project)) runtime.projectBindings.register(project.value);
+        const relatedProjects = Option.isSome(project)
+          ? yield* Effect.forEach(runtime.projectBindings.members(project.value.id), (id) =>
+              projections
+                .getProjectShellById(id)
+                .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error))),
+            )
+          : [];
+        const agentHarnesses = (yield* settings.getSettings).brainAgentHarnesses;
         const response = yield* Effect.tryPromise(async () => {
           let error: string | null = null;
           let createdWorkspaceId: string | null = null;
@@ -119,8 +221,15 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
                 throw new Error(
                   "Project not found on this computer. Retry after it finishes being created.",
                 );
-              runtime.projectBindings.register(project.value);
-              await runtime.bindProject(project.value, command.workspaceId);
+              await bindProjectWithAgentTools({
+                folders: relatedProjects.flatMap((related) =>
+                  Option.isSome(related) ? [related.value.workspaceRoot] : [],
+                ),
+                stateDir: process.env.FLOW_SHARED_BRAIN_HOME ?? config.stateDir,
+                workspaceId: command.workspaceId,
+                harnesses: agentHarnesses,
+                bind: () => runtime.bindProject(project.value, command.workspaceId),
+              });
             } else if (command.action === "listGithubRepositories") {
               repositories = await runtime.listGithubRepositories(command.workspaceId);
             } else if (command.action === "listGithubBranches") {

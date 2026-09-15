@@ -18,3 +18,5 @@ export type {
 } from "./types.ts";
 import "./styles.css";
 export { BrainCliSelect } from "./BrainCliSelect.tsx";
+
+export { BrainAgentSetup } from "./BrainAgentSetup.tsx";

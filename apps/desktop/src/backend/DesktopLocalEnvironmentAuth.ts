@@ -64,7 +64,12 @@ export const make = Effect.gen(function* () {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }
         const config = configOption.value;
-        const credential = config.bootstrap.desktopBootstrapToken;
+        const credential = config.externalBootstrap
+          ? yield* Effect.tryPromise({
+              try: config.externalBootstrap,
+              catch: (cause) => new DesktopLocalEnvironmentAuthSessionBootstrapError({ cause }),
+            })
+          : config.bootstrap.desktopBootstrapToken;
         if (!credential) {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }

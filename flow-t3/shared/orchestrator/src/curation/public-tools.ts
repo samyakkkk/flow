@@ -11,7 +11,7 @@ export const CURATION_PUBLIC_TOOLS = [
       properties: { entryId: { type: "string" }, revision: { type: "integer", minimum: 1 } },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "list_skills",
@@ -22,7 +22,7 @@ export const CURATION_PUBLIC_TOOLS = [
       properties: { query: { type: "string" } },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "read_skill",
@@ -34,7 +34,7 @@ export const CURATION_PUBLIC_TOOLS = [
       required: ["id"],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "read_document",
@@ -46,7 +46,7 @@ export const CURATION_PUBLIC_TOOLS = [
       required: ["id"],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
 ];
 const result = (value: unknown, isError = false) => ({

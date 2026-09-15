@@ -1,6 +1,16 @@
 #!/usr/bin/env node
-import { main } from "./instances/launcher.mjs";
-main(process.argv.slice(2)).catch((error) => {
+import { main, registryRoot } from "./instances/launcher.mjs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "setup" && !args.includes("--state-dir")) {
+  await main(["--no-open"]);
+  args.push("--state-dir", join(registryRoot(), "instances/primary/data/userdata"));
+}
+const run =
+  args[0] === "setup" || args[0] === "agents"
+    ? (await import("../flow-t3/shared/bin/harness/agent-connector.mjs")).main
+    : main;
+run(args[0] === "agents" ? args.slice(1) : args).catch((error) => {
   console.error(error.message);
   process.exitCode = 1;
 });
