@@ -42,6 +42,8 @@ import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import {
   partitionOnboardingProjects,
+  projectIsWithinFolder,
+  isSuggestedBrainProject,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
   resolveOnboardingProjectId,
@@ -54,7 +56,8 @@ import {
 } from "../../onboarding/providerReadiness.logic";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { newProjectId, randomUUID } from "../../lib/utils";
-import { agentSessionImport } from "../../state/agentSessions";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { agentSessionScan, agentSessionImport } from "../../state/agentSessions";
 import { readProjects, useProjects } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { isOnboardingRelayEnvironment } from "../../onboarding/targetEnvironment.logic";
@@ -1209,6 +1212,9 @@ function ImportStep({
   const projects = useProjects();
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(new Set());
   const [search, setSearch] = useState("");
+  const scanFolder = useAtomQueryRunner(agentSessionScan, { reportFailure: false, refresh: true });
+  const [chosenFolders, setChosenFolders] = useState<readonly string[]>([]);
+  const [folderMessage, setFolderMessage] = useState("");
   const [githubRepositories, setGithubRepositories] = useState<readonly string[]>([]);
   const [importError, setImportError] = useState("");
   const [landingProject, setLandingProject] = useState<ScopedProjectRef | null>(null);
@@ -1249,14 +1255,16 @@ function ImportStep({
     () =>
       partitionOnboardingProjects(
         scans.flatMap((scan) =>
-          (scan.data?.candidates ?? []).map((candidate) => ({
-            ...candidate,
-            environmentId: scan.environmentId,
-            key: onboardingProjectKey(scan.environmentId, candidate.path),
-          })),
+          (scan.data?.candidates ?? [])
+            .filter((candidate) => isSuggestedBrainProject(candidate.path, chosenFolders))
+            .map((candidate) => ({
+              ...candidate,
+              environmentId: scan.environmentId,
+              key: onboardingProjectKey(scan.environmentId, candidate.path),
+            })),
         ),
       ),
-    [scans],
+    [scans, chosenFolders],
   );
   const selectedKeys = selectedPaths;
   const selected = candidates.filter((candidate) => selectedKeys.has(candidate.key));
@@ -1432,7 +1440,38 @@ function ImportStep({
             key={scan.environmentId}
             environmentId={scan.environmentId}
             disabled={isImporting}
-            onFolder={(folder) => onAddFolder(scan.environmentId, folder)}
+            onFolder={async (folder) => {
+              const result = await scanFolder({
+                environmentId: scan.environmentId,
+                input: { roots: [folder] },
+              });
+              if (result._tag !== "Success")
+                throw new Error("Could not scan this folder. Try another folder.");
+              const found = result.value.candidates.filter(
+                (candidate) =>
+                  projectIsWithinFolder(candidate.path, folder) &&
+                  isSuggestedBrainProject(candidate.path, [folder]),
+              );
+              if (found.length === 0)
+                throw new Error(
+                  "No projects found in this folder. Choose a project folder instead.",
+                );
+              setChosenFolders((current) => [...new Set([...current, folder])]);
+              setSelectedPaths(
+                (current) =>
+                  new Set([
+                    ...current,
+                    ...found.map((candidate) =>
+                      onboardingProjectKey(scan.environmentId, candidate.path),
+                    ),
+                  ]),
+              );
+              setSearch(folder.replace(/^\/private\/tmp(?=\/|$)/, "/tmp"));
+              setFolderMessage(
+                `${found.length} ${found.length === 1 ? "project" : "projects"} selected from ${folder}`,
+              );
+              onAddFolder(scan.environmentId, folder);
+            }}
             onGithub={async (repository) => {
               const workspaceId = brainChoices.get(scan.environmentId)?.id;
               if (!workspaceId) throw new Error("Choose a Brain first.");
@@ -1450,6 +1489,11 @@ function ImportStep({
             }}
           />
         ))}
+        {folderMessage ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            {folderMessage}
+          </p>
+        ) : null}
         {candidates.length > 0 ? (
           <Input
             aria-label="Search projects"
@@ -1474,7 +1518,9 @@ function ImportStep({
             const scanCandidates = candidates.filter(
               (candidate) =>
                 candidate.environmentId === scan.environmentId &&
-                `${candidate.title} ${candidate.path}`.toLowerCase().includes(search.toLowerCase()),
+                `${candidate.git?.repository ?? candidate.title} ${candidate.path}`
+                  .toLowerCase()
+                  .includes(search.toLowerCase()),
             );
             const label =
               environments.find((environment) => environment.environmentId === scan.environmentId)
@@ -1572,7 +1618,9 @@ function ImportCandidateList({
             }}
           />
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium">{candidate.title}</span>
+            <span className="block text-sm font-medium">
+              {candidate.git?.repository ?? candidate.title}
+            </span>
             <span className="block break-all text-xs text-muted-foreground">{candidate.path}</span>
           </span>
         </label>

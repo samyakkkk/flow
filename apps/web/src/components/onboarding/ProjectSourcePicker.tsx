@@ -22,7 +22,7 @@ export function ProjectSourcePicker({
 }: {
   readonly environmentId: EnvironmentId;
   readonly disabled: boolean;
-  readonly onFolder: (path: string) => void;
+  readonly onFolder: (path: string) => Promise<void>;
   readonly onGithub: (repository: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"folder" | "github">("folder");
@@ -184,15 +184,11 @@ export function ProjectSourcePicker({
                 (mode === "folder" ? !listing || path !== listing.parentPath : !repository.trim())
               }
               onClick={async () => {
-                if (mode === "folder" && listing) {
-                  onFolder(listing.parentPath);
-                  setOpen(false);
-                  return;
-                }
                 setBusy(true);
                 setError("");
                 try {
-                  await onGithub(repository.trim());
+                  if (mode === "folder" && listing) await onFolder(listing.parentPath);
+                  else await onGithub(repository.trim());
                   setRepository("");
                   setOpen(false);
                 } catch (cause) {

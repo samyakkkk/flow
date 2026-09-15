@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   groupOnboardingProjects,
+  isSuggestedBrainProject,
+  projectIsWithinFolder,
   partitionOnboardingProjects,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
@@ -330,5 +332,26 @@ describe("projects on multiple computers", () => {
     const first = { ...candidate("/code/app"), environmentId: "first" };
     const second = { ...candidate("/code/app"), environmentId: "second" };
     expect(partitionOnboardingProjects([first, second], now).recent).toEqual([first, second]);
+  });
+});
+
+describe("Brain project suggestions", () => {
+  it("hides internal Brain folders even when their parent was chosen", () => {
+    expect(isSuggestedBrainProject("/tmp/test/userdata/brain/workspaces/uuid", ["/tmp/test"])).toBe(
+      false,
+    );
+    expect(isSuggestedBrainProject("/home/me/project/.t3/worktrees/task")).toBe(false);
+    expect(isSuggestedBrainProject("/home/me/flow/data/projects/demo/workspace/repos/app")).toBe(
+      false,
+    );
+  });
+  it("offers temporary projects only after explicit folder selection", () => {
+    expect(isSuggestedBrainProject("/private/tmp/test/app")).toBe(false);
+    expect(isSuggestedBrainProject("/private/tmp/test/app", ["/tmp/test"])).toBe(true);
+    expect(isSuggestedBrainProject("/home/me/projects/app")).toBe(true);
+  });
+  it("matches nested folders without matching siblings with the same prefix", () => {
+    expect(projectIsWithinFolder("/private/tmp/test/team/app", "/tmp/test")).toBe(true);
+    expect(projectIsWithinFolder("/tmp/testing/app", "/tmp/test")).toBe(false);
   });
 });

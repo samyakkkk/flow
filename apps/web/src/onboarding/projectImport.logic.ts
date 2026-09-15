@@ -138,3 +138,27 @@ export function resolveOnboardingLandingProject<T>(
 export function onboardingProjectKey(environmentId: EnvironmentId, path: string): string {
   return JSON.stringify([environmentId, path]);
 }
+
+/** Compare server-returned canonical macOS paths with paths chosen in the browser. */
+export function projectIsWithinFolder(project: string, folder: string): boolean {
+  const normalize = (value: string) =>
+    value
+      .replaceAll("\\", "/")
+      .replace(/^\/private\/tmp(?=\/|$)/, "/tmp")
+      .replace(/\/$/, "");
+  const root = normalize(folder);
+  const candidate = normalize(project);
+  return candidate === root || candidate.startsWith(root + "/");
+}
+
+/** Internal indexer directories are not user projects. Temporary folders require an explicit choice. */
+export function isSuggestedBrainProject(
+  path: string,
+  chosenFolders: readonly string[] = [],
+): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (/\/(?:userdata\/brain\/workspaces|\.t3\/worktrees)\//.test(normalized)) return false;
+  if (/\/data\/projects\/[^/]+\/workspace\/repos\//.test(normalized)) return false;
+  if (chosenFolders.some((folder) => projectIsWithinFolder(path, folder))) return true;
+  return !/^(?:\/private)?\/tmp(?:\/|$)|^\/private\/var\/folders\//.test(normalized);
+}
