@@ -16,6 +16,12 @@ Run these commands on the machine that will host T3 Code:
 
 Uninstalling the service leaves your projects, threads, and settings intact.
 
+This is the T3 Cloud boot service. It is separate from the Flow service
+(`com.flow.service` on macOS, `flow.service` on Linux) described in
+[Run Flow in a browser](./local-instances.md), which is installed and removed with
+`flow service install` and `flow service uninstall`. The two can be installed at
+the same time and neither command affects the other.
+
 Install and update use the version of the CLI you invoke. For nightly, use
 `npx t3@nightly service update`; replace `nightly` with an exact version to pin
 one. An older CLI refuses to replace a newer service unless you explicitly add
@@ -75,7 +81,11 @@ On macOS, check **System Settings → General → Login Items** if the service n
 longer starts at login. If agent work cannot access Desktop, Documents, or
 Downloads, it may need Full Disk Access for the Node executable listed in
 `ProgramArguments` in
-`~/Library/LaunchAgents/com.t3tools.t3code.service.plist`.
+`~/Library/LaunchAgents/com.t3tools.t3code.service.plist`. If your coding agents
+run under the Flow service instead, grant it to the Node executable listed in
+that unit's own `ProgramArguments`, in
+`~/Library/LaunchAgents/com.flow.service.plist`; each unit is granted access
+separately.
 
 For failures after signing in to T3 Connect, see
 [connection troubleshooting](./remote-access.md#t3-connect-troubleshooting).

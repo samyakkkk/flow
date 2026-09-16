@@ -34,6 +34,25 @@ restarting apps. It refuses to overwrite an unrelated command. The existing
 `~/.flow/bin/flow` memory helper is left intact; integrations using its absolute
 path continue to work.
 
+## Keep Flow running in the background
+
+```sh
+flow service install
+flow service status
+flow service uninstall
+```
+
+Installing the service starts Flow at login on macOS, and with your user session
+on Linux. `flow status`, `flow stop` and `flow restart` keep working as before:
+a service you stop with `flow stop` stays stopped until you start it again, and
+starting and restarting go through the service manager. `flow service status`
+prints where the service is installed and what it is doing. Uninstalling removes
+it from startup and leaves your projects, threads, brain and settings untouched.
+
+The Flow desktop app connects to this same service, so quitting the app leaves
+your background work, indexing and captured agent sessions running. To stop or
+restart the service from the app, use **Settings → Connections → Flow service**.
+
 ## Development
 
 ```sh
@@ -69,10 +88,16 @@ coding tests. Test instances do not copy primary projects or connector settings.
 
 Data and saved instance configuration for source installations live beneath
 `~/.local/share/flow-app/instances`. Release installations use
-`~/.local/share/flow-browser/instance-home/instances` by default. For automation, `FLOW_INSTANCE_HOME` selects
-an entirely separate registry. It does not change provider credential homes.
-The first primary launch starts with new storage; existing legacy T3/Flow data
-is not migrated automatically.
+`~/.local/share/flow-browser/instance-home/instances` by default. For automation,
+`FLOW_INSTANCE_HOME` selects an entirely separate registry. It does not change
+provider credential homes.
+
+Your application data itself lives in a separate home. If you already have a T3
+Code or Flow install at `~/.t3`, it is adopted where it is and keeps using that
+folder; a fresh install uses `~/.flow`. Either way the data is never moved or
+copied to a new location, so the brain, indexing and any managed worktrees stay
+intact. `--home` lets you point a new installation at an existing folder, but an
+installation that already records a home will not accept a different one.
 
 The current supervisor and installation script target macOS/Linux. Windows
 process-tree supervision remains a follow-up.
