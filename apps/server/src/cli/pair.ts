@@ -476,7 +476,7 @@ const adminFlag = Flag.boolean("admin").pipe(
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription(
-    "Print the minted credential as JSON on stdout and nothing else. Skips the QR code and the pairing URL.",
+    "Print the minted credential and its pairing URL as JSON on stdout and nothing else. Skips the QR code and the human-readable notes.",
   ),
   Flag.withDefault(false),
 );
@@ -554,6 +554,10 @@ export const pairCommand = Command.make("pair", {
           // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
           JSON.stringify({
             credential: issued.credential,
+            // The URL the human-readable mode prints, so a caller that wants to
+            // open the app in a browser does not have to rebuild it and get the
+            // dev-server/tailnet base wrong.
+            pairingUrl,
             expiresAt: DateTime.formatIso(issued.expiresAt),
             scopes: issued.scopes,
           }),

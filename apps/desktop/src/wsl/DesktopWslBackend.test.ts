@@ -114,6 +114,7 @@ describe("DesktopWslBackend", () => {
           registeredSpec = spec;
           return wsl;
         }),
+      retryPrimaryAttach: Effect.void,
       unregister: () => Effect.die("unexpected unregister"),
     } satisfies DesktopBackendPool.DesktopBackendPool["Service"]);
 

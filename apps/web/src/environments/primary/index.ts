@@ -23,6 +23,8 @@ export {
   __resetServerAuthBootstrapForTests,
 } from "./auth";
 
+export { readPrimaryAttachFailure } from "./attachFailure";
+
 export { usePrimarySessionState } from "./sessionState";
 
 export {

@@ -197,9 +197,9 @@ describe("DesktopBackendPool", () => {
     const makeHandler = (outcomes: DesktopServiceAdoption.AdoptionOutcome[]) =>
       Effect.gen(function* () {
         const adoptions = yield* Ref.make(0);
-        const reports: string[] = [];
+        const surfaced = yield* Ref.make(0);
         const events: string[] = [];
-        const handle = yield* DesktopBackendPool.makeAttachFailureHandler({
+        const recovery = yield* DesktopBackendPool.makeAttachFailureHandler({
           adopt: () =>
             Ref.updateAndGet(adoptions, (count) => count + 1).pipe(
               Effect.map((count) => outcomes[count - 1] ?? adopted),
@@ -208,35 +208,47 @@ describe("DesktopBackendPool", () => {
             Effect.sync(() => {
               events.push(String(step.event));
             }),
-          report: (input) =>
-            Effect.sync(() => {
-              reports.push(input.body);
-            }),
+          surface: () => Ref.update(surfaced, (count) => count + 1),
         });
-        return { handle, adoptions, reports, events };
+        return {
+          handle: recovery.handle,
+          allowAdoption: recovery.allowAdoption,
+          adoptions,
+          surfaced,
+          events,
+        };
       });
 
     it.effect("adopts the service once when none is installed", () =>
       Effect.gen(function* () {
-        const { handle, adoptions, reports, events } = yield* makeHandler([adopted]);
+        const { handle, allowAdoption, adoptions, surfaced, events } = yield* makeHandler([
+          adopted,
+          adopted,
+        ]);
 
         // True asks the attached instance for one more attach attempt.
         assert.isTrue(yield* handle(notInstalled));
         assert.equal(yield* Ref.get(adoptions), 1);
-        assert.deepEqual(reports, []);
+        assert.equal(yield* Ref.get(surfaced), 0);
         assert.deepEqual(events, ["attach-failed", "adoption-step", "adoption-outcome"]);
 
         // A second not-installed after a completed adoption is not something
-        // re-running would fix, so it stops and tells the user.
+        // re-running would fix, so it stops and shows the recovery screen.
         assert.isFalse(yield* handle(notInstalled));
         assert.equal(yield* Ref.get(adoptions), 1);
-        assert.lengthOf(reports, 1);
+        assert.equal(yield* Ref.get(surfaced), 1);
+
+        // An explicit retry from that screen is the user asking for the whole
+        // thing again, adoption included.
+        yield* allowAdoption;
+        assert.isTrue(yield* handle(notInstalled));
+        assert.equal(yield* Ref.get(adoptions), 2);
       }),
     );
 
     it.effect("reports the adoption reason instead of retrying when it fails", () =>
       Effect.gen(function* () {
-        const { handle, reports } = yield* makeHandler([
+        const { handle, surfaced } = yield* makeHandler([
           {
             _tag: "failed",
             home: "/Users/alice/.flow",
@@ -255,14 +267,13 @@ describe("DesktopBackendPool", () => {
         ]);
 
         assert.isFalse(yield* handle(notInstalled));
-        assert.lengthOf(reports, 1);
-        assert.include(reports[0] ?? "", "network: Download failed (503).");
+        assert.equal(yield* Ref.get(surfaced), 1);
       }),
     );
 
     it.effect("leaves other attach failures to the service layer", () =>
       Effect.gen(function* () {
-        const { handle, adoptions, reports } = yield* makeHandler([]);
+        const { handle, adoptions, surfaced } = yield* makeHandler([]);
 
         assert.isFalse(
           yield* handle({
@@ -272,7 +283,7 @@ describe("DesktopBackendPool", () => {
           }),
         );
         assert.equal(yield* Ref.get(adoptions), 0);
-        assert.lengthOf(reports, 1);
+        assert.equal(yield* Ref.get(surfaced), 1);
       }),
     );
   });

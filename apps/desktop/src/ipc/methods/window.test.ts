@@ -108,6 +108,56 @@ describe("getLocalEnvironmentBootstraps", () => {
     }).pipe(Effect.provide(DesktopBackendPool.layerTest([retryingInstance])));
   });
 
+  it.effect("publishes the attached primary's attach failure instead of skipping it", () => {
+    // The primary is skipped in every other preflight case (same origin, no
+    // "connecting" affordance). An attach failure is the exception: the
+    // recovery screen is the only place that says the Flow service is the
+    // problem, and it branches on this kind.
+    const failedPrimary: DesktopBackendManager.DesktopBackendInstance = {
+      ...defaultWslInstance,
+      id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
+      label: Effect.succeed("This machine"),
+      detached: true,
+      currentConfig: Effect.succeed(
+        Option.some({
+          ...readyWslConfig,
+          preflightFailure: Option.some({
+            reason: "The Flow service is not running.",
+            fatal: true,
+            attach: { kind: "stopped" as const, detail: "Service status: stopped." },
+          }),
+        }),
+      ),
+      snapshot: Effect.succeed({
+        desiredRunning: true,
+        ready: false,
+        activePid: Option.none(),
+        restartAttempt: 0,
+        restartScheduled: false,
+      }),
+    };
+
+    return Effect.gen(function* () {
+      const result = yield* getLocalEnvironmentBootstraps.handler();
+      assert.deepEqual(result, [
+        {
+          id: "primary",
+          label: "This machine",
+          runningDistro: null,
+          // Null endpoints: there is nothing to dial, and the renderer must
+          // not start an auth bootstrap against a dead port.
+          httpBaseUrl: null,
+          wsBaseUrl: null,
+          attachFailure: {
+            kind: "stopped",
+            reason: "The Flow service is not running.",
+            detail: "Service status: stopped.",
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(DesktopBackendPool.layerTest([failedPrimary])));
+  });
+
   it.effect("omits a bounded transient bootstrap after retries stop", () => {
     const stoppedInstance: DesktopBackendManager.DesktopBackendInstance = {
       ...defaultWslInstance,

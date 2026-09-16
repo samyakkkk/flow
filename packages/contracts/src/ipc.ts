@@ -282,6 +282,32 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
 // importing brand machinery from the desktop package.
 export const PRIMARY_LOCAL_ENVIRONMENT_ID = "primary";
 
+/**
+ * Why the desktop could not attach to the Flow service. Mirrors `AttachFailure`
+ * in apps/desktop/src/backend/DesktopBackendManager.ts: `reason` is the sentence
+ * a human reads, `detail` the technical line behind it, and `kind` the only
+ * thing the renderer branches on to offer the right recovery.
+ */
+export const DesktopAttachFailureKindSchema = Schema.Literals([
+  "incompatible",
+  "stopped",
+  "not-installed",
+  "unreachable",
+]);
+export type DesktopAttachFailureKind = typeof DesktopAttachFailureKindSchema.Type;
+
+export interface DesktopAttachFailure {
+  kind: DesktopAttachFailureKind;
+  reason: string;
+  detail: string;
+}
+
+export const DesktopAttachFailureSchema = Schema.Struct({
+  kind: DesktopAttachFailureKindSchema,
+  reason: Schema.String,
+  detail: Schema.String,
+});
+
 export interface DesktopEnvironmentBootstrap {
   // Stable backend instance id (e.g. "primary" or "wsl:ubuntu"). The
   // web env runtime keys local environments off this so projects
@@ -295,6 +321,10 @@ export interface DesktopEnvironmentBootstrap {
   httpBaseUrl: string | null;
   wsBaseUrl: string | null;
   bootstrapToken?: string;
+  // Present only for the attached primary when the Flow service could not be
+  // reached. The endpoints are null in that case: there is nothing to dial, and
+  // the renderer shows the recovery screen instead of booting the workspace.
+  attachFailure?: DesktopAttachFailure;
 }
 
 export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
@@ -304,6 +334,7 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   httpBaseUrl: Schema.NullOr(Schema.String),
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
+  attachFailure: Schema.optionalKey(DesktopAttachFailureSchema),
 });
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
@@ -592,6 +623,58 @@ export interface DesktopFlowServiceActionResult {
 export const DesktopFlowServiceActionResultSchema = Schema.Struct({
   ok: Schema.Boolean,
   reason: Schema.NullOr(DesktopFlowServiceActionFailureSchema),
+  detail: Schema.NullOr(Schema.String),
+});
+
+/**
+ * The first-launch adoption journal, as the recovery screen reads it. The
+ * desktop writes it to `<home>/userdata/service-adoption.json` one step at a
+ * time (apps/desktop/src/backend/DesktopServiceAdoption.ts), so a screen shown
+ * mid-adoption can list how far it got. Null when no adoption has ever run.
+ */
+export const DesktopFlowServiceAdoptionOutcomeSchema = Schema.Literals([
+  "in-progress",
+  "adopted",
+  "failed",
+]);
+export type DesktopFlowServiceAdoptionOutcome = typeof DesktopFlowServiceAdoptionOutcomeSchema.Type;
+
+export interface DesktopFlowServiceAdoptionStep {
+  name: string;
+  ok: boolean;
+  detail: string | null;
+}
+
+export const DesktopFlowServiceAdoptionStepSchema = Schema.Struct({
+  name: Schema.String,
+  ok: Schema.Boolean,
+  detail: Schema.NullOr(Schema.String),
+});
+
+export interface DesktopFlowServiceAdoption {
+  outcome: DesktopFlowServiceAdoptionOutcome;
+  steps: readonly DesktopFlowServiceAdoptionStep[];
+  failure: { step: string; message: string } | null;
+}
+
+export const DesktopFlowServiceAdoptionSchema = Schema.Struct({
+  outcome: DesktopFlowServiceAdoptionOutcomeSchema,
+  steps: Schema.Array(DesktopFlowServiceAdoptionStepSchema),
+  failure: Schema.NullOr(Schema.Struct({ step: Schema.String, message: Schema.String })),
+});
+
+/**
+ * A recovery action's outcome. Deliberately says nothing more than whether the
+ * app could do the thing: the pairing credential minted for the browser hand-off
+ * never leaves the main process, so `detail` carries a reason, never a secret.
+ */
+export interface DesktopFlowServiceRecoveryResult {
+  ok: boolean;
+  detail: string | null;
+}
+
+export const DesktopFlowServiceRecoveryResultSchema = Schema.Struct({
+  ok: Schema.Boolean,
   detail: Schema.NullOr(Schema.String),
 });
 
@@ -1202,6 +1285,13 @@ export interface DesktopBridge {
   getFlowServiceStatus?: () => Promise<DesktopFlowServiceStatus>;
   stopFlowService?: () => Promise<DesktopFlowServiceActionResult>;
   restartFlowService?: () => Promise<DesktopFlowServiceActionResult>;
+  /** Re-runs the attached primary's attach. Never rejects. */
+  retryFlowServiceAttach?: () => Promise<DesktopFlowServiceRecoveryResult>;
+  getFlowServiceAdoption?: () => Promise<DesktopFlowServiceAdoption | null>;
+  /** Opens the running service in the default browser, paired. */
+  openFlowServiceInBrowser?: () => Promise<DesktopFlowServiceRecoveryResult>;
+  /** Quits and relaunches with the built-in server instead of the service. */
+  relaunchWithLegacyBackend?: () => Promise<DesktopFlowServiceRecoveryResult>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;

@@ -220,12 +220,15 @@ describe("t3 pair", () => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
         const parsed = JSON.parse(output.trim()) as {
           readonly credential: string;
+          readonly pairingUrl: string;
           readonly expiresAt: string;
           readonly scopes: ReadonlyArray<string>;
         };
         assert.isTrue(parsed.credential.length > 0);
         assert.isTrue(Number.isFinite(Date.parse(parsed.expiresAt)));
         assert.deepEqual([...parsed.scopes], [...AuthAdministrativeScopes]);
+        // Callers open this URL rather than rebuilding it from the origin.
+        assert.equal(parsed.pairingUrl, `${origin}/pair#token=${parsed.credential}`);
         assert.notInclude(output, "Pairing URL");
 
         const listed = yield* captureStdout(
