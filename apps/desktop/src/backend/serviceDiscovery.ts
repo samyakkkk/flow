@@ -83,6 +83,46 @@ export const fetchEnvironmentDescriptor = async (
   return (await response.json()) as unknown;
 };
 
+/** The control endpoint of a live supervisor, or null when no supervisor has
+    published one. Same-user file trust, the model `flow` itself uses: whoever
+    can read `runtime.json` is already the owner of this installation. The
+    token stays inside this module's callers — it is never part of a discovery
+    result, and never crosses the IPC boundary. */
+export const readServiceControl = async ({
+  registryRoot,
+  name = "primary",
+}: {
+  readonly registryRoot: string;
+  readonly name?: string;
+}): Promise<{ readonly url: URL; readonly token: string } | null> => {
+  const directory = join(resolve(registryRoot), "instances", name);
+  let runtime: unknown;
+  try {
+    runtime = await readJson(join(directory, "runtime.json"));
+  } catch {
+    return null;
+  }
+  if (!isRecord(runtime) || !nonEmptyString(runtime.token)) return null;
+  try {
+    const url = new URL(String(runtime.controlUrl));
+    // Identical to the guard `discoverService` applies below: a control URL is
+    // only ever a loopback origin, never a credentialed or pathed address.
+    if (
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      return null;
+    return { url, token: runtime.token };
+  } catch {
+    return null;
+  }
+};
+
 export const discoverService = async ({
   registryRoot,
   name = "primary",

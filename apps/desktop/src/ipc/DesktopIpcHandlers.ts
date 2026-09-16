@@ -8,6 +8,11 @@ import {
   setConnectionCatalog,
 } from "./methods/connectionCatalog.ts";
 import {
+  getFlowServiceStatus,
+  restartFlowService,
+  stopFlowService,
+} from "./methods/flowService.ts";
+import {
   getAdvertisedEndpoints,
   getServerExposureState,
   setServerExposureMode,
@@ -83,6 +88,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setServerExposureMode);
   yield* ipc.handle(setTailscaleServeEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
+
+  yield* ipc.handle(getFlowServiceStatus);
+  yield* ipc.handle(stopFlowService);
+  yield* ipc.handle(restartFlowService);
 
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);

@@ -509,6 +509,93 @@ export const DesktopWslStateSchema = Schema.Struct({
 });
 
 /**
+ * Lifecycle phase of the persistent `flow` service, as the desktop reads it
+ * from the instance registry. The first six values are discovery verdicts
+ * (nothing installed, unusable metadata, an owner that does not answer); the
+ * last three are the supervisor's own reported phases.
+ */
+export const DesktopFlowServicePhaseSchema = Schema.Literals([
+  "not-configured",
+  "invalid",
+  "incompatible",
+  "stopped",
+  "unreachable",
+  "starting",
+  "ready",
+  "stopping",
+  "failed",
+]);
+export type DesktopFlowServicePhase = typeof DesktopFlowServicePhaseSchema.Type;
+
+export interface DesktopFlowServiceInstance {
+  phase: DesktopFlowServicePhase;
+  /** Null until an installation exists and its metadata reads cleanly. */
+  environmentId: string | null;
+  dataHome: string | null;
+  /** The server's own origin, reported only once the service is ready. */
+  serverOrigin: string | null;
+  error: string | null;
+}
+
+export const DesktopFlowServiceInstanceSchema = Schema.Struct({
+  phase: DesktopFlowServicePhaseSchema,
+  environmentId: Schema.NullOr(Schema.String),
+  dataHome: Schema.NullOr(Schema.String),
+  serverOrigin: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+});
+
+/**
+ * The login-service unit plus the service instance it manages. The control
+ * token that reaches the supervisor never appears here: it belongs to the
+ * lifecycle owner, and the renderer only needs to render and act, not dial.
+ */
+export interface DesktopFlowServiceStatus {
+  /** A unit file exists at `unitPath`. */
+  installed: boolean;
+  /** The service manager has the unit loaded (launchd) or enabled/active (systemd). */
+  loaded: boolean;
+  /** The installed unit still launches this installation's supervisor. */
+  current: boolean;
+  label: string;
+  unitPath: string;
+  instance: DesktopFlowServiceInstance;
+}
+
+export const DesktopFlowServiceStatusSchema = Schema.Struct({
+  installed: Schema.Boolean,
+  loaded: Schema.Boolean,
+  current: Schema.Boolean,
+  label: Schema.String,
+  unitPath: Schema.String,
+  instance: DesktopFlowServiceInstanceSchema,
+});
+
+/**
+ * Why a stop or restart did not happen. `not-managed` means no service
+ * manager owns the unit, so restarting is the CLI's job rather than the
+ * app's; `not-running` means there was nothing to stop.
+ */
+export const DesktopFlowServiceActionFailureSchema = Schema.Literals([
+  "not-managed",
+  "not-running",
+  "failed",
+]);
+export type DesktopFlowServiceActionFailure = typeof DesktopFlowServiceActionFailureSchema.Type;
+
+export interface DesktopFlowServiceActionResult {
+  ok: boolean;
+  reason: DesktopFlowServiceActionFailure | null;
+  detail: string | null;
+}
+
+export const DesktopFlowServiceActionResultSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.NullOr(DesktopFlowServiceActionFailureSchema),
+  detail: Schema.NullOr(Schema.String),
+});
+
+/**
  * Renderer-facing snapshot of a desktop preview tab. Mirrors the main-process
  * PreviewTabState shape but uses serialisable primitives only.
  */
@@ -1107,6 +1194,14 @@ export interface DesktopBridge {
     readonly port?: number;
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  /**
+   * Flow service lifecycle. Optional because older desktop shells can host a
+   * newer web client, and because a shell that never attached to a service has
+   * nothing to report.
+   */
+  getFlowServiceStatus?: () => Promise<DesktopFlowServiceStatus>;
+  stopFlowService?: () => Promise<DesktopFlowServiceActionResult>;
+  restartFlowService?: () => Promise<DesktopFlowServiceActionResult>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;

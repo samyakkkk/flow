@@ -61,6 +61,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconPicker } from "./EnvironmentIconPicker";
+import { FlowServiceSettings } from "./FlowServiceSettings";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { Input } from "../ui/input";
 import { CommandShortcut } from "../ui/command";
@@ -3518,6 +3519,8 @@ export function ConnectionsSettings() {
           <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
+
+      <FlowServiceSettings descriptor={primaryServerConfig?.environment ?? null} />
 
       <SettingsSection
         {...searchableSetting("remote-environments")}
