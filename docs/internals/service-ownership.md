@@ -198,6 +198,20 @@ leaves `in-progress` (`DesktopServiceAdoption.ts:89-92`), which deliberately doe
 adopted: reading it as done would strand a half-installed service the app never finishes, retries
 or reports.
 
+**The packaged renderer follows the service, not a port the app chose.** The window loads the
+`flow://app` scheme, and that scheme resolves its target on every request from the primary
+instance's live address — the attached backend's discovered origin, or a child's origin once it is
+ready — never from the port the desktop reserved for a child it no longer spawns
+([`ElectronProtocol.ts`](../../apps/desktop/src/electron/ElectronProtocol.ts) `handleDesktopRequest`,
+wired in [`DesktopApp.ts`](../../apps/desktop/src/app/DesktopApp.ts)). Resolving per request is what
+lets the window follow an attach that completes, or moves, after registration. When there is no
+address, requests are served from the web client the artifact already ships at
+`<serverRoot>/apps/server/dist/client` inside `server.asar`: the shell for navigations, exact files
+for assets, 403 for anything resolving outside that directory, and 503 JSON for `/api`, `/ws`,
+`/oauth` and `/.well-known` so a fetch never receives HTML. That fallback is the only reason the
+recovery surface can render at all — there is no server to fetch it from — and the address
+accessors are plain `Ref` reads, so resolving the target never mints a credential.
+
 ## Public and private
 
 This repository is the local half: the service, the `flow` CLI, the desktop and browser clients,
