@@ -15,6 +15,7 @@ describe("DesktopEarlyElectronStartup", () => {
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3-test/userdata/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "kwallet6" });
@@ -29,6 +30,7 @@ describe("DesktopEarlyElectronStartup", () => {
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: () => `{
         // manually edited setting
         "linuxPasswordStore": "gnome-libsecret",
@@ -43,6 +45,7 @@ describe("DesktopEarlyElectronStartup", () => {
       env: {},
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: () => {
         throw new Error("missing");
       },
@@ -56,6 +59,7 @@ describe("DesktopEarlyElectronStartup", () => {
       env: { T3CODE_HOME: "/" },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: (path) => {
         assert.equal(path, "/userdata/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "kwallet6" });
@@ -74,6 +78,7 @@ describe("DesktopEarlyElectronStartup", () => {
       },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3-test/userdata/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "auto" });
@@ -93,6 +98,7 @@ describe("DesktopEarlyElectronStartup", () => {
       },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3/dev/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "kwallet" });
@@ -110,6 +116,7 @@ describe("DesktopEarlyElectronStartup", () => {
       },
       homeDirectory: "/home/user",
       joinPath,
+      directoryExists: () => true,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3/dev/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "gnome-libsecret" });

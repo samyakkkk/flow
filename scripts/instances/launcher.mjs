@@ -64,12 +64,14 @@ export function parse(args) {
     else if (["--isolated", "--ui-only", "--shared-brain"].includes(flag)) {
       if (input.mode) throw Error("Choose only one development mode.");
       input.mode = flag.slice(2);
-    } else if (["--code", "--from"].includes(flag)) {
+    } else if (["--code", "--from", "--home"].includes(flag)) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw Error(`${flag} requires a value.`);
       input[flag.slice(2)] = value;
     } else throw Error(`Unknown option: ${flag}`);
   }
+  // --home is the one configuration flag primary accepts: the installer records
+  // where this machine's data already lives (see configure()).
   if (!input.dev && (input.mode || input.from || input.fresh || input.code || input.replace))
     throw Error(
       "Instance configuration flags belong to flow dev NAME. Use flow restart for primary.",
@@ -79,7 +81,7 @@ export function parse(args) {
   if (input.mode === "isolated" && input.from) throw Error("--isolated cannot use --from.");
   if (
     input.action !== "start" &&
-    (input.mode || input.from || input.fresh || input.code || input.replace)
+    (input.mode || input.from || input.fresh || input.code || input.replace || input.home)
   )
     throw Error("Configuration flags apply only when starting a development instance.");
   return input;
@@ -112,6 +114,8 @@ export async function configure(input, directory) {
     if (input.fresh) throw Error(`${input.name} already exists. Use a new name for --fresh.`);
     if (input.code && (await realpath(resolve(input.code))) !== saved.code)
       throw Error("Use a new instance name to run a different checkout.");
+    if (input.home && resolve(input.home) !== saved.home)
+      throw Error("This instance already stores its data elsewhere; a home is never moved.");
     if ((input.mode && input.mode !== saved.mode) || (input.from && input.from !== saved.from))
       throw Error(
         "Use a new instance name for a different brain mode/source. --replace preserves configuration.",
@@ -136,7 +140,10 @@ export async function configure(input, directory) {
     mode,
     ...(from ? { from } : {}),
     dev: input.dev,
-    home: join(directory, "data"),
+    // An explicit home lets a service adopt data that already exists elsewhere;
+    // it is recorded once and honored verbatim on every later launch, because
+    // moving a home orphans the brain store and every managed worktree.
+    home: input.home ? resolve(input.home) : join(directory, "data"),
   };
   await atomic(join(directory, "config.json"), config);
   return config;
@@ -249,7 +256,7 @@ export async function main(args) {
     return (await import("./supervisor.mjs")).supervise(input.directory);
   if (input.action === "help")
     return console.log(
-      "flow [status|stop|restart] [--no-open]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
+      "flow [status|stop|restart] [--home PATH] [--no-open]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
     );
   if (input.action === "list") {
     const directory = join(registryRoot(), "instances");

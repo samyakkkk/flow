@@ -21,6 +21,7 @@ const environmentLayer = DesktopEnvironment.layer({
   isPackaged: true,
   resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
   runningUnderArm64Translation: false,
+  legacyHomeExists: true,
 }).pipe(
   Layer.provide(
     Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, DesktopConfig.layerTest({})),
@@ -40,6 +41,7 @@ describe("DesktopAssets", () => {
         isPackaged: false,
         resourcesPath: "/repo/apps/desktop/resources",
         runningUnderArm64Translation: false,
+        legacyHomeExists: true,
       }).pipe(
         Layer.provide(
           Layer.mergeAll(

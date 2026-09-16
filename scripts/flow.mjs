@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { main, registryRoot } from "./instances/launcher.mjs";
-import { join } from "node:path";
+import { primaryStateDir } from "./instances/service-discovery.mjs";
 const args = process.argv.slice(2);
 if (args[0] === "setup" && !args.includes("--state-dir")) {
   await main(["--no-open"]);
-  args.push("--state-dir", join(registryRoot(), "instances/primary/data/userdata"));
+  args.push("--state-dir", await primaryStateDir(registryRoot()));
 }
 const run =
   args[0] === "setup" || args[0] === "agents"

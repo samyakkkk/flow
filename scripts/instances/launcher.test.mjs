@@ -14,6 +14,33 @@ test("normal launch does not depend on instance arguments", () => {
   assert.equal(parse([]).name, "primary");
   assert.throws(() => parse(["--isolated"]), /development|dev/);
 });
+test("an explicit home is recorded once and never moved afterwards", async () => {
+  assert.equal(parse(["--home", "/srv/flow"]).home, "/srv/flow");
+  assert.throws(() => parse(["--home"]), /requires a value/);
+  assert.throws(() => parse(["stop", "--home", "/srv/flow"]), /only when starting/);
+  const directory = await mkdtemp(join(tmpdir(), "flow-home-test-"));
+  try {
+    const adopted = join(directory, "adopted");
+    const saved = await configure(parse(["--home", adopted]), directory);
+    assert.equal(saved.home, adopted);
+    assert.deepEqual(await configure(parse([]), directory), saved);
+    await assert.rejects(
+      configure(parse(["--home", join(directory, "elsewhere")]), directory),
+      /never moved/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("storage defaults to the instance directory when no home is given", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-home-default-test-"));
+  try {
+    const saved = await configure(parse(["dev", "test1", "--code", sourceRoot]), directory);
+    assert.equal(saved.home, join(directory, "data"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test("mode and destructive flag conflicts are rejected", () => {
   assert.throws(() => parse(["dev", "test1", "--isolated", "--shared-brain"]), /one/);
   assert.throws(() => parse(["dev", "test1", "--fresh", "--replace"]), /fresh/);

@@ -10,12 +10,28 @@ async function readJson(path) {
   }
 }
 
+// The state directory of a registry's `primary` instance. The home is recorded
+// in `config.json` (an installer may point it at data that already exists, see
+// the launcher's `--home`); `<instance>/data` is the layout when it does not.
+export async function primaryStateDir(registryRoot) {
+  const directory = join(resolve(registryRoot), "instances/primary");
+  const config = await readJson(join(directory, "config.json")).catch(() => null);
+  const home =
+    typeof config?.home === "string" && config.home ? config.home : join(directory, "data");
+  return join(home, "userdata");
+}
+
 // Discovery never starts, stops, migrates or repairs an installation. In
 // particular, an unreachable owner is not permission to start another server.
-export async function discoverCloudService(home) {
-  const installationHome = resolve(home);
-  const directory = join(installationHome, "instance-home/instances/primary");
-  const base = { version: 1, installationHome, channel: "cloud-cli" };
+export async function discoverService({
+  registryRoot,
+  name = "primary",
+  channel = "cloud-cli",
+  installationHome,
+}) {
+  const root = resolve(registryRoot);
+  const directory = join(root, "instances", name);
+  const base = { version: 1, installationHome: installationHome ?? root, channel };
   let config, runtime;
   try {
     config = await readJson(join(directory, "config.json"));
@@ -29,20 +45,19 @@ export async function discoverCloudService(home) {
   if (
     typeof config.id !== "string" ||
     !config.id ||
-    config.name !== "primary" ||
+    config.name !== name ||
     config.dev ||
     config.mode !== "isolated" ||
     typeof config.home !== "string" ||
+    !config.home ||
     typeof config.code !== "string"
   )
     return { ...base, status: "invalid", reason: "Not a standalone primary service." };
+  // The recorded home is the identity: a service may legitimately own data
+  // outside its instance directory. Only its absence disqualifies it, because
+  // discovery must never invent a home it did not find.
   try {
-    if ((await realpath(config.home)) !== (await realpath(join(directory, "data"))))
-      return {
-        ...base,
-        status: "invalid",
-        reason: "Service data belongs to another installation.",
-      };
+    await realpath(config.home);
   } catch {
     return { ...base, status: "invalid", reason: "Service data directory is unavailable." };
   }
@@ -103,3 +118,10 @@ export async function discoverCloudService(home) {
     return { ...identity, status: "unreachable", reason: "Service could not be reached." };
   }
 }
+
+// The cloud CLI's installation layout: one `primary` service under `instance-home`.
+export const discoverCloudService = (home) =>
+  discoverService({
+    registryRoot: join(resolve(home), "instance-home"),
+    installationHome: resolve(home),
+  });

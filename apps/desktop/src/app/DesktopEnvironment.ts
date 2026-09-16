@@ -27,6 +27,8 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  /** Whether `~/.t3/userdata` exists — see `@t3tools/shared/homeBaseDir`. */
+  readonly legacyHomeExists: boolean;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -161,6 +163,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
+    legacyHomeExists: input.legacyHomeExists,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;

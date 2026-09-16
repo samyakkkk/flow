@@ -227,6 +227,8 @@ export async function retireLegacyFlow({
       launchers.push(file);
     } else warnings.push(`Unrecognized command retained: ${file}`);
   }
+  // Confined to `checkouts/`: `~/.flow` may now also be a T3 base dir, whose
+  // userdata/caches/worktrees/runtime/source are never legacy installs.
   for (const name of await list(join(home, ".flow/checkouts")))
     roots.add(join(home, ".flow/checkouts", name));
   const verifiedRoots = [];

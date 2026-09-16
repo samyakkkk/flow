@@ -25,6 +25,7 @@ const defaultEnvironmentInput = {
   isPackaged: true,
   resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
   runningUnderArm64Translation: false,
+  legacyHomeExists: true,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 type TestEnvironmentInput = Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> & {

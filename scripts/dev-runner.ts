@@ -7,10 +7,12 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { resolveGitWorktreePath, resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+import { legacyBaseDirProbePath, resolveHomeBaseDir } from "@t3tools/shared/homeBaseDir";
 import { HostProcessEnvironment, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -68,9 +70,24 @@ export function isProxiableBindHost(host: string): boolean {
   );
 }
 
-export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
-  path.join(NodeOS.homedir(), ".t3"),
-);
+/**
+ * The shared home a dev server falls back to when nothing else selects one.
+ * Worktree `.t3` precedence still outranks it — see the `--home-dir` resolution
+ * in `runDev`.
+ */
+export const DEFAULT_T3_HOME = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const homeDirectory = NodeOS.homedir();
+  return resolveHomeBaseDir({
+    explicit: undefined,
+    homeDirectory,
+    joinPath: path.join,
+    legacyHomeExists: yield* fileSystem
+      .exists(legacyBaseDirProbePath(homeDirectory, path.join))
+      .pipe(Effect.orElseSucceed(() => false)),
+  });
+});
 
 const MODE_ARGS = {
   dev: [
@@ -278,7 +295,9 @@ export function resolveOffset(config: {
   return Effect.succeed({ offset: 0, source: "default ports" });
 }
 
-function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, never, Path.Path> {
+function resolveBaseDir(
+  baseDir: string | undefined,
+): Effect.Effect<string, never, Path.Path | FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const configured = baseDir?.trim();
@@ -317,7 +336,11 @@ export function createDevRunnerEnv({
   host,
   port,
   devUrl,
-}: CreateDevRunnerEnvInput): Effect.Effect<NodeJS.ProcessEnv, never, Path.Path> {
+}: CreateDevRunnerEnvInput): Effect.Effect<
+  NodeJS.ProcessEnv,
+  never,
+  Path.Path | FileSystem.FileSystem
+> {
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;

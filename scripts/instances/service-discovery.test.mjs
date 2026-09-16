@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { discoverCloudService } from "./service-discovery.mjs";
+import { discoverCloudService, discoverService, primaryStateDir } from "./service-discovery.mjs";
 
 async function fixture(t) {
   const home = await mkdtemp(join(tmpdir(), "flow-discovery-"));
@@ -49,14 +49,44 @@ test("stopped service retains identity and pinned code without starting it", asy
   assert.equal(result.environmentId, f.config.id);
   assert.equal(result.runningCode, f.config.code);
 });
-test("corrupt, foreign and unsupported metadata cannot look like a fresh install", async (t) => {
+test("corrupt, homeless and unsupported metadata cannot look like a fresh install", async (t) => {
   const f = await fixture(t);
   await writeFile(join(f.directory, "config.json"), "{");
   assert.equal((await discoverCloudService(f.home)).status, "invalid");
-  await f.save("config.json", { ...f.config, home: f.home });
+  await f.save("config.json", { ...f.config, home: join(f.home, "moved-away") });
+  assert.equal((await discoverCloudService(f.home)).status, "invalid");
+  await f.save("config.json", { ...f.config, home: "" });
   assert.equal((await discoverCloudService(f.home)).status, "invalid");
   await f.save("config.json", { ...f.config, version: 2 });
   assert.equal((await discoverCloudService(f.home)).status, "incompatible");
+});
+test("a service may own data outside its instance directory", async (t) => {
+  const f = await fixture(t);
+  const adopted = join(f.home, "adopted-home");
+  await mkdir(adopted, { recursive: true });
+  await f.save("config.json", { ...f.config, home: adopted });
+  const result = await discoverCloudService(f.home);
+  assert.equal(result.status, "stopped");
+  assert.equal(result.dataHome, adopted);
+});
+test("registry discovery and the cloud wrapper report the same service", async (t) => {
+  const f = await fixture(t);
+  const direct = await discoverService({ registryRoot: join(f.home, "instance-home") });
+  const wrapped = await discoverCloudService(f.home);
+  assert.equal(direct.status, "stopped");
+  assert.equal(direct.environmentId, wrapped.environmentId);
+  assert.equal(wrapped.installationHome, f.home);
+});
+test("the primary state directory follows the recorded home, or its instance directory", async (t) => {
+  const f = await fixture(t);
+  const registry = join(f.home, "instance-home");
+  assert.equal(await primaryStateDir(registry), join(f.directory, "data/userdata"));
+  await f.save("config.json", { ...f.config, home: "/srv/flow-home" });
+  assert.equal(await primaryStateDir(registry), "/srv/flow-home/userdata");
+  assert.equal(
+    await primaryStateDir(join(f.home, "nowhere")),
+    join(f.home, "nowhere/instances/primary/data/userdata"),
+  );
 });
 test("authenticates live identity without exposing credentials or trusting response fields", async (t) => {
   const f = await fixture(t);

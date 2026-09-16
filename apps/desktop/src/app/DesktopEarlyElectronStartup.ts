@@ -1,3 +1,4 @@
+import { legacyBaseDirProbePath } from "@t3tools/shared/homeBaseDir";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -20,6 +21,8 @@ interface EarlyDesktopSettingsInput {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly readFileString: (path: string) => string;
+  /** Whether `~/.t3/userdata` exists — see `@t3tools/shared/homeBaseDir`. */
+  readonly directoryExists: (path: string) => boolean;
 }
 
 type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
@@ -48,12 +51,16 @@ function resolveEarlyDesktopSettingsPath(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
+  readonly directoryExists: (path: string) => boolean;
 }): string {
   const t3Home = Option.fromUndefinedOr(input.env.T3CODE_HOME);
   const baseDir = resolveDesktopBaseDir({
     homeDirectory: input.homeDirectory,
     joinPath: input.joinPath,
     t3Home,
+    legacyHomeExists: input.directoryExists(
+      legacyBaseDirProbePath(input.homeDirectory, input.joinPath),
+    ),
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,

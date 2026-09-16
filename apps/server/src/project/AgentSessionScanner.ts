@@ -553,6 +553,13 @@ function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
   return caseFold ? normalized.toLowerCase() : normalized;
 }
 
+/**
+ * Worktrees under a base dir that is not the configured one still belong to
+ * T3: both home names are matched because fresh installs use `~/.flow` while
+ * existing ones stay on `~/.t3` (see `@t3tools/shared/homeBaseDir`).
+ */
+const MANAGED_WORKTREE_MARKERS = ["/.t3/worktrees/", "/.flow/worktrees/"];
+
 function isT3ManagedWorktree(
   candidatePath: string,
   worktreesDir: string,
@@ -561,7 +568,7 @@ function isT3ManagedWorktree(
   const normalized = normalizeForWorktreeMatch(candidatePath, caseFold);
   return (
     normalized.startsWith(normalizeForWorktreeMatch(worktreesDir, caseFold)) ||
-    normalized.includes("/.t3/worktrees/")
+    MANAGED_WORKTREE_MARKERS.some((marker) => normalized.includes(marker))
   );
 }
 

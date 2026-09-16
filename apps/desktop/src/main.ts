@@ -74,11 +74,15 @@ const desktopEnvironmentLayer = Layer.unwrap(
     );
     const platform = yield* HostProcessPlatform;
     const processArch = yield* HostProcessArchitecture;
+    const homeDirectory = NodeOS.homedir();
     return DesktopEnvironment.layer({
       dirname: __dirname,
-      homeDirectory: NodeOS.homedir(),
+      homeDirectory,
       platform,
       processArch,
+      // Probed once at startup: an install already at `~/.t3` keeps it, a fresh
+      // one gets `~/.flow`. See `@t3tools/shared/homeBaseDir`.
+      legacyHomeExists: DesktopPreReadyPlatform.legacyHomeExistsForProcess(),
       ...metadata,
     });
   }),

@@ -48,6 +48,7 @@ it.layer(NodeServices.layer)("Linux browser secret path", (it) => {
           isPackaged,
           resourcesPath,
           runningUnderArm64Translation: false,
+          legacyHomeExists: true,
         }).pipe(Layer.provide(DesktopConfig.layerTest({})));
         return LinuxBrowserSecret.LinuxBrowserSecretPath.pipe(
           Effect.provide(LinuxBrowserSecret.layer.pipe(Layer.provide(environment))),

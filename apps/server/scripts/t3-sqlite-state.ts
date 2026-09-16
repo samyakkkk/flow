@@ -4,6 +4,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
+import { legacyBaseDirProbePath, resolveHomeBaseDir } from "@t3tools/shared/homeBaseDir";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -181,7 +182,15 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const baseDir = path.resolve(input.baseDir);
-  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
+  const sharedHome = path.resolve(
+    options.sharedHome ??
+      resolveHomeBaseDir({
+        explicit: undefined,
+        homeDirectory: NodeOS.homedir(),
+        joinPath: path.join,
+        legacyHomeExists: yield* fs.exists(legacyBaseDirProbePath(NodeOS.homedir(), path.join)),
+      }),
+  );
   const databasePath = path.join(baseDir, "userdata", "state.sqlite");
   const source = yield* resolveSqlSource(input.sql, input.file);
 

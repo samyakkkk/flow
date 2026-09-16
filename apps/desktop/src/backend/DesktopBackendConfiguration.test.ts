@@ -72,6 +72,7 @@ function makeEnvironmentLayer(
     isPackaged: options?.isPackaged ?? true,
     resourcesPath: options?.resourcesPath ?? "/missing/resources",
     runningUnderArm64Translation: false,
+    legacyHomeExists: true,
   }).pipe(
     Layer.provide(
       Layer.mergeAll(

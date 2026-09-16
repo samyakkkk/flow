@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as Electron from "electron";
+import { legacyBaseDirProbePath } from "@t3tools/shared/homeBaseDir";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
@@ -36,7 +37,16 @@ export const resolveEarlyLinuxElectronOptionsFromProcess =
       homeDirectory: NodeOS.homedir(),
       joinPath: NodePath.posix.join,
       readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
+      directoryExists: (path) => NodeFS.existsSync(path),
     });
+
+/**
+ * Whether an install already lives at `~/.t3`, which keeps its data there
+ * instead of defaulting to `~/.flow` — see `@t3tools/shared/homeBaseDir`.
+ * Read here because this module already owns the pre-ready synchronous reads.
+ */
+export const legacyHomeExistsForProcess = (): boolean =>
+  NodeFS.existsSync(legacyBaseDirProbePath(NodeOS.homedir(), NodePath.join));
 
 export class DesktopPreReadyElectronOptions extends Context.Service<
   DesktopPreReadyElectronOptions,
