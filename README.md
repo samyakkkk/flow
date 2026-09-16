@@ -30,20 +30,6 @@ desktop app gives you a native window. The install script gives you the `flow`
 command and the same Flow in your browser. Use either or both: coding agents you run
 outside Flow keep working with the Brain whether or not a window is open.
 
-### Desktop app
-
-| Platform                  | Download                                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS 15+ · Apple Silicon | **[Flow 0.1.4 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg)** · signed, notarized, auto-updating      |
-| macOS · Intel             | **[Flow 0.1.4 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg)** · signed, notarized, auto-updating        |
-| Linux · x64               | **[Flow 0.1.4 (.AppImage)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage)** · Ubuntu 24.04 or compatible |
-| Windows                   | Planned                                                                                                                                                       |
-
-Checksums and updater assets are on the
-[Flow 0.1.4 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4).
-
-### Install script
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
 ```
@@ -54,6 +40,18 @@ your browser; `flow service install` keeps it running in the background from log
 Apple Silicon macOS 15 or newer. Updates are prepared automatically; run `flow update`
 to check now. See [Install Flow](./docs/user/install.md) for options and
 [Run Flow in the background](./docs/user/local-instances.md) for the service commands.
+
+<p align="center"><strong>— or download the desktop app —</strong></p>
+
+<p align="center">
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg"><img alt="Download Flow 0.1.4 for macOS, Apple Silicon" src="https://img.shields.io/badge/macOS-Apple_Silicon-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg"><img alt="Download Flow 0.1.4 for macOS, Intel" src="https://img.shields.io/badge/macOS-Intel-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage"><img alt="Download Flow 0.1.4 for Linux, x64 AppImage" src="https://img.shields.io/badge/Linux-x64-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
+  <img alt="Windows: planned" src="https://img.shields.io/badge/Windows-planned-9E9E9E?style=for-the-badge">
+</p>
+
+<p align="center">Flow 0.1.4 · macOS 15+ · Ubuntu 24.04 or compatible · signed, notarized, auto-updating<br>
+Checksums and updater assets are on the <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4">Flow 0.1.4 release</a>.</p>
 
 ## Why Flow
 
