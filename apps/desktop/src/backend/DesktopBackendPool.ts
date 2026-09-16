@@ -86,6 +86,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -97,6 +98,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import * as DesktopServiceAdoption from "./DesktopServiceAdoption.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -209,10 +212,88 @@ type UnregisterAction =
   | { readonly _tag: "Wait"; readonly done: Deferred.Deferred<void> }
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
+/** What `handleAttachFailure` needs from the world. Injected so the recovery
+    decision can be tested without an Electron dialog, a filesystem or a real
+    service installation. */
+export interface AttachFailureRecovery {
+  readonly adopt: () => Effect.Effect<DesktopServiceAdoption.AdoptionOutcome>;
+  readonly logStep: (step: Record<string, unknown>) => Effect.Effect<void>;
+  readonly report: (input: {
+    readonly title: string;
+    readonly body: string;
+  }) => Effect.Effect<void>;
+}
+
+/**
+ * The attached primary's preflight-failure handler.
+ *
+ * `not-installed` is the one failure with an automatic recovery: this desktop
+ * is the first launch after the service model landed, so it installs the Flow
+ * release and registers the service (see DesktopServiceAdoption), then returns
+ * true to ask the attached instance for one more attach attempt. Adoption runs
+ * at most once per session — a second `not-installed` after a completed
+ * adoption means something is wrong that re-running would not fix.
+ *
+ * Every other kind stays inert on purpose: starting or updating the service is
+ * the service layer's job, and a private child would compete with it for the
+ * instance lock.
+ */
+export const makeAttachFailureHandler = Effect.fn("desktop.backendPool.makeAttachFailureHandler")(
+  function* (recovery: AttachFailureRecovery) {
+    const adoptionAttempted = yield* Ref.make(false);
+
+    const reportFailure = (reason: string, detail: string) =>
+      recovery.report({
+        title: `${BRAND.name} could not connect to its service`,
+        body: `${reason}\n\n${detail}`.trim(),
+      });
+
+    return Effect.fn("desktop.backendPool.primaryAttachFailed")(function* (
+      failure: DesktopBackendManager.PreflightFailure,
+    ) {
+      yield* recovery.logStep({
+        event: "attach-failed",
+        reason: failure.reason,
+        kind: failure.attach?.kind ?? "unknown",
+      });
+      const detail = failure.attach?.detail ?? "";
+      if (failure.attach?.kind !== "not-installed" || (yield* Ref.get(adoptionAttempted))) {
+        yield* reportFailure(failure.reason, detail);
+        return false;
+      }
+
+      yield* Ref.set(adoptionAttempted, true);
+      const outcome = yield* recovery.adopt();
+      if (outcome._tag !== "already-adopted") {
+        for (const step of outcome.journal.steps) {
+          yield* recovery.logStep({
+            event: "adoption-step",
+            step: step.name,
+            ok: step.ok,
+            ...(step.detail === undefined ? {} : { detail: step.detail }),
+          });
+        }
+      }
+      yield* recovery.logStep({ event: "adoption-outcome", outcome: outcome._tag });
+      if (outcome._tag === "failed") {
+        // 6b replaces this with a real recovery surface ("Continue with the
+        // built-in server", which relaunches with FLOW_DESKTOP_LEGACY_BACKEND=1).
+        yield* reportFailure(
+          `${BRAND.name} could not set up its background service.`,
+          `${outcome.reason}: ${outcome.message}`,
+        );
+        return false;
+      }
+      return true;
+    });
+  },
+);
+
 export const layer = Layer.effect(
   DesktopBackendPool,
   Effect.gen(function* () {
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -285,21 +366,15 @@ export const layer = Layer.effect(
     // `makeLegacyPrimary` go away.
     const legacyPrimaryRequested = process.env.FLOW_DESKTOP_LEGACY_BACKEND === "1";
 
-    const handleAttachFailure = Effect.fn("desktop.backendPool.primaryAttachFailed")(function* (
-      failure: DesktopBackendManager.PreflightFailure,
-    ) {
-      yield* logBackendPoolWarning("could not attach to the Flow service", {
-        reason: failure.reason,
-        kind: failure.attach?.kind ?? "unknown",
-      });
-      yield* electronDialog.showErrorBox(
-        `${BRAND.name} could not connect to its service`,
-        `${failure.reason}\n\n${failure.attach?.detail ?? ""}`.trim(),
-      );
-      // No automatic recovery here: starting or installing the service is
-      // the service layer's job, and a private child would compete with it
-      // for the instance lock.
-      return false;
+    const handleAttachFailure = yield* makeAttachFailureHandler({
+      adopt: () =>
+        DesktopServiceAdoption.adoptService({
+          homeDirectory: environment.homeDirectory,
+          executablePath: process.execPath,
+          flowReleaseScriptPath: environment.flowReleaseScriptPath,
+        }),
+      logStep: (step) => logBackendPoolWarning("flow service attach recovery", step),
+      report: (input) => electronDialog.showErrorBox(input.title, input.body),
     });
 
     const makeAttachedPrimary = DesktopAttachedBackend.makeAttachedBackendInstance({

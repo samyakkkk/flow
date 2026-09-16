@@ -34,7 +34,7 @@ import * as Schema from "effect/Schema";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import {
-  defaultRegistryRoot,
+  desktopServiceRegistryRoot,
   discoverService,
   fetchEnvironmentDescriptor,
   type ServiceDiscoveryResult,
@@ -218,7 +218,7 @@ const defaultFetchDescriptor = (httpBaseUrl: URL): Effect.Effect<unknown, Attach
 export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.make")(function* (
   spec: AttachedBackendSpec,
 ) {
-  const registryRoot = spec.registryRoot ?? defaultRegistryRoot();
+  const registryRoot = spec.registryRoot ?? desktopServiceRegistryRoot();
   const serviceName = spec.serviceName ?? "primary";
   const discover =
     spec.discover ??

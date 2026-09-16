@@ -966,6 +966,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/resources/browser-secret/**/*",
   "!apps/desktop/prod-resources/browser-secret",
   "!apps/desktop/prod-resources/browser-secret/**/*",
+  "!apps/desktop/resources/flow-bootstrap",
+  "!apps/desktop/resources/flow-bootstrap/**/*",
+  "!apps/desktop/prod-resources/flow-bootstrap",
+  "!apps/desktop/prod-resources/flow-bootstrap/**/*",
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
@@ -1098,6 +1102,30 @@ export const DESKTOP_EXTRA_RESOURCES = [
 ] as const;
 export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
+] as const;
+
+// `scripts/flow-release.mjs` is the Flow service bootstrap: first-launch
+// adoption runs it with Electron's embedded Node to install the independent
+// Flow release (which self-updates on its own train) and register it as a
+// login service. It must ship as a loose file rather than from app.asar
+// because it is executed as a script by a separate Node process.
+//
+// Its static imports are all Node built-ins, so the script alone is enough;
+// `flow-mac-app.mjs` rides along because it is the one sibling a dynamic
+// import could reach (`install-bundle`, which adoption never runs) and it
+// costs one more small file. Every other dynamic import resolves inside the
+// installed release tree, not next to this bootstrap.
+//
+// Windows is deliberately left out: flow-release.mjs refuses to run anywhere
+// but Apple Silicon macOS and Linux x64, so a Windows desktop never adopts a
+// service.
+export const FLOW_BOOTSTRAP_RESOURCE_DIR = "flow-bootstrap";
+export const FLOW_BOOTSTRAP_SCRIPTS = ["flow-release.mjs", "flow-mac-app.mjs"] as const;
+export const FLOW_BOOTSTRAP_EXTRA_RESOURCES = [
+  {
+    from: `apps/desktop/prod-resources/${FLOW_BOOTSTRAP_RESOURCE_DIR}`,
+    to: FLOW_BOOTSTRAP_RESOURCE_DIR,
+  },
 ] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -2270,6 +2298,28 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   }
 });
 
+/** Copies the Flow service bootstrap into the staged resources so
+    electron-builder can emit it at `resources/flow-bootstrap/`. See
+    FLOW_BOOTSTRAP_EXTRA_RESOURCES for why it ships loose and why Windows is
+    excluded. */
+export const stageFlowBootstrap = Effect.fn("stageFlowBootstrap")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+}) {
+  if (input.platform === "win") return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const targetDir = path.join(input.stageResourcesDir, FLOW_BOOTSTRAP_RESOURCE_DIR);
+  yield* fs.makeDirectory(targetDir, { recursive: true });
+  for (const scriptName of FLOW_BOOTSTRAP_SCRIPTS) {
+    yield* fs.copyFile(
+      path.join(input.repoRoot, "scripts", scriptName),
+      path.join(targetDir, scriptName),
+    );
+  }
+});
+
 export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2663,6 +2713,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "win" ? [] : FLOW_BOOTSTRAP_EXTRA_RESOURCES),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
@@ -3643,6 +3694,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     platform: options.platform,
     arch: options.arch,
     verbose: options.verbose,
+  });
+  yield* stageFlowBootstrap({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
   });
 
   yield* assertPlatformBuildResources(

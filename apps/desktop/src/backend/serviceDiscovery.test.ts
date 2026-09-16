@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, assert, describe, expect, it } from "@effect/vitest";
 
-import { defaultRegistryRoot, discoverService } from "./serviceDiscovery.ts";
+import { desktopServiceRegistryRoot, discoverService } from "./serviceDiscovery.ts";
 
 const cleanups: Array<() => Promise<unknown>> = [];
 
@@ -135,11 +135,28 @@ describe("desktop service discovery", () => {
     assert.equal(result.environmentId, "environment");
   });
 
-  it("follows FLOW_INSTANCE_HOME, else the launcher's default registry", () => {
+  it("resolves the registry of the installed release, not the dev checkout", () => {
+    // An explicit registry always wins; that is how `flow dev` and a source
+    // checkout opt into their own.
     assert.equal(
-      defaultRegistryRoot({ FLOW_INSTANCE_HOME: "/srv/flow-app" }, "/home/dev"),
+      desktopServiceRegistryRoot({
+        env: { FLOW_INSTANCE_HOME: "/srv/flow-app" },
+        homeDirectory: "/home/dev",
+      }),
       "/srv/flow-app",
     );
-    assert.equal(defaultRegistryRoot({}, "/home/dev"), "/home/dev/.local/share/flow-app");
+    assert.equal(
+      desktopServiceRegistryRoot({
+        env: { FLOW_RELEASE_HOME: "/opt/flow-release" },
+        homeDirectory: "/home/dev",
+      }),
+      "/opt/flow-release/instance-home",
+    );
+    // Never `~/.local/share/flow-app`: that registry belongs to a source
+    // checkout, and the desktop's service is always the installed release.
+    assert.equal(
+      desktopServiceRegistryRoot({ env: {}, homeDirectory: "/home/dev" }),
+      "/home/dev/.local/share/flow-browser/instance-home",
+    );
   });
 });

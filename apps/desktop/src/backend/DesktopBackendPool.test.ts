@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -17,6 +18,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
+import type * as DesktopServiceAdoption from "./DesktopServiceAdoption.ts";
 import type { DesktopBackendSnapshot, DesktopBackendStartConfig } from "./DesktopBackendManager.ts";
 
 function makeStubInstance(
@@ -88,6 +90,12 @@ function makePoolLayer(
             backendCwd: "/test",
           }),
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
+        // The pool only reads the home directory and the bootstrap script path
+        // out of the environment, for first-launch service adoption.
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          homeDirectory: "/Users/alice",
+          flowReleaseScriptPath: "/repo/scripts/flow-release.mjs",
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
         DesktopAppSettings.layerTest(),
         DesktopWslEnvironment.layerTest(),
         ElectronDialog.layer,
@@ -160,4 +168,112 @@ describe("DesktopBackendPool", () => {
       }),
     ),
   );
+
+  describe("attach failure handling", () => {
+    const notInstalled = {
+      reason: "The Flow service is not installed yet.",
+      fatal: true,
+      attach: { kind: "not-installed", detail: "Service status: not-configured." },
+    } as const;
+    const adopted = {
+      _tag: "adopted",
+      home: "/Users/alice/.flow",
+      journalPath: "/Users/alice/.flow/userdata/service-adoption.json",
+      journal: {
+        version: 1,
+        startedAt: "2026-09-16T10:00:00.000Z",
+        steps: [
+          {
+            name: "install-service",
+            startedAt: "2026-09-16T10:00:00.000Z",
+            finishedAt: "2026-09-16T10:00:01.000Z",
+            ok: true,
+          },
+        ],
+        outcome: "adopted",
+      },
+    } as const satisfies DesktopServiceAdoption.AdoptionOutcome;
+
+    const makeHandler = (outcomes: DesktopServiceAdoption.AdoptionOutcome[]) =>
+      Effect.gen(function* () {
+        const adoptions = yield* Ref.make(0);
+        const reports: string[] = [];
+        const events: string[] = [];
+        const handle = yield* DesktopBackendPool.makeAttachFailureHandler({
+          adopt: () =>
+            Ref.updateAndGet(adoptions, (count) => count + 1).pipe(
+              Effect.map((count) => outcomes[count - 1] ?? adopted),
+            ),
+          logStep: (step) =>
+            Effect.sync(() => {
+              events.push(String(step.event));
+            }),
+          report: (input) =>
+            Effect.sync(() => {
+              reports.push(input.body);
+            }),
+        });
+        return { handle, adoptions, reports, events };
+      });
+
+    it.effect("adopts the service once when none is installed", () =>
+      Effect.gen(function* () {
+        const { handle, adoptions, reports, events } = yield* makeHandler([adopted]);
+
+        // True asks the attached instance for one more attach attempt.
+        assert.isTrue(yield* handle(notInstalled));
+        assert.equal(yield* Ref.get(adoptions), 1);
+        assert.deepEqual(reports, []);
+        assert.deepEqual(events, ["attach-failed", "adoption-step", "adoption-outcome"]);
+
+        // A second not-installed after a completed adoption is not something
+        // re-running would fix, so it stops and tells the user.
+        assert.isFalse(yield* handle(notInstalled));
+        assert.equal(yield* Ref.get(adoptions), 1);
+        assert.lengthOf(reports, 1);
+      }),
+    );
+
+    it.effect("reports the adoption reason instead of retrying when it fails", () =>
+      Effect.gen(function* () {
+        const { handle, reports } = yield* makeHandler([
+          {
+            _tag: "failed",
+            home: "/Users/alice/.flow",
+            journalPath: "/Users/alice/.flow/userdata/service-adoption.json",
+            reason: "network",
+            step: "install-release",
+            message: "Download failed (503).",
+            journal: {
+              version: 1,
+              startedAt: "2026-09-16T10:00:00.000Z",
+              steps: [],
+              outcome: "failed",
+              failure: { step: "install-release", message: "Download failed (503)." },
+            },
+          },
+        ]);
+
+        assert.isFalse(yield* handle(notInstalled));
+        assert.lengthOf(reports, 1);
+        assert.include(reports[0] ?? "", "network: Download failed (503).");
+      }),
+    );
+
+    it.effect("leaves other attach failures to the service layer", () =>
+      Effect.gen(function* () {
+        const { handle, adoptions, reports } = yield* makeHandler([]);
+
+        assert.isFalse(
+          yield* handle({
+            reason: "The Flow service is not running.",
+            fatal: true,
+            attach: { kind: "stopped", detail: "Service status: stopped." },
+          }),
+        );
+        assert.equal(yield* Ref.get(adoptions), 0);
+        assert.lengthOf(reports, 1);
+      }),
+    );
+  });
 });

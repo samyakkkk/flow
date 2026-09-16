@@ -21,7 +21,11 @@ import * as NodePath from "node:path";
 
 import type { DesktopFlowServiceActionResult, DesktopFlowServiceStatus } from "@t3tools/contracts";
 
-import { defaultRegistryRoot, discoverService, readServiceControl } from "./serviceDiscovery.ts";
+import {
+  desktopServiceRegistryRoot,
+  discoverService,
+  readServiceControl,
+} from "./serviceDiscovery.ts";
 
 // Kept in sync with `scripts/instances/service.mjs`; the label is part of the
 // on-disk contract, so both sides must name it identically.
@@ -110,7 +114,7 @@ const resolveInput = (input: FlowServiceInput): ResolvedInput => {
     input.homeDirectory === undefined ? { host } : { homeDirectory: input.homeDirectory, host },
   );
   return {
-    registryRoot: input.registryRoot ?? defaultRegistryRoot(),
+    registryRoot: input.registryRoot ?? desktopServiceRegistryRoot(),
     name: input.name ?? "primary",
     label: location.label,
     unitPath: location.path,

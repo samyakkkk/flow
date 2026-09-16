@@ -63,6 +63,13 @@ export class DesktopEnvironment extends Context.Service<
     // extracts on demand (see DesktopWslServerTree).
     readonly serverRoot: string;
     readonly backendEntryPath: string;
+    // `scripts/flow-release.mjs`, the Flow service bootstrap. First-launch
+    // adoption runs it with Electron's embedded Node to install the
+    // independent Flow release and register it as a login service; the
+    // desktop's own bundled server is never the service. Absent on packaged
+    // Windows, where that bootstrap does not run (see
+    // scripts/build-desktop-artifact.ts).
+    readonly flowReleaseScriptPath: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
@@ -89,6 +96,9 @@ export class DesktopEnvironment extends Context.Service<
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = BRAND.name;
+
+// Mirrors the staged resource directory in scripts/build-desktop-artifact.ts.
+const FLOW_BOOTSTRAP_RESOURCE_DIR = "flow-bootstrap";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -214,6 +224,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appRoot,
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
+    // Packaged builds carry the bootstrap as an extra resource next to the
+    // other staged resources; dev runs the repo's own copy.
+    flowReleaseScriptPath: input.isPackaged
+      ? path.join(resourcesPath, FLOW_BOOTSTRAP_RESOURCE_DIR, "flow-release.mjs")
+      : path.join(rootDir, "scripts", "flow-release.mjs"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged

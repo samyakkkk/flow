@@ -38,12 +38,33 @@ export interface ServiceDiscoveryResult {
   readonly reason?: string;
 }
 
-// Mirrors `launcher.mjs`'s `registryRoot()`. The desktop must land on the same
-// registry the `flow` CLI manages, or it would attach to nothing.
-export const defaultRegistryRoot = (
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = homedir(),
-): string => resolve(env.FLOW_INSTANCE_HOME || join(home, ".local/share/flow-app"));
+// Where the desktop's service lives, and the single source of truth for it:
+// first-launch adoption installs into this registry (DesktopServiceAdoption)
+// and attaching reads from it, so the two can never point at different
+// installations.
+//
+// The desktop's service is always the installed Flow *release*, which puts its
+// registry at `<FLOW_RELEASE_HOME>/instance-home` (`flow-release.mjs` defaults
+// FLOW_INSTANCE_HOME to exactly that before handing off to the launcher).
+// There is deliberately no fallback to `launcher.mjs`'s own
+// `~/.local/share/flow-app` default: that is the registry a *source checkout*
+// manages, and silently attaching to it would let a dev tree and a release
+// fight over one app. A developer who wants that registry sets
+// FLOW_INSTANCE_HOME, which is what `flow dev` already does.
+export const desktopServiceRegistryRoot = ({
+  env = process.env,
+  homeDirectory = homedir(),
+}: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDirectory?: string;
+} = {}): string =>
+  resolve(
+    env.FLOW_INSTANCE_HOME ||
+      join(
+        env.FLOW_RELEASE_HOME || join(homeDirectory, ".local/share/flow-browser"),
+        "instance-home",
+      ),
+  );
 
 const readJson = async (path: string): Promise<unknown> => {
   try {

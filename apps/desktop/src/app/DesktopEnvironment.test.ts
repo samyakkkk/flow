@@ -105,6 +105,25 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("locates the Flow service bootstrap in the repo and in the package", () =>
+    Effect.gen(function* () {
+      // Adoption runs this script with Electron's embedded Node; packaged
+      // builds ship it loose under resources/ (see build-desktop-artifact.ts).
+      const development = yield* makeEnvironment();
+      assert.equal(development.flowReleaseScriptPath, "/repo/scripts/flow-release.mjs");
+
+      const packaged = yield* makeEnvironment({
+        isPackaged: true,
+        appPath: "/Applications/Flow.app/Contents/Resources/app.asar",
+        resourcesPath: "/Applications/Flow.app/Contents/Resources",
+      });
+      assert.equal(
+        packaged.flowReleaseScriptPath,
+        "/Applications/Flow.app/Contents/Resources/flow-bootstrap/flow-release.mjs",
+      );
+    }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({
