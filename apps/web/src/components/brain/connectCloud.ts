@@ -1,4 +1,4 @@
-import type { BrainCommand, BrainResponse } from "@t3tools/contracts";
+import type { BrainCli, BrainCommand, BrainResponse } from "@t3tools/contracts";
 
 /**
  * Shared shape of the "connect to an existing remote Brain" form. Both the
@@ -10,6 +10,8 @@ export interface ConnectCloudFields {
   readonly endpoint: string;
   readonly email: string;
   readonly password: string;
+  /** CLI that curates conversation notes on this machine. Omitted keeps the remote Brain's choice. */
+  readonly cli?: BrainCli | undefined;
 }
 
 export const CONNECT_CLOUD_ERROR =
@@ -30,6 +32,7 @@ export function connectCloudCommand(
     endpoint: fields.endpoint.trim(),
     email: fields.email.trim(),
     password: fields.password,
+    ...(fields.cli ? { cli: fields.cli } : {}),
   };
 }
 

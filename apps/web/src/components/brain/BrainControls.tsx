@@ -103,7 +103,7 @@ export function CreateBrainDialog({
     try {
       const result = await send(
         location === "remote"
-          ? connectCloudCommand({ endpoint, email, password })
+          ? connectCloudCommand({ endpoint, email, password, cli: selected })
           : { action: "create", name, cli: selected! },
       );
       const outcome = connectCloudOutcome(
@@ -207,45 +207,45 @@ export function CreateBrainDialog({
                 </label>
               </>
             ) : (
-              <>
-                <label className="block space-y-2 text-sm">
-                  Brain name
-                  <Input
-                    autoFocus
-                    required
-                    maxLength={80}
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="e.g. Acme platform"
-                  />
-                </label>
-                <fieldset className="space-y-2">
-                  <legend className="mb-2 text-sm">Build knowledge with</legend>
-                  {state?.clis.map((entry) => (
-                    <label
-                      key={entry.id}
-                      className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
-                    >
-                      <input
-                        type="radio"
-                        name="brain-cli"
-                        checked={selected === entry.id}
-                        disabled={!entry.installed || busy}
-                        onChange={() => setCli(entry.id)}
-                      />
-                      <span>
-                        <span className="block font-medium">{cliName(entry.id)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {entry.installed
-                            ? "Uses your existing CLI sign-in"
-                            : "Not installed on this computer"}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
-                </fieldset>
-              </>
+              <label className="block space-y-2 text-sm">
+                Brain name
+                <Input
+                  autoFocus
+                  required
+                  maxLength={80}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="e.g. Acme platform"
+                />
+              </label>
             )}
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-sm">
+                {location === "remote" ? "Write conversation notes with" : "Build knowledge with"}
+              </legend>
+              {state?.clis.map((entry) => (
+                <label
+                  key={entry.id}
+                  className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="radio"
+                    name="brain-cli"
+                    checked={selected === entry.id}
+                    disabled={!entry.installed || busy}
+                    onChange={() => setCli(entry.id)}
+                  />
+                  <span>
+                    <span className="block font-medium">{cliName(entry.id)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {entry.installed
+                        ? "Uses your existing CLI sign-in"
+                        : "Not installed on this computer"}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}

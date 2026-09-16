@@ -29,6 +29,12 @@ describe("connectCloudCommand", () => {
     ).toEqual({ action: "connectCloud", endpoint: "https://x", email: "a@b.c", password: " pw " });
   });
 
+  it("sends the local notes CLI only when one was chosen", () => {
+    const fields = { endpoint: "https://b.example", email: "a@b.c", password: "x" };
+    expect(connectCloudCommand(fields)).not.toHaveProperty("cli");
+    expect(connectCloudCommand({ ...fields, cli: "codex" })).toMatchObject({ cli: "codex" });
+  });
+
   it("includes a workspace id only when reconnecting an existing Brain", () => {
     expect(
       connectCloudCommand({ endpoint: "https://x", email: "a@b.c", password: "pw" }, "ws-1"),

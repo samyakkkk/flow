@@ -677,7 +677,7 @@ function remoteBrainSources(
 type BrainSetupMode = "create" | "connect";
 const BRAIN_SETUP_MODES = [
   { mode: "create", label: "Create a new Brain" },
-  { mode: "connect", label: "Connect to your existing Brain" },
+  { mode: "connect", label: "Connect to your team Brain" },
 ] as const satisfies readonly { mode: BrainSetupMode; label: string }[];
 
 /** Setup values stay fixed while provider probes refresh the surrounding cards. */
@@ -842,8 +842,8 @@ export function ConnectedAgentsStep({
    * onboarding and settings surfaces cannot drift apart.
    */
   const connectBrain = async () => {
-    const fields = { endpoint, email, password };
-    if (busy || !connectCloudReady(fields)) return;
+    const fields = { endpoint, email, password, cli };
+    if (busy || !connectCloudReady(fields) || !cliReady) return;
     setBusy(true);
     setError("");
     try {
@@ -868,6 +868,8 @@ export function ConnectedAgentsStep({
     }
   };
   const connectReady = connectCloudReady({ endpoint, email, password });
+  const cliReady =
+    getOnboardingProviderState(byDriver.get(cli === "claude" ? "claudeAgent" : cli)) === "ready";
   const primaryAgents = PRIMARY_AGENT_DRIVERS.map((driver) => ({
     driver,
     provider: byDriver.get(driver),
@@ -948,37 +950,6 @@ export function ConnectedAgentsStep({
               </label>
             </div>
           ) : null}
-          {mode === "create" && brainState && brainState.workspaces.length > 0 ? (
-            <label className="mb-4 block space-y-2 text-sm">
-              Brain for this computer
-              <select
-                className="w-full rounded-md border bg-background p-2"
-                value={choice?.id ?? ""}
-                disabled={busy}
-                onChange={(event) => {
-                  const brain = brainState.workspaces.find(
-                    (item) => item.id === event.target.value,
-                  );
-                  if (brain)
-                    onChoose(environmentId, {
-                      id: brain.id,
-                      name: brain.name,
-                      sources: remoteBrainSources(brain),
-                    });
-                }}
-              >
-                <option value="" disabled>
-                  Choose an existing Brain or create one below
-                </option>
-                {brainState.workspaces.map((brain) => (
-                  <option key={brain.id} value={brain.id}>
-                    {brain.name}
-                    {brain.remote ? " (Cloud)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
           {choice ? (
             <p className="mb-3 text-sm text-success-foreground">
               {choice.name} is ready. Next, choose its projects.
@@ -995,13 +966,17 @@ export function ConnectedAgentsStep({
               />
             </label>
           ) : null}
-          {!choice && mode === "create" ? (
-            <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p>
+          {!choice ? (
+            <p className="mb-2 text-sm">
+              {mode === "connect"
+                ? "Choose an agent to write this computer's conversation notes"
+                : "Choose an agent to maintain this Brain"}
+            </p>
           ) : null}
           <div className="space-y-1.5">
             {primaryAgents.map(({ driver, provider }) => (
               <div key={driver} className="flex items-center gap-2">
-                {!choice && mode === "create" ? (
+                {!choice ? (
                   <input
                     type="radio"
                     name={`brain-cli-${environmentId}`}
@@ -1110,12 +1085,7 @@ export function ConnectedAgentsStep({
           disabled={
             busy ||
             (!choice &&
-              (mode === "connect"
-                ? !connectReady
-                : !name.trim() ||
-                  getOnboardingProviderState(
-                    byDriver.get(cli === "claude" ? "claudeAgent" : cli),
-                  ) !== "ready"))
+              (mode === "connect" ? !connectReady || !cliReady : !name.trim() || !cliReady))
           }
           onClick={() =>
             choice

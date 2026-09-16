@@ -171,12 +171,13 @@ describe("onboarding Brain step", () => {
 
   it("swaps the create fields for connect fields and requires all three", async () => {
     await render();
-    await act(async () => modeButton("Connect to your existing Brain").props.onClick());
+    await act(async () => modeButton("Connect to your team Brain").props.onClick());
 
     expect(labelled("Brain name")).toBeUndefined();
-    expect(renderer!.root.findAllByProps({ type: "radio", name: "brain-cli-local" })).toHaveLength(
-      0,
-    );
+    // Conversation notes are curated locally, so the CLI choice stays in connect mode.
+    expect(
+      renderer!.root.findAllByProps({ type: "radio", name: "brain-cli-local" }).length,
+    ).toBeGreaterThan(0);
     expect(labelled("Brain URL or invitation link")).toBeDefined();
     expect(labelled("Email")).toBeDefined();
     expect(labelled("Password")).toBeDefined();
@@ -192,7 +193,7 @@ describe("onboarding Brain step", () => {
 
   it("connects an existing remote Brain, records it, and advances", async () => {
     await render();
-    await act(async () => modeButton("Connect to your existing Brain").props.onClick());
+    await act(async () => modeButton("Connect to your team Brain").props.onClick());
     await type("Brain URL or invitation link", "  https://brain.example.com  ");
     await type("Email", "  dev@example.com ");
     await type("Password", " hunter2hunter2 ");
@@ -224,6 +225,7 @@ describe("onboarding Brain step", () => {
       endpoint: "https://brain.example.com",
       email: "dev@example.com",
       password: " hunter2hunter2 ",
+      cli: "claude",
     });
     expect(onChoose).toHaveBeenCalledWith(environmentId, {
       id: "remote-1",
@@ -236,7 +238,7 @@ describe("onboarding Brain step", () => {
 
   it("shows the server error and stays on the step when the connect fails", async () => {
     await render();
-    await act(async () => modeButton("Connect to your existing Brain").props.onClick());
+    await act(async () => modeButton("Connect to your team Brain").props.onClick());
     await type("Brain URL or invitation link", "https://brain.example.com");
     await type("Email", "dev@example.com");
     await type("Password", "wrong-password");
@@ -254,7 +256,7 @@ describe("onboarding Brain step", () => {
 
   it("falls back to guidance copy when the connect fails without a message", async () => {
     await render();
-    await act(async () => modeButton("Connect to your existing Brain").props.onClick());
+    await act(async () => modeButton("Connect to your team Brain").props.onClick());
     await type("Brain URL or invitation link", "https://brain.example.com");
     await type("Email", "dev@example.com");
     await type("Password", "hunter2hunter2");

@@ -771,6 +771,10 @@ export class BrainRuntime {
       throw new Error("Request setup instructions through the environment API.");
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "connectCloud") {
+      // The curator that writes conversation notes runs on this machine, so the
+      // CLI must exist here even though the graph lives remotely.
+      if (command.cli && !this.clis.some((cli) => cli.id === command.cli && cli.installed))
+        throw new Error(`Install ${command.cli} before choosing it.`);
       const target = cloudSignInTarget(command.endpoint);
       const previous = this.workspaces.find(
         (w) => (w.remote?.endpoint ?? w.migration?.endpoint) === target.endpoint,
@@ -812,7 +816,14 @@ export class BrainRuntime {
           status: "ready",
           message: "Connected to cloud",
         };
+        const previousCli = connected.cli;
+        if (command.cli) connected.cli = command.cli;
         await this.save();
+        if (connected.cli !== previousCli) {
+          const worker = this.sessionWorkers.get(connected.id);
+          this.sessionWorkers.delete(connected.id);
+          if (worker) await (await worker).close();
+        }
         this.queueDocumentSync(connected);
         return connected.id;
       }
@@ -858,7 +869,7 @@ export class BrainRuntime {
       const workspace: Workspace = {
         id,
         name: brain.name,
-        cli: brain.cli,
+        cli: command.cli ?? brain.cli,
         sources: [],
         projectIds: [],
         remote: {
