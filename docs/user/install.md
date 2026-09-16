@@ -1,7 +1,10 @@
 # Install Flow
 
-Flow runs coding agents and a local Brain on your computer. The bash installer
-sets up the local browser app from stable GitHub Releases.
+Flow runs coding agents and a local Brain on your computer. You can install it as
+a desktop app or with the bash installer described here; both share one local Flow
+service and one Brain, and you can have both. This page covers the bash installer
+and installing from a checkout. Desktop downloads are in the
+[README](../../README.md#install).
 
 ## Requirements
 
@@ -82,8 +85,18 @@ Use a different `--prefix` if you want to retain both launchers.
 
 ## Desktop
 
-These scripts install the local browser app. T3 Code's npm package and desktop
-package-manager installs are upstream T3 releases and do not install Flow.
+Prefer a native window? Download the Flow desktop app for macOS (Apple Silicon or
+Intel) or Linux x64 from the links in the [README](../../README.md#install). It is
+signed, notarized, and updates itself.
+
+The desktop app connects to the same local Flow service as the `flow` command, so
+installing both is fine: quitting the app leaves the service, its Brain, and your
+connected coding agents running. Manage the service from
+**Settings → Connections → Flow service** in the app, or with `flow service` in a
+terminal.
+
+T3 Code's npm package and desktop package-manager installs are upstream T3 releases
+and do not install Flow.
 
 ## Providers
 

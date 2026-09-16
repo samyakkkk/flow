@@ -23,18 +23,37 @@ Brain instead of asking you to explain the codebase and its decisions again.
   <img src="./docs/images/flow-workspace.webp" alt="Flow workspace with an agent session, Auto-Skills, and conversation notes" width="1200">
 </p>
 
-## Download
+## Install
 
-| Platform                  | Availability                                                                                                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS 15+ · Apple Silicon | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-arm64.dmg)** · signed, notarized, and auto-updating  |
-| macOS · Intel             | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x64.dmg)** · signed, notarized, and auto-updating    |
-| Linux · x64               | **[Download Flow 0.1.3 (.AppImage)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x86_64.AppImage)** · Ubuntu 24.04 or compatible |
-| Windows                   | Planned                                                                                                                                                                |
+Flow installs two ways, and they share one local Flow service and one Brain. The
+desktop app gives you a native window. The install script gives you the `flow`
+command and the same Flow in your browser. Use either or both: coding agents you run
+outside Flow keep working with the Brain whether or not a window is open.
 
-See the [Flow 0.1.3 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.3)
-for checksums and updater assets. The macOS app checks for updates automatically;
-installing from source requires manual updates.
+### Desktop app
+
+| Platform                  | Download                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS 15+ · Apple Silicon | **[Flow 0.1.4 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg)** · signed, notarized, auto-updating      |
+| macOS · Intel             | **[Flow 0.1.4 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg)** · signed, notarized, auto-updating        |
+| Linux · x64               | **[Flow 0.1.4 (.AppImage)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage)** · Ubuntu 24.04 or compatible |
+| Windows                   | Planned                                                                                                                                                       |
+
+Checksums and updater assets are on the
+[Flow 0.1.4 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4).
+
+### Install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
+```
+
+Installs the `flow` command and Flow's local service with its own Node runtime, so
+you do not need Node, npm, Homebrew, Docker, or Git. Run `flow` to open Flow in
+your browser; `flow service install` keeps it running in the background from login.
+Apple Silicon macOS 15 or newer. Updates are prepared automatically; run `flow update`
+to check now. See [Install Flow](./docs/user/install.md) for options and
+[Run Flow in the background](./docs/user/local-instances.md) for the service commands.
 
 ## Why Flow
 
@@ -92,11 +111,11 @@ project and begin working without configuring a separate service.
 - Shared team Brains, so knowledge follows the project across teammates
 - Linear integration for issues, decisions, and delivery context
 - Slack integration for searchable conversations and shared project context
-- Native installers for macOS Intel and Linux x64
+- Windows desktop app
 
 ## Get started
 
-1. Install Flow and open the app.
+1. Install Flow, as the desktop app or with the install script, and open it.
 2. Add a local project.
 3. Choose or create its Brain.
 4. Select a coding provider and start a thread.
@@ -121,7 +140,8 @@ multiple accounts, and remote environments.
 
 ## Documentation
 
-- [Browser app and source installation](./docs/user/install.md)
+- [Install with the script or from source](./docs/user/install.md)
+- [Run Flow in the background](./docs/user/local-instances.md)
 - [Working with threads](./docs/user/thread-sidebar.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
