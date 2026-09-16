@@ -909,11 +909,9 @@ export function ConnectedAgentsStep({
         className="mt-5 h-auto max-h-[28rem] [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
       >
         <section>
-          {!choice ? (
+          {!choice && mode === "connect" ? (
             <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-              {mode === "connect"
-                ? "Use a Brain your team already runs. Enter its URL or invitation link and sign in."
-                : "Give it a name and choose a CLI to build its knowledge."}
+              Use a Brain your team already runs. Enter its URL or invitation link and sign in.
             </p>
           ) : null}
           {mode === "connect" && !choice ? (
