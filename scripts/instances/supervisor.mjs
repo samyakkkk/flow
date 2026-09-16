@@ -20,7 +20,11 @@ import * as NodeTimersPromises from "node:timers/promises";
 const { setTimeout: delay } = NodeTimersPromises;
 import { atomic, json, registryRoot, control, sourceRoot } from "./launcher.mjs";
 import { releaseController } from "./release-control.mjs";
-import { prepareAutomaticUpdate, spawnReleaseCommand } from "../flow-release.mjs";
+import {
+  prepareAutomaticUpdate,
+  selectPrimaryRelease,
+  spawnReleaseCommand,
+} from "../flow-release.mjs";
 export async function freePort() {
   const server = tcpServer();
   server.listen(0, "127.0.0.1");
@@ -57,6 +61,32 @@ export function cleanEnvironment(env) {
 // "this went wrong, start me again". Every exit below picks one deliberately.
 const failureLinger = 2000;
 export async function supervise(directory) {
+  const managed = process.env.FLOW_SERVICE_MANAGED === "1";
+  if (managed && process.env.FLOW_RELEASE_HOME) {
+    // A service manager restarts this process in place, so nothing runs `flow
+    // restart`'s release selection first and the instance would keep launching
+    // the release it was pinned to. Selection happens before the lock is taken
+    // because it takes that same lock to rewrite config.json, and it declines
+    // (leaving the pinned release) while another supervisor owns the instance.
+    const pinned = await json(join(directory, "config.json"));
+    if (pinned && !pinned.dev)
+      try {
+        await selectPrimaryRelease({
+          directory,
+          home: process.env.FLOW_RELEASE_HOME,
+          launcher: { control },
+        });
+      } catch (error) {
+        // Running the recorded code anyway would bypass the release containment
+        // check, and rethrowing would crash-loop every ThrottleInterval. Stay
+        // stopped instead: `flow service install` reconfigures and starts it.
+        console.error(
+          `Flow service will not start: ${error.message} Run \`flow service install\` to reconfigure.`,
+        );
+        process.exitCode = 0;
+        return;
+      }
+  }
   const ownership = new DatabaseSync(join(directory, "supervisor-lock.sqlite"));
   try {
     ownership.exec("BEGIN EXCLUSIVE");
@@ -69,7 +99,6 @@ export async function supervise(directory) {
   }
   const config = await json(join(directory, "config.json"));
   const releaseHome = config.dev ? undefined : process.env.FLOW_RELEASE_HOME;
-  const managed = process.env.FLOW_SERVICE_MANAGED === "1";
   const updates = releaseController({
     home: releaseHome,
     code: config.code,
