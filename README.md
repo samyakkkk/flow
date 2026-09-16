@@ -25,33 +25,27 @@ Brain instead of asking you to explain the codebase and its decisions again.
 
 ## Install
 
-Flow installs two ways, and they share one local Flow service and one Brain. The
-desktop app gives you a native window. The install script gives you the `flow`
-command and the same Flow in your browser. Use either or both: coding agents you run
-outside Flow keep working with the Brain whether or not a window is open.
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
 ```
 
-Installs the `flow` command and Flow's local service with its own Node runtime, so
-you do not need Node, npm, Homebrew, Docker, or Git. Run `flow` to open Flow in
-your browser; `flow service install` keeps it running in the background from login.
-Apple Silicon macOS 15 or newer. Updates are prepared automatically; run `flow update`
-to check now. See [Install Flow](./docs/user/install.md) for options and
-[Run Flow in the background](./docs/user/local-instances.md) for the service commands.
+<p align="center"><sub>Apple Silicon macOS 15+ · installs the <code>flow</code> command and Flow's local service</sub></p>
 
-<p align="center"><strong>— or download the desktop app —</strong></p>
+<p align="center"><strong>or</strong></p>
 
 <p align="center">
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg"><img alt="Download Flow 0.1.4 for macOS, Apple Silicon" src="https://img.shields.io/badge/macOS-Apple_Silicon-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg"><img alt="Download Flow 0.1.4 for macOS, Intel" src="https://img.shields.io/badge/macOS-Intel-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage"><img alt="Download Flow 0.1.4 for Linux, x64 AppImage" src="https://img.shields.io/badge/Linux-x64-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
-  <img alt="Windows: planned" src="https://img.shields.io/badge/Windows-planned-9E9E9E?style=for-the-badge">
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg"><img src="./docs/images/download-macos-apple-silicon.svg" alt="Download Flow for macOS (Apple Silicon)" width="194"></a>
+  &nbsp;
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg"><img src="./docs/images/download-macos-intel.svg" alt="Download Flow for macOS (Intel)" width="194"></a>
+  &nbsp;
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage"><img src="./docs/images/download-linux.svg" alt="Download Flow for Linux (x64 AppImage)" width="194"></a>
 </p>
 
-<p align="center">Flow 0.1.4 · macOS 15+ · Ubuntu 24.04 or compatible · signed, notarized, auto-updating<br>
-Checksums and updater assets are on the <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4">Flow 0.1.4 release</a>.</p>
+<p align="center"><sub>Flow 0.1.4 · signed, notarized, auto-updating · <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4">checksums</a> · Windows planned</sub></p>
+
+Both share one local Flow service and one Brain, and coding agents you run outside
+Flow keep their Brain when the app is closed. See [Install Flow](./docs/user/install.md)
+and [Run Flow in the background](./docs/user/local-instances.md).
 
 ## Why Flow
 
