@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "jsonc-parser";
 
-const materializer = new URL("../../bin/lib/materialize.mjs", import.meta.url).href;
+const materializer = new URL("../lib/materialize.mjs", import.meta.url).href;
 
 for (const harness of ["opencode", "gemini", "antigravity"]) {
   test(`${harness}-only setup installs and restores shared knowledge without Codex`, () => fixture(({ repoDir, invoke }) => {
@@ -40,12 +40,12 @@ function fixture(run) {
   const git = spawnSync("git", ["init", "-q", repoDir]);
   assert.equal(git.status, 0);
   const ctx = { repoDir, project: "test-project", repo: "test-repo", harnesses: ["copilot"] };
-  function invoke(code) {
+  function invoke(code, extraEnv = {}) {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import * as m from ${JSON.stringify(materializer)};
       const ctx = ${JSON.stringify(ctx)};
       ${code}
-    `], { env: { ...process.env, HOME: home, COPILOT_HOME: "" }, encoding: "utf8" });
+    `], { env: { ...process.env, HOME: home, COPILOT_HOME: "", ...extraEnv }, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   }
@@ -76,7 +76,7 @@ test("Copilot setup, repeated setup, and removal preserve user configuration", (
   const cli = parse(installed[".github/mcp.json"]);
   assert.deepEqual(cli.mcpServers["flow-graph"], vscode.servers["flow-graph"]);
   const hooks = parse(installed[".github/hooks/flow.json"]);
-  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"]);
+  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["PostToolUse", "SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"]);
   assert.equal(hooks.hooks.Stop.length, 2);
   assert.match(hooks.hooks.Stop[1].command, /'--harness' 'copilot'/);
   assert.ok(!existsSync(join(repoDir, ".claude")), "Copilot installs independently of Claude");
@@ -233,4 +233,30 @@ test("Antigravity MCP identities are stable per binding and do not collide acros
   assert.notEqual(render("test-project", "different-repo"), first);
   invoke("m.removeRepo(ctx.repoDir);");
   assert.equal(readFileSync(file, "utf8"), original);
+}));
+
+// The Cloud CLI points FLOW_AGENT_HOME at <home>/agents, so the shim path is not
+// under ~/.flow. Flow must still recognize its own hooks there, or removal strands
+// them and the next setup appends a duplicate (double capture).
+test("hooks under a custom agent home are recognized on re-setup and removal", () => fixture(({ home, repoDir, invoke }) => {
+  const env = { FLOW_AGENT_HOME: join(home, "agents") };
+  const harnesses = "['claude', 'codex', 'cursor']";
+  const hookFiles = [".claude/settings.json", ".codex/hooks.json", ".cursor/hooks.json"];
+
+  invoke(`m.materializeRepo({ ...ctx, harnesses: ${harnesses} });`, env);
+  const installed = readFileSync(join(repoDir, hookFiles[0]), "utf8");
+  assert.match(installed, /agents\/bin\/flow-hook/, "shim path should follow FLOW_AGENT_HOME");
+
+  invoke(`m.materializeRepo({ ...ctx, harnesses: ${harnesses} });`, env);
+  for (const rel of hookFiles) {
+    const hooks = JSON.parse(readFileSync(join(repoDir, rel), "utf8")).hooks;
+    for (const [event, entries] of Object.entries(hooks)) {
+      assert.equal(entries.length, 1, `${rel} ${event} duplicated on re-setup`);
+    }
+  }
+
+  invoke("m.removeRepo(ctx.repoDir)", env);
+  for (const rel of hookFiles) {
+    assert.ok(!existsSync(join(repoDir, rel)), `${rel} left behind after removal`);
+  }
 }));

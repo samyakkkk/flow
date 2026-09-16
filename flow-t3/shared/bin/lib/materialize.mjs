@@ -143,8 +143,12 @@ function unspliceBlock(file, begin = BLOCK_BEGIN, end = BLOCK_END) {
 // hooks-object merge (Claude Code dialect, shared by Codex and Gemini)
 
 // Our entries are recognizable forever by the shim path inside the command.
+// Match on `bin/flow-hook` rather than the default `~/.flow` home: FLOW_DIR
+// follows FLOW_AGENT_HOME (the Cloud CLI points it at <home>/agents), and a
+// home-specific literal would leave those hooks unrecognized — so `remove`
+// would strand them and the next `setup` would append a duplicate.
 function isFlowHook(entry) {
-  return JSON.stringify(entry).replace(/\\+/g, "/").includes(".flow/bin/flow-hook");
+  return JSON.stringify(entry).replace(/\\+/g, "/").includes("/bin/flow-hook");
 }
 
 // events: [{name, extra?}] — extra merges into the hook object (e.g. Gemini's
@@ -202,9 +206,9 @@ This repo is documented as connected to Flow project **${project}**.
    If tools are deferred, use your tool discovery/search facility to find
    \`flow-graph orient\` before concluding MCP is unavailable.
 2. Only if MCP is unavailable → run the CLI (requires network access from your shell):
-   - \`~/.flow/bin/flow orient\`
-   - \`~/.flow/bin/flow search "<symptom, identifier, or file path>"\`
-   - \`~/.flow/bin/flow remember "<verbatim conclusion + context>"\`
+   - \`${VERBS_CLI_PATH} orient\`
+   - \`${VERBS_CLI_PATH} search "<symptom, identifier, or file path>"\`
+   - \`${VERBS_CLI_PATH} remember "<verbatim conclusion + context>"\`
 
 ## Trust rules (important)
 
@@ -249,7 +253,7 @@ Run the setup prompt again to repair configuration; the skill alone is not a bin
   return `This repo is connected to Flow project "${project}" (knowledge graph + team
 memory). Use the \`flow-graph\` MCP tools; discover/search deferred tools for
 \`flow-graph orient\` first if needed. Only if MCP is unavailable, use the CLI:
-\`~/.flow/bin/flow orient\` at session start, \`… search "<symptom>"\` when
+\`${VERBS_CLI_PATH} orient\` at session start, \`… search "<symptom>"\` when
 surprised, \`… remember "<conclusion>"\` when durable work concludes. If it
 reports a different project or NOT CONNECTED, stop and tell the user to run
 \`flow setup ${project}\`. Details: the "flow" skill.`;
@@ -391,9 +395,9 @@ export const VERBS_CLI_PATH = join(FLOW_DIR, "bin", "flow");
 
 function verbsCliSource() {
   return `#!/usr/bin/env node
-// ~/.flow/bin/flow — Flow memory CLI for agents (managed by \`flow setup\`).
+// ${VERBS_CLI_PATH} — Flow memory CLI for agents (managed by \`flow setup\`).
 // Subcommands: orient · search "<query>" · remember "<text>" · status
-// Binding resolves from the current folder via ~/.flow/integrations.json.
+// Binding resolves from the current folder via ${MANIFEST_PATH}.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -954,8 +958,11 @@ export function materializeRepo(ctx) {
   for (const rel of CANDIDATE_FILES.filter((name) => name.endsWith(".json"))) {
     const file = join(ctx.repoDir, rel);
     if (!existsSync(file)) continue;
-    if (COPILOT_JSON_FILES.includes(rel)) parseCopilotJson(file, readFileSync(file, "utf8"));
-    else readJson(file, {});
+    // Only the harnesses being rendered get their configs validated: a malformed
+    // Copilot file must not abort an unrelated gemini-only setup.
+    if (COPILOT_JSON_FILES.includes(rel)) {
+      if (harnesses.includes("copilot")) parseCopilotJson(file, readFileSync(file, "utf8"));
+    } else readJson(file, {});
   }
   const originals = snapshotOriginals(ctx.repoDir);
   const owned = [];
