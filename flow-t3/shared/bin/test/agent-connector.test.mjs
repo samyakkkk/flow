@@ -25,7 +25,7 @@ async function fixture(t) {
     events.push(input);
     let result = null;
     if (input.method === 'state') result = { workspaces: [{ id: 'brain-1', name: 'Team Brain', cli: 'claude' }] };
-    if (input.method === 'tools') result = ['orient', 'remember'].map(name => ({ name, inputSchema: { type: 'object', properties: {} } }));
+    if (input.method === 'tools') result = ['orient', 'remember', 'read_document'].map(name => ({ name, inputSchema: { type: 'object', properties: {} } }));
     if (input.method === 'call') result = { content: [{ type: 'text', text: input.context.session }] };
     if (input.method === 'memories') result = { memories: [], session: input.context.session };
     res.end(JSON.stringify({ result }));
@@ -115,13 +115,14 @@ test('MCP binds exact native sessions and rejects cross-conversation rebinding',
       { id: 2, method: 'tools/call', params: { name: 'remember', arguments: { text: 'early' } } },
       { id: 3, method: 'tools/call', params: { name: 'bind_session', arguments: { session: `claude:${session}` } } },
       { id: 4, method: 'tools/call', params: { name: 'remember', arguments: { text: 'saved' } } },
-      { id: 5, method: 'tools/call', params: { name: 'get_chat_memories', arguments: {} } },
+      { id: 5, method: 'tools/call', params: { name: 'read_document', arguments: { id: `notes:t3-claude:${session}` } } },
       { id: 6, method: 'tools/call', params: { name: 'bind_session', arguments: { session: session === 'chat-a' ? 'claude:chat-b' : 'claude:chat-a' } } },
     ];
     const result = await f.run([join(f.root, '.flow/bin/flow-mcp'), '--project', project], requests.map(x => JSON.stringify({ jsonrpc: '2.0', ...x })).join('\n') + '\n');
     assert.equal(result.code, 0, result.stderr);
     const replies = result.stdout.trim().split('\n').map(JSON.parse);
     assert.match(replies[1].error.message, /bind_session/);
+    assert.match(replies[2].result.content[0].text, new RegExp(`notes:t3-claude:${session}`));
     assert.match(replies[3].result.content[0].text, new RegExp(session));
     assert.match(replies[4].result.content[0].text, new RegExp(session));
     assert.match(replies[5].error.message, /already bound/);

@@ -140,18 +140,22 @@ it("captures immediately, curates all documents over private MCP, and advances o
     expect(chat.documents?.map((doc) => doc.kind).sort()).toEqual(["doc", "skill"]);
     expect((await worker.document(skillId))?.text).toMatch(/^---\nname: "verify-a-local-test"/);
     expect((await worker.knowledge()).documents).toHaveLength(2);
-    const skills = await worker.call("list_skills", { query: "testing" }, { session: "chat" });
-    expect(skills.isError).not.toBe(true);
+    const skill = await worker.call("read_document", { id: skillId }, { session: "chat" });
+    expect(skill.isError).not.toBe(true);
     expect(
-      skills.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(),
-    ).toContain(skillId);
+      skill.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(),
+    ).toContain("verify-a-local-test");
     expect((await worker.memories("unrelated")).documents).toEqual([]);
-    const hidden = await worker.call(
+    // Another conversation can read this chat's notes and continue the work.
+    const shared = await worker.call(
       "read_document",
       { id: "notes:t3-chat" },
       { session: "unrelated" },
     );
-    expect(hidden.isError).toBe(true);
+    expect(shared.isError).not.toBe(true);
+    expect(
+      shared.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(),
+    ).toContain("testing procedure");
     fail = true;
     await worker.capture({
       context: { session: "chat", repo: "flow" },

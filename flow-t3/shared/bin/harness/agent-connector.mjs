@@ -81,9 +81,10 @@ export async function mcp(project) {
   const tools = await request(binding, 'tools');
   let session;
   const unbound = `mcp:${randomUUID()}`;
+  // bind_session ties this stdio connection to the conversation the capture hook
+  // announced; remember and the conversation’s notes attach to that session.
   const extra = [
-    { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
-    { name: 'get_chat_memories', description: 'Read saved notes from this bound conversation. Requires bind_session first.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+    { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle. The reply names this conversation’s notes document for read_document.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
   ];
   const lines = createInterface({ input: process.stdin });
   for await (const line of lines) {
@@ -92,7 +93,7 @@ export async function mcp(project) {
       input = JSON.parse(line);
       if (input.id === undefined) continue;
       let result;
-      if (input.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'flow-graph', version: '1.0.0' }, instructions: 'Call orient first. Bind the exact Flow conversation handle from the startup hook using bind_session before remember or get_chat_memories. Never infer the latest conversation in a folder.' };
+      if (input.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'flow-graph', version: '1.0.0' }, instructions: 'Call orient first. Bind the exact Flow conversation handle from the startup hook using bind_session before remember. Never infer the latest conversation in a folder.' };
       else if (input.method === 'ping') result = {};
       else if (input.method === 'tools/list') result = { tools: [...tools, ...extra] };
       else if (input.method === 'tools/call') {
@@ -106,10 +107,7 @@ export async function mcp(project) {
           const saved = await readJson(join(home(), 'agent-sessions', project, hash(args.session) + '.json'), null);
           if (!saved || saved.common !== binding.folder.common) throw Error('No captured session matches this handle and repository');
           session = saved.session;
-          result = { content: [{ type: 'text', text: `Bound Flow conversation ${session}` }] };
-        } else if (name === 'get_chat_memories') {
-          if (!session) throw Error('Call bind_session with this conversation’s hook handle first');
-          result = { content: [{ type: 'text', text: JSON.stringify(await request(binding, 'memories', { context: context(binding, session) })) }] };
+          result = { content: [{ type: 'text', text: `Bound Flow conversation ${session}. Its notes: read_document notes:t3-${session}` }] };
         } else {
           const tool = tools.find(tool => tool.name === name);
           if (!tool) throw Error('Unknown Flow tool');

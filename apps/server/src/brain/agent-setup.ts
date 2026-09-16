@@ -95,7 +95,7 @@ The Brain's registered repositories are: ${JSON.stringify(input.repositories)}. 
 ${command}
 4. Restart the selected agents and follow their MCP and hook trust prompts. Setup cannot approve a harness's trust dialog. Do not change unrelated settings.
 5. Run ${cli} doctor --folder '<folder>'. Confirm the Brain name and that the capture queue drained. Call flow-graph orient in the configured agent.
-6. The startup hook supplies a Flow conversation handle. Call bind_session with that exact handle before remember or get_chat_memories. If the harness does not expose the handle to the model, report conversation-note access as unverified; never select the most recent session in a folder.
+6. The startup hook supplies a Flow conversation handle. Call bind_session with that exact handle before remember; its reply names the conversation's notes document for read_document. If the harness does not expose the handle to the model, report conversation-note access as unverified; never select the most recent session in a folder.
 7. Test a short conversation and check its saved notes in Flow after curation completes. Report configuration, MCP, capture and curation separately; do not claim that a connection check proves curation.
 
 Manual commands:

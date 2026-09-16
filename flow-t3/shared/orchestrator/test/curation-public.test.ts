@@ -4,8 +4,11 @@ import Database from "better-sqlite3";
 import { CurationStore } from "../src/curation/store.js";
 import { CurationPublicTools } from "../src/curation/public-tools.js";
 
+const search = (tools: CurationPublicTools, query: string) =>
+  JSON.stringify(tools.augment("search_knowledge", { query }, { content: [] }));
+
 NodeTest.test(
-  "superseded procedures stay readable but leave normal discovery until restored",
+  "superseded procedures stay readable but leave discovery until restored",
   () => {
     const db = new Database(":memory:");
     db.exec(
@@ -31,20 +34,12 @@ NodeTest.test(
         evidence: [2],
       },
     );
-    NodeAssert.deepEqual(JSON.parse(tools.call("list_skills", {}, "chat")!.content[0]!.text), []);
-    NodeAssert.deepEqual(
-      JSON.parse(
-        tools.call("list_skills", { query: "standalone health" }, "chat")!.content[0]!.text,
-      ),
-      [],
-    );
+    NodeAssert.doesNotMatch(search(tools, "type:skill standalone health"), new RegExp(skill.id));
     NodeAssert.doesNotMatch(
       JSON.stringify(tools.augment("orient", {}, { content: [] })),
       /Standalone health check/,
     );
-    const retained = JSON.parse(
-      tools.call("read_skill", { id: skill.id }, "chat")!.content[0]!.text,
-    );
+    const retained = JSON.parse(tools.call("read_document", { id: skill.id })!.content[0]!.text);
     NodeAssert.equal(retained.status, "superseded");
     NodeAssert.match(retained.text, /Start the standalone process/);
     NodeAssert.equal(store.list({ includeInactive: true }).length, 1);
@@ -58,18 +53,13 @@ NodeTest.test(
         evidence: [3],
       },
     );
-    NodeAssert.equal(
-      JSON.parse(
-        tools.call("list_skills", { query: "standalone health" }, "chat")!.content[0]!.text,
-      )[0].id,
-      skill.id,
-    );
+    NodeAssert.match(search(tools, "type:skill standalone health"), new RegExp(skill.id));
     db.close();
   },
 );
 
 NodeTest.test(
-  "mixed entity batches preserve order, missing entries and conversation scope",
+  "mixed entity batches preserve order and read another conversation's notes",
   async () => {
     const db = new Database(":memory:");
     db.exec(
@@ -84,12 +74,11 @@ NodeTest.test(
       text: "Run the same test before and after the fix.",
       evidence: [1],
     });
-    const notes = store.bootstrap(cp, "Private original task");
+    const notes = store.bootstrap(cp, "Earlier original task");
     const tools = new CurationPublicTools(store);
     let calls = 0;
     const response = await tools.batch(
       { ids: [skill.id, "svc:test", notes.id, "missing", skill.id] },
-      "chat-b",
       async (args) => {
         calls++;
         NodeAssert.deepEqual(args.ids, ["svc:test", "missing"]);
@@ -115,27 +104,27 @@ NodeTest.test(
       [
         [skill.id, "found"],
         ["svc:test", "found"],
-        [notes.id, "not_found"],
+        [notes.id, "found"],
         ["missing", "not_found"],
         [skill.id, "found"],
       ],
     );
-    NodeAssert.equal(payload.found, 3);
-    NodeAssert.doesNotMatch(JSON.stringify(payload), /Private original task/);
-    const readSkill = JSON.parse(
-      tools.call("read_skill", { id: skill.id }, "chat-b")!.content[0]!.text,
-    );
+    NodeAssert.equal(payload.found, 4);
+    // A new conversation picks up where a previous one left off.
+    NodeAssert.match(JSON.stringify(payload), /Earlier original task/);
+    const otherChat = JSON.parse(tools.call("read_document", { id: notes.id })!.content[0]!.text);
+    NodeAssert.match(otherChat.text, /Earlier original task/);
+    const readSkill = JSON.parse(tools.call("read_document", { id: skill.id })!.content[0]!.text);
     NodeAssert.equal(readSkill.text, skill.text);
-    NodeAssert.match(
-      JSON.stringify(tools.augment("orient", {}, { content: [] })),
-      /Test regression/,
-    );
+    const orient = JSON.stringify(tools.augment("orient", {}, { content: [] }, "t3-chat-b"));
+    NodeAssert.match(orient, /Test regression/);
+    NodeAssert.match(orient, /notes:t3-chat-b/);
     db.close();
   },
 );
 
 NodeTest.test(
-  "curated search honors anchored and corpus-only filters and excludes notes before ranking",
+  "curated search honors anchored and corpus-only filters, kind tokens, and includes notes",
   () => {
     const db = new Database(":memory:");
     db.exec(
@@ -143,9 +132,10 @@ NodeTest.test(
     );
     const store = new CurationStore(db);
     const cp = { sessionId: "chat", repo: "flow", after: 0, through: 1 };
-    const memory = store.save(cp, {
-      kind: "memory",
+    const rule = store.save(cp, {
+      kind: "doc",
       name: "Regression rule",
+      description: "How regression evidence is retained.",
       text: "Retain regression failure evidence.",
       evidence: [1],
     });
@@ -156,6 +146,7 @@ NodeTest.test(
       text: "Run the test.",
       evidence: [1],
     });
+    const notes = store.bootstrap(cp, "Investigating a regression in onboarding");
     const tools = new CurationPublicTools(store);
     const original = { content: [{ type: "text", text: "Existing search results" }] };
     for (const query of [
@@ -166,11 +157,16 @@ NodeTest.test(
       "sort:recent regression",
     ])
       NodeAssert.equal(tools.augment("search_knowledge", { query }, original), original);
-    const response = JSON.stringify(
-      tools.augment("search_knowledge", { query: "type:memory regression" }, original),
-    );
-    NodeAssert.match(response, new RegExp(memory.id));
-    NodeAssert.doesNotMatch(response, new RegExp(skill.id));
+    const docOnly = search(tools, "type:doc regression");
+    NodeAssert.match(docOnly, new RegExp(rule.id));
+    NodeAssert.doesNotMatch(docOnly, new RegExp(skill.id));
+    NodeAssert.doesNotMatch(docOnly, new RegExp(notes.id));
+    const skillOnly = search(tools, "type:skill regression");
+    NodeAssert.match(skillOnly, new RegExp(skill.id));
+    NodeAssert.doesNotMatch(skillOnly, new RegExp(rule.id));
+    const notesOnly = search(tools, "type:notes regression");
+    NodeAssert.match(notesOnly, new RegExp(notes.id));
+    NodeAssert.doesNotMatch(notesOnly, new RegExp(skill.id));
     const envelope = {
       content: [
         { type: "text", text: JSON.stringify({ status: "ok", results: "Existing result" }) },
@@ -185,7 +181,8 @@ NodeTest.test(
     const decoded = JSON.parse(augmented.content[0]!.text);
     NodeAssert.equal(decoded.status, "ok");
     NodeAssert.match(decoded.results, /Existing result/);
-    NodeAssert.match(decoded.results, new RegExp(memory.id));
+    NodeAssert.match(decoded.results, new RegExp(rule.id));
+    NodeAssert.match(decoded.results, new RegExp(notes.id));
     db.close();
   },
 );

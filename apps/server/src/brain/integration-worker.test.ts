@@ -19,7 +19,7 @@ it("loads only a host-selected integration with its owning Brain storage and too
       async configure(config) { host.database.prepare('INSERT INTO integration_fixture VALUES (?)').run(config.value); return { configured: true }; },
       async action(action) {
         if (action === 'read') return { rows: host.database.prepare('SELECT value FROM integration_fixture').all(), tools: host.tools.map(tool => tool.name) };
-        if (action === 'tools') return host.call('list_skills', {}, 'fixture');
+        if (action === 'tools') return host.call('read_document', { id: 'missing' }, 'fixture');
         throw Error('Unknown integration operation');
       },
       async close() { host.database.prepare('INSERT INTO integration_fixture VALUES (?)').run('closed'); }

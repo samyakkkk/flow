@@ -203,7 +203,7 @@ async function main() {
     if (args.event) payload.hook_event_name = args.event;
     const session = await capture(args.project, args.harness, payload);
     if (session && ["SessionStart", "sessionStart"].includes(payload.hook_event_name ?? payload.hookEventName)) {
-      const message = `Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember or get_chat_memories. Never use another conversation's handle.`;
+      const message = `Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember; its reply names this conversation's notes document. Never use another conversation's handle.`;
       process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } }) + "\n");
     }
     return;
