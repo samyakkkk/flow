@@ -5,6 +5,8 @@ import {
   groupOnboardingProjects,
   githubRepositoryKey,
   matchGithubProjects,
+  matchRemoteBrainSources,
+  folderMatchesRemoteSource,
   isSuggestedBrainProject,
   projectIsWithinFolder,
   partitionOnboardingProjects,
@@ -407,5 +409,74 @@ describe("GitHub additions reuse local projects", () => {
         [],
       ),
     ).toEqual([]);
+  });
+});
+
+describe("matchRemoteBrainSources", () => {
+  const checkout = candidate("/work/app", { git: github("team/app") });
+  const other = candidate("/work/site", { git: github("team/site") });
+
+  it("matches a connected Brain's repositories to their local clones", () => {
+    const { matched, unmatched } = matchRemoteBrainSources(
+      ["https://github.com/team/app", "https://github.com/team/site"],
+      [checkout, other],
+      [],
+    );
+
+    expect(matched.map((entry) => entry.repository)).toEqual([
+      "https://github.com/team/app",
+      "https://github.com/team/site",
+    ]);
+    expect(matched[0]!.candidates.map((entry) => entry.path)).toEqual(["/work/app"]);
+    expect(unmatched).toEqual([]);
+  });
+
+  it("reports repositories without a local clone, and non-GitHub sources, as unmatched", () => {
+    const { matched, unmatched } = matchRemoteBrainSources(
+      ["https://github.com/team/app", "https://github.com/team/absent", "https://git.acme.dev/x/y"],
+      [checkout],
+      [],
+    );
+
+    expect(matched.map((entry) => entry.repository)).toEqual(["https://github.com/team/app"]);
+    expect(unmatched).toEqual(["https://github.com/team/absent", "https://git.acme.dev/x/y"]);
+  });
+
+  it("reports one entry for sources that name the same repository", () => {
+    const { matched } = matchRemoteBrainSources(
+      ["https://github.com/team/app", "git@github.com:TEAM/app.git"],
+      [checkout],
+      [],
+    );
+
+    expect(matched).toHaveLength(1);
+  });
+
+  it("skips internal indexing clones the picker already hides", () => {
+    const indexed = candidate("/home/me/.t3/userdata/brain/workspaces/w1/repos/app", {
+      git: github("team/app"),
+    });
+
+    expect(
+      matchRemoteBrainSources(["https://github.com/team/app"], [indexed], []).unmatched,
+    ).toEqual(["https://github.com/team/app"]);
+  });
+});
+
+describe("folderMatchesRemoteSource", () => {
+  it("accepts a clone of the same repository, whatever the URL form", () => {
+    expect(
+      folderMatchesRemoteSource("https://github.com/team/app", "git@github.com:TEAM/app.git"),
+    ).toBe(true);
+  });
+
+  it("rejects a different repository, a non-GitHub origin, and a folder without one", () => {
+    expect(
+      folderMatchesRemoteSource("https://github.com/team/app", "https://github.com/team/site"),
+    ).toBe(false);
+    expect(
+      folderMatchesRemoteSource("https://git.acme.dev/team/app", "https://git.acme.dev/team/app"),
+    ).toBe(false);
+    expect(folderMatchesRemoteSource("https://github.com/team/app", null)).toBe(false);
   });
 });

@@ -36,6 +36,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { brainCommand } from "../../state/brain";
+import { connectCloudCommand, connectCloudOutcome, connectCloudReady } from "../brain/connectCloud";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -45,8 +46,10 @@ import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import {
   projectIsWithinFolder,
   isSuggestedBrainProject,
+  folderMatchesRemoteSource,
   githubRepositoryKey,
   matchGithubProjects,
+  matchRemoteBrainSources,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
   resolveOnboardingProjectId,
@@ -96,6 +99,17 @@ import { cn } from "../../lib/utils";
  */
 
 type WizardStep = "connection" | "agents" | "import";
+
+/**
+ * The Brain chosen for one computer. `sources` carries a connected remote
+ * Brain's indexed repositories so the Projects step can preselect their local
+ * clones; a newly created local Brain has none.
+ */
+interface OnboardingBrainChoice {
+  readonly id: string;
+  readonly name: string;
+  readonly sources?: readonly string[] | undefined;
+}
 const NO_ENVIRONMENTS: readonly EnvironmentId[] = [];
 
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
@@ -118,10 +132,10 @@ export function WelcomeWizard({
   const [projectEnvironmentIds, setProjectEnvironmentIds] = useState<readonly EnvironmentId[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [brainChoices, setBrainChoices] = useState<
-    ReadonlyMap<EnvironmentId, { id: string; name: string }>
+    ReadonlyMap<EnvironmentId, OnboardingBrainChoice>
   >(new Map());
   const chooseOnboardingBrain = useCallback(
-    (environmentId: EnvironmentId, brain: { id: string; name: string }) => {
+    (environmentId: EnvironmentId, brain: OnboardingBrainChoice) => {
       setBrainChoices((current) => new Map(current).set(environmentId, brain));
     },
     [],
@@ -644,6 +658,28 @@ function PairingForm({
 const PRIMARY_AGENT_DRIVERS = ["claudeAgent", "codex", "opencode"] as const;
 type OnboardingAgentDriver = (typeof PRIMARY_AGENT_DRIVERS)[number];
 
+/**
+ * A remote Brain already indexes its team's repositories; the local workspace
+ * mirrors them after a connect. Local Brains start empty, so they contribute
+ * nothing to preselect.
+ */
+function remoteBrainSources(
+  workspace:
+    | { readonly remote?: unknown; readonly sources: readonly { repository: string }[] }
+    | undefined,
+): readonly string[] | undefined {
+  if (!workspace?.remote) return undefined;
+  const repositories = workspace.sources.map((source) => source.repository).filter(Boolean);
+  return repositories.length > 0 ? [...new Set(repositories)] : undefined;
+}
+
+/** The Brain step either creates a new local Brain or connects an existing remote one. */
+type BrainSetupMode = "create" | "connect";
+const BRAIN_SETUP_MODES = [
+  { mode: "create", label: "Create a new Brain" },
+  { mode: "connect", label: "Connect to your existing Brain" },
+] as const satisfies readonly { mode: BrainSetupMode; label: string }[];
+
 /** Setup values stay fixed while provider probes refresh the surrounding cards. */
 interface AgentTerminalSession {
   readonly environmentId: EnvironmentId;
@@ -668,8 +704,8 @@ function AgentsStep({
   onContinue,
 }: {
   readonly environmentIds: readonly EnvironmentId[];
-  readonly choices: ReadonlyMap<EnvironmentId, { id: string; name: string }>;
-  readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
+  readonly choices: ReadonlyMap<EnvironmentId, OnboardingBrainChoice>;
+  readonly onChoose: (environmentId: EnvironmentId, brain: OnboardingBrainChoice) => void;
   readonly onContinue: (environmentId: EnvironmentId) => void;
 }) {
   const { environments } = useEnvironments();
@@ -679,10 +715,7 @@ function AgentsStep({
   const activeId =
     selectedId && environmentIds.includes(selectedId) ? selectedId : environmentIds[0];
   return (
-    <StepShell
-      title="Create your Brain"
-      description="Give it a name and choose a CLI to build its knowledge."
-    >
+    <StepShell title="Set up your Brain">
       <Tabs.Root
         value={activeId}
         onValueChange={(value) => {
@@ -723,7 +756,8 @@ function AgentsStep({
   );
 }
 
-function ConnectedAgentsStep({
+/** Exported for the Brain-step behavior tests. */
+export function ConnectedAgentsStep({
   environmentId,
   choice,
   onChoose,
@@ -731,8 +765,8 @@ function ConnectedAgentsStep({
 }: {
   readonly onContinue: (id: EnvironmentId) => void;
   readonly environmentId: EnvironmentId;
-  readonly choice: { id: string; name: string } | undefined;
-  readonly onChoose: (environmentId: EnvironmentId, brain: { id: string; name: string }) => void;
+  readonly choice: OnboardingBrainChoice | undefined;
+  readonly onChoose: (environmentId: EnvironmentId, brain: OnboardingBrainChoice) => void;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -758,6 +792,10 @@ function ConnectedAgentsStep({
   const [cli, setCli] = useState<BrainCli>("claude");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<BrainSetupMode>("create");
+  const [endpoint, setEndpoint] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [readAttempt, setReadAttempt] = useState(0);
   useEffect(() => {
     let active = true;
@@ -799,18 +837,118 @@ function ConnectedAgentsStep({
       setBusy(false);
     }
   };
+  /**
+   * Connect mode reuses the Brain page's validation and command shape, so the
+   * onboarding and settings surfaces cannot drift apart.
+   */
+  const connectBrain = async () => {
+    const fields = { endpoint, email, password };
+    if (busy || !connectCloudReady(fields)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await executeBrain({ environmentId, input: connectCloudCommand(fields) });
+      const response = result._tag === "Success" ? result.value : null;
+      const outcome = connectCloudOutcome(response);
+      if (!outcome.ok) {
+        setError(outcome.error);
+        return;
+      }
+      setPassword("");
+      if (response) setBrainState(response.state);
+      const connected = response?.state.workspaces.find((item) => item.id === outcome.workspaceId);
+      onChoose(environmentId, {
+        id: outcome.workspaceId,
+        name: connected?.name ?? endpoint.trim(),
+        sources: remoteBrainSources(connected),
+      });
+      onContinue(environmentId);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const connectReady = connectCloudReady({ endpoint, email, password });
   const primaryAgents = PRIMARY_AGENT_DRIVERS.map((driver) => ({
     driver,
     provider: byDriver.get(driver),
   }));
   return (
     <>
+      {!choice ? (
+        <div
+          role="radiogroup"
+          aria-label="Brain setup"
+          className="mt-4 flex gap-1 rounded-lg bg-muted p-1"
+        >
+          {BRAIN_SETUP_MODES.map((option) => (
+            <button
+              key={option.mode}
+              type="button"
+              role="radio"
+              aria-checked={mode === option.mode}
+              disabled={busy}
+              className={cn(
+                "flex-1 rounded-md px-3 py-2 text-sm",
+                mode === option.mode ? "bg-background shadow-sm" : "text-muted-foreground",
+              )}
+              onClick={() => {
+                setMode(option.mode);
+                setError("");
+                setPassword("");
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <ScrollArea
         scrollFade
         className="mt-5 h-auto max-h-[28rem] [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
       >
         <section>
-          {brainState && brainState.workspaces.length > 0 ? (
+          {!choice ? (
+            <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
+              {mode === "connect"
+                ? "Use a Brain your team already runs. Enter its URL or invitation link and sign in."
+                : "Give it a name and choose a CLI to build its knowledge."}
+            </p>
+          ) : null}
+          {mode === "connect" && !choice ? (
+            <div className="mb-4 space-y-3">
+              <label className="block space-y-2 text-sm">
+                Brain URL or invitation link
+                <Input
+                  type="url"
+                  placeholder="https://brain.example.com"
+                  value={endpoint}
+                  disabled={busy}
+                  onChange={(event) => setEndpoint(event.target.value)}
+                />
+              </label>
+              <label className="block space-y-2 text-sm">
+                Email
+                <Input
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  disabled={busy}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </label>
+              <label className="block space-y-2 text-sm">
+                Password
+                <Input
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  disabled={busy}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+          {mode === "create" && brainState && brainState.workspaces.length > 0 ? (
             <label className="mb-4 block space-y-2 text-sm">
               Brain for this computer
               <select
@@ -821,7 +959,12 @@ function ConnectedAgentsStep({
                   const brain = brainState.workspaces.find(
                     (item) => item.id === event.target.value,
                   );
-                  if (brain) onChoose(environmentId, { id: brain.id, name: brain.name });
+                  if (brain)
+                    onChoose(environmentId, {
+                      id: brain.id,
+                      name: brain.name,
+                      sources: remoteBrainSources(brain),
+                    });
                 }}
               >
                 <option value="" disabled>
@@ -840,7 +983,7 @@ function ConnectedAgentsStep({
             <p className="mb-3 text-sm text-success-foreground">
               {choice.name} is ready. Next, choose its projects.
             </p>
-          ) : (
+          ) : mode === "create" ? (
             <label className="mb-4 block space-y-2 text-sm">
               Brain name
               <Input
@@ -851,12 +994,14 @@ function ConnectedAgentsStep({
                 onChange={(event) => setName(event.target.value)}
               />
             </label>
-          )}
-          {!choice ? <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p> : null}
+          ) : null}
+          {!choice && mode === "create" ? (
+            <p className="mb-2 text-sm">Choose an agent to maintain this Brain</p>
+          ) : null}
           <div className="space-y-1.5">
             {primaryAgents.map(({ driver, provider }) => (
               <div key={driver} className="flex items-center gap-2">
-                {!choice ? (
+                {!choice && mode === "create" ? (
                   <input
                     type="radio"
                     name={`brain-cli-${environmentId}`}
@@ -965,13 +1110,30 @@ function ConnectedAgentsStep({
           disabled={
             busy ||
             (!choice &&
-              (!name.trim() ||
-                getOnboardingProviderState(byDriver.get(cli === "claude" ? "claudeAgent" : cli)) !==
-                  "ready"))
+              (mode === "connect"
+                ? !connectReady
+                : !name.trim() ||
+                  getOnboardingProviderState(
+                    byDriver.get(cli === "claude" ? "claudeAgent" : cli),
+                  ) !== "ready"))
           }
-          onClick={() => (choice ? onContinue(environmentId) : void createBrain())}
+          onClick={() =>
+            choice
+              ? onContinue(environmentId)
+              : mode === "connect"
+                ? void connectBrain()
+                : void createBrain()
+          }
         >
-          {busy ? "Creating Brain…" : choice ? "Use this Brain" : "Create Brain"}
+          {busy
+            ? mode === "connect" && !choice
+              ? "Connecting…"
+              : "Creating Brain…"
+            : choice
+              ? "Use this Brain"
+              : mode === "connect"
+                ? "Connect Brain"
+                : "Create Brain"}
           <ArrowRightIcon className="size-3.5" />
         </Button>
       </div>
@@ -1203,7 +1365,7 @@ function ImportStep({
 }: {
   readonly scans: ReturnType<typeof useProjectScans>;
   readonly onAddFolder: (id: EnvironmentId, folder: string) => void;
-  readonly brainChoices: ReadonlyMap<EnvironmentId, { id: string; name: string }>;
+  readonly brainChoices: ReadonlyMap<EnvironmentId, OnboardingBrainChoice>;
   readonly isImporting: boolean;
   readonly setIsImporting: (value: boolean) => void;
   readonly onDone: (projectRef?: ScopedProjectRef) => Promise<boolean>;
@@ -1277,6 +1439,116 @@ function ImportStep({
   }, [scans, chosenFolders, chosenProjects]);
   const selectedKeys = selectedPaths;
   const selected = candidates.filter((candidate) => selectedKeys.has(candidate.key));
+
+  /**
+   * A connected remote Brain already indexes its team's repositories, so the
+   * local clones of those repositories are what this computer needs set up.
+   */
+  const remoteSourceMatches = useMemo(
+    () =>
+      scans.map((scan) => {
+        const choice = brainChoices.get(scan.environmentId);
+        const sources = choice?.sources ?? [];
+        const scanned = scan.data;
+        if (sources.length === 0 || scanned === null)
+          return { scan, brainId: null, matched: [], unmatched: [] as readonly string[] };
+        const knownProjects = projects
+          .filter((project) => project.environmentId === scan.environmentId)
+          .map((project) => ({
+            path: project.workspaceRoot,
+            title: project.title,
+            projectId: project.id,
+          }));
+        const chosen = chosenProjects.filter(
+          (project) => project.environmentId === scan.environmentId,
+        );
+        return {
+          scan,
+          brainId: choice?.id ?? null,
+          ...matchRemoteBrainSources(
+            sources,
+            scanned.candidates,
+            [...chosen, ...knownProjects],
+            chosenFolders,
+          ),
+        };
+      }),
+    [scans, brainChoices, projects, chosenProjects, chosenFolders],
+  );
+  // Preselect once per connected Brain; later renders must not undo unchecks.
+  const preselectedBrainsRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const entry of remoteSourceMatches) {
+      if (entry.brainId === null) continue;
+      const marker = `${entry.scan.environmentId}:${entry.brainId}`;
+      if (preselectedBrainsRef.current.has(marker)) continue;
+      preselectedBrainsRef.current.add(marker);
+      // Same shape as the "Add GitHub repository" flow: a match that resolves to a
+      // registered parent project is not a scan candidate, so it must be added as a
+      // chosen project or its selection would point at nothing.
+      const scanned = entry.scan.data?.candidates ?? [];
+      const additions: ImportCandidate[] = entry.matched
+        .flatMap((match) => match.candidates)
+        .map((candidate) => ({
+          ...candidate,
+          environmentId: entry.scan.environmentId,
+          key: onboardingProjectKey(entry.scan.environmentId, candidate.path),
+          repositories: scanned.filter(
+            (repo) => repo.git !== null && projectIsWithinFolder(repo.path, candidate.path),
+          ),
+        }));
+      if (additions.length === 0) continue;
+      setChosenProjects((current) => {
+        const existing = new Set(current.map((project) => project.key));
+        return [...current, ...additions.filter((project) => !existing.has(project.key))];
+      });
+      setSelectedPaths((current) => new Set([...current, ...additions.map((p) => p.key)]));
+    }
+  }, [remoteSourceMatches]);
+
+  /**
+   * Add a picked folder as a project. `validate` lets a caller refuse folders
+   * that are not what was asked for — the picker surfaces the thrown message.
+   */
+  const addProjectFolder = async (
+    environmentId: EnvironmentId,
+    folder: string,
+    validate?: (found: readonly AgentSessionProjectCandidate[]) => void,
+  ) => {
+    const result = await scanFolder({ environmentId, input: { roots: [folder] } });
+    if (result._tag !== "Success")
+      throw new Error("Could not scan this folder. Try another folder.");
+    const found = result.value.candidates.filter(
+      (candidate) =>
+        projectIsWithinFolder(candidate.path, folder) &&
+        isSuggestedBrainProject(candidate.path, [folder]),
+    );
+    validate?.(found);
+    const key = onboardingProjectKey(environmentId, folder);
+    const project: ImportCandidate = {
+      path: folder,
+      title: folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder,
+      sources: [],
+      threadCount: 0,
+      lastActiveAt: null,
+      alreadyImported: false,
+      git: found.find((item) => item.path === folder)?.git ?? null,
+      environmentId,
+      key,
+      repositories: found.filter((item) => item.git !== null),
+    };
+    setChosenProjects((current) => [
+      ...current.filter(
+        (item) => item.environmentId !== environmentId || !projectIsWithinFolder(item.path, folder),
+      ),
+      project,
+    ]);
+    setChosenFolders((current) => [...new Set([...current, folder])]);
+    setSelectedPaths((current) => new Set([...current, key]));
+    setSearch("");
+    setFolderMessage(`Project added: ${project.title}`);
+    onAddFolder(environmentId, folder);
+  };
 
   const finishAfterImport = () => {
     const projectRef = resolveOnboardingLandingProject(
@@ -1449,45 +1721,7 @@ function ImportStep({
             key={scan.environmentId}
             environmentId={scan.environmentId}
             disabled={isImporting}
-            onFolder={async (folder) => {
-              const result = await scanFolder({
-                environmentId: scan.environmentId,
-                input: { roots: [folder] },
-              });
-              if (result._tag !== "Success")
-                throw new Error("Could not scan this folder. Try another folder.");
-              const found = result.value.candidates.filter(
-                (candidate) =>
-                  projectIsWithinFolder(candidate.path, folder) &&
-                  isSuggestedBrainProject(candidate.path, [folder]),
-              );
-              const key = onboardingProjectKey(scan.environmentId, folder);
-              const project: ImportCandidate = {
-                path: folder,
-                title: folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder,
-                sources: [],
-                threadCount: 0,
-                lastActiveAt: null,
-                alreadyImported: false,
-                git: found.find((item) => item.path === folder)?.git ?? null,
-                environmentId: scan.environmentId,
-                key,
-                repositories: found.filter((item) => item.git !== null),
-              };
-              setChosenProjects((current) => [
-                ...current.filter(
-                  (item) =>
-                    item.environmentId !== scan.environmentId ||
-                    !projectIsWithinFolder(item.path, folder),
-                ),
-                project,
-              ]);
-              setChosenFolders((current) => [...new Set([...current, folder])]);
-              setSelectedPaths((current) => new Set([...current, key]));
-              setSearch("");
-              setFolderMessage(`Project added: ${project.title}`);
-              onAddFolder(scan.environmentId, folder);
-            }}
+            onFolder={(folder) => addProjectFolder(scan.environmentId, folder)}
             onGithub={async (repository) => {
               const workspaceId = brainChoices.get(scan.environmentId)?.id;
               if (!workspaceId) throw new Error("Choose a Brain first.");
@@ -1568,6 +1802,38 @@ function ImportStep({
             {folderMessage}
           </p>
         ) : null}
+        {remoteSourceMatches.map((entry) =>
+          entry.unmatched.length === 0 ? null : (
+            <div key={entry.scan.environmentId} className="space-y-3 rounded-lg border p-3">
+              <p className="text-sm font-medium">Not found locally</p>
+              <p className="text-xs text-muted-foreground">
+                Your Brain indexes these repositories. Choose each clone on this computer to set it
+                up here too.
+              </p>
+              {entry.unmatched.map((repository) => (
+                <div key={repository} className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="min-w-0 break-all text-sm">{repository}</span>
+                  <ProjectSourcePicker
+                    environmentId={entry.scan.environmentId}
+                    disabled={isImporting}
+                    onFolder={(folder) =>
+                      addProjectFolder(entry.scan.environmentId, folder, (found) => {
+                        if (
+                          !found.some((candidate) =>
+                            folderMatchesRemoteSource(repository, candidate.git?.repository),
+                          )
+                        )
+                          throw new Error(
+                            `This folder is not a clone of ${repository}. Choose the folder that contains it.`,
+                          );
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          ),
+        )}
         {candidates.length > 0 ? (
           <Input
             aria-label="Search projects"

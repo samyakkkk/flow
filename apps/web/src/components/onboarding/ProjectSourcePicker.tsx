@@ -23,7 +23,8 @@ export function ProjectSourcePicker({
   readonly environmentId: EnvironmentId;
   readonly disabled: boolean;
   readonly onFolder: (path: string) => Promise<void>;
-  readonly onGithub: (repository: string) => Promise<void>;
+  /** Omitted where only a local clone makes sense, such as a repository the Brain already indexes. */
+  readonly onGithub?: (repository: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"folder" | "github">("folder");
   const [open, setOpen] = useState(false);
@@ -69,18 +70,20 @@ export function ProjectSourcePicker({
           <FolderIcon className="size-4" />
           Choose folder
         </Button>
-        <Button
-          variant="outline"
-          disabled={disabled}
-          onClick={() => {
-            setError("");
-            setMode("github");
-            setOpen(true);
-          }}
-        >
-          <GithubIcon className="size-4" />
-          Add GitHub repository
-        </Button>
+        {onGithub ? (
+          <Button
+            variant="outline"
+            disabled={disabled}
+            onClick={() => {
+              setError("");
+              setMode("github");
+              setOpen(true);
+            }}
+          >
+            <GithubIcon className="size-4" />
+            Add GitHub repository
+          </Button>
+        ) : null}
       </div>
       <Dialog
         open={open}
@@ -188,7 +191,7 @@ export function ProjectSourcePicker({
                 setError("");
                 try {
                   if (mode === "folder" && listing) await onFolder(listing.parentPath);
-                  else await onGithub(repository.trim());
+                  else if (onGithub) await onGithub(repository.trim());
                   setRepository("");
                   setOpen(false);
                 } catch (cause) {
