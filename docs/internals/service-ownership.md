@@ -172,7 +172,10 @@ the supervisor's own 120 s readiness deadline (`:278-289`), so a slow first boot
 broken service. A failed attach never retries itself: it parks one of four reasons —
 `not-installed`, `stopped`, `unreachable`, `incompatible` (`:132-151`) — and the recovery surface
 drives the retry through `onPreflightFailed` (`:325-349`). It may offer a retry and an
-open-in-browser escape, but never downgrades the service and never spawns a private child server,
+open-in-browser escape. A `stopped` service is started once per session before the screen appears,
+through the service manager when a unit is loaded and otherwise by running the service's own
+launcher with the runtime the registry recorded (`config.node`), which takes the launcher and
+supervisor locks itself. The desktop never downgrades the service and never spawns a private child server,
 which would collide with the owner's locks on the first write. The private child survives behind
 `FLOW_DESKTOP_LEGACY_BACKEND=1` for exactly one release as the rollback
 ([`DesktopBackendPool.ts:364-367`](../../apps/desktop/src/backend/DesktopBackendPool.ts)).

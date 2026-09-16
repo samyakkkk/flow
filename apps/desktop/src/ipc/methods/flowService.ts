@@ -84,6 +84,22 @@ export const makeFlowServiceIpcMethods = (
     }),
   }),
 
+  startFlowService: DesktopIpc.makeIpcMethod({
+    channel: IpcChannels.START_FLOW_SERVICE_CHANNEL,
+    payload: Schema.Void,
+    result: DesktopFlowServiceActionResultSchema,
+    handler: Effect.fn("desktop.ipc.flowService.start")(function* () {
+      const input = yield* resolveInput(overrides);
+      return yield* Effect.promise(() =>
+        FlowService.startFlowService({
+          ...input,
+          fallbackNodePath: process.execPath,
+          fallbackNodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+        }),
+      ).pipe(Effect.catchCause((cause) => Effect.succeed(actionFailure(Cause.pretty(cause)))));
+    }),
+  }),
+
   restartFlowService: DesktopIpc.makeIpcMethod({
     channel: IpcChannels.RESTART_FLOW_SERVICE_CHANNEL,
     payload: Schema.Void,
@@ -102,3 +118,4 @@ const methods = makeFlowServiceIpcMethods();
 export const getFlowServiceStatus = methods.getFlowServiceStatus;
 export const stopFlowService = methods.stopFlowService;
 export const restartFlowService = methods.restartFlowService;
+export const startFlowService = methods.startFlowService;

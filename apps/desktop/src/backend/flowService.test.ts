@@ -9,8 +9,10 @@ import { afterEach, describe, expect, it } from "@effect/vitest";
 import {
   readFlowServiceStatus,
   restartFlowService,
+  startFlowService,
   stopFlowService,
   unitLocation,
+  type ServiceProcessLauncher,
   type ServiceProcessRunner,
 } from "./flowService.ts";
 
@@ -276,6 +278,130 @@ describe("flow service panel actions", () => {
     expect(runner.calls).toEqual([
       { command: "systemctl", args: ["--user", "is-active", "flow.service"] },
       { command: "systemctl", args: ["--user", "restart", "flow.service"] },
+    ]);
+  });
+
+  it("starts a stopped managed service through its service manager", async () => {
+    const f = await fixture();
+    const runner = recordingRunner(true);
+    const launched: string[] = [];
+    // The stand-in manager "starts" the service by publishing a control file.
+    const run: ServiceProcessRunner = async (command, args) => {
+      const result = await runner.run(command, args);
+      if (args[0] === "kickstart")
+        await f.save("runtime.json", {
+          id: "environment",
+          generation: "g",
+          token: "t",
+          controlUrl: "http://127.0.0.1:1",
+          pid: 1,
+        });
+      return result;
+    };
+
+    const result = await startFlowService({
+      registryRoot: f.registryRoot,
+      homeDirectory: f.home,
+      host: "darwin",
+      uid: 501,
+      run,
+      launch: async (command) => {
+        launched.push(command);
+        return { ok: true, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runner.calls).toEqual([
+      { command: "launchctl", args: ["print", "gui/501/com.flow.service"] },
+      { command: "launchctl", args: ["kickstart", "gui/501/com.flow.service"] },
+    ]);
+    expect(launched).toEqual([]);
+  });
+
+  it("starts a stopped unmanaged service by running its launcher with the recorded runtime", async () => {
+    const f = await fixture();
+    await f.save("config.json", {
+      version: 1,
+      id: "environment",
+      name: "primary",
+      mode: "isolated",
+      dev: false,
+      home: f.dataHome,
+      code: f.code,
+      node: "/opt/flow/runtime/bin/node",
+    });
+    const runner = recordingRunner(false);
+    const launches: Array<{
+      command: string;
+      args: readonly string[];
+      env: Record<string, string>;
+    }> = [];
+    const launch: ServiceProcessLauncher = async (command, args, env) => {
+      launches.push({ command, args, env: { ...env } });
+      await f.save("runtime.json", {
+        id: "environment",
+        generation: "g",
+        token: "t",
+        controlUrl: "http://127.0.0.1:1",
+        pid: 1,
+      });
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    const result = await startFlowService({
+      registryRoot: f.registryRoot,
+      homeDirectory: f.home,
+      host: "darwin",
+      uid: 501,
+      run: runner.run,
+      launch,
+      fallbackNodePath: "/electron",
+      fallbackNodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(launches).toEqual([
+      {
+        command: "/opt/flow/runtime/bin/node",
+        args: [NodePath.join(f.code, "scripts/flow.mjs"), "--no-open"],
+        env: { FLOW_INSTANCE_HOME: f.registryRoot },
+      },
+    ]);
+  });
+
+  it("falls back to the app's own runtime for a registry without a recorded one", async () => {
+    const f = await fixture();
+    const launches: Array<{ command: string; env: Record<string, string> }> = [];
+    const launch: ServiceProcessLauncher = async (command, _args, env) => {
+      launches.push({ command, env: { ...env } });
+      await f.save("runtime.json", {
+        id: "environment",
+        generation: "g",
+        token: "t",
+        controlUrl: "http://127.0.0.1:1",
+        pid: 1,
+      });
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    const result = await startFlowService({
+      registryRoot: f.registryRoot,
+      homeDirectory: f.home,
+      host: "linux",
+      uid: 501,
+      run: recordingRunner(false).run,
+      launch,
+      fallbackNodePath: "/electron",
+      fallbackNodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(launches).toEqual([
+      {
+        command: "/electron",
+        env: { FLOW_INSTANCE_HOME: f.registryRoot, ELECTRON_RUN_AS_NODE: "1" },
+      },
     ]);
   });
 

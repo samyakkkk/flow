@@ -64,6 +64,7 @@ export function parse(args) {
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (flag === "--no-open") input.noOpen = true;
+    else if (flag === "--browser") input.browser = true;
     else if (flag === "--replace") input.replace = true;
     else if (flag === "--fresh") input.fresh = true;
     else if (["--isolated", "--ui-only", "--shared-brain"].includes(flag)) {
@@ -129,6 +130,14 @@ export async function configure(input, directory) {
       throw Error(
         "Use a new instance name for a different brain mode/source. --replace preserves configuration.",
       );
+    // Older registries predate `node`. Backfilling it is the one edit made to a
+    // saved config: it changes nothing about identity or storage, and it is
+    // what lets a client start a stopped service with the right runtime.
+    if (typeof saved.node !== "string") {
+      const updated = { ...saved, node: process.execPath };
+      await atomic(join(directory, "config.json"), updated);
+      return updated;
+    }
     return saved;
   }
   const code = await realpath(
@@ -153,6 +162,10 @@ export async function configure(input, directory) {
     // it is recorded once and honored verbatim on every later launch, because
     // moving a home orphans the brain store and every managed worktree.
     home: input.home ? resolve(input.home) : join(directory, "data"),
+    // The runtime this launcher runs under (nvm's node for a checkout, the
+    // private runtime for a release). Clients that need to start a stopped
+    // service run the launcher with it instead of guessing.
+    node: process.execPath,
   };
   await atomic(join(directory, "config.json"), config);
   return config;
@@ -176,6 +189,41 @@ async function openBrowser(url) {
         ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
         : ["xdg-open", [url]];
   await exec(...command).catch(() => console.log(`Open ${url}`));
+}
+/** The installed Flow desktop app, if any. Only the two standard macOS
+    application folders count; anything else is a build, not an install. */
+export async function installedDesktopApp(
+  platform = NodeOS.platform(),
+  home = homedir(),
+  systemApplications = "/Applications",
+) {
+  if (platform !== "darwin") return null;
+  for (const candidate of [
+    join(systemApplications, "Flow.app"),
+    join(home, "Applications/Flow.app"),
+  ]) {
+    try {
+      await access(join(candidate, "Contents/MacOS/Flow"));
+      return candidate;
+    } catch {
+      // not installed there
+    }
+  }
+  return null;
+}
+/** Open the desktop app when it is installed, else the browser. The app is
+    told which registry this service lives in: it attaches to the release
+    registry by default and would otherwise not find a checkout's service. It
+    mints its own credential, so the pairing URL is only printed for a browser. */
+async function openClient(url, input) {
+  const app = input.browser ? null : await installedDesktopApp();
+  if (!app) return openBrowser(url);
+  try {
+    await exec("open", ["-a", app, "--env", `FLOW_INSTANCE_HOME=${registryRoot()}`]);
+    console.log(`Opened ${app}. Browser: ${url} (or run flow --browser)`);
+  } catch {
+    await openBrowser(url);
+  }
 }
 export async function lockLauncher(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -257,7 +305,7 @@ export async function start(input) {
     const frontend = new URL(status.url);
     pairingUrl.host = frontend.host;
     pairingUrl.protocol = frontend.protocol;
-    if (!input.noOpen) await openBrowser(pairingUrl.toString());
+    if (!input.noOpen) await openClient(pairingUrl.toString(), input);
     else console.log(`Pairing URL: ${pairingUrl}`);
     return status;
   } finally {
@@ -274,7 +322,7 @@ export async function main(args) {
     return (await import("./service.mjs")).service(input.verb, { home: input.home });
   if (input.action === "help")
     return console.log(
-      "flow [status|stop|restart] [--home PATH] [--no-open]\nflow service install|status|uninstall [--home PATH]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
+      "flow [status|stop|restart] [--home PATH] [--no-open|--browser]\nflow service install|status|uninstall [--home PATH]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
     );
   if (input.action === "list") {
     const directory = join(registryRoot(), "instances");

@@ -15,6 +15,7 @@
 // is simply refused when no service manager owns the unit.
 
 import * as NodeChildProcess from "node:child_process";
+import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -259,13 +260,99 @@ export const stopFlowService = async (
   }
 };
 
+/** Spawns a detached process and resolves once it has started. Injected so
+    tests assert the argv rather than launching a service. */
+export type ServiceProcessLauncher = (
+  command: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+) => Promise<ServiceProcessResult>;
+
+const defaultLauncher: ServiceProcessLauncher = (command, args, env) =>
+  new Promise((resolvePromise) => {
+    const child = NodeChildProcess.spawn(command, [...args], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, ...env },
+    });
+    child.once("error", (error) =>
+      resolvePromise({ ok: false, stdout: "", stderr: error.message }),
+    );
+    child.once("spawn", () => {
+      child.unref();
+      resolvePromise({ ok: true, stdout: "", stderr: "" });
+    });
+  });
+
+const START_POLL_INTERVAL_MS = 250;
+// 20 s: a supervisor publishes its control file well before the server is ready.
+const START_SETTLE_POLLS = 80;
+
+export interface StartFlowServiceInput extends FlowServiceInput {
+  readonly launch?: ServiceProcessLauncher;
+  /** Used to run the launcher when the registry predates the recorded `node`
+      (an Electron binary with ELECTRON_RUN_AS_NODE, in production). */
+  readonly fallbackNodePath?: string;
+  readonly fallbackNodeEnv?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Start a stopped service. A managed service is started by its service manager
+ * (`launchctl kickstart` / `systemctl start`). An unmanaged one is started by
+ * running the service's own launcher — the same `flow` the user would type —
+ * which takes the launcher and supervisor locks itself, so two clients starting
+ * at once cannot produce two servers. The desktop still never spawns a
+ * supervisor directly. Resolves once discovery no longer reports `stopped`.
+ */
+export const startFlowService = async (
+  input: StartFlowServiceInput,
+): Promise<DesktopFlowServiceActionResult> => {
+  const resolved = resolveInput(input);
+  const discovery = await discoverService({
+    registryRoot: resolved.registryRoot,
+    name: resolved.name,
+    fetch: resolved.fetchImpl,
+  });
+  if (discovery.status === "ready" || discovery.status === "starting")
+    return { ok: true, reason: null, detail: null };
+  if (discovery.status !== "stopped" && discovery.status !== "failed")
+    return failed("failed", discovery.reason ?? `The service is ${discovery.status}.`);
+  if (await isUnitLoaded(resolved)) {
+    const result =
+      resolved.host === "darwin"
+        ? await resolved.run("launchctl", ["kickstart", launchdTarget(resolved)])
+        : await resolved.run("systemctl", ["--user", "start", SYSTEMD_UNIT]);
+    if (!result.ok) return failed("failed", result.stderr.trim() || null);
+  } else {
+    if (!discovery.runningCode) return failed("failed", "The service has no recorded checkout.");
+    const launcher = NodePath.join(discovery.runningCode, "scripts/flow.mjs");
+    if (!(await exists(launcher))) return failed("failed", `Missing launcher at ${launcher}.`);
+    const node = discovery.nodePath ?? input.fallbackNodePath;
+    if (!node) return failed("failed", "No runtime is recorded for the service.");
+    const result = await (input.launch ?? defaultLauncher)(node, [launcher, "--no-open"], {
+      FLOW_INSTANCE_HOME: resolved.registryRoot,
+      ...(discovery.nodePath ? {} : (input.fallbackNodeEnv ?? {})),
+    });
+    if (!result.ok) return failed("failed", result.stderr.trim() || null);
+  }
+  for (let poll = 0; poll < START_SETTLE_POLLS; poll += 1) {
+    const current = await discoverService({
+      registryRoot: resolved.registryRoot,
+      name: resolved.name,
+      fetch: resolved.fetchImpl,
+    });
+    if (current.status !== "stopped") return { ok: true, reason: null, detail: null };
+    await NodeTimersPromises.setTimeout(START_POLL_INTERVAL_MS);
+  }
+  return failed("failed", "The service did not start in time.");
+};
+
 export const restartFlowService = async (
   input: FlowServiceInput,
 ): Promise<DesktopFlowServiceActionResult> => {
   const resolved = resolveInput(input);
-  // Only the service manager restarts the service. The desktop deliberately
-  // has no path that spawns a supervisor: that would race the manager for the
-  // supervisor lock, and an app-owned server is the thing this work removed.
+  // Only the service manager restarts a running service: the desktop never
+  // spawns a supervisor itself (see `startFlowService` for the stopped case).
   if (!(await isUnitLoaded(resolved))) return failed("not-managed", null);
   const result =
     resolved.host === "darwin"

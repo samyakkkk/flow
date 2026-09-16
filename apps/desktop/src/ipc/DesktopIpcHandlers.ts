@@ -10,6 +10,7 @@ import {
 import {
   getFlowServiceStatus,
   restartFlowService,
+  startFlowService,
   stopFlowService,
 } from "./methods/flowService.ts";
 import {
@@ -98,6 +99,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getFlowServiceStatus);
   yield* ipc.handle(stopFlowService);
   yield* ipc.handle(restartFlowService);
+  yield* ipc.handle(startFlowService);
   yield* ipc.handle(retryFlowServiceAttach);
   yield* ipc.handle(getFlowServiceAdoption);
   yield* ipc.handle(openFlowServiceInBrowser);
