@@ -219,7 +219,11 @@ async function openClient(url, input) {
   const app = input.browser ? null : await installedDesktopApp();
   if (!app) return openBrowser(url);
   try {
-    await exec("open", ["-a", app, "--env", `FLOW_INSTANCE_HOME=${registryRoot()}`]);
+    // `open` forwards this shell's environment to the app. Hand it the same
+    // scrubbed environment the supervisor gives the server, so a T3CODE_* or
+    // FLOW_* variable in a developer's shell cannot point the app elsewhere.
+    const env = (await import("./supervisor.mjs")).cleanEnvironment(process.env);
+    await exec("open", ["-a", app, "--env", `FLOW_INSTANCE_HOME=${registryRoot()}`], { env });
     console.log(`Opened ${app}. Browser: ${url} (or run flow --browser)`);
   } catch {
     await openBrowser(url);
