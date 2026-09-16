@@ -94,6 +94,7 @@ import * as FileSystem from "effect/FileSystem";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -278,7 +279,46 @@ export const layer = Layer.effect(
       },
     );
 
-    const primary = yield* DesktopBackendManager.makeBackendInstance({
+    // The primary backend is the `flow` service the app attaches to. The old
+    // private-child backend stays available behind FLOW_DESKTOP_LEGACY_BACKEND
+    // for exactly one release as the migration rollback, then this branch and
+    // `makeLegacyPrimary` go away.
+    const legacyPrimaryRequested = process.env.FLOW_DESKTOP_LEGACY_BACKEND === "1";
+
+    const handleAttachFailure = Effect.fn("desktop.backendPool.primaryAttachFailed")(function* (
+      failure: DesktopBackendManager.PreflightFailure,
+    ) {
+      yield* logBackendPoolWarning("could not attach to the Flow service", {
+        reason: failure.reason,
+        kind: failure.attach?.kind ?? "unknown",
+      });
+      yield* electronDialog.showErrorBox(
+        `${BRAND.name} could not connect to its service`,
+        `${failure.reason}\n\n${failure.attach?.detail ?? ""}`.trim(),
+      );
+      // No automatic recovery here: starting or installing the service is
+      // the service layer's job, and a private child would compete with it
+      // for the instance lock.
+      return false;
+    });
+
+    const makeAttachedPrimary = DesktopAttachedBackend.makeAttachedBackendInstance({
+      id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
+      label: configuration.resolvePrimaryLabel,
+      environment: yield* configuration.attachedBackendEnvironment,
+      onReady: (httpBaseUrl) =>
+        desktopWindow.handleBackendReady(httpBaseUrl).pipe(
+          Effect.catch((error) =>
+            logBackendPoolWarning("failed to open main window after backend readiness", {
+              error: error.message,
+            }),
+          ),
+        ),
+      onShutdown: () => desktopWindow.handleBackendNotReady,
+      onPreflightFailed: handleAttachFailure,
+    });
+
+    const makeLegacyPrimary = DesktopBackendManager.makeBackendInstance({
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Keep this lazy. The pool layer is initialized before startup loads
       // persisted desktop settings, so resolving the primary label here would
@@ -303,6 +343,8 @@ export const layer = Layer.effect(
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
     });
+
+    const primary = yield* legacyPrimaryRequested ? makeLegacyPrimary : makeAttachedPrimary;
 
     const instancesRef = yield* SynchronizedRef.make<
       ReadonlyMap<BackendInstanceId, RegisteredInstance>

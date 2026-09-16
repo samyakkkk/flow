@@ -71,6 +71,11 @@ const backendConfigurationLayer = Layer.succeed(
     resolvePrimary: Effect.die("unexpected resolvePrimary"),
     resolvePrimaryLabel: Effect.succeed("Windows"),
     resolveWsl: () => Effect.die("unexpected resolveWsl"),
+    attachedBackendEnvironment: Effect.succeed({
+      executablePath: "/test/electron",
+      backendEntryPath: "/test/server/bin.mjs",
+      backendCwd: "/test",
+    }),
   } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"],
 );
 

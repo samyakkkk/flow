@@ -1,0 +1,179 @@
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off - this is a filesystem-shaped port of a plain-JS module; it runs before any Effect service exists and must stay a line-for-line match of the canonical implementation.
+// Port of `scripts/instances/service-discovery.mjs` (`discoverService`), which
+// stays the canonical implementation: the `flow` CLI and the launcher read the
+// registry through it, and any change to the on-disk contract belongs there
+// first. This copy exists because the desktop cannot import it — the package
+// typechecks with `allowJs` off under NodeNext, and the bundled main process
+// must not reach outside `apps/desktop` for runtime code. Keep the status
+// vocabulary and the disqualification rules identical; the one addition is
+// `serverOrigin`, which the canonical module deliberately withholds from CLI
+// JSON output but an attaching desktop needs in order to dial the server.
+//
+// Discovery never starts, stops, migrates or repairs an installation. An
+// unreachable owner is not permission to start another server.
+
+import * as NodeFS from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+
+export type ServiceStatus =
+  | "not-configured"
+  | "invalid"
+  | "incompatible"
+  | "stopped"
+  | "unreachable"
+  | "starting"
+  | "ready"
+  | "stopping"
+  | "failed";
+
+export interface ServiceDiscoveryResult {
+  readonly status: ServiceStatus;
+  readonly environmentId?: string;
+  readonly dataHome?: string;
+  readonly runningCode?: string;
+  // The server's own HTTP origin, reported by a live supervisor's `/status`.
+  // Present only once the service reaches `ready`.
+  readonly serverOrigin?: string;
+  readonly reason?: string;
+}
+
+// Mirrors `launcher.mjs`'s `registryRoot()`. The desktop must land on the same
+// registry the `flow` CLI manages, or it would attach to nothing.
+export const defaultRegistryRoot = (
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string => resolve(env.FLOW_INSTANCE_HOME || join(home, ".local/share/flow-app"));
+
+const readJson = async (path: string): Promise<unknown> => {
+  try {
+    return JSON.parse(await NodeFS.readFile(path, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const nonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
+export interface DiscoverServiceInput {
+  readonly registryRoot: string;
+  readonly name?: string;
+  readonly timeoutMs?: number;
+  // Injected by tests so the control request can be driven without a
+  // supervisor; production passes nothing and uses global fetch.
+  readonly fetch?: typeof globalThis.fetch;
+}
+
+/** The service's unauthenticated environment descriptor. Lives here rather
+    than in the Effect layer above because it is the same kind of plain probe
+    as `/status`: a raw HTTP read of a process this app does not own. */
+export const fetchEnvironmentDescriptor = async (
+  httpBaseUrl: URL,
+  timeoutMs = 5_000,
+): Promise<unknown> => {
+  const response = await fetch(new URL("/.well-known/t3/environment", httpBaseUrl), {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`Descriptor request failed with ${String(response.status)}.`);
+  return (await response.json()) as unknown;
+};
+
+export const discoverService = async ({
+  registryRoot,
+  name = "primary",
+  timeoutMs = 3_000,
+  fetch: fetchImpl = globalThis.fetch,
+}: DiscoverServiceInput): Promise<ServiceDiscoveryResult> => {
+  const directory = join(resolve(registryRoot), "instances", name);
+  let config: unknown;
+  let runtime: unknown;
+  try {
+    config = await readJson(join(directory, "config.json"));
+    runtime = await readJson(join(directory, "runtime.json"));
+  } catch {
+    return { status: "invalid", reason: "Unreadable service metadata." };
+  }
+  if (!isRecord(config)) return { status: runtime ? "invalid" : "not-configured" };
+  if (config.version !== 1)
+    return { status: "incompatible", reason: "Unsupported instance metadata version." };
+  if (
+    !nonEmptyString(config.id) ||
+    config.name !== name ||
+    config.dev ||
+    config.mode !== "isolated" ||
+    !nonEmptyString(config.home) ||
+    typeof config.code !== "string"
+  )
+    return { status: "invalid", reason: "Not a standalone primary service." };
+  // The recorded home is the identity: a service may legitimately own data
+  // outside its instance directory. Only its absence disqualifies it, because
+  // discovery must never invent a home it did not find.
+  try {
+    await NodeFS.realpath(config.home);
+  } catch {
+    return { status: "invalid", reason: "Service data directory is unavailable." };
+  }
+  const identity = {
+    environmentId: config.id,
+    dataHome: config.home,
+    runningCode: config.code,
+  } as const;
+  if (!isRecord(runtime)) return { ...identity, status: "stopped" };
+  let url: URL;
+  try {
+    url = new URL(String(runtime.controlUrl));
+    if (
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash ||
+      runtime.id !== config.id ||
+      !nonEmptyString(runtime.generation) ||
+      !nonEmptyString(runtime.token)
+    )
+      throw new Error("invalid");
+  } catch {
+    return { ...identity, status: "invalid", reason: "Invalid service control identity." };
+  }
+  try {
+    const response = await fetchImpl(new URL("/status", url), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { authorization: `Bearer ${String(runtime.token)}` },
+    });
+    if (!response.ok)
+      return { ...identity, status: "unreachable", reason: "Service rejected the status request." };
+    const live: unknown = await response.json();
+    if (!isRecord(live) || live.id !== config.id || live.generation !== runtime.generation)
+      return {
+        ...identity,
+        status: "invalid",
+        reason: "Live service identity does not match this installation.",
+      };
+    const phase = live.phase;
+    if (phase !== "starting" && phase !== "ready" && phase !== "stopping" && phase !== "failed")
+      return {
+        ...identity,
+        status: "incompatible",
+        reason: "Unsupported service lifecycle state.",
+      };
+    // The control token and control URL belong to the lifecycle owner and are
+    // never forwarded; the server origin is the one field a client needs.
+    return {
+      ...identity,
+      status: phase,
+      ...(nonEmptyString(live.origin) ? { serverOrigin: live.origin } : {}),
+    };
+  } catch {
+    return { ...identity, status: "unreachable", reason: "Service could not be reached." };
+  }
+};

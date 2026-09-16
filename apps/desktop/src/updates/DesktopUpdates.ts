@@ -592,7 +592,11 @@ export const make = Effect.gen(function* () {
           // WSL child gets hard-killed by the OS instead of receiving
           // SIGTERM + grace. Stops run concurrently with the same 5s
           // budget the primary had on its own.
-          const instances = yield* pool.list;
+          // Attached instances are skipped: they are clients of the Flow
+          // service, not owners of it. The install proceeds regardless — the
+          // desktop no longer supervises the server, so there is nothing of
+          // the server's to shut down first.
+          const instances = (yield* pool.list).filter((instance) => instance.detached !== true);
           yield* Effect.forEach(
             instances,
             (instance) => instance.stop({ timeout: Duration.seconds(5) }),

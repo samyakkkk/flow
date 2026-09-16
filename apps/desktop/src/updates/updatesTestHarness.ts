@@ -31,6 +31,8 @@ export interface UpdatesHarnessOptions {
   readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
+  // Marks the stub backend as attached to a service the app does not own.
+  readonly detachedBackend?: boolean;
   readonly env?: Record<string, string | undefined>;
 }
 
@@ -44,6 +46,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
   const installSteps: string[] = [];
+  // Recorded separately from installSteps so existing step assertions stay
+  // exact while a test can still prove a stop did or did not happen.
+  let backendStopCount = 0;
 
   const addListener = (eventName: string, listener: (...args: readonly unknown[]) => void) => {
     const eventListeners = listeners.get(eventName) ?? new Set();
@@ -128,7 +133,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     start: Effect.sync(() => {
       installSteps.push("startBackend");
     }).pipe(Effect.andThen(options.startBackend ?? Effect.void)),
-    stop: () => options.stopBackend ?? Effect.void,
+    stop: () =>
+      Effect.sync(() => {
+        backendStopCount += 1;
+      }).pipe(Effect.andThen(options.stopBackend ?? Effect.void)),
     currentConfig: Effect.succeed(Option.none()),
     snapshot: Effect.succeed({
       desiredRunning: false,
@@ -138,6 +146,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       restartScheduled: false,
     }),
     waitForReady: () => Effect.succeed(true),
+    ...(options.detachedBackend === true ? { detached: true } : {}),
   };
   const backendLayer = DesktopBackendPool.layerTest([stubBackendInstance]);
 
@@ -225,6 +234,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     checkCount: () => checkCount,
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
+    backendStops: () => backendStopCount,
     downloadCount: () => downloadCount,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,

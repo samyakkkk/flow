@@ -14,6 +14,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
 
+import type * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -61,6 +62,11 @@ export class DesktopBackendConfiguration extends Context.Service<
     // fall-back to Windows), so the env switcher can't show "WSL" for a
     // backend that actually resolved to Windows.
     readonly resolvePrimaryLabel: Effect.Effect<string>;
+    // Where the server's entry lives, for a primary that attaches to a running
+    // service rather than spawning one. The attached backend never launches
+    // this entry as a server — it runs its `pair` subcommand to mint a
+    // credential against the service's own database.
+    readonly attachedBackendEnvironment: Effect.Effect<DesktopAttachedBackend.AttachedBackendEnvironment>;
   }
 >()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
 
@@ -855,6 +861,11 @@ export const make = Effect.gen(function* () {
       }
       return distro ? `WSL (${distro})` : "WSL";
     }).pipe(Effect.withSpan("desktop.backendConfiguration.resolvePrimaryLabel")),
+    attachedBackendEnvironment: Effect.succeed({
+      executablePath: process.execPath,
+      backendEntryPath: environment.backendEntryPath,
+      backendCwd: environment.backendCwd,
+    }),
     resolveWsl: (input) =>
       Effect.gen(function* () {
         const shared = yield* sharedInputs;

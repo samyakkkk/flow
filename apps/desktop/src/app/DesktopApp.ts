@@ -318,7 +318,10 @@ const scopedProgram = Effect.scoped(
         // cascade, so leaving the WSL instance for its parent scope
         // finalizer means it gets hard-killed by the OS instead of
         // receiving SIGTERM + grace. Stops run concurrently.
-        const instances = yield* pool.list;
+        // Attached instances are skipped: the app does not own the Flow
+        // service, and quitting must leave it (and the brain, and every
+        // external coding session's capture endpoint) running.
+        const instances = (yield* pool.list).filter((instance) => instance.detached !== true);
         yield* Effect.forEach(instances, (instance) => instance.stop(), {
           concurrency: "unbounded",
         });
