@@ -22,7 +22,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
@@ -165,25 +164,9 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         ...(bootstrap.desktopBootstrapToken
           ? { bootstrapToken: bootstrap.desktopBootstrapToken }
           : {}),
-        // This channel is synchronous, so a backend that has to spawn a
-        // process to mint (the attached Flow service) cannot hand a token
-        // over here; the renderer asks for one through the async method below.
-        ...(instance.mintBootstrapCredential ? { bootstrapCredentialOnDemand: true } : {}),
       });
     }
     return bootstraps;
-  }),
-});
-
-export const mintLocalEnvironmentBootstrapCredential = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.MINT_LOCAL_ENVIRONMENT_BOOTSTRAP_CREDENTIAL_CHANNEL,
-  payload: Schema.String,
-  result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.mintLocalEnvironmentBootstrapCredential")(function* (id) {
-    const pool = yield* DesktopBackendPool.DesktopBackendPool;
-    const instance = yield* pool.get(id as DesktopBackendManager.BackendInstanceId);
-    if (Option.isNone(instance) || !instance.value.mintBootstrapCredential) return null;
-    return Option.getOrNull(yield* instance.value.mintBootstrapCredential);
   }),
 });
 

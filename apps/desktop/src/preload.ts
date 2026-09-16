@@ -50,8 +50,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }
     return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
   },
-  mintLocalEnvironmentBootstrapCredential: (id) =>
-    ipcRenderer.invoke(IpcChannels.MINT_LOCAL_ENVIRONMENT_BOOTSTRAP_CREDENTIAL_CHANNEL, id),
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),

@@ -20,8 +20,8 @@
 // inside `currentConfig`: the renderer bridge reads that over a *synchronous*
 // IPC channel, and an async Effect there is an uncaught AsyncFiberError in the
 // main process. Instead the config carries no token and `mintBootstrapCredential`
-// mints one on request, fresh per call, so a single-use credential is fine and
-// a renderer reload simply asks again.
+// mints one on request; `DesktopLocalEnvironmentAuth` exchanges it for the
+// bearer the renderer uses on every request, so single-use is fine.
 
 import * as NodeChildProcess from "node:child_process";
 
@@ -401,14 +401,14 @@ export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.ma
       return Option.some(buildConfig(new URL("http://127.0.0.1/"), "", parked));
     }
     // No credential here: this read must stay synchronous (see the header).
-    // The bridge flags the bootstrap as on-demand and the renderer mints one
-    // through `mintBootstrapCredential` right before exchanging it.
+    // `DesktopLocalEnvironmentAuth` mints one through `mintBootstrapCredential`
+    // when it needs a bearer for the renderer.
     return Option.some(buildConfig(current.value.httpBaseUrl, "", Option.none()));
   }).pipe(Effect.withSpan("desktop.attachedBackend.currentConfig"));
 
   // One single-use administrative credential per call. A mint failure
-  // degrades to None, which the renderer treats as "no credential" (its
-  // pairing screen) rather than a crash.
+  // degrades to None, which the bearer provider reports as an unconfigured
+  // backend rather than a crash.
   const mintBootstrapCredential = Effect.gen(function* () {
     const current = yield* Ref.get(attached);
     if (Option.isNone(current)) return Option.none<string>();

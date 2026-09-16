@@ -153,9 +153,10 @@ The desktop reuses that path — it runs the service's own backend entry as
 Minting spawns a process, and the bridge that hands the renderer its backend address
 (`getLocalEnvironmentBootstraps`) is a _synchronous_ IPC channel: an async Effect inside it is an
 uncaught `AsyncFiberError` in the main process. So the attached instance's `currentConfig` carries
-no token and stays synchronous; the bootstrap is flagged `bootstrapCredentialOnDemand`, and the
-renderer mints one through the async `mintLocalEnvironmentBootstrapCredential` right before its
-bootstrap-token exchange. Fresh per request, so single-use is fine and a reload simply asks again.
+no token and stays synchronous, and exposes `mintBootstrapCredential` instead. The renderer never
+sees the credential: `DesktopLocalEnvironmentAuth` (the bearer every renderer request carries,
+fetched over the async `getLocalEnvironmentBearerToken` channel) mints one there when the config
+has none, exchanges it once, and caches the bearer exactly as it does the legacy token.
 
 ## The attached desktop backend
 
