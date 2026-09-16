@@ -51,20 +51,34 @@ export function cleanEnvironment(env) {
     ),
   );
 }
+// A service manager runs the supervisor with KeepAlive={SuccessfulExit:false}
+// (launchd) or Restart=on-failure (systemd), so the exit code carries intent:
+// 0 means "an owner exists or the user asked for this, stay stopped", 1 means
+// "this went wrong, start me again". Every exit below picks one deliberately.
+const failureLinger = 2000;
 export async function supervise(directory) {
   const ownership = new DatabaseSync(join(directory, "supervisor-lock.sqlite"));
   try {
     ownership.exec("BEGIN EXCLUSIVE");
   } catch {
+    // Another supervisor already owns this instance: an owner exists, so a
+    // service manager must not respawn this one.
     ownership.close();
+    process.exitCode = 0;
     return;
   }
   const config = await json(join(directory, "config.json"));
   const releaseHome = config.dev ? undefined : process.env.FLOW_RELEASE_HOME;
+  const managed = process.env.FLOW_SERVICE_MANAGED === "1";
   const updates = releaseController({
     home: releaseHome,
     code: config.code,
-    restart: (onFailure) => spawnReleaseCommand(releaseHome, ["restart", "--no-open"], onFailure),
+    restart: managed
+      ? // The service manager owns the restart. Spawning a replacement here
+        // would race it for supervisor-lock.sqlite, so stop cleanly and exit
+        // non-zero instead; the manager starts the prepared release.
+        () => void stop(1)
+      : (onFailure) => spawnReleaseCommand(releaseHome, ["restart", "--no-open"], onFailure),
   });
   let updateTimer;
   const generation = randomUUID();
@@ -88,9 +102,12 @@ export async function supervise(directory) {
       if (error.code !== "ESRCH") throw error;
     }
   };
-  const stop = async () => {
+  // `exitCode` is the reason this supervisor is going away: 0 for an
+  // intentional stop, 1 for a failure a service manager should recover from.
+  const stop = async (exitCode = 0) => {
     if (stopping) return;
     stopping = true;
+    process.exitCode = exitCode;
     clearInterval(updateTimer);
     state.phase = "stopping";
     for (const child of children) signalChild(child, "SIGTERM");
@@ -111,6 +128,16 @@ export async function supervise(directory) {
       await rm(join(directory, "runtime.json"), { force: true });
     await new Promise((resolve) => server.close(resolve));
     ownership.close();
+  };
+  let failing = false;
+  // An unexpected child death or a readiness failure stops the instance and
+  // exits 1. The short linger keeps `state` answerable first, because `flow`
+  // polls /status every 150ms and reports `state.error` to the person waiting.
+  const fail = () => {
+    if (stopping || failing) return;
+    failing = true;
+    for (const child of children) signalChild(child, "SIGTERM");
+    setTimeout(() => void stop(1), failureLinger);
   };
   const server = createServer((request, response) => {
     if (request.headers.authorization !== `Bearer ${token}` || request.method !== "POST") {
@@ -169,8 +196,8 @@ export async function supervise(directory) {
     child.once("exit", (code) => {
       if (!stopping) {
         state.phase = "failed";
-        for (const peer of children) if (peer !== child) signalChild(peer, "SIGTERM");
         state.error = `An owned process exited (${code}). Run flow ${config.name === "primary" ? "restart" : `dev ${config.name} --replace`}.`;
+        fail();
       }
     });
     return child;
@@ -287,6 +314,6 @@ export async function supervise(directory) {
     state.phase = "failed";
     state.error = error.message;
     console.error(error);
-    for (const child of children) signalChild(child, "SIGTERM");
+    fail();
   }
 }

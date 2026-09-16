@@ -55,6 +55,11 @@ export function parse(args) {
       if (!input.name || !/^[a-z][a-z0-9-]{0,47}$/.test(input.name) || reserved.has(input.name))
         throw Error("Choose a dev name using lowercase letters, digits and hyphens.");
     }
+  } else if (args[0] === "service") {
+    input.action = args.shift();
+    input.verb = args.shift();
+    if (!["install", "status", "uninstall"].includes(input.verb))
+      throw Error("Usage: flow service install|status|uninstall [--home PATH]");
   } else if (["status", "stop", "restart"].includes(args[0])) input.action = args.shift();
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
@@ -79,9 +84,13 @@ export function parse(args) {
   if (input.fresh && (input.replace || (input.mode && input.mode !== "isolated")))
     throw Error("--fresh creates a new isolated unit; it cannot replace or share another unit.");
   if (input.mode === "isolated" && input.from) throw Error("--isolated cannot use --from.");
+  // `flow service install` also records the home the service adopts.
+  const configurable =
+    input.action === "start" || (input.action === "service" && input.verb === "install");
   if (
-    input.action !== "start" &&
-    (input.mode || input.from || input.fresh || input.code || input.replace || input.home)
+    (input.action !== "start" &&
+      (input.mode || input.from || input.fresh || input.code || input.replace)) ||
+    (!configurable && input.home)
   )
     throw Error("Configuration flags apply only when starting a development instance.");
   return input;
@@ -201,18 +210,25 @@ export async function start(input) {
       status = null;
     }
     if (!status) {
-      const log = openSync(join(directory, "runtime.log"), "a", 0o600);
-      const child = spawn(
-        process.execPath,
-        [join(sourceRoot, "scripts/flow.mjs"), "--supervise", directory],
-        { detached: true, stdio: ["ignore", log, log], env: process.env },
-      );
-      closeSync(log);
-      await new Promise((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-      });
-      child.unref();
+      // An installed service owns the supervisor's lifecycle; starting a second
+      // one here would race it for the instance lock.
+      const service = await import("./service.mjs");
+      const managed = input.name === "primary" ? await service.managedService() : null;
+      if (managed?.loaded) await service.restartManaged(managed);
+      else {
+        const log = openSync(join(directory, "runtime.log"), "a", 0o600);
+        const child = spawn(
+          process.execPath,
+          [join(sourceRoot, "scripts/flow.mjs"), "--supervise", directory],
+          { detached: true, stdio: ["ignore", log, log], env: process.env },
+        );
+        closeSync(log);
+        await new Promise((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+        child.unref();
+      }
     }
     status = await waitFor(directory, (value) => value?.phase === "ready");
     console.log(
@@ -254,9 +270,11 @@ export async function main(args) {
     throw Error("The managed launcher currently supports macOS and Linux.");
   if (input.action === "supervise")
     return (await import("./supervisor.mjs")).supervise(input.directory);
+  if (input.action === "service")
+    return (await import("./service.mjs")).service(input.verb, { home: input.home });
   if (input.action === "help")
     return console.log(
-      "flow [status|stop|restart] [--home PATH] [--no-open]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
+      "flow [status|stop|restart] [--home PATH] [--no-open]\nflow service install|status|uninstall [--home PATH]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
     );
   if (input.action === "list") {
     const directory = join(registryRoot(), "instances");
