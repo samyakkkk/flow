@@ -282,6 +282,11 @@ export interface DesktopBackendInstance {
   readonly start: Effect.Effect<void>;
   readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
+  // Where this instance's server currently answers, or None when it has none
+  // (not started, or attach failed). Cheap and side-effect free on purpose:
+  // the `flow://app` protocol reads it on every request, and reading
+  // `currentConfig` instead would mint a pairing credential each time.
+  readonly httpBaseUrl?: Effect.Effect<Option.Option<URL>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   // Polls desiredRunning + the instance's own ready flag until the
   // backend reports ready, or the timeout elapses. Returns true on
@@ -692,6 +697,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     })),
   );
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
+  // Only while the child is actually ready: before that the port is resolved
+  // but nothing is listening on it, and callers use this to decide where to
+  // send renderer traffic.
+  const httpBaseUrl = Ref.get(state).pipe(
+    Effect.map((current) =>
+      current.ready
+        ? Option.map(current.config, (config) => config.httpBaseUrl)
+        : Option.none<URL>(),
+    ),
+  );
 
   const cancelRestart = Effect.gen(function* () {
     const restartFiber = yield* Ref.modify(state, (current) => [
@@ -1182,6 +1197,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     start,
     stop,
     currentConfig,
+    httpBaseUrl,
     snapshot,
     waitForReady,
   } satisfies DesktopBackendInstance;

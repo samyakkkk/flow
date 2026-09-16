@@ -127,6 +127,26 @@ describe("desktop attached backend", () => {
       // service's own data home.
       assert.equal(second.bootstrap.desktopBootstrapToken, "credential-2");
       assert.deepEqual(mints, [DATA_HOME, DATA_HOME]);
+
+      // The renderer protocol asks for the address on every request, so it
+      // must not go through the minting path.
+      assert.deepEqual(
+        Option.map(yield* instance.httpBaseUrl!, (url) => url.origin),
+        Option.some(origin),
+      );
+      assert.deepEqual(mints, [DATA_HOME, DATA_HOME]);
+    }),
+  );
+
+  it.effect("reports no address while it is not attached", () =>
+    Effect.gen(function* () {
+      const { instance } = yield* makeInstance({
+        discoveries: [{ status: "stopped", reason: "Service status: stopped." }],
+      });
+
+      assert.isTrue(Option.isNone(yield* instance.httpBaseUrl!));
+      yield* instance.start;
+      assert.isTrue(Option.isNone(yield* instance.httpBaseUrl!));
     }),
   );
 

@@ -143,6 +143,12 @@ export class DesktopBackendPoolCannotUnregisterPrimaryError extends Schema.Tagge
   }
 }
 
+// An instance that does not report an address (older instance kinds, test
+// doubles) reads as "no server", which is exactly how the protocol treats a
+// backend it cannot reach.
+const primaryHttpBaseUrl = (instance: DesktopBackendInstance): Effect.Effect<Option.Option<URL>> =>
+  instance.httpBaseUrl ?? Effect.succeed(Option.none());
+
 export class DesktopBackendPool extends Context.Service<
   DesktopBackendPool,
   {
@@ -157,6 +163,12 @@ export class DesktopBackendPool extends Context.Service<
     // exposed as a typed effect so consumers don't have to handle the
     // Option for the case that's guaranteed to be present.
     readonly primary: Effect.Effect<DesktopBackendInstance>;
+    // Where the primary's server currently answers, or None when there is
+    // none (attach failed, or has not completed yet). The `flow://app`
+    // protocol resolves its proxy target through this on every request, so it
+    // stays a cheap read and never mints a credential the way `currentConfig`
+    // does.
+    readonly primaryHttpBaseUrl: Effect.Effect<Option.Option<URL>>;
     // Build a fresh DesktopBackendInstance from `spec` and add it to the
     // registry. The pool owns the instance's scope: unregister(id) or pool
     // teardown closes it and runs the instance's auto-stop finalizer. The
@@ -583,6 +595,7 @@ export const layer = Layer.effect(
         ),
       ),
       primary: Effect.succeed(primary),
+      primaryHttpBaseUrl: primaryHttpBaseUrl(primary),
       register,
       unregister,
       retryPrimaryAttach: attachRecovery.allowAdoption.pipe(
@@ -617,6 +630,7 @@ export const layerTest = (
         get: (id) => Effect.succeed(Option.fromNullishOr(byId.get(id))),
         list: Effect.succeed(Array.from(byId.values())),
         primary: Effect.succeed(primary),
+        primaryHttpBaseUrl: primaryHttpBaseUrl(primary),
         register: () => Effect.die("DesktopBackendPool.layerTest does not support register"),
         unregister: () => Effect.die("DesktopBackendPool.layerTest does not support unregister"),
         retryPrimaryAttach: primary.start,

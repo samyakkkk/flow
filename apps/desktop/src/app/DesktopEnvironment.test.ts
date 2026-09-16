@@ -73,6 +73,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appRoot, "/repo");
       assert.equal(environment.serverRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.bundledClientDir, "/repo/apps/server/dist/client");
       assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.flow.desktop.dev");
       assert.equal(environment.linuxWmClass, "flow-dev");
@@ -138,6 +139,12 @@ describe("DesktopEnvironment", () => {
       assert.equal(
         environment.backendEntryPath,
         "/install/resources/server.asar/apps/server/dist/bin.mjs",
+      );
+      // The renderer's static fallback reads out of the same server tree, so
+      // packaged Windows must point it at the sidecar too.
+      assert.equal(
+        environment.bundledClientDir,
+        "/install/resources/server.asar/apps/server/dist/client",
       );
     }),
   );

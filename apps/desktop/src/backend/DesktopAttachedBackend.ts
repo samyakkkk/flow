@@ -411,6 +411,14 @@ export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.ma
     return Option.some(buildConfig(current.value.httpBaseUrl, credential, Option.none()));
   }).pipe(Effect.withSpan("desktop.attachedBackend.currentConfig"));
 
+  // The attached service's address, read straight off the attach result. This
+  // deliberately does not go through `currentConfig`: that mints a single-use
+  // pairing credential per read, and the renderer protocol asks for the target
+  // on every request.
+  const httpBaseUrl = Ref.get(attached).pipe(
+    Effect.map(Option.map((current) => current.httpBaseUrl)),
+  );
+
   const snapshot = Effect.gen(function* () {
     return {
       desiredRunning: yield* Ref.get(desiredRunning),
@@ -446,6 +454,7 @@ export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.ma
     start,
     stop,
     currentConfig,
+    httpBaseUrl,
     snapshot,
     waitForReady,
     detached: true,

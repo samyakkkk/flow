@@ -63,6 +63,12 @@ export class DesktopEnvironment extends Context.Service<
     // extracts on demand (see DesktopWslServerTree).
     readonly serverRoot: string;
     readonly backendEntryPath: string;
+    // The built web client that ships next to the server in the desktop
+    // artifact. The `flow://app` protocol serves it directly when no Flow
+    // service is reachable, so the window (and the recovery screen) still
+    // renders with nothing to proxy to. Dev never reads it — the renderer
+    // target there is Vite — and the path may not exist in a repo checkout.
+    readonly bundledClientDir: string;
     // `scripts/flow-release.mjs`, the Flow service bootstrap. First-launch
     // adoption runs it with Electron's embedded Node to install the
     // independent Flow release and register it as a login service; the
@@ -224,6 +230,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appRoot,
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
+    bundledClientDir: path.join(serverRoot, "apps/server/dist/client"),
     // Packaged builds carry the bootstrap as an extra resource next to the
     // other staged resources; dev runs the repo's own copy.
     flowReleaseScriptPath: input.isPackaged

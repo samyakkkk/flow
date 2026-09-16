@@ -24,6 +24,7 @@ import type { DesktopBackendSnapshot, DesktopBackendStartConfig } from "./Deskto
 function makeStubInstance(
   id: DesktopBackendPool.BackendInstanceId,
   label: string,
+  httpBaseUrl?: Effect.Effect<Option.Option<URL>>,
 ): DesktopBackendPool.DesktopBackendInstance {
   const snapshot: DesktopBackendSnapshot = {
     desiredRunning: false,
@@ -38,6 +39,7 @@ function makeStubInstance(
     start: Effect.void,
     stop: () => Effect.void,
     currentConfig: Effect.succeed(Option.none<DesktopBackendStartConfig>()),
+    ...(httpBaseUrl === undefined ? {} : { httpBaseUrl }),
     snapshot: Effect.succeed(snapshot),
     waitForReady: (_timeout: Duration.Duration) => Effect.succeed(false),
   };
@@ -140,6 +142,45 @@ describe("DesktopBackendPool", () => {
         DesktopBackendPool.layerTest([
           makeStubInstance(DesktopBackendPool.PRIMARY_INSTANCE_ID, "Windows"),
           makeStubInstance(DesktopBackendPool.BackendInstanceId("wsl:ubuntu"), "WSL (Ubuntu)"),
+        ]),
+      ),
+    ),
+  );
+
+  it.effect("reports the primary's live address as it changes", () =>
+    Effect.gen(function* () {
+      // The renderer protocol reads this on every request, so it has to follow
+      // the primary rather than report an address captured once.
+      let current = Option.none<URL>();
+      const pool = yield* DesktopBackendPool.DesktopBackendPool.pipe(
+        Effect.provide(
+          DesktopBackendPool.layerTest([
+            makeStubInstance(
+              DesktopBackendPool.PRIMARY_INSTANCE_ID,
+              "Flow service",
+              Effect.sync(() => current),
+            ),
+          ]),
+        ),
+      );
+
+      assert.isTrue(Option.isNone(yield* pool.primaryHttpBaseUrl));
+      current = Option.some(new URL("http://127.0.0.1:3773/"));
+      assert.deepEqual(
+        Option.map(yield* pool.primaryHttpBaseUrl, (url) => url.href),
+        Option.some("http://127.0.0.1:3773/"),
+      );
+    }),
+  );
+
+  it.effect("reports no primary address for an instance that cannot report one", () =>
+    Effect.gen(function* () {
+      const pool = yield* DesktopBackendPool.DesktopBackendPool;
+      assert.isTrue(Option.isNone(yield* pool.primaryHttpBaseUrl));
+    }).pipe(
+      Effect.provide(
+        DesktopBackendPool.layerTest([
+          makeStubInstance(DesktopBackendPool.PRIMARY_INSTANCE_ID, "Windows"),
         ]),
       ),
     ),

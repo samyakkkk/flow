@@ -109,6 +109,7 @@ describe("DesktopWslBackend", () => {
         ),
       list: Effect.succeed([primary]),
       primary: Effect.succeed(primary),
+      primaryHttpBaseUrl: Effect.succeed(Option.none<URL>()),
       register: (spec) =>
         Effect.sync(() => {
           registeredSpec = spec;
