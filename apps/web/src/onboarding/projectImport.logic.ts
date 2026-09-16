@@ -138,3 +138,77 @@ export function resolveOnboardingLandingProject<T>(
 export function onboardingProjectKey(environmentId: EnvironmentId, path: string): string {
   return JSON.stringify([environmentId, path]);
 }
+
+/** Compare server-returned canonical macOS paths with paths chosen in the browser. */
+export function projectIsWithinFolder(project: string, folder: string): boolean {
+  const normalize = (value: string) =>
+    value
+      .replaceAll("\\", "/")
+      .replace(/^\/private\/tmp(?=\/|$)/, "/tmp")
+      .replace(/\/$/, "");
+  const root = normalize(folder);
+  const candidate = normalize(project);
+  return candidate === root || candidate.startsWith(root + "/");
+}
+
+/** Internal indexer directories are not user projects. Temporary folders require an explicit choice. */
+export function isSuggestedBrainProject(
+  path: string,
+  chosenFolders: readonly string[] = [],
+): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (/\/(?:userdata\/brain\/workspaces|\.t3\/worktrees)\//.test(normalized)) return false;
+  if (/\/data\/projects\/[^/]+\/workspace\/repos\//.test(normalized)) return false;
+  if (chosenFolders.some((folder) => projectIsWithinFolder(path, folder))) return true;
+  return !/^(?:\/private)?\/tmp(?:\/|$)|^\/private\/var\/folders\//.test(normalized);
+}
+
+/** Match HTTPS/SSH GitHub URLs using repository identity, never directory names. */
+export function githubRepositoryKey(value: string): string | null {
+  const cleaned = value.trim().replace(/^git@github\.com:/i, "https://github.com/");
+  const match =
+    /^(?:https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
+      cleaned,
+    );
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
+/** Reuse the nearest known parent project; internal indexing clones never qualify. */
+export function matchGithubProjects(
+  repository: string,
+  candidates: readonly AgentSessionProjectCandidate[],
+  projects: readonly { path: string; title: string; projectId?: ProjectId | undefined }[],
+  chosenFolders: readonly string[] = [],
+): AgentSessionProjectCandidate[] {
+  const key = githubRepositoryKey(repository);
+  if (!key) return [];
+  const matches = new Map<string, AgentSessionProjectCandidate>();
+  for (const candidate of candidates) {
+    if (!isSuggestedBrainProject(candidate.path, chosenFolders)) continue;
+    if (!candidate.git?.repository || githubRepositoryKey(candidate.git.repository) !== key)
+      continue;
+    const parent = projects
+      .filter(
+        (project) =>
+          isSuggestedBrainProject(project.path, chosenFolders) &&
+          projectIsWithinFolder(candidate.path, project.path),
+      )
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    const path = parent?.path ?? candidate.path;
+    const { projectId: _checkoutProjectId, ...checkout } = candidate;
+    matches.set(
+      path,
+      parent
+        ? {
+            ...checkout,
+            path,
+            title: parent.title,
+            alreadyImported: Boolean(parent.projectId),
+            ...(parent.projectId ? { projectId: parent.projectId, alreadyImported: true } : {}),
+            git: path === candidate.path ? candidate.git : null,
+          }
+        : candidate,
+    );
+  }
+  return [...matches.values()];
+}

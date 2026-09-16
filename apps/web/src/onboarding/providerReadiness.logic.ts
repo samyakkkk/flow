@@ -1,6 +1,7 @@
 import {
   ClaudeSettings,
   CodexSettings,
+  OpenCodeSettings,
   type ExecutionEnvironmentPlatformOs,
   type ServerProvider,
   type ServerSettings,
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeOpenCodeSettings = Schema.decodeUnknownOption(OpenCodeSettings);
 const SAFE_SHELL_BINARY_PATTERN = /^[A-Za-z0-9_./:\\-]+$/;
 
 function quoteProviderBinary(
@@ -72,14 +74,17 @@ export function selectOnboardingProvidersByDriver(
 }
 
 /**
- * Official standalone installers. Neither needs Node or npm, and both land in
- * the paths the server's provider maintenance recognizes as native, so the
- * one-click updater in Settings keeps working after install.
+ * Official installers. OpenCode on Windows uses npm; the POSIX installers
+ * install standalone binaries.
  */
 const NATIVE_INSTALL_COMMANDS = {
   claudeAgent: {
     windows: "irm https://claude.ai/install.ps1 | iex",
     posix: "curl -fsSL https://claude.ai/install.sh | bash",
+  },
+  opencode: {
+    windows: "npm install -g opencode-ai",
+    posix: "curl -fsSL https://opencode.ai/install | bash",
   },
   codex: {
     windows: "irm https://chatgpt.com/codex/install.ps1 | iex",
@@ -125,5 +130,12 @@ export function resolveOnboardingProviderLoginCommand(
     return `${quoteProviderBinary(binaryPath, "codex", platform)} login`;
   }
 
+  if (provider.driver === "opencode") {
+    const config = decodeOpenCodeSettings(
+      instance ? (instance.config ?? {}) : settings.providers.opencode,
+    );
+    const binaryPath = Option.isSome(config) ? config.value.binaryPath : "opencode";
+    return `${quoteProviderBinary(binaryPath, "opencode", platform)} auth login`;
+  }
   return provider.driver;
 }

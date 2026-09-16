@@ -3,6 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   groupOnboardingProjects,
+  githubRepositoryKey,
+  matchGithubProjects,
+  isSuggestedBrainProject,
+  projectIsWithinFolder,
   partitionOnboardingProjects,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
@@ -330,5 +334,78 @@ describe("projects on multiple computers", () => {
     const first = { ...candidate("/code/app"), environmentId: "first" };
     const second = { ...candidate("/code/app"), environmentId: "second" };
     expect(partitionOnboardingProjects([first, second], now).recent).toEqual([first, second]);
+  });
+});
+
+describe("Brain project suggestions", () => {
+  it("hides internal Brain folders even when their parent was chosen", () => {
+    expect(isSuggestedBrainProject("/tmp/test/userdata/brain/workspaces/uuid", ["/tmp/test"])).toBe(
+      false,
+    );
+    expect(isSuggestedBrainProject("/home/me/project/.t3/worktrees/task")).toBe(false);
+    expect(isSuggestedBrainProject("/home/me/flow/data/projects/demo/workspace/repos/app")).toBe(
+      false,
+    );
+  });
+  it("offers temporary projects only after explicit folder selection", () => {
+    expect(isSuggestedBrainProject("/private/tmp/test/app")).toBe(false);
+    expect(isSuggestedBrainProject("/private/tmp/test/app", ["/tmp/test"])).toBe(true);
+    expect(isSuggestedBrainProject("/home/me/projects/app")).toBe(true);
+  });
+  it("matches nested folders without matching siblings with the same prefix", () => {
+    expect(projectIsWithinFolder("/private/tmp/test/team/app", "/tmp/test")).toBe(true);
+    expect(projectIsWithinFolder("/tmp/testing/app", "/tmp/test")).toBe(false);
+  });
+});
+
+describe("GitHub additions reuse local projects", () => {
+  it("normalizes GitHub URL forms and rejects other hosts", () => {
+    expect(githubRepositoryKey("git@github.com:Team/App.git")).toBe("team/app");
+    expect(githubRepositoryKey("https://github.com/team/app/")).toBe("team/app");
+    expect(githubRepositoryKey("https://example.com/team/app")).toBeNull();
+  });
+  it("selects the local checkout by remote identity", () => {
+    const checkout = candidate("/work/different-name", { git: github("team/app") });
+    expect(matchGithubProjects("https://github.com/TEAM/APP.git", [checkout], [])).toEqual([
+      checkout,
+    ]);
+  });
+  it("reuses a parent project and deduplicates its matching checkouts", () => {
+    const parentId = ProjectId.make("parent");
+    const matches = matchGithubProjects(
+      "team/app",
+      [
+        candidate("/work/team/api", { git: github("team/app") }),
+        candidate("/work/team/copy", { git: github("team/app") }),
+      ],
+      [{ path: "/work/team", title: "Team", projectId: parentId }],
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ path: "/work/team", title: "Team", projectId: parentId });
+  });
+  it("does not reuse a child's project id for a newly selected parent", () => {
+    const matches = matchGithubProjects(
+      "team/app",
+      [
+        candidate("/work/team/app", {
+          git: github("team/app"),
+          projectId: ProjectId.make("child"),
+        }),
+      ],
+      [{ path: "/work/team", title: "Team" }],
+    );
+    expect(matches[0]?.projectId).toBeUndefined();
+  });
+  it("keeps repositories without a checkout source-only and ignores internal clones", () => {
+    expect(
+      matchGithubProjects(
+        "team/app",
+        [
+          candidate("/work/app", { git: github("other/app") }),
+          candidate("/home/me/.t3/userdata/brain/workspaces/id/repo", { git: github("team/app") }),
+        ],
+        [],
+      ),
+    ).toEqual([]);
   });
 });

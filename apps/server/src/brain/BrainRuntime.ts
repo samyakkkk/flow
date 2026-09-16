@@ -1,3 +1,4 @@
+import { projectRepositories, hasProjectRepositorySource } from "./project-repositories.ts";
 import type { GithubAccess } from "../../../../flow-t3/shared/runtime/src/github.ts";
 import { cloudSignInTarget, signInToCloud, CloudClient } from "./cloud-client.ts";
 import { ProjectBrainBindings } from "./project-bindings.ts";
@@ -1196,36 +1197,31 @@ export class BrainRuntime {
     const result = this.commands.then(async () => {
       if (this.closed) throw new Error("Brain runtime is shutting down.");
       const workspace = workspaceId ? this.workspace(workspaceId) : null;
+      const repositories = workspace ? await projectRepositories(project.workspaceRoot) : [];
       if (workspace?.remote) {
-        const remote = await (await this.cloud(workspace)).state(true);
+        const cloud = await this.cloud(workspace);
+        const remote = await cloud.state(true);
         if (remote.database.status !== "ready") throw new Error("Cloud Brain is unavailable.");
-        const folder = await this.inspectFolder(project.workspaceRoot);
-        if (!folder.github)
-          throw new Error("Push this repository to GitHub before connecting it to a cloud Brain.");
         const brain = remote.workspaces.find((entry) => entry.id === workspace.remote!.brainId);
         if (!brain) throw new Error("Cloud Brain no longer exists.");
-        if (
-          !brain.sources.some(
-            (source) => source.repository.toLowerCase() === folder.repository.toLowerCase(),
-          )
-        )
-          await (
-            await this.cloud(workspace)
-          ).command({
+        const existing = new Set(brain.sources.map((source) => source.repository.toLowerCase()));
+        for (const path of repositories) {
+          const folder = await this.inspectFolder(path);
+          if (!folder.github) continue;
+          if (existing.has(folder.repository.toLowerCase())) continue;
+          await cloud.command({
             action: "import",
             workspaceId: workspace.remote.brainId,
             repository: folder.repository,
           });
-      }
-      if (workspace && !workspace.remote) {
-        const folder = await this.inspectFolder(project.workspaceRoot);
-        const existing = workspace.sources.find((source) => source.localPath === folder.localPath);
-        if (!existing)
-          await this.executeCommand({
-            action: "importFolder",
-            workspaceId: workspace.id,
-            path: project.workspaceRoot,
-          });
+          existing.add(folder.repository.toLowerCase());
+        }
+      } else if (workspace) {
+        for (const path of repositories) {
+          const folder = await this.inspectFolder(path);
+          if (hasProjectRepositorySource(workspace.sources, folder)) continue;
+          await this.executeCommand({ action: "importFolder", workspaceId: workspace.id, path });
+        }
       }
       await this.projectBindings.bind(project.id, workspaceId);
     });

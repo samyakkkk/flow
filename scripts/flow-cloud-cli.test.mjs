@@ -17,3 +17,25 @@ test('update feed failures fail explicitly and have a bounded request',async()=>
     assert.ok(options.signal);return new Response('',{status:503});
   }),/503/);
 });
+
+test('unified entry opens browser and accepts local and Cloud setup', async () => {
+  const { dispatch } = await import('./flow-cloud-cli.mjs');
+  const calls = [];
+  const run = async args => calls.push(args);
+  await dispatch([], run);
+  await dispatch(['--web'], run);
+  await dispatch(['setup', '--local', '--brain', 'local-id', '--folder', '/project'], run);
+  await dispatch(['setup', '--cloud', 'https://brain.example', '--cloud-brain', 'remote-id'], run);
+  assert.deepEqual(calls.slice(0, 2), [[], []]);
+  assert.deepEqual(calls[2], ['setup', '--local', 'true', '--brain', 'local-id', '--folder', '/project', '--harness', 'detected']);
+  assert.ok(calls[3].includes('--cloud'));
+  await assert.rejects(dispatch(['setup', '--local', '--cloud', 'https://brain.example'], run), /Choose/);
+});
+
+test('lifecycle and diagnostic commands never open the UI', async () => {
+  const { dispatch } = await import('./flow-cloud-cli.mjs');
+  const calls = [];
+  for (const args of [['status'], ['stop'], ['restart'], ['doctor', '--folder', '/project'], ['brains', 'list']])
+    await dispatch(args, async args => calls.push(args));
+  assert.deepEqual(calls, [['status', '--no-open'], ['stop', '--no-open'], ['restart', '--no-open'], ['agents', 'doctor', '--folder', '/project'], ['brains', 'list']]);
+});

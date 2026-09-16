@@ -20,9 +20,18 @@ export async function atomic(file, value) {
   await fs.rename(temporary, file);
 }
 export function gitIdentity(folder) {
-  const git = args => execFileSync('git', ['-C', folder, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  return { common: resolve(folder, git(['rev-parse', '--git-common-dir'])), root: git(['rev-parse', '--show-toplevel']) };
+  const git = args => execFileSync('git', ['-C', folder, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  try {
+    return { common: resolve(folder, git(['rev-parse', '--git-common-dir'])), root: git(['rev-parse', '--show-toplevel']) };
+  } catch (error) {
+    // Plain folders can use a Brain too; do not create a Git repository merely to bind tools.
+    // Other Git failures (permissions, unsafe ownership, missing Git) must remain visible.
+    if (!String(error.stderr).includes('not a git repository')) throw error;
+    const root = realpathSync(folder);
+    return { common: `folder:${root}`, root };
+  }
 }
+
 export function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /^(password|passwd|secret|api[_-]?key|access[_-]?token|auth(?:orization)?|token)$/i.test(key) ? '[redacted]' : redact(item)]));
@@ -189,6 +198,7 @@ export async function main(argv) {
   const state = await request(entry, 'state', { metadataOnly: true });
   const brain = state.workspaces.find(item => item.id === options.brain);
   if (!brain) throw Error('Brain not found on this runtime');
+  if (options.local === 'true' && brain.remote) throw Error('The selected Brain is Cloud-connected. Choose a local Brain or omit --local.');
   entry.name = brain.name;
   const manifest = await readJson(join(home(), 'integrations.json'), {});
   const current = manifest.repos?.[folder];
