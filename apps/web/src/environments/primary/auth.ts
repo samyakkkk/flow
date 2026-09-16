@@ -165,15 +165,22 @@ export function takePairingTokenFromUrl(): string | null {
   return token;
 }
 
-function getDesktopBootstrapCredential(): string | null {
+async function getDesktopBootstrapCredential(): Promise<string | null> {
   // Both backends share the same bootstrap token (DesktopBackendConfiguration
   // mints one tokenRef and feeds it to both resolvers), so picking the
   // primary entry is fine even when the WSL backend is also registered.
-  const bootstraps = window.desktopBridge?.getLocalEnvironmentBootstraps() ?? [];
+  const bridge = window.desktopBridge;
+  const bootstraps = bridge?.getLocalEnvironmentBootstraps() ?? [];
   const primary = bootstraps.find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
-  return typeof primary?.bootstrapToken === "string" && primary.bootstrapToken.length > 0
-    ? primary.bootstrapToken
-    : null;
+  if (typeof primary?.bootstrapToken === "string" && primary.bootstrapToken.length > 0)
+    return primary.bootstrapToken;
+  // The attached Flow service mints single-use credentials on request, right
+  // before the exchange, instead of carrying one in the sync bootstrap read.
+  if (primary?.bootstrapCredentialOnDemand && bridge?.mintLocalEnvironmentBootstrapCredential) {
+    const minted = await bridge.mintLocalEnvironmentBootstrapCredential(primary.id);
+    return typeof minted === "string" && minted.length > 0 ? minted : null;
+  }
+  return null;
 }
 
 export async function fetchSessionState(): Promise<AuthSessionState> {
@@ -308,8 +315,10 @@ function isTransientBootstrapError(error: unknown): boolean {
 }
 
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
-  const bootstrapCredential = getDesktopBootstrapCredential();
   const currentSession = await fetchSessionState();
+  const bootstrapCredential = currentSession.authenticated
+    ? null
+    : await getDesktopBootstrapCredential();
   if (currentSession.authenticated) {
     return { status: "authenticated" };
   }

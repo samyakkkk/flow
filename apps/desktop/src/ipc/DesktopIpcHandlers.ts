@@ -46,6 +46,7 @@ import {
   getAppBranding,
   getLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken,
+  mintLocalEnvironmentBootstrapCredential,
   getSystemLocale,
   getWindowFullscreenState,
   openExternal,
@@ -73,6 +74,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
+  yield* ipc.handle(mintLocalEnvironmentBootstrapCredential);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);

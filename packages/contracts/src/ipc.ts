@@ -321,6 +321,9 @@ export interface DesktopEnvironmentBootstrap {
   httpBaseUrl: string | null;
   wsBaseUrl: string | null;
   bootstrapToken?: string;
+  // The backend mints single-use credentials on request (attached Flow
+  // service); ask `mintLocalEnvironmentBootstrapCredential` before exchanging.
+  bootstrapCredentialOnDemand?: boolean;
   // Present only for the attached primary when the Flow service could not be
   // reached. The endpoints are null in that case: there is nothing to dial, and
   // the renderer shows the recovery screen instead of booting the workspace.
@@ -334,6 +337,12 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   httpBaseUrl: Schema.NullOr(Schema.String),
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
+  /**
+   * Set when the backend mints single-use credentials on request instead of
+   * carrying one here (the attached Flow service). The renderer asks for one
+   * with `mintLocalEnvironmentBootstrapCredential` right before exchanging it.
+   */
+  bootstrapCredentialOnDemand: Schema.optionalKey(Schema.Boolean),
   attachFailure: Schema.optionalKey(DesktopAttachFailureSchema),
 });
 
@@ -1244,6 +1253,9 @@ export interface DesktopBridge {
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  // Mints one single-use bootstrap credential for a bootstrap flagged
+  // `bootstrapCredentialOnDemand`; null when that backend cannot mint right now.
+  mintLocalEnvironmentBootstrapCredential?: (id: string) => Promise<string | null>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

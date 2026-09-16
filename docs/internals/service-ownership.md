@@ -148,9 +148,14 @@ already owns the data — so an attach endpoint would add network surface withou
 The desktop reuses that path — it runs the service's own backend entry as
 `pair --base-dir <dataHome> --admin --json` (`DesktopAttachedBackend.ts:156-202`) — asking for
 `AuthAdministrativeScopes` because an attached client still has to manage connections
-(`pair.ts:427-446`, flag at `:470-472`). `--admin` widens the scope, not who may ask. The
-credential is minted fresh on every `currentConfig` read, so single-use is fine and a renderer
-reload simply mints another; the renderer's bootstrap-token exchange is unchanged.
+(`pair.ts:427-446`, flag at `:470-472`). `--admin` widens the scope, not who may ask.
+
+Minting spawns a process, and the bridge that hands the renderer its backend address
+(`getLocalEnvironmentBootstraps`) is a _synchronous_ IPC channel: an async Effect inside it is an
+uncaught `AsyncFiberError` in the main process. So the attached instance's `currentConfig` carries
+no token and stays synchronous; the bootstrap is flagged `bootstrapCredentialOnDemand`, and the
+renderer mints one through the async `mintLocalEnvironmentBootstrapCredential` right before its
+bootstrap-token exchange. Fresh per request, so single-use is fine and a reload simply asks again.
 
 ## The attached desktop backend
 
@@ -210,7 +215,7 @@ address, requests are served from the web client the artifact already ships at
 for assets, 403 for anything resolving outside that directory, and 503 JSON for `/api`, `/ws`,
 `/oauth` and `/.well-known` so a fetch never receives HTML. That fallback is the only reason the
 recovery surface can render at all — there is no server to fetch it from — and the address
-accessors are plain `Ref` reads, so resolving the target never mints a credential.
+accessors are plain `Ref` reads.
 
 ## Public and private
 
