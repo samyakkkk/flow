@@ -1,4 +1,5 @@
 import {
+  DESKTOP_PROTOCOL,
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
@@ -211,6 +212,7 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    desktopProtocol: DESKTOP_PROTOCOL,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,

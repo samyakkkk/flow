@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { DESKTOP_PROTOCOL, ExecutionEnvironmentDescriptor } from "./environment.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
@@ -25,6 +25,18 @@ describe("ExecutionEnvironmentDescriptor", () => {
         capabilities: { ...descriptor.capabilities, pullRequests: true },
       }).capabilities.pullRequests,
     ).toBe(true);
+  });
+
+  it("decodes a server that predates the desktop-attach protocol", () => {
+    // Older servers omit the field entirely; decoding must still succeed so
+    // the desktop can reach its own incompatibility decision.
+    expect(decodeDescriptor(descriptor).desktopProtocol).toBeUndefined();
+  });
+
+  it("preserves an advertised desktop-attach protocol generation", () => {
+    expect(
+      decodeDescriptor({ ...descriptor, desktopProtocol: DESKTOP_PROTOCOL }).desktopProtocol,
+    ).toBe(DESKTOP_PROTOCOL);
   });
 
   it("treats a missing attachment upload capability as unsupported", () => {

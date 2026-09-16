@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { DESKTOP_PROTOCOL } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -171,6 +172,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+      // Desktop clients refuse to attach to a server that advertises no
+      // generation, so the descriptor must always carry one.
+      expect(second.desktopProtocol).toBe(DESKTOP_PROTOCOL);
     }),
   );
 
