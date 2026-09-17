@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - Read the external agents' routing table from its source file.
+import * as NodeFS from "node:fs";
 import { GRAPH_PREAMBLE } from "../../../../flow-t3/shared/orchestrator/src/agents/graph-preamble.ts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -129,6 +131,15 @@ it.effect(
       const initialContext = (yield* load(threadId, "")).context;
       expect(initialContext).toContain(orientText);
       expect(initialContext).toContain(GRAPH_PREAMBLE);
+      // Hosted agents and external coding agents must read the same routing table.
+      const routing = /FLOW_ROUTING = `([^`]+)`/.exec(
+        NodeFS.readFileSync(
+          new URL("../../../../flow-t3/shared/bin/harness/routing.mjs", import.meta.url),
+          "utf8",
+        ),
+      )?.[1];
+      expect(routing).toBeDefined();
+      expect(GRAPH_PREAMBLE).toContain(routing);
       expect(yield* load(threadId, "team")).toEqual({ bindingKey: "team" });
       expect(reads).toBe(1);
       yield* capture(

@@ -89,6 +89,7 @@ test('machine-scope setup renders user configuration once, resolves the folder a
   assert.ok(claudeJson.mcpServers.mine && claudeJson.mcpServers['flow-graph']);
   assert.deepEqual(claudeJson.mcpServers['flow-graph'].args, [join(f.root, '.flow/bin/flow-mcp')]);
   assert.match(await fs.readFile(join(f.root, '.claude/skills/flow/SKILL.md'), 'utf8'), /bind_session/);
+  assert.match(await fs.readFile(join(f.root, '.claude/skills/flow/SKILL.md'), 'utf8'), /WHEN YOU NEED[\s\S]*search_knowledge the task's key terms/);
   assert.match(await fs.readFile(join(f.root, '.agents/skills/flow/SKILL.md'), 'utf8'), /flow-graph/);
   const line = await f.hookLine();
   assert.doesNotMatch(line, /--project/);
@@ -198,6 +199,7 @@ test('the MCP server serves no tools in an unbound folder and the Brain tools on
   const bound = await f.run([mcp], input);
   const replies = bound.stdout.trim().split('\n').map(JSON.parse);
   assert.match(replies[0].result.instructions, /Team Brain/);
+  assert.match(replies[0].result.instructions, /WHEN YOU NEED[\s\S]*read_document/);
   assert.deepEqual(replies[1].result.tools.map(tool => tool.name), ['orient', 'remember', 'read_document', 'bind_session']);
 });
 
