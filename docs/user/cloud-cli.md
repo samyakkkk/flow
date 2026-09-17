@@ -13,15 +13,18 @@ Linux x64. No desktop app is required. An installed, signed-in coding provider i
 needed for local conversation processing. Knowledge is stored in your Cloud
 Brain; conversation capture and curation run on your machine.
 
-The CLI lives at `~/.local/share/flow-cloud-cli/bin/flow`. It also installs
-`~/.local/bin/flow` when that path is free. If another Flow installation owns the
-command, use the CLI's full path. Existing Mac apps and their data are kept.
+This is the same Flow installation as the [bash installer](./install.md) and the
+one a desktop app sets up on first launch, so the `flow` command, the browser and
+the desktop apps all use one service. It lives in `~/.local/share/flow-browser`;
+`bin/flow` inside it always works, and `~/.local/bin/flow` is installed too when
+that path is free. A CLI installed from the dashboard before this was unified
+stays in `~/.local/share/flow-cloud-cli` and is updated and used in place.
 
-Flow checks its own release channel whenever invoked and downloads updates in
-the background. Later invocations use the downloaded CLI. Network or verification
-failures leave the installed version usable. Running servers keep their current
-version until restarted; use `flow restart` when you are ready to apply a server
-update. `flow update` waits for an update to finish downloading.
+Flow prepares updates at startup and every six hours while running. Network or
+verification failures leave the installed version usable. Running servers keep
+their current version until restarted; use `flow restart` when you are ready to
+apply an update. `flow update` prepares one immediately. See
+[updating Flow](./updating.md).
 
 Use `flow agents resolve --folder /path/to/project` to see which Brain a folder
 uses, `flow agents doctor --folder /path/to/project` to check a connection, or

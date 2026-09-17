@@ -20,16 +20,23 @@ the exact commit, publishing, and verifying installation and update delivery.
 
    Use a normal fast-forward push; merge `origin/release` into your candidate
    first if needed. Never force-push around a divergent release branch.
+
 2. Each push runs **Flow browser release** against the exact triggering SHA.
    It selects the next patch above all stable `flow-vX.Y.Z` tags (for example,
    `0.1.2` → `0.1.3`). No manual tagging or package version edit is needed.
-3. On an Apple Silicon macOS runner, the workflow builds the web app and native
-   dependencies once, verifies a private Node distribution against its official
-   checksum, and packages the runtime with Flow.
-4. It publishes a `flow-vX.Y.Z` GitHub release with `flow-source.tar.gz`,
-   `flow-source.tar.gz.sha256`, and its matching `flow-release.mjs` bootstrap,
-   plus `flow-browser-darwin-arm64.tar.gz` and its SHA-256 file, marked as latest.
-   Existing installations discover it automatically.
+3. On Apple Silicon macOS and Ubuntu 24.04 runners, the workflow builds the web
+   app and native dependencies, verifies a private Node distribution against its
+   official checksum, and packages the runtime with Flow. Desktop apps install
+   this release on first launch, so publish it before a desktop release that
+   needs it.
+4. It publishes a `flow-vX.Y.Z` GitHub release, marked as latest, with
+   `flow-browser-darwin-arm64.tar.gz`, `flow-browser-linux-x64.tar.gz` and their
+   SHA-256 files, `flow-source.tar.gz` with its checksum and matching
+   `flow-release.mjs` bootstrap, and `install-cli.sh`, the installer pinned to
+   that version for the Cloud dashboard. The same files are mirrored under a
+   `flow-cloud-cli-vX.Y.Z` tag (not latest) so CLIs installed from the dashboard
+   before the feeds were unified receive the update that moves them onto
+   `flow-v*`. Existing installations discover the release automatically.
 5. Verify installation on supported targets and the transition from the preceding
    release before broadly sharing the installer.
 

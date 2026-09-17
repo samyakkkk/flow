@@ -8,7 +8,7 @@ and installing from a checkout. Desktop downloads are in the
 
 ## Requirements
 
-- An Apple Silicon Mac running macOS 15 or newer, with an internet connection.
+- An Apple Silicon Mac running macOS 15 or newer, or Ubuntu 24.04-compatible Linux x64, with an internet connection.
 - A supported provider account; configure its CLI and login in Flow's provider settings.
 
 Flow includes its own Node runtime and ready-built dependencies. You do not need
