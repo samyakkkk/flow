@@ -106,13 +106,14 @@ is destructive, and a `mv` does not even touch most of the damage.**
    absolute `gitdir:` paths in both directions. Moving the tree breaks every one of them until
    `git worktree repair` runs from each source repository — and checkpoint refs live in those
    trees.
-3. **Hook identity is derived from the state directory.** A connected repo's project key is
+3. **Binding identity is derived from the state directory.** A bound folder's project key is
    `agents-<hash(stateDir + ':' + brainId)>`
-   ([`agent-connector.mjs:189-190`](../../flow-t3/shared/bin/harness/agent-connector.mjs)). A
-   new path is a new key, orphaning that project's spool and forcing every repo's hook lines to
-   be re-materialized — and Codex's hook line is trust-hashed and must never change
-   ([`materialize.mjs:540`](../../flow-t3/shared/bin/lib/materialize.mjs)), so rewriting it
-   silently revokes Codex trust everywhere.
+   ([`resolve.mjs`](../../flow-t3/shared/bin/harness/resolve.mjs)), and the machine registry
+   lists the state directories it may ask about Brains. A new path is a new key, orphaning
+   every project's capture spool and every binding in `~/.flow/config.json`. Hook and MCP
+   lines in the user's tool configuration carry no project and survive a move, but they are
+   trust-hashed by Codex and must never change
+   ([`materialize.mjs`](../../flow-t3/shared/bin/lib/materialize.mjs), `hookCmd`).
 
 Absolute paths are persisted in the event log and provider settings too, so a projection rebuild
 would not repair them either. A move, if ever genuinely required, is a migration project with a

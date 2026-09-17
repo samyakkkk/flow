@@ -1554,7 +1554,6 @@ function ImportStep({
         ? selection.filter((candidate) => importedProjects.has(candidate.key)).length
         : 0;
     let importedThreadCount = 0;
-    let skippedThreadCount = 0;
     const refreshEnvironments = new Set<EnvironmentId>();
     for (const candidate of selection) {
       const { environmentId } = candidate;
@@ -1636,18 +1635,17 @@ function ImportStep({
         return;
       }
       if (threadImportResult._tag === "Success") {
+        // Threads the importer skips are unreadable history the user cannot
+        // act on; the project is done with whatever was importable.
         importedThreadCount += threadImportResult.value.importedCount;
-        skippedThreadCount += threadImportResult.value.skippedCount;
         if (threadImportResult.value.importedCount > 0) {
           projectsWithImportedHistoryRef.current.set(
             candidate.key,
             scopeProjectRef(environmentId, projectId),
           );
         }
-        if (threadImportResult.value.skippedCount === 0) {
-          importedProjectsCount += 1;
-          importedProjects.set(candidate.key, scopeProjectRef(environmentId, projectId));
-        }
+        importedProjectsCount += 1;
+        importedProjects.set(candidate.key, scopeProjectRef(environmentId, projectId));
       } else if (!isAtomCommandInterrupted(threadImportResult)) {
         projectAttempts.delete(candidate.key);
         refreshEnvironments.add(environmentId);
@@ -1658,21 +1656,12 @@ function ImportStep({
     }
     setIsImporting(false);
     if (importedProjectsCount < selection.length) {
-      if (importedThreadCount > 0 && skippedThreadCount > 0) {
-        setImportError(
-          `Imported ${importedThreadCount} ${importedThreadCount === 1 ? "thread" : "threads"}. ${skippedThreadCount} ${skippedThreadCount === 1 ? "thread" : "threads"} could not be imported.`,
-        );
-      } else if (skippedThreadCount > 0) {
-        setImportError(
-          `${skippedThreadCount} ${skippedThreadCount === 1 ? "thread could" : "threads could"} not be imported.`,
-        );
-      } else if (importedThreadCount > 0) {
-        setImportError(
-          `Imported ${importedThreadCount} ${importedThreadCount === 1 ? "thread" : "threads"}. Some thread history could not be imported.`,
-        );
-      } else {
-        setImportError("Could not import thread history.");
-      }
+      const failed = selection.length - importedProjectsCount;
+      setImportError(
+        importedThreadCount > 0
+          ? `Imported ${importedThreadCount} ${importedThreadCount === 1 ? "thread" : "threads"}. ${failed} ${failed === 1 ? "project" : "projects"} could not be added. Retry to finish setup.`
+          : `${failed} ${failed === 1 ? "project" : "projects"} could not be added. Retry to finish setup.`,
+      );
       return;
     }
     finishAfterImport();
