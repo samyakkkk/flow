@@ -3,7 +3,12 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { collect, orderForUpload, publishReleaseAssets } from "./publish-release-assets.mjs";
+import {
+  collect,
+  orderForUpload,
+  publishReleaseAssets,
+  sha256,
+} from "./publish-release-assets.mjs";
 
 const { test } = NodeTest;
 const assert = NodeAssert;
@@ -16,14 +21,17 @@ function fakeGitHub({ release = null, failUploads = {} } = {}) {
   const gh = async (args) => {
     calls.push(args.join(" "));
     const [noun, verb, tag] = args;
-    if (noun !== "release") throw Error(`unexpected ${noun}`);
-    if (verb === "view") {
+    if (noun === "api") {
       if (!gh.release) throw Error("release not found");
       return JSON.stringify({
-        isDraft: gh.release.isDraft,
-        assets: [...gh.release.assets].map(([name, size]) => ({ name, size })),
+        draft: gh.release.isDraft,
+        assets: [...gh.release.assets].map(([name, digest]) => ({
+          name,
+          ...(digest === null ? {} : { digest: `sha256:${digest}` }),
+        })),
       });
     }
+    if (noun !== "release") throw Error(`unexpected ${noun}`);
     if (verb === "create") {
       gh.release = { isDraft: !args.includes("--prerelease"), assets: new Map() };
       return "";
@@ -34,7 +42,7 @@ function fakeGitHub({ release = null, failUploads = {} } = {}) {
         failUploads[name] -= 1;
         throw Error("HTTP 500: Error saving asset");
       }
-      gh.release.assets.set(name, sizes.get(name));
+      gh.release.assets.set(name, digests.get(name));
       return "";
     }
     if (verb === "delete-asset") {
@@ -57,7 +65,12 @@ const sizes = new Map([
   ["Flow-x64.dmg", 200],
   ["latest-mac.yml", 1],
 ]);
-const files = [...sizes].map(([name, size]) => ({ path: `/build/${name}`, size }));
+const digests = new Map([...sizes.keys()].map((name) => [name, `digest-of-${name}`]));
+const files = [...sizes].map(([name, size]) => ({
+  path: `/build/${name}`,
+  size,
+  digest: digests.get(name),
+}));
 
 test("a versioned release stays a draft until it holds exactly what was built", async () => {
   const gh = fakeGitHub();
@@ -74,13 +87,13 @@ test("a versioned release stays a draft until it holds exactly what was built", 
   assert.ok(gh.calls.at(-1).includes("--draft=false"));
 });
 
-test("a rerun uploads only what is missing or the wrong size", async () => {
+test("a rerun uploads only what is missing or changed", async () => {
   const gh = fakeGitHub({
     release: {
       isDraft: true,
       assets: [
-        ["Flow-arm64.dmg", 100],
-        ["Flow-x64.dmg", 7],
+        ["Flow-arm64.dmg", digests.get("Flow-arm64.dmg")],
+        ["Flow-x64.dmg", "digest-of-a-truncated-upload"],
       ],
     },
   });
@@ -92,7 +105,7 @@ test("a rerun uploads only what is missing or the wrong size", async () => {
     sleep: async () => {},
   });
   const uploaded = gh.calls.filter((call) => call.startsWith("release upload"));
-  // The complete one is left alone; the truncated one is replaced.
+  // The identical one is left alone; the one whose contents differ is replaced.
   assert.deepEqual(
     uploaded.map((call) => call.split(" ")[3]),
     ["/build/Flow-x64.dmg", "/build/latest-mac.yml"],
@@ -132,8 +145,8 @@ test("the rolling feed gains the new files before stale ones are removed", async
     release: {
       isDraft: false,
       assets: [
-        ["Flow-0.9-arm64.dmg", 5],
-        ["latest-mac.yml", 9],
+        ["Flow-0.9-arm64.dmg", "old"],
+        ["latest-mac.yml", "the-previous-release"],
       ],
     },
   });
@@ -166,7 +179,7 @@ test("updater manifests are uploaded last", async () => {
   assert.deepEqual(ordered, ["Flow.dmg", "Flow.AppImage", "latest-mac.yml", "latest-linux.yml"]);
 });
 
-test("collect reads sizes from disk and skips directories", async (t) => {
+test("collect reads what is on disk and skips directories", async (t) => {
   const directory = await NodeFSP.mkdtemp(join(NodeOS.tmpdir(), "flow-assets-"));
   t.after(() => NodeFSP.rm(directory, { recursive: true, force: true }));
   await NodeFSP.writeFile(join(directory, "Flow.dmg"), "installer");
@@ -179,4 +192,38 @@ test("collect reads sizes from disk and skips directories", async (t) => {
       ["latest-mac.yml", 1],
     ],
   );
+});
+
+test("a manifest of unchanged size is still uploaded, because its contents differ", async () => {
+  // Every release's latest-mac.yml is the same number of bytes. Comparing size
+  // left a rolling feed advertising the previous version while holding the new
+  // installers, so nobody was ever offered the update.
+  const gh = fakeGitHub({
+    release: { isDraft: false, assets: [["latest-mac.yml", "the-previous-release"]] },
+  });
+  await publishReleaseAssets({
+    tag: "flow-desktop-latest",
+    files: files.filter((file) => file.path.endsWith("latest-mac.yml")),
+    rolling: true,
+    gh,
+    log: () => {},
+    sleep: async () => {},
+  });
+  assert.ok(gh.calls.some((call) => call.includes("release upload")));
+  assert.equal(gh.release.assets.get("latest-mac.yml"), digests.get("latest-mac.yml"));
+});
+
+test("an asset GitHub stores no digest for is uploaded again", async () => {
+  const gh = fakeGitHub({ release: { isDraft: true, assets: [["Flow-arm64.dmg", null]] } });
+  await publishReleaseAssets({ tag: "t", files, gh, log: () => {}, sleep: async () => {} });
+  assert.ok(gh.calls.some((call) => call.includes("/build/Flow-arm64.dmg")));
+});
+
+test("collect hashes what it finds", async (t) => {
+  const directory = await NodeFSP.mkdtemp(join(NodeOS.tmpdir(), "flow-digest-"));
+  t.after(() => NodeFSP.rm(directory, { recursive: true, force: true }));
+  await NodeFSP.writeFile(join(directory, "Flow.dmg"), "installer");
+  const [file] = await collect(directory);
+  assert.equal(file.digest, await sha256(join(directory, "Flow.dmg")));
+  assert.match(file.digest, /^[a-f0-9]{64}$/);
 });
