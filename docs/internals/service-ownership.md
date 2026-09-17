@@ -106,13 +106,14 @@ is destructive, and a `mv` does not even touch most of the damage.**
    absolute `gitdir:` paths in both directions. Moving the tree breaks every one of them until
    `git worktree repair` runs from each source repository — and checkpoint refs live in those
    trees.
-3. **Hook identity is derived from the state directory.** A connected repo's project key is
+3. **Binding identity is derived from the state directory.** A bound folder's project key is
    `agents-<hash(stateDir + ':' + brainId)>`
-   ([`agent-connector.mjs:189-190`](../../flow-t3/shared/bin/harness/agent-connector.mjs)). A
-   new path is a new key, orphaning that project's spool and forcing every repo's hook lines to
-   be re-materialized — and Codex's hook line is trust-hashed and must never change
-   ([`materialize.mjs:540`](../../flow-t3/shared/bin/lib/materialize.mjs)), so rewriting it
-   silently revokes Codex trust everywhere.
+   ([`resolve.mjs`](../../flow-t3/shared/bin/harness/resolve.mjs)), and the machine registry
+   lists the state directories it may ask about Brains. A new path is a new key, orphaning
+   every project's capture spool and every binding in `~/.flow/config.json`. Hook and MCP
+   lines in the user's tool configuration carry no project and survive a move, but they are
+   trust-hashed by Codex and must never change
+   ([`materialize.mjs`](../../flow-t3/shared/bin/lib/materialize.mjs), `hookCmd`).
 
 Absolute paths are persisted in the event log and provider settings too, so a projection rebuild
 would not repair them either. A move, if ever genuinely required, is a migration project with a
@@ -148,9 +149,15 @@ already owns the data — so an attach endpoint would add network surface withou
 The desktop reuses that path — it runs the service's own backend entry as
 `pair --base-dir <dataHome> --admin --json` (`DesktopAttachedBackend.ts:156-202`) — asking for
 `AuthAdministrativeScopes` because an attached client still has to manage connections
-(`pair.ts:427-446`, flag at `:470-472`). `--admin` widens the scope, not who may ask. The
-credential is minted fresh on every `currentConfig` read, so single-use is fine and a renderer
-reload simply mints another; the renderer's bootstrap-token exchange is unchanged.
+(`pair.ts:427-446`, flag at `:470-472`). `--admin` widens the scope, not who may ask.
+
+Minting spawns a process, and the bridge that hands the renderer its backend address
+(`getLocalEnvironmentBootstraps`) is a _synchronous_ IPC channel: an async Effect inside it is an
+uncaught `AsyncFiberError` in the main process. So the attached instance's `currentConfig` carries
+no token and stays synchronous, and exposes `mintBootstrapCredential` instead. The renderer never
+sees the credential: `DesktopLocalEnvironmentAuth` (the bearer every renderer request carries,
+fetched over the async `getLocalEnvironmentBearerToken` channel) mints one there when the config
+has none, exchanges it once, and caches the bearer exactly as it does the legacy token.
 
 ## The attached desktop backend
 
@@ -166,7 +173,10 @@ the supervisor's own 120 s readiness deadline (`:278-289`), so a slow first boot
 broken service. A failed attach never retries itself: it parks one of four reasons —
 `not-installed`, `stopped`, `unreachable`, `incompatible` (`:132-151`) — and the recovery surface
 drives the retry through `onPreflightFailed` (`:325-349`). It may offer a retry and an
-open-in-browser escape, but never downgrades the service and never spawns a private child server,
+open-in-browser escape. A `stopped` service is started once per session before the screen appears,
+through the service manager when a unit is loaded and otherwise by running the service's own
+launcher with the runtime the registry recorded (`config.node`), which takes the launcher and
+supervisor locks itself. The desktop never downgrades the service and never spawns a private child server,
 which would collide with the owner's locks on the first write. The private child survives behind
 `FLOW_DESKTOP_LEGACY_BACKEND=1` for exactly one release as the rollback
 ([`DesktopBackendPool.ts:364-367`](../../apps/desktop/src/backend/DesktopBackendPool.ts)).
@@ -210,7 +220,7 @@ address, requests are served from the web client the artifact already ships at
 for assets, 403 for anything resolving outside that directory, and 503 JSON for `/api`, `/ws`,
 `/oauth` and `/.well-known` so a fetch never receives HTML. That fallback is the only reason the
 recovery surface can render at all — there is no server to fetch it from — and the address
-accessors are plain `Ref` reads, so resolving the target never mints a credential.
+accessors are plain `Ref` reads.
 
 ## Public and private
 

@@ -46,6 +46,7 @@ export const GET_ADVERTISED_ENDPOINTS_CHANNEL = "desktop:get-advertised-endpoint
 export const GET_FLOW_SERVICE_STATUS_CHANNEL = "desktop:get-flow-service-status";
 export const STOP_FLOW_SERVICE_CHANNEL = "desktop:stop-flow-service";
 export const RESTART_FLOW_SERVICE_CHANNEL = "desktop:restart-flow-service";
+export const START_FLOW_SERVICE_CHANNEL = "desktop:start-flow-service";
 export const RETRY_FLOW_SERVICE_ATTACH_CHANNEL = "desktop:retry-flow-service-attach";
 export const GET_FLOW_SERVICE_ADOPTION_CHANNEL = "desktop:get-flow-service-adoption";
 export const OPEN_FLOW_SERVICE_IN_BROWSER_CHANNEL = "desktop:open-flow-service-in-browser";

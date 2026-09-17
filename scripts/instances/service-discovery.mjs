@@ -66,6 +66,7 @@ export async function discoverService({
     environmentId: config.id,
     dataHome: config.home,
     runningCode: config.code,
+    ...(typeof config.node === "string" && config.node ? { nodePath: config.node } : {}),
   };
   if (!runtime) return { ...identity, status: "stopped" };
   let url;

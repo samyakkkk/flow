@@ -64,7 +64,15 @@ export const make = Effect.gen(function* () {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }
         const config = configOption.value;
-        const credential = config.bootstrap.desktopBootstrapToken;
+        // The attached Flow service carries no token in its config (that read
+        // is synchronous and minting spawns a process); it mints a single-use
+        // credential on request instead. Exchanged once here, cached as a
+        // bearer like the legacy token.
+        const credential =
+          config.bootstrap.desktopBootstrapToken ||
+          (primary?.mintBootstrapCredential
+            ? Option.getOrUndefined(yield* primary.mintBootstrapCredential)
+            : undefined);
         if (!credential) {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }

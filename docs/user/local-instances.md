@@ -22,8 +22,11 @@ flow stop
 flow restart
 ```
 
-`flow` opens the existing app or starts it and opens a pairing link. You do not
-need to remember its port. Closing the terminal or browser leaves it running.
+`flow` opens the existing app or starts it. On a Mac with the Flow desktop app
+installed it opens that app; otherwise it opens a pairing link in your browser
+(`flow --browser` forces the browser). You do not need to remember its port.
+Closing the terminal, browser, or app leaves it running. Opening the desktop app
+while the service is stopped starts it.
 `--no-open` prints the pairing link instead. Restart can interrupt active turns;
 it preserves application data. Provider CLI sign-ins remain shared.
 

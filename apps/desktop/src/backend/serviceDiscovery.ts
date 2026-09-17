@@ -32,6 +32,8 @@ export interface ServiceDiscoveryResult {
   readonly environmentId?: string;
   readonly dataHome?: string;
   readonly runningCode?: string;
+  /** The runtime the launcher recorded for this instance; absent on older registries. */
+  readonly nodePath?: string;
   // The server's own HTTP origin, reported by a live supervisor's `/status`.
   // Present only once the service reaches `ready`.
   readonly serverOrigin?: string;
@@ -183,6 +185,7 @@ export const discoverService = async ({
     environmentId: config.id,
     dataHome: config.home,
     runningCode: config.code,
+    ...(typeof config.node === "string" && config.node ? { nodePath: config.node } : {}),
   } as const;
   if (!isRecord(runtime)) return { ...identity, status: "stopped" };
   let url: URL;

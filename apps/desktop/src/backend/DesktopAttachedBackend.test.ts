@@ -101,7 +101,7 @@ const ready = (origin: string): ServiceDiscoveryResult => ({
 });
 
 describe("desktop attached backend", () => {
-  it.effect("attaches to a compatible service and mints a credential per read", () =>
+  it.effect("attaches to a compatible service and mints a credential per request", () =>
     Effect.gen(function* () {
       const origin = yield* Effect.promise(() => descriptorServer(readyDescriptor()));
       const { instance, readyUrls, mints } = yield* makeInstance({ discoveries: [ready(origin)] });
@@ -115,17 +115,20 @@ describe("desktop attached backend", () => {
       assert.isTrue(instance.detached);
       assert.deepEqual(readyUrls, [`${origin}/`]);
 
-      const first = yield* instance.currentConfig;
+      // The bridge reads the config over a synchronous IPC channel, so it
+      // must be runnable with runSync: no minting inside it.
+      const first = Effect.runSync(instance.currentConfig);
       assert.isTrue(Option.isSome(first));
       const config = Option.getOrThrow(first);
       assert.equal(config.httpBaseUrl.origin, origin);
       assert.isTrue(Option.isNone(config.preflightFailure));
-      assert.equal(config.bootstrap.desktopBootstrapToken, "credential-1");
+      assert.equal(config.bootstrap.desktopBootstrapToken, "");
+      assert.deepEqual(mints, []);
 
-      const second = Option.getOrThrow(yield* instance.currentConfig);
-      // Single-use credentials: every read mints its own against the
+      // Single-use credentials: every request mints its own against the
       // service's own data home.
-      assert.equal(second.bootstrap.desktopBootstrapToken, "credential-2");
+      assert.deepEqual(yield* instance.mintBootstrapCredential!, Option.some("credential-1"));
+      assert.deepEqual(yield* instance.mintBootstrapCredential!, Option.some("credential-2"));
       assert.deepEqual(mints, [DATA_HOME, DATA_HOME]);
 
       // The renderer protocol asks for the address on every request, so it
@@ -264,9 +267,10 @@ describe("desktop attached backend", () => {
       assert.isFalse(snapshot.desiredRunning);
       assert.isFalse(snapshot.ready);
       assert.isTrue(Option.isNone(snapshot.activePid));
-      // The service is still there: the config (and a fresh credential for it)
-      // is still readable after a stop.
+      // The service is still there: the config is still readable after a stop
+      // and a credential can still be minted for it.
       assert.isTrue(Option.isSome(yield* instance.currentConfig));
+      assert.isTrue(Option.isSome(yield* instance.mintBootstrapCredential!));
       assert.equal(mints.length, 1);
       assert.isFalse(yield* instance.waitForReady(Duration.millis(10)));
     }),

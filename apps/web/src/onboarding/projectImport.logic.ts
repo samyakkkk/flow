@@ -212,3 +212,53 @@ export function matchGithubProjects(
   }
   return [...matches.values()];
 }
+
+/** A folder offered for a remote Brain source counts only when its origin is that repository. */
+export function folderMatchesRemoteSource(
+  repository: string,
+  origin: string | null | undefined,
+): boolean {
+  const key = githubRepositoryKey(repository);
+  const originKey = origin ? githubRepositoryKey(origin) : null;
+  return key !== null && originKey !== null && key === originKey;
+}
+
+export interface RemoteBrainSourceMatch {
+  /** The remote Brain's repository URL, as the Brain reports it. */
+  readonly repository: string;
+  readonly candidates: readonly AgentSessionProjectCandidate[];
+}
+
+/**
+ * Line a connected remote Brain's indexed repositories up with local checkouts
+ * so onboarding can preselect them. Sources the client cannot match — a repo
+ * that is not cloned here, or a non-GitHub source — come back as `unmatched`
+ * for the folder picker. Sources that resolve to the same GitHub repository are
+ * reported once.
+ */
+export function matchRemoteBrainSources(
+  repositories: readonly string[],
+  candidates: readonly AgentSessionProjectCandidate[],
+  projects: readonly { path: string; title: string; projectId?: ProjectId | undefined }[],
+  chosenFolders: readonly string[] = [],
+): { matched: readonly RemoteBrainSourceMatch[]; unmatched: readonly string[] } {
+  const matched: RemoteBrainSourceMatch[] = [];
+  const unmatched: string[] = [];
+  const seen = new Set<string>();
+  for (const repository of repositories) {
+    const key = githubRepositoryKey(repository);
+    if (key === null) {
+      if (!seen.has(repository)) {
+        seen.add(repository);
+        unmatched.push(repository);
+      }
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found = matchGithubProjects(repository, candidates, projects, chosenFolders);
+    if (found.length === 0) unmatched.push(repository);
+    else matched.push({ repository, candidates: found });
+  }
+  return { matched, unmatched };
+}

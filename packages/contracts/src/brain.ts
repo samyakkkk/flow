@@ -205,6 +205,8 @@ export const BrainCommand = Schema.Union([
     endpoint: Schema.String,
     email: Schema.String,
     password: Schema.String,
+    /** Local CLI that curates this machine's conversation notes; defaults to the remote Brain's. */
+    cli: Schema.optionalKey(BrainCli),
   }),
   Schema.Struct({ action: Schema.Literal("disconnectCloud"), workspaceId: Schema.String }),
   Schema.Struct({

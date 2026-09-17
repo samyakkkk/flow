@@ -103,6 +103,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getFlowServiceStatus: () => ipcRenderer.invoke(IpcChannels.GET_FLOW_SERVICE_STATUS_CHANNEL),
   stopFlowService: () => ipcRenderer.invoke(IpcChannels.STOP_FLOW_SERVICE_CHANNEL),
   restartFlowService: () => ipcRenderer.invoke(IpcChannels.RESTART_FLOW_SERVICE_CHANNEL),
+  startFlowService: () => ipcRenderer.invoke(IpcChannels.START_FLOW_SERVICE_CHANNEL),
   retryFlowServiceAttach: () => ipcRenderer.invoke(IpcChannels.RETRY_FLOW_SERVICE_ATTACH_CHANNEL),
   getFlowServiceAdoption: () => ipcRenderer.invoke(IpcChannels.GET_FLOW_SERVICE_ADOPTION_CHANNEL),
   openFlowServiceInBrowser: () =>

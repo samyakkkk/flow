@@ -282,10 +282,15 @@ export interface DesktopBackendInstance {
   readonly start: Effect.Effect<void>;
   readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
+  // Mints a single-use bootstrap credential for this instance's server on
+  // request; `DesktopLocalEnvironmentAuth` exchanges it for the renderer's
+  // bearer. Only backends that cannot carry a token in their config (the
+  // attached Flow service) implement it: `currentConfig` must stay synchronous
+  // because the renderer bridge reads it over a sync IPC channel.
+  readonly mintBootstrapCredential?: Effect.Effect<Option.Option<string>>;
   // Where this instance's server currently answers, or None when it has none
   // (not started, or attach failed). Cheap and side-effect free on purpose:
-  // the `flow://app` protocol reads it on every request, and reading
-  // `currentConfig` instead would mint a pairing credential each time.
+  // the `flow://app` protocol reads it on every request.
   readonly httpBaseUrl?: Effect.Effect<Option.Option<URL>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   // Polls desiredRunning + the instance's own ready flag until the

@@ -98,6 +98,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import type { DesktopFlowServiceActionResult } from "@t3tools/contracts";
+import * as FlowService from "./flowService.ts";
 import * as DesktopServiceAdoption from "./DesktopServiceAdoption.ts";
 import * as FlowServiceRecovery from "./flowServiceRecovery.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -236,6 +238,8 @@ type UnregisterAction =
     installation. */
 export interface AttachFailureRecovery {
   readonly adopt: () => Effect.Effect<DesktopServiceAdoption.AdoptionOutcome>;
+  /** Start an installed-but-stopped service (see `flowService.startFlowService`). */
+  readonly startService: () => Effect.Effect<DesktopFlowServiceActionResult>;
   readonly logStep: (step: Record<string, unknown>) => Effect.Effect<void>;
   /** Put the failure in front of the user. The window renders the recovery
       screen from the parked failure the bridge hands it; nothing is passed
@@ -260,6 +264,7 @@ export interface AttachFailureRecovery {
 export const makeAttachFailureHandler = Effect.fn("desktop.backendPool.makeAttachFailureHandler")(
   function* (recovery: AttachFailureRecovery) {
     const adoptionAttempted = yield* Ref.make(false);
+    const startAttempted = yield* Ref.make(false);
 
     const handle = Effect.fn("desktop.backendPool.primaryAttachFailed")(function* (
       failure: DesktopBackendManager.PreflightFailure,
@@ -269,6 +274,23 @@ export const makeAttachFailureHandler = Effect.fn("desktop.backendPool.makeAttac
         reason: failure.reason,
         kind: failure.attach?.kind ?? "unknown",
       });
+      // A stopped service is started, once per session: the app opening is
+      // the user asking for Flow, and the service layer owns the start (the
+      // service manager or the launcher). If that does not work, the recovery
+      // screen says so and offers the same action by hand.
+      if (failure.attach?.kind === "stopped" && !(yield* Ref.get(startAttempted))) {
+        yield* Ref.set(startAttempted, true);
+        const started = yield* recovery.startService();
+        yield* recovery.logStep({
+          event: "service-start",
+          ok: started.ok,
+          reason: started.reason,
+          detail: started.detail,
+        });
+        if (started.ok) return true;
+        yield* recovery.surface();
+        return false;
+      }
       if (failure.attach?.kind !== "not-installed" || (yield* Ref.get(adoptionAttempted))) {
         yield* recovery.surface();
         return false;
@@ -297,7 +319,10 @@ export const makeAttachFailureHandler = Effect.fn("desktop.backendPool.makeAttac
     // An explicit retry from the recovery screen is the user saying "try the
     // whole thing again", including an adoption that failed the first time.
     // Automatic retries stay capped at one adoption per session.
-    const allowAdoption = Ref.set(adoptionAttempted, false);
+    const allowAdoption = Effect.all([
+      Ref.set(adoptionAttempted, false),
+      Ref.set(startAttempted, false),
+    ]).pipe(Effect.asVoid);
 
     return { handle, allowAdoption };
   },
@@ -394,6 +419,17 @@ export const layer = Layer.effect(
           executablePath: process.execPath,
           flowReleaseScriptPath: environment.flowReleaseScriptPath,
         }),
+      startService: () =>
+        Effect.promise(() =>
+          FlowService.startFlowService({
+            host: process.platform,
+            uid: typeof process.getuid === "function" ? process.getuid() : 0,
+            homeDirectory: environment.homeDirectory,
+            // An older registry has no recorded runtime; this binary is a Node 24.
+            fallbackNodePath: process.execPath,
+            fallbackNodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+          }),
+        ),
       logStep: (step) => logBackendPoolWarning("flow service attach recovery", step),
       // The recovery screen is the surface. Opening the window is all this
       // side has to do: the bridge already carries the parked failure, so the

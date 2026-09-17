@@ -16,9 +16,12 @@
 // service's own backend entry as `pair --base-dir <dataHome> --admin --json`,
 // which opens the service's auth database from a second process and mints an
 // administrative pairing credential. Trust is the filesystem, the same model
-// the `flow` CLI already uses. It is minted fresh on every `currentConfig`
-// read, so a single-use credential is fine and a renderer reload simply mints
-// another.
+// the `flow` CLI already uses. Minting spawns a process, so it cannot happen
+// inside `currentConfig`: the renderer bridge reads that over a *synchronous*
+// IPC channel, and an async Effect there is an uncaught AsyncFiberError in the
+// main process. Instead the config carries no token and `mintBootstrapCredential`
+// mints one on request; `DesktopLocalEnvironmentAuth` exchanges it for the
+// bearer the renderer uses on every request, so single-use is fine.
 
 import * as NodeChildProcess from "node:child_process";
 
@@ -397,24 +400,30 @@ export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.ma
       // carries it. There is no server to dial, hence the placeholder.
       return Option.some(buildConfig(new URL("http://127.0.0.1/"), "", parked));
     }
-    // Minted per read: the credential is single-use, and every read (bridge
-    // hand-off, renderer reload, bearer bootstrap) wants its own. A mint
-    // failure degrades to "no credential", which consumers already treat as
-    // an unconfigured backend rather than a crash.
-    const credential = yield* mintCredential({ dataHome: current.value.dataHome }).pipe(
+    // No credential here: this read must stay synchronous (see the header).
+    // `DesktopLocalEnvironmentAuth` mints one through `mintBootstrapCredential`
+    // when it needs a bearer for the renderer.
+    return Option.some(buildConfig(current.value.httpBaseUrl, "", Option.none()));
+  }).pipe(Effect.withSpan("desktop.attachedBackend.currentConfig"));
+
+  // One single-use administrative credential per call. A mint failure
+  // degrades to None, which the bearer provider reports as an unconfigured
+  // backend rather than a crash.
+  const mintBootstrapCredential = Effect.gen(function* () {
+    const current = yield* Ref.get(attached);
+    if (Option.isNone(current)) return Option.none<string>();
+    return yield* mintCredential({ dataHome: current.value.dataHome }).pipe(
+      Effect.map(Option.some),
       Effect.catch((error) =>
         logWarning("could not mint a pairing credential for the attached service", {
           detail: error.detail,
-        }).pipe(Effect.as("")),
+        }).pipe(Effect.as(Option.none<string>())),
       ),
     );
-    return Option.some(buildConfig(current.value.httpBaseUrl, credential, Option.none()));
-  }).pipe(Effect.withSpan("desktop.attachedBackend.currentConfig"));
+  }).pipe(Effect.withSpan("desktop.attachedBackend.mintBootstrapCredential"));
 
-  // The attached service's address, read straight off the attach result. This
-  // deliberately does not go through `currentConfig`: that mints a single-use
-  // pairing credential per read, and the renderer protocol asks for the target
-  // on every request.
+  // The attached service's address, read straight off the attach result; the
+  // renderer protocol asks for the target on every request.
   const httpBaseUrl = Ref.get(attached).pipe(
     Effect.map(Option.map((current) => current.httpBaseUrl)),
   );
@@ -454,6 +463,7 @@ export const makeAttachedBackendInstance = Effect.fn("desktop.attachedBackend.ma
     start,
     stop,
     currentConfig,
+    mintBootstrapCredential,
     httpBaseUrl,
     snapshot,
     waitForReady,

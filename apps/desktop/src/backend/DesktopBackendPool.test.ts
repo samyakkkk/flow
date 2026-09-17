@@ -235,12 +235,24 @@ describe("DesktopBackendPool", () => {
       },
     } as const satisfies DesktopServiceAdoption.AdoptionOutcome;
 
-    const makeHandler = (outcomes: DesktopServiceAdoption.AdoptionOutcome[]) =>
+    const makeHandler = (
+      outcomes: DesktopServiceAdoption.AdoptionOutcome[],
+      startResults: Array<{ ok: boolean }> = [{ ok: true }],
+    ) =>
       Effect.gen(function* () {
+        const starts = yield* Ref.make(0);
         const adoptions = yield* Ref.make(0);
         const surfaced = yield* Ref.make(0);
         const events: string[] = [];
         const recovery = yield* DesktopBackendPool.makeAttachFailureHandler({
+          startService: () =>
+            Ref.updateAndGet(starts, (count) => count + 1).pipe(
+              Effect.map((count) => ({
+                ok: startResults[count - 1]?.ok ?? true,
+                reason: null,
+                detail: null,
+              })),
+            ),
           adopt: () =>
             Ref.updateAndGet(adoptions, (count) => count + 1).pipe(
               Effect.map((count) => outcomes[count - 1] ?? adopted),
@@ -255,6 +267,7 @@ describe("DesktopBackendPool", () => {
           handle: recovery.handle,
           allowAdoption: recovery.allowAdoption,
           adoptions,
+          starts,
           surfaced,
           events,
         };
@@ -312,18 +325,54 @@ describe("DesktopBackendPool", () => {
       }),
     );
 
+    const stopped = {
+      reason: "The Flow service is not running.",
+      fatal: true,
+      attach: { kind: "stopped", detail: "Service status: stopped." },
+    } as const;
+
+    it.effect("starts a stopped service once, then shows the recovery screen", () =>
+      Effect.gen(function* () {
+        const { handle, allowAdoption, adoptions, starts, surfaced, events } = yield* makeHandler(
+          [],
+          [{ ok: true }, { ok: false }],
+        );
+
+        // A successful start asks the attached instance to try again.
+        assert.isTrue(yield* handle(stopped));
+        assert.equal(yield* Ref.get(starts), 1);
+        assert.equal(yield* Ref.get(adoptions), 0);
+        assert.equal(yield* Ref.get(surfaced), 0);
+        assert.deepEqual(events, ["attach-failed", "service-start"]);
+
+        // Still stopped after a start: not something a second automatic start
+        // would fix, so the screen appears with its manual start action.
+        assert.isFalse(yield* handle(stopped));
+        assert.equal(yield* Ref.get(starts), 1);
+        assert.equal(yield* Ref.get(surfaced), 1);
+
+        // An explicit retry allows one more automatic start; a failed start
+        // surfaces immediately.
+        yield* allowAdoption;
+        assert.isFalse(yield* handle(stopped));
+        assert.equal(yield* Ref.get(starts), 2);
+        assert.equal(yield* Ref.get(surfaced), 2);
+      }),
+    );
+
     it.effect("leaves other attach failures to the service layer", () =>
       Effect.gen(function* () {
-        const { handle, adoptions, surfaced } = yield* makeHandler([]);
+        const { handle, adoptions, starts, surfaced } = yield* makeHandler([]);
 
         assert.isFalse(
           yield* handle({
-            reason: "The Flow service is not running.",
+            reason: "The Flow service did not answer.",
             fatal: true,
-            attach: { kind: "stopped", detail: "Service status: stopped." },
+            attach: { kind: "unreachable", detail: "Timed out." },
           }),
         );
         assert.equal(yield* Ref.get(adoptions), 0);
+        assert.equal(yield* Ref.get(starts), 0);
         assert.equal(yield* Ref.get(surfaced), 1);
       }),
     );

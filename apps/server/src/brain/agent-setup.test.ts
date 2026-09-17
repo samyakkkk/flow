@@ -3,26 +3,25 @@ import { bindProjectWithAgentTools, manageAgentIntegration } from "./agent-setup
 import type { BrainAgentIntegration } from "@t3tools/contracts";
 const status: BrainAgentIntegration = {
   configured: false,
-  harnesses: [],
+  harnesses: ["claude", "codex"],
   detected: ["claude", "codex"],
   brainName: null,
   workspaceId: null,
   pendingCaptures: 0,
   message: "",
 };
-it("automatically connects detected tools after binding a new project", async () => {
+it("binds every checkout of a project to its chosen Brain after recording the choice", async () => {
   const events: string[] = [];
   const manage: typeof manageAgentIntegration = async (input) => {
-    events.push(input.operation);
-    if (input.operation === "configure") {
-      expect(input.harnesses).toEqual(["claude", "codex"]);
-      expect(input.workspaceId).toBe("brain");
-    }
+    events.push(`${input.operation}:${input.folder}`);
+    expect(input.operation).toBe("configure");
+    expect(input.workspaceId).toBe("brain");
+    expect(input.harnesses).toBeUndefined();
     return status;
   };
   await bindProjectWithAgentTools(
     {
-      folders: ["/project"],
+      folders: ["/one", "/two", "/one"],
       workspaceId: "brain",
       stateDir: "/state",
       bind: async () => {
@@ -31,37 +30,9 @@ it("automatically connects detected tools after binding a new project", async ()
     },
     manage,
   );
-  expect(events).toEqual(["status", "bind", "configure"]);
+  expect(events).toEqual(["bind", "configure:/one", "configure:/two"]);
 });
-it("revokes every checkout before switching and preserves its selected tools", async () => {
-  const events: string[] = [];
-  const manage: typeof manageAgentIntegration = async (input) => {
-    events.push(input.operation);
-    if (input.operation === "configure") expect(input.harnesses).toEqual(["codex"]);
-    return { ...status, configured: true, workspaceId: "old", harnesses: ["codex"] };
-  };
-  await bindProjectWithAgentTools(
-    {
-      folders: ["/one", "/two"],
-      workspaceId: "new",
-      stateDir: "/state",
-      bind: async () => {
-        events.push("bind");
-      },
-    },
-    manage,
-  );
-  expect(events).toEqual([
-    "status",
-    "status",
-    "remove",
-    "remove",
-    "bind",
-    "configure",
-    "configure",
-  ]);
-});
-it("disconnects tools without reinstalling when the Brain is removed", async () => {
+it("unbinds folders when the project's Brain is removed", async () => {
   const events: string[] = [];
   await bindProjectWithAgentTools(
     {
@@ -74,8 +45,8 @@ it("disconnects tools without reinstalling when the Brain is removed", async () 
     },
     async (input) => {
       events.push(input.operation);
-      return { ...status, configured: true, workspaceId: "old", harnesses: ["codex"] };
+      return { ...status, configured: true, workspaceId: "old" };
     },
   );
-  expect(events).toEqual(["status", "remove", "bind"]);
+  expect(events).toEqual(["bind", "remove"]);
 });

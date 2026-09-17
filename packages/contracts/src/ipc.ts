@@ -1285,6 +1285,7 @@ export interface DesktopBridge {
   getFlowServiceStatus?: () => Promise<DesktopFlowServiceStatus>;
   stopFlowService?: () => Promise<DesktopFlowServiceActionResult>;
   restartFlowService?: () => Promise<DesktopFlowServiceActionResult>;
+  startFlowService?: () => Promise<DesktopFlowServiceActionResult>;
   /** Re-runs the attached primary's attach. Never rejects. */
   retryFlowServiceAttach?: () => Promise<DesktopFlowServiceRecoveryResult>;
   getFlowServiceAdoption?: () => Promise<DesktopFlowServiceAdoption | null>;

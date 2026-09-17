@@ -101,9 +101,9 @@ export function FlowServiceRecoverySurface({
           return;
         }
         case "start-service": {
-          const restart = bridge?.restartFlowService;
-          if (!restart) return fail("This app cannot start the service.");
-          void restart().then(
+          const start = bridge?.startFlowService ?? bridge?.restartFlowService;
+          if (!start) return fail("This app cannot start the service.");
+          void start().then(
             (result) =>
               finish(
                 result.ok
