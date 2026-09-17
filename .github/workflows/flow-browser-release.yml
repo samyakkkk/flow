@@ -122,6 +122,8 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: [version, package]
     runs-on: ubuntu-24.04
+    # ~600 MB per release, uploaded twice; GitHub's upload service can be slow.
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:
@@ -130,6 +132,15 @@ jobs:
           pattern: flow-browser-release-*
           merge-multiple: true
           path: release-browser
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          sparse-checkout: scripts/publish-release-assets.mjs
+          sparse-checkout-cone-mode: false
+          path: release-scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
       - name: Publish stable browser release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -137,12 +148,12 @@ jobs:
           FLOW_TAG: ${{ needs.version.outputs.tag }}
           FLOW_COMMIT: ${{ needs.version.outputs.commit }}
         run: |
-          gh release create "$FLOW_TAG" release-browser/* \
-            --target "$FLOW_COMMIT" --title "Flow ${FLOW_TAG#flow-v}" \
-            --generate-notes --latest
+          set -euo pipefail
+          node release-scripts/scripts/publish-release-assets.mjs "$FLOW_TAG" release-browser \
+            --title "Flow ${FLOW_TAG#flow-v}" --target "$FLOW_COMMIT" --generate-notes --latest
           # CLIs installed from the dashboard before the feeds were unified only
           # watch this tag name. One update moves them onto flow-v*; drop this
           # mirror once no supported install predates the unification.
-          gh release create "flow-cloud-cli-v${FLOW_TAG#flow-v}" release-browser/* \
-            --target "$FLOW_COMMIT" --title "Flow ${FLOW_TAG#flow-v} (earlier Cloud CLI installs)" \
-            --notes "Same files as $FLOW_TAG, for CLIs installed from the dashboard before the feeds were unified." --latest=false
+          node release-scripts/scripts/publish-release-assets.mjs "flow-cloud-cli-v${FLOW_TAG#flow-v}" release-browser \
+            --title "Flow ${FLOW_TAG#flow-v} (earlier Cloud CLI installs)" --target "$FLOW_COMMIT" \
+            --notes "Same files as $FLOW_TAG, for CLIs installed from the dashboard before the feeds were unified."
