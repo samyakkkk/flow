@@ -1,6 +1,9 @@
 .flow-brain-experience { display: grid; width: 100%; max-width: 1152px; gap: 24px; margin: 0 auto; padding: 24px 32px; color: var(--foreground); font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif); }
 .flow-brain-notice, .flow-brain-error { margin: 0; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 30%, transparent); padding: 12px; color: var(--muted-foreground); font-size: 13px; }
 .flow-brain-error { border-color: color-mix(in srgb, var(--destructive) 30%, transparent); background: color-mix(in srgb, var(--destructive) 5%, transparent); color: var(--destructive); }
+.flow-brain-building-notice { display: flex; align-items: center; gap: 8px; border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); background: color-mix(in srgb, var(--primary) 6%, transparent); color: var(--foreground); }
+.flow-brain-spin { flex: 0 0 auto; animation: flow-brain-spin 1s linear infinite; }
+@keyframes flow-brain-spin { to { transform: rotate(360deg); } }
 .flow-brain-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); }
 .flow-brain-tabs > button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; outline: 0; background: transparent; padding: 12px 16px; color: var(--muted-foreground); cursor: pointer; font: inherit; font-size: 13px; }
 .flow-brain-tabs > button:hover { color: var(--foreground); }

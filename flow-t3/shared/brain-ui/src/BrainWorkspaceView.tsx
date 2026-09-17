@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, BrainCircuit, Network, PlusIcon } from "lucide-react";
+import { AlertTriangle, BrainCircuit, Loader2, Network, PlusIcon } from "lucide-react";
 import { BrainGraph } from "./BrainGraph.tsx";
 import type { BrainWorkspaceViewProps } from "./types.ts";
 
@@ -32,6 +32,12 @@ export function BrainWorkspaceView({
   return (
     <div className="flow-brain-experience">
       {toolbar}
+      {hasBrain && isIndexing && (
+        <p role="status" className="flow-brain-notice flow-brain-building-notice">
+          <Loader2 size={14} className="flow-brain-spin" aria-hidden="true" />
+          <span><strong>Your brain is building.</strong> This may take a few minutes.</span>
+        </p>
+      )}
       {snapshot.entities.length > 0 && connectionNotice && (
         <p role="status" className="flow-brain-notice">
           <strong>{connectionNotice.title}</strong> {connectionNotice.description}
