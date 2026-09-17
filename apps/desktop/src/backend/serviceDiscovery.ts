@@ -12,7 +12,8 @@
 // Discovery never starts, stops, migrates or repairs an installation. An
 // unreachable owner is not permission to start another server.
 
-import * as NodeFS from "node:fs/promises";
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -40,13 +41,40 @@ export interface ServiceDiscoveryResult {
   readonly reason?: string;
 }
 
+// The one Flow install on this machine, shared by the desktop apps, the `flow`
+// command and install.sh. Port of `resolveReleaseHome` in
+// `scripts/flow-release.mjs`; keep the folder order identical. The retired
+// Cloud CLI installed elsewhere, and its hooks and service unit record absolute
+// paths, so such an install is adopted where it is, never moved.
+export const FLOW_RELEASE_HOME_NAMES = ["flow-browser", "flow-cloud-cli"] as const;
+
+export const resolveFlowReleaseHome = ({
+  env = process.env,
+  homeDirectory = homedir(),
+  exists = NodeFS.existsSync,
+}: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDirectory?: string;
+  readonly exists?: (path: string) => boolean;
+} = {}): string => {
+  if (env.FLOW_RELEASE_HOME) return resolve(env.FLOW_RELEASE_HOME);
+  const share = join(homeDirectory, ".local/share");
+  const installed = FLOW_RELEASE_HOME_NAMES.find((name) => exists(join(share, name, "current")));
+  return join(share, installed ?? FLOW_RELEASE_HOME_NAMES[0]);
+};
+
+/** Hosts the Flow CLI is built for; mirrors the gate in `flow-release.mjs`.
+    Anywhere else there is no service to install, so the app keeps its own server. */
+export const flowServiceSupportsHost = (platform: string, arch: string): boolean =>
+  (platform === "darwin" && arch === "arm64") || (platform === "linux" && arch === "x64");
+
 // Where the desktop's service lives, and the single source of truth for it:
 // first-launch adoption installs into this registry (DesktopServiceAdoption)
 // and attaching reads from it, so the two can never point at different
-// installations.
+// installations. Whichever of the app or the CLI was installed first, both
+// resolve the same home and so share one service.
 //
-// The desktop's service is always the installed Flow *release*, which puts its
-// registry at `<FLOW_RELEASE_HOME>/instance-home` (`flow-release.mjs` defaults
+// The registry is `<release home>/instance-home` (`flow-release.mjs` defaults
 // FLOW_INSTANCE_HOME to exactly that before handing off to the launcher).
 // There is deliberately no fallback to `launcher.mjs`'s own
 // `~/.local/share/flow-app` default: that is the registry a *source checkout*
@@ -56,21 +84,20 @@ export interface ServiceDiscoveryResult {
 export const desktopServiceRegistryRoot = ({
   env = process.env,
   homeDirectory = homedir(),
+  exists = NodeFS.existsSync,
 }: {
   readonly env?: NodeJS.ProcessEnv;
   readonly homeDirectory?: string;
+  readonly exists?: (path: string) => boolean;
 } = {}): string =>
   resolve(
     env.FLOW_INSTANCE_HOME ||
-      join(
-        env.FLOW_RELEASE_HOME || join(homeDirectory, ".local/share/flow-browser"),
-        "instance-home",
-      ),
+      join(resolveFlowReleaseHome({ env, homeDirectory, exists }), "instance-home"),
   );
 
 const readJson = async (path: string): Promise<unknown> => {
   try {
-    return JSON.parse(await NodeFS.readFile(path, "utf8")) as unknown;
+    return JSON.parse(await NodeFSP.readFile(path, "utf8")) as unknown;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -177,7 +204,7 @@ export const discoverService = async ({
   // outside its instance directory. Only its absence disqualifies it, because
   // discovery must never invent a home it did not find.
   try {
-    await NodeFS.realpath(config.home);
+    await NodeFSP.realpath(config.home);
   } catch {
     return { status: "invalid", reason: "Service data directory is unavailable." };
   }

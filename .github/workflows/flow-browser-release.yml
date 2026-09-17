@@ -21,11 +21,12 @@ concurrency:
   queue: max
 
 jobs:
-  package:
-    runs-on: macos-15
-    timeout-minutes: 30
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v6
@@ -40,13 +41,35 @@ jobs:
         env:
           FLOW_VERSION: ${{ inputs.version }}
         run: node scripts/flow-release-version.mjs
+  package:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        # Desktop apps install this release on first launch, so every platform
+        # the desktop ships for that the CLI supports needs a bundle here.
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libexpat1-dev gettext cmake ninja-build
       - name: Test installer and launcher
-        run: node --test scripts/retire-legacy-flow.test.mjs scripts/flow-bootstrap.test.mjs scripts/prepare-browser-lockfile.test.mjs scripts/flow-bundle.test.mjs scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
+        if: runner.os == 'macOS'
+        run: node --test scripts/retire-legacy-flow.test.mjs scripts/flow-bootstrap.test.mjs scripts/prepare-browser-lockfile.test.mjs scripts/flow-bundle.test.mjs scripts/prepare-browser-native.test.mjs scripts/flow-release-version.test.mjs scripts/flow-release.test.mjs scripts/flow-cli.test.mjs scripts/instances/launcher.test.mjs scripts/instances/release-control.test.mjs scripts/instances/release-handoff.test.mjs
       - name: Prepare release source
+        shell: bash
         env:
-          FLOW_VERSION: ${{ steps.version.outputs.version }}
+          FLOW_VERSION: ${{ needs.version.outputs.version }}
         run: |
-          mkdir -p "$RUNNER_TEMP/flow-source"
+          mkdir -p "$RUNNER_TEMP/flow-source" release-browser
           git archive HEAD -- . ':(exclude).repos' | tar -xf - -C "$RUNNER_TEMP/flow-source"
           node --input-type=module - <<'JS'
           import { readFileSync, writeFileSync } from 'node:fs';
@@ -57,37 +80,69 @@ jobs:
             writeFileSync(file, JSON.stringify({...pkg, version: process.env.FLOW_VERSION}, null, 2) + '\n');
           }
           JS
-          mkdir -p release-browser
+      - name: Package release source and bootstrap
+        if: runner.os == 'macOS'
+        run: |
           cp "$RUNNER_TEMP/flow-source/scripts/flow-release.mjs" release-browser/flow-release.mjs
           tar --no-xattrs --no-acls -czf release-browser/flow-source.tar.gz -C "$RUNNER_TEMP/flow-source" .
           (cd release-browser && shasum -a 256 flow-source.tar.gz > flow-source.tar.gz.sha256)
-      - name: Build ready-to-run Apple Silicon package
+      - name: Build and verify ready-to-run package
         env:
-          FLOW_VERSION: ${{ steps.version.outputs.version }}
+          FLOW_VERSION: ${{ needs.version.outputs.version }}
         run: node scripts/build-browser-bundle.mjs "$RUNNER_TEMP/flow-source" "$GITHUB_WORKSPACE/release-browser" "$FLOW_VERSION"
+      - name: Verify CLI and Brain behavior with the bundled runtime
+        working-directory: ${{ runner.temp }}/flow-source
+        run: runtime/bin/node --test scripts/cli-brains.test.mjs flow-t3/shared/bin/test/*.test.mjs
+      - name: Smoke test installation beside another flow command
+        shell: bash
+        run: |
+          test_home="$RUNNER_TEMP/cli-user"
+          mkdir -p "$test_home/.local/bin" "$test_home/staging"
+          printf 'someone else owns this\n' > "$test_home/.local/bin/flow"
+          archive=$(find release-browser -name 'flow-browser-*.tar.gz' -print -quit)
+          digest=$(cut -d ' ' -f 1 "$archive.sha256")
+          tar -xzf "$archive" -C "$test_home/staging"
+          HOME="$test_home" "$test_home/staging/runtime/bin/node" "$test_home/staging/scripts/flow-release.mjs" install-bundle "$test_home/staging" "$digest"
+          test "$(cat "$test_home/.local/bin/flow")" = 'someone else owns this'
+          HOME="$test_home" "$test_home/.local/share/flow-browser/bin/flow" status
+      - name: Pin the dashboard installer to this release
+        if: runner.os == 'Linux'
+        env:
+          FLOW_VERSION: ${{ needs.version.outputs.version }}
+        # install-cloud.sh is the asset name the deployed dashboard may still fetch.
+        run: |
+          sed "s/__FLOW_CLI_VERSION__/$FLOW_VERSION/g" install.sh > release-browser/install-cli.sh
+          cp release-browser/install-cli.sh release-browser/install-cloud.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: flow-browser-release
+          name: flow-browser-release-${{ matrix.os }}
           path: release-browser/*
           if-no-files-found: error
   publish:
     if: github.event_name != 'pull_request'
-    needs: package
+    needs: [version, package]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: flow-browser-release
+          pattern: flow-browser-release-*
+          merge-multiple: true
           path: release-browser
       - name: Publish stable browser release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          FLOW_TAG: ${{ needs.package.outputs.tag }}
-          FLOW_COMMIT: ${{ needs.package.outputs.commit }}
+          FLOW_TAG: ${{ needs.version.outputs.tag }}
+          FLOW_COMMIT: ${{ needs.version.outputs.commit }}
         run: |
           gh release create "$FLOW_TAG" release-browser/* \
             --target "$FLOW_COMMIT" --title "Flow ${FLOW_TAG#flow-v}" \
             --generate-notes --latest
+          # CLIs installed from the dashboard before the feeds were unified only
+          # watch this tag name. One update moves them onto flow-v*; drop this
+          # mirror once no supported install predates the unification.
+          gh release create "flow-cloud-cli-v${FLOW_TAG#flow-v}" release-browser/* \
+            --target "$FLOW_COMMIT" --title "Flow ${FLOW_TAG#flow-v} (earlier Cloud CLI installs)" \
+            --notes "Same files as $FLOW_TAG, for CLIs installed from the dashboard before the feeds were unified." --latest=false

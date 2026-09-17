@@ -102,6 +102,8 @@ import type { DesktopFlowServiceActionResult } from "@t3tools/contracts";
 import * as FlowService from "./flowService.ts";
 import * as DesktopServiceAdoption from "./DesktopServiceAdoption.ts";
 import * as FlowServiceRecovery from "./flowServiceRecovery.ts";
+import { flowServiceSupportsHost } from "./serviceDiscovery.ts";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -408,7 +410,13 @@ export const layer = Layer.effect(
     // ("Continue with the built-in server"). The marker is consumed as it is
     // read, so the next ordinary launch attaches again and the choice is never
     // a mode the user cannot leave.
+    // Intel Macs and Windows have no Flow CLI build, so there is no service to
+    // attach to or install; without this they would land on the recovery
+    // screen at every launch.
+    const hostPlatform = yield* HostProcessPlatform;
+    const hostArchitecture = yield* HostProcessArchitecture;
     const legacyPrimaryRequested =
+      !flowServiceSupportsHost(hostPlatform, hostArchitecture) ||
       process.env.FLOW_DESKTOP_LEGACY_BACKEND === "1" ||
       FlowServiceRecovery.consumeLegacyBackendMarker(environment.stateDir);
 

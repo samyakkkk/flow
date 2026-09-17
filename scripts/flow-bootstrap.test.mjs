@@ -17,7 +17,7 @@ NodeTest.test("bootstrap pins the exact legacy cleanup before executing it", asy
     NodeCrypto.createHash("sha256").update(helper).digest("hex"),
   );
   NodeAssert.ok(
-    installer.indexOf("shasum -a 256 -c cleanup.sha256") <
+    installer.indexOf("$FLOW_SHASUM -c cleanup.sha256") <
       installer.indexOf('PATH="$FLOW_CLEANUP_PATH"'),
   );
 });
