@@ -198,6 +198,12 @@ export const BrainAgentIntegration = Schema.Struct({
   message: Schema.String,
 });
 export type BrainAgentIntegration = typeof BrainAgentIntegration.Type;
+/** Machine-level coding-agent registrations on the computer hosting an environment. */
+export const BrainAgentTools = Schema.Struct({
+  installed: Schema.Array(BrainHarness),
+  detected: Schema.Array(BrainHarness),
+});
+export type BrainAgentTools = typeof BrainAgentTools.Type;
 export const BrainCommand = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("connectCloud"),
@@ -225,6 +231,10 @@ export const BrainCommand = Schema.Union([
     projectId: ProjectId,
     operation: Schema.Literals(["status", "configure", "remove", "retry"]),
     harnesses: Schema.optionalKey(Schema.Array(BrainHarness)),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("agentTools"),
+    operation: Schema.Literals(["status", "install"]),
   }),
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({
@@ -283,6 +293,7 @@ export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
   agentIntegration: Schema.optionalKey(BrainAgentIntegration),
+  agentTools: Schema.optionalKey(BrainAgentTools),
   agentSetup: Schema.optionalKey(
     Schema.Struct({ instructions: Schema.String, command: Schema.String }),
   ),

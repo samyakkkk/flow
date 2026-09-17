@@ -767,7 +767,11 @@ export class BrainRuntime {
     return result;
   }
   private async executeCommand(command: BrainCommand) {
-    if (command.action === "agentSetup" || command.action === "agentIntegration")
+    if (
+      command.action === "agentSetup" ||
+      command.action === "agentIntegration" ||
+      command.action === "agentTools"
+    )
       throw new Error("Request setup instructions through the environment API.");
     if (this.closed) throw new Error("Brain runtime is shutting down.");
     if (command.action === "connectCloud") {

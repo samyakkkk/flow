@@ -3,6 +3,8 @@ import {
   agentSetupInstructions,
   manageAgentIntegration,
   bindProjectWithAgentTools,
+  installAgentTools,
+  readAgentTools,
 } from "./agent-setup.ts";
 import {
   AuthOrchestrationOperateScope,
@@ -95,6 +97,26 @@ export const brainHttpApiLayer = HttpApiBuilder.group(
                 state: await runtime.state(undefined, true),
                 error:
                   error instanceof Error ? error.message : "Could not configure coding agents.",
+                createdWorkspaceId: null,
+              };
+            }
+          }).pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
+        }
+        if (command.action === "agentTools") {
+          return yield* Effect.tryPromise(async () => {
+            const stateDir = process.env.FLOW_SHARED_BRAIN_HOME ?? config.stateDir;
+            try {
+              if (command.operation === "install") await installAgentTools({ stateDir });
+              return {
+                state: await runtime.state(undefined, true),
+                agentTools: await readAgentTools(),
+                error: null,
+                createdWorkspaceId: null,
+              };
+            } catch (error) {
+              return {
+                state: await runtime.state(undefined, true),
+                error: error instanceof Error ? error.message : "Could not connect coding agents.",
                 createdWorkspaceId: null,
               };
             }

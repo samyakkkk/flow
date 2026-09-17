@@ -105,7 +105,8 @@ Codex, Cursor, Gemini CLI, OpenCode, GitHub Copilot, and Antigravity. When Flow
 starts on a computer, it registers one hook, one `flow-graph` MCP server, and one
 `flow` skill in each detected agent's own user configuration. Nothing is written
 into your repositories. Restart the agents once and approve their hook or MCP
-trust prompt if they show one; that approval covers every folder.
+trust prompt if they show one; that approval covers every folder. The last step of
+onboarding lists the tools it found and connects any that are not connected yet.
 
 A folder is connected when its repository belongs to a Brain: any checkout of a
 repository you connected to a Brain, or any project whose Brain you chose in

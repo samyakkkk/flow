@@ -6,7 +6,7 @@ import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as Schema from "effect/Schema";
-import { BrainAgentIntegration, type BrainHarness } from "@t3tools/contracts";
+import { BrainAgentIntegration, BrainAgentTools, type BrainHarness } from "@t3tools/contracts";
 const execute = NodeUtil.promisify(NodeChildProcess.execFile);
 const decodeIntegration = Schema.decodeUnknownSync(BrainAgentIntegration);
 
@@ -54,6 +54,19 @@ export function installAgentTools(input: {
       detected: BrainHarness[];
       migrated: string[];
     };
+  });
+}
+
+const decodeTools = Schema.decodeUnknownSync(BrainAgentTools);
+/** Which coding agents exist on this computer and which already carry Flow's registration. */
+export function readAgentTools() {
+  return serialized(async () => {
+    const { stdout } = await execute(process.execPath, [connectorScript(), "tools"], {
+      env: connectorEnv(),
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+    });
+    return decodeTools(JSON.parse(stdout));
   });
 }
 

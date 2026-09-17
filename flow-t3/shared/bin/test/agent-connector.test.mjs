@@ -186,6 +186,8 @@ test('a folder of checkouts resolves through its children', async t => {
 test('the MCP server serves no tools in an unbound folder and the Brain tools once bound', async t => {
   const f = await fixture(t);
   assert.equal((await f.run([connector, 'install', '--state-dir', f.state, '--harness', 'claude'])).code, 0);
+  const tools = JSON.parse((await f.run([connector, 'tools'])).stdout);
+  assert.deepEqual(tools.installed, ['claude']); assert.ok(Array.isArray(tools.detected));
   const mcp = join(f.root, '.flow/bin/flow-mcp');
   const input = mcpRequests.map(x => JSON.stringify({ jsonrpc: '2.0', ...x })).join('\n') + '\n';
   const unbound = await f.run([mcp], input);

@@ -2045,3 +2045,49 @@ code {
     visibility: visible;
   }
 }
+
+/* Onboarding finish: one burst and one settle, then nothing repaints. */
+@keyframes flow-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, -12px, 0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--flow-confetti-drift, 0px), 340px, 0)
+      rotate(var(--flow-confetti-spin, 360deg));
+  }
+}
+@keyframes flow-marble-settle {
+  0% {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.6);
+  }
+  70% {
+    transform: translateY(2px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.flow-confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 7px;
+  height: 11px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: flow-confetti-fall 1.6s cubic-bezier(0.2, 0.7, 0.4, 1) 1 forwards;
+}
+.flow-marble {
+  animation: flow-marble-settle 420ms cubic-bezier(0.2, 0.8, 0.3, 1) 1 backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-confetti-piece {
+    display: none;
+  }
+  .flow-marble {
+    animation: none;
+  }
+}

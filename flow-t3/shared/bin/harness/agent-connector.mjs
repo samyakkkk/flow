@@ -214,6 +214,11 @@ export async function main(argv) {
     console.log(JSON.stringify({ ...result, next: 'Restart your coding agents and approve their hook or MCP trust prompts once. Folders whose repositories belong to a Flow Brain are connected automatically.' }, null, 2));
     return;
   }
+  if (action === 'tools') {
+    const config = await readJson(join(home(), 'config.json'), {});
+    console.log(JSON.stringify({ installed: config.machine?.harnesses ?? [], detected: (await materializer()).detectHarnesses() }));
+    return;
+  }
   if (action === 'uninstall') { console.log(JSON.stringify(await uninstall({ materializer: await materializer() }), null, 2)); return; }
   if (action === 'resolve') { console.log(JSON.stringify(await resolveBinding(folder), null, 2)); return; }
   if (action === 'status') {

@@ -6,7 +6,9 @@ import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   AgentSessionProjectCandidate,
+  BrainAgentTools,
   BrainCli,
+  BrainHarness,
   BrainState,
   EnvironmentId,
   ProjectId,
@@ -84,6 +86,17 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  AntigravityIcon,
+  ClaudeAI,
+  CursorIcon,
+  Gemini,
+  GithubCopilotIcon,
+  OpenAI,
+  OpenCodeIcon,
+  type Icon,
+} from "../Icons";
 import { WizardPanel, WizardSteps } from "../ui/wizard";
 import { Dialog, DialogHeader, DialogPopup, DialogTitle } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
@@ -98,7 +111,7 @@ import { cn } from "../../lib/utils";
  * re-runnable by clearing the flag.
  */
 
-type WizardStep = "connection" | "agents" | "import";
+type WizardStep = "connection" | "agents" | "import" | "tools";
 
 /**
  * The Brain chosen for one computer. `sources` carries a connected remote
@@ -177,7 +190,15 @@ export function WelcomeWizard({
     setSetupIds(ids);
     setStep("agents");
   };
-  const stageIndex = step === "agents" ? 1 : step === "import" ? 2 : 0;
+  const stageIndex = step === "agents" ? 1 : step === "import" ? 2 : step === "tools" ? 3 : 0;
+  const [landingRef, setLandingRef] = useState<ScopedProjectRef | undefined>(undefined);
+  // Projects are saved by now; the last step explains how other tools share the Brain.
+  const continueToTools = useCallback((projectRef?: ScopedProjectRef) => {
+    setLandingRef(projectRef);
+    setIsImporting(false);
+    setStep("tools");
+    return Promise.resolve(true);
+  }, []);
   const finish = useCallback(
     (projectRef?: ScopedProjectRef) => {
       if (finishingPromiseRef.current !== null) return finishingPromiseRef.current;
@@ -233,15 +254,17 @@ export function WelcomeWizard({
         <div className="flex min-h-0 flex-col">
           <DialogHeader className="gap-4">
             <BrandWordmark className="h-6" />
-            <WizardSteps
-              steps={ONBOARDING_STAGES}
-              currentStep={stageIndex}
-              isStepDisabled={(index) => isImporting || index >= stageIndex}
-              onStepChange={(index) => {
-                if (isImporting || index > stageIndex) return;
-                setStep(index === 0 ? "connection" : "agents");
-              }}
-            />
+            {step === "tools" ? null : (
+              <WizardSteps
+                steps={ONBOARDING_STAGES}
+                currentStep={stageIndex}
+                isStepDisabled={(index) => isImporting || index >= stageIndex}
+                onStepChange={(index) => {
+                  if (isImporting || index > stageIndex) return;
+                  setStep(index === 0 ? "connection" : "agents");
+                }}
+              />
+            )}
           </DialogHeader>
 
           <WizardPanel className="min-w-0" holdHeight={isLoadingProjects}>
@@ -280,6 +303,15 @@ export function WelcomeWizard({
                   setStep("import");
                 }}
               />
+            ) : step === "tools" ? (
+              <CodingToolsStep
+                environmentId={projectEnvironmentIds[0] ?? setupIds[0]}
+                brainName={
+                  brainChoices.get(projectEnvironmentIds[0] ?? setupIds[0] ?? ("" as EnvironmentId))
+                    ?.name
+                }
+                onDone={() => void finish(landingRef)}
+              />
             ) : (
               <ImportStep
                 scans={scans}
@@ -291,7 +323,7 @@ export function WelcomeWizard({
                 brainChoices={brainChoices}
                 isImporting={isImporting}
                 setIsImporting={setIsImporting}
-                onDone={finish}
+                onDone={continueToTools}
               />
             )}
           </WizardPanel>
@@ -1958,6 +1990,172 @@ function ImportCandidateList({
 }
 
 // ── Shared bits ──────────────────────────────────────────────
+
+// ── Finish: the Brain is connected ───────────────────────────
+
+const CODING_TOOLS: Record<
+  BrainHarness,
+  { label: string; icon: Icon; mono?: boolean; slot: readonly [number, number, number] }
+> = {
+  // slot = [left %, top %, diameter px]: a fixed scatter, like marbles on a tray.
+  claude: { label: "Claude Code", icon: ClaudeAI, slot: [8, 14, 64] },
+  codex: { label: "Codex", icon: OpenAI, mono: true, slot: [31, 46, 56] },
+  cursor: { label: "Cursor", icon: CursorIcon, mono: true, slot: [52, 10, 60] },
+  gemini: { label: "Gemini CLI", icon: Gemini, slot: [74, 40, 52] },
+  opencode: { label: "OpenCode", icon: OpenCodeIcon, mono: true, slot: [16, 58, 48] },
+  copilot: { label: "GitHub Copilot", icon: GithubCopilotIcon, mono: true, slot: [84, 8, 46] },
+  antigravity: { label: "Antigravity", icon: AntigravityIcon, slot: [55, 56, 50] },
+};
+const CONFETTI_COLORS = ["#3b5bdb", "#f59f00", "#e8590c", "#2f9e44", "#ae3ec9", "#1098ad"];
+
+/** One burst that ends by itself; index math keeps it identical across renders. */
+function ConfettiBurst() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      {Array.from({ length: 42 }, (_, index) => (
+        <span
+          key={index}
+          className="flow-confetti-piece"
+          style={
+            {
+              left: `${(index * 37) % 100}%`,
+              backgroundColor: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+              animationDelay: `${(index % 7) * 60}ms`,
+              "--flow-confetti-drift": `${((index * 53) % 80) - 40}px`,
+              "--flow-confetti-spin": `${((index * 97) % 540) + 180}deg`,
+            } as React.CSSProperties
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Closes onboarding: the Brain follows its projects into every coding agent.
+ * Registers Flow in the agents found on the environment's computer when that
+ * has not happened yet; nothing here is required to finish.
+ */
+function CodingToolsStep({
+  environmentId,
+  brainName,
+  onDone,
+}: {
+  readonly environmentId: EnvironmentId | undefined;
+  readonly brainName: string | undefined;
+  readonly onDone: () => void;
+}) {
+  const executeBrain = useAtomCommand(brainCommand, { reportFailure: false });
+  const [tools, setTools] = useState<BrainAgentTools | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const run = useCallback(
+    async (operation: "status" | "install") => {
+      if (!environmentId) return;
+      setBusy(true);
+      setError("");
+      const result = await executeBrain({
+        environmentId,
+        input: { action: "agentTools", operation },
+      });
+      setBusy(false);
+      if (result._tag !== "Success" || result.value.error || !result.value.agentTools) {
+        setError(
+          (result._tag === "Success" && result.value.error) ||
+            "Could not check the coding agents on this computer.",
+        );
+        return;
+      }
+      setTools(result.value.agentTools);
+    },
+    [environmentId, executeBrain],
+  );
+  useEffect(() => {
+    void run("status");
+  }, [run]);
+
+  const brain = brainName ?? "your Brain";
+  const pending = tools?.detected.filter((tool) => !tools.installed.includes(tool)) ?? [];
+  return (
+    <div className="relative">
+      <ConfettiBurst />
+      <StepShell
+        title="Your Brain is connected!"
+        description={`Use ${brain} in any of your coding agents. Open your project in ${BRAND.name} or outside it, and it picks the Brain up on its own.`}
+      >
+        <div
+          className="relative mt-5 h-40 overflow-hidden rounded-2xl border border-border bg-muted/40"
+          role="list"
+          aria-label="Coding agents on this computer"
+        >
+          {tools?.detected.map((tool, index) => {
+            const { label: toolLabel, icon: ToolIcon, mono, slot } = CODING_TOOLS[tool];
+            const connected = tools.installed.includes(tool);
+            const label = connected ? toolLabel : `${toolLabel} · not connected yet`;
+            return (
+              <Tooltip key={tool}>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="listitem"
+                      aria-label={label}
+                      className={cn(
+                        "flow-marble absolute flex items-center justify-center rounded-full border border-border bg-background shadow-sm",
+                        !connected && "opacity-40 grayscale",
+                      )}
+                      style={{
+                        left: `${slot[0]}%`,
+                        top: `${slot[1]}%`,
+                        width: slot[2],
+                        height: slot[2],
+                        animationDelay: `${index * 70}ms`,
+                      }}
+                    >
+                      <ToolIcon className={cn("size-1/2", mono && "fill-foreground")} />
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top">{label}</TooltipPopup>
+              </Tooltip>
+            );
+          })}
+          {tools === null && !error ? (
+            <p className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Spinner className="size-4" /> Looking for coding agents…
+            </p>
+          ) : null}
+          {tools && tools.detected.length === 0 ? (
+            <p className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+              No other coding agents found here yet. Install one and it connects on its own.
+            </p>
+          ) : null}
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          {pending.length > 0
+            ? `${pending.length} ${pending.length === 1 ? "agent is" : "agents are"} not connected yet.`
+            : "Restart any coding agent that is already open so it picks this up."}
+        </p>
+        {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
+        <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+          {pending.length > 0 ? (
+            <>
+              <Button variant="ghost-muted" disabled={busy} onClick={onDone}>
+                Skip for now
+              </Button>
+              <Button autoFocus disabled={busy} onClick={() => void run("install")}>
+                {busy ? "Connecting…" : "Connect coding agents"}
+              </Button>
+            </>
+          ) : (
+            <Button autoFocus disabled={tools === null && !error} onClick={onDone}>
+              Start using {BRAND.name}
+            </Button>
+          )}
+        </div>
+      </StepShell>
+    </div>
+  );
+}
 
 function StepShell({
   title,
