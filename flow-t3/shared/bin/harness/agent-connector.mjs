@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { agentHome } from './agent-home.mjs';
+import { FLOW_ROUTING } from './routing.mjs';
 import { readJson, request, flush } from "./capture-replay.mjs";
 import { atomic, gitIdentity, resolveBinding, persistBinding, forgetBinding, eventFolder, repoLabel } from './resolve.mjs';
 // Local-only bridge: credentials stay in the app's private endpoint descriptor.
@@ -89,7 +90,7 @@ export async function mcp(project) {
     { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle. The reply names this conversation’s notes document for read_document.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
   ] : [];
   const instructions = binding
-    ? `Flow Brain ${JSON.stringify(binding.name ?? binding.workspace)} is connected to this folder. Call orient first. Bind the exact Flow conversation handle from the startup hook using bind_session before remember. Never infer the latest conversation in a folder.`
+    ? `Flow Brain ${JSON.stringify(binding.name ?? binding.workspace)} is connected to this folder.\n${FLOW_ROUTING}\nBind the exact Flow conversation handle from the startup hook using bind_session before remember. Never infer the latest conversation in a folder.`
     : 'No Flow Brain is bound to this folder, so no Flow tools are available here. Continue without Flow memory; bind the folder to a Brain in Flow to enable them.';
   const lines = createInterface({ input: process.stdin });
   for await (const line of lines) {

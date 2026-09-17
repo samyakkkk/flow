@@ -6,7 +6,8 @@
   "license": "AGPL-3.0-only",
   "exports": {
     "./connector": "./harness/agent-connector.mjs",
-    "./replay": "./harness/capture-replay.mjs"
+    "./replay": "./harness/capture-replay.mjs",
+    "./routing": "./harness/routing.mjs"
   },
   "dependencies": {
     "jsonc-parser": "3.3.1"

@@ -1,4 +1,5 @@
 import { discoverExecutable } from "./executables.mjs";
+import { FLOW_ROUTING } from "../harness/routing.mjs";
 // lib/materialize.mjs — the materializer: renders Flow's four atoms (hook
 // shim wiring, MCP registration, skill, instruction block) into each coding
 // tool's config dialect.
@@ -48,8 +49,8 @@ export const MCP_PATH = join(FLOW_DIR, "bin", "flow-mcp");
 // shebangs fail silently. Bake the absolute node that ran `flow setup`.
 export const NODE_BIN = process.execPath;
 const MANIFEST_PATH = join(FLOW_DIR, "integrations.json");
-export const ATOMS_VERSION = 2; // bump → `flow setup` re-renders repo files
-export const GLOBAL_VERSION = 1; // bump → Flow re-renders machine-level tool files on start
+export const ATOMS_VERSION = 3; // bump → `flow setup` re-renders repo files
+export const GLOBAL_VERSION = 2; // bump → Flow re-renders machine-level tool files on start
 
 const BLOCK_BEGIN = "<!-- flow:begin — managed by `flow setup`; edits inside are overwritten -->";
 const BLOCK_END = "<!-- flow:end -->";
@@ -197,11 +198,7 @@ description: Consult the connected Flow Brain and save durable conclusions.
 
 ${instructionBlock(project)}
 
-Search Flow on unexpected failures. Verify indexed facts against the checkout.
-Save verbatim durable decisions with enough context to stand alone. Never guess a
-conversation handle, classify notes yourself, or upload secrets. After compaction,
-orient again and read_document this conversation's notes (bind_session names their id).
-`;
+${flowSkillBody()}`;
   return `---
 name: flow
 description: Consult Flow's project memory (knowledge graph + distilled team memory) and store durable conclusions back. Use at session start, when something fails unexpectedly, and before finishing non-trivial work.
@@ -508,7 +505,7 @@ try {
 `;
 }
 
-export const CONNECTOR_FILES = ["agent-connector.mjs", "capture-replay.mjs", "agent-home.mjs", "cloud-setup.mjs", "resolve.mjs"];
+export const CONNECTOR_FILES = ["agent-connector.mjs", "capture-replay.mjs", "agent-home.mjs", "cloud-setup.mjs", "resolve.mjs", "routing.mjs"];
 
 // Shims and the connector under ~/.flow/bin, plus (optionally) one project
 // entry. Machine-level installs pass no project: bindings arrive later from
@@ -1184,31 +1181,49 @@ memory. Binding a folder to a Brain happens in the Flow app, never from here.`;
 function globalSkillMd() {
   return `---
 name: flow
-description: Consult the connected Flow Brain (project knowledge graph and distilled team memory) and save durable conclusions back. Use at session start, when something fails unexpectedly, and before finishing non-trivial work.
+description: Consult the connected Flow Brain (project knowledge graph, conversation notes, maintained docs and learned skills) and save durable conclusions back. Use at session start, before starting a task, when something fails unexpectedly, and before finishing non-trivial work.
 ---
 
-# Flow project memory
+${flowSkillBody()}`;
+}
+
+// One body for the machine-level skill and the per-repository connector skill.
+function flowSkillBody() {
+  return `# Flow project memory
 
 Flow's tools appear as the \`flow-graph\` MCP server only in folders that are
 bound to a Flow Brain. If your tools are deferred, search for \`flow-graph orient\`
 before concluding Flow is unavailable. If the server has no tools, or orient says
 no Brain is bound, continue without Flow memory: binding is done in the Flow app.
 
+\`\`\`
+${FLOW_ROUTING}
+\`\`\`
+
 - **Orient first.** Call orient at session start and after context loss. Verify the
   connected Brain name it reports; it labels CONNECTED PROJECT separately from
-  the repository name.
+  the repository name. It lists this conversation's notes, the most recent other
+  conversations, and the Brain's docs and skills, each with an id.
 - **Bind the conversation.** The startup context supplies a Flow conversation
   handle. Call bind_session with that exact handle before remember; its reply
   names this conversation's notes for read_document. Never guess a handle or pick
   the latest session in a folder.
-- **Search on surprise.** Before deep-diving a failure or unfamiliar area, search
-  the symptom; answers come with file:line anchors. Verify indexed facts against
+- **Search before you start, and on surprise.** search_knowledge is one search over
+  conversation notes from any chat, maintained docs, skills, Slack and Linear.
+  Search the task's key terms before starting and the error text when something
+  fails; then read_document the ids that matter. Verify indexed facts against
   the checkout.
+- **Narrow a search.** Add type:notes, type:doc, type:skill, type:thread or
+  type:ticket; node:<id> for what is anchored to a graph node; channel:<name>
+  sort:recent for the latest Slack messages. Pass several queries at once.
+- **Continue earlier work.** When asked to continue something, find that
+  conversation in orient's list or with search_knowledge type:notes, and
+  read_document its notes before doing anything else.
 - **Verify remote references.** If an anchored repository is not cloned here, use
   source_read or source_search with its registered repository name.
 - **Remember conclusions.** When non-trivial work concludes or the user states a
   durable rule, remember it verbatim with enough context to stand alone. The
-  distiller files it; never classify notes or upload secrets.
+  curator files it; never classify notes or upload secrets.
 - **Skip for trivial edits.** One-line fixes do not need memory.
 `;
 }

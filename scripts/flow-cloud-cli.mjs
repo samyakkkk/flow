@@ -123,6 +123,7 @@ export async function main(args) {
         "agent-home.mjs",
         "cloud-setup.mjs",
         "resolve.mjs",
+        "routing.mjs",
       ].map((name) => [name, name]),
     ]) {
       const temporary = join(shims, `.${to}-${randomUUID()}`);
