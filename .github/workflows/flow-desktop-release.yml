@@ -251,7 +251,9 @@ jobs:
     name: Publish desktop release
     needs: [preflight, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Uploads ~1 GB twice (versioned, then the rolling feed). A cut-off mid-way leaves
+    # the rolling feed without assets and breaks auto-update, so leave real headroom.
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
