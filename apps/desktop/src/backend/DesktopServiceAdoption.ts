@@ -28,7 +28,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
-const { dirname, join, resolve } = NodePath;
+const { dirname, join } = NodePath;
 
 import { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import { legacyBaseDirProbePath, resolveHomeBaseDir } from "@t3tools/shared/homeBaseDir";
@@ -41,6 +41,7 @@ import {
   desktopServiceRegistryRoot,
   discoverService,
   fetchEnvironmentDescriptor,
+  resolveFlowReleaseHome,
   type ServiceDiscoveryResult,
 } from "./serviceDiscovery.ts";
 
@@ -173,6 +174,8 @@ export const resolveAdoptionPaths = (input: {
   readonly homeDirectory: string;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly legacyHomeExists: boolean;
+  /** Test seam for which CLI homes are already installed. */
+  readonly exists?: (path: string) => boolean;
 }): AdoptionPaths => {
   const home = resolveHomeBaseDir({
     explicit: input.env.T3CODE_HOME,
@@ -180,15 +183,18 @@ export const resolveAdoptionPaths = (input: {
     joinPath: join,
     legacyHomeExists: input.legacyHomeExists,
   });
-  const releaseHome = resolve(
-    input.env.FLOW_RELEASE_HOME || join(input.homeDirectory, ".local/share/flow-browser"),
-  );
+  const releaseHome = resolveFlowReleaseHome({
+    env: input.env as NodeJS.ProcessEnv,
+    homeDirectory: input.homeDirectory,
+    ...(input.exists ? { exists: input.exists } : {}),
+  });
   return {
     home,
     releaseHome,
     registryRoot: desktopServiceRegistryRoot({
       env: input.env as NodeJS.ProcessEnv,
       homeDirectory: input.homeDirectory,
+      ...(input.exists ? { exists: input.exists } : {}),
     }),
     journalPath: join(home, "userdata", ADOPTION_JOURNAL_FILE),
     releaseReceiptPath: join(releaseHome, "current", "flow-release.json"),

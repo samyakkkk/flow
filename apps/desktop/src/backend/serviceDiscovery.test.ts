@@ -155,7 +155,25 @@ describe("desktop service discovery", () => {
     // Never `~/.local/share/flow-app`: that registry belongs to a source
     // checkout, and the desktop's service is always the installed release.
     assert.equal(
-      desktopServiceRegistryRoot({ env: {}, homeDirectory: "/home/dev" }),
+      desktopServiceRegistryRoot({ env: {}, homeDirectory: "/home/dev", exists: () => false }),
+      "/home/dev/.local/share/flow-browser/instance-home",
+    );
+  });
+
+  it("attaches to a CLI the retired Cloud installer put in its own folder", () => {
+    // The app and the `flow` command must land on one service whichever was
+    // installed first, so an existing install is found where it already is.
+    assert.equal(
+      desktopServiceRegistryRoot({
+        env: {},
+        homeDirectory: "/home/dev",
+        exists: (path) => path === "/home/dev/.local/share/flow-cloud-cli/current",
+      }),
+      "/home/dev/.local/share/flow-cloud-cli/instance-home",
+    );
+    // The standard folder wins when both are present.
+    assert.equal(
+      desktopServiceRegistryRoot({ env: {}, homeDirectory: "/home/dev", exists: () => true }),
       "/home/dev/.local/share/flow-browser/instance-home",
     );
   });
