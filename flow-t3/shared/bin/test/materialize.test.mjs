@@ -260,3 +260,51 @@ test("hooks under a custom agent home are recognized on re-setup and removal", (
     assert.ok(!existsSync(join(repoDir, rel)), `${rel} left behind after removal`);
   }
 }));
+
+test("machine-scope rendering registers every tool once in user configuration and removal restores it", () => fixture(({ home, invoke }) => {
+  const codexHome = join(home, ".codex");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  mkdirSync(join(home, ".copilot"), { recursive: true });
+  const userSettings = { permissions: { allow: ["Read"] }, hooks: { Stop: [{ hooks: [{ type: "command", command: "mine" }] }] } };
+  writeFileSync(join(home, ".claude/settings.json"), JSON.stringify(userSettings));
+  writeFileSync(join(home, ".claude.json"), '{"numStartups":1}');
+  writeFileSync(join(home, ".claude/CLAUDE.md"), "# Mine\n");
+  writeFileSync(join(codexHome, "config.toml"), 'model = "x"\n');
+  writeFileSync(join(home, ".copilot/mcp-config.json"), '{\n  // mine\n  "mcpServers": { "mine": { "command": "m" } },\n}\n');
+  const all = "['claude','codex','cursor','antigravity','gemini','opencode','copilot']";
+  invoke(`m.materializeGlobal({ harnesses: ${all} }); m.materializeGlobal({ harnesses: ${all} });`, { CODEX_HOME: codexHome, COPILOT_HOME: join(home, ".copilot") });
+  const claude = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+  assert.equal(claude.hooks.Stop.length, 2);
+  assert.equal(claude.hooks.SessionStart.length, 1);
+  assert.doesNotMatch(claude.hooks.SessionStart[0].hooks[0].command, /--project/);
+  assert.ok(claude.permissions.allow.includes("Read") && claude.permissions.allow.includes("mcp__flow-graph__orient"));
+  const claudeJson = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+  assert.equal(claudeJson.numStartups, 1);
+  assert.equal(claudeJson.mcpServers["flow-graph"].type, "stdio");
+  assert.match(readFileSync(join(home, ".claude/CLAUDE.md"), "utf8"), /^# Mine\n\n<!-- flow:begin/);
+  const codex = readFileSync(join(codexHome, "config.toml"), "utf8");
+  assert.equal(codex.match(/mcp_servers\.flow-graph/g).length, 1);
+  assert.match(codex, /hooks = true/);
+  assert.equal(JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8")).hooks.SessionStart.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, ".cursor/hooks.json"), "utf8")).hooks.sessionStart.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, ".cursor/mcp.json"), "utf8")).mcpServers["flow-graph"].args.length, 1);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/config/hooks.json"), "utf8"))["flow-capture"].Stop);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/config/mcp_config.json"), "utf8")).mcpServers["flow-graph"]);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/settings.json"), "utf8")).mcpServers["flow-graph"]);
+  assert.ok(JSON.parse(readFileSync(join(home, ".config/opencode/opencode.json"), "utf8")).mcp["flow-graph"]);
+  assert.match(readFileSync(join(home, ".config/opencode/plugins/flow.ts"), "utf8"), /PROJECT = undefined/);
+  const copilot = parse(readFileSync(join(home, ".copilot/mcp-config.json"), "utf8"));
+  assert.ok(copilot.mcpServers.mine && copilot.mcpServers["flow-graph"]);
+  assert.equal(parse(readFileSync(join(home, ".copilot/hooks/flow.json"), "utf8")).hooks.Stop.length, 1);
+  for (const skill of [".claude/skills/flow/SKILL.md", ".agents/skills/flow/SKILL.md", ".cursor/skills/flow/SKILL.md", ".gemini/antigravity/global_skills/flow/SKILL.md", ".copilot/skills/flow/SKILL.md"])
+    assert.match(readFileSync(join(home, skill), "utf8"), /flow-graph/);
+  invoke("m.removeGlobal()", { CODEX_HOME: codexHome, COPILOT_HOME: join(home, ".copilot") });
+  assert.deepEqual(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")), userSettings);
+  assert.deepEqual(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")), { numStartups: 1 });
+  assert.equal(readFileSync(join(home, ".claude/CLAUDE.md"), "utf8"), "# Mine\n");
+  assert.equal(readFileSync(join(codexHome, "config.toml"), "utf8"), 'model = "x"\n\n[features]\nhooks = true\n');
+  assert.deepEqual(Object.keys(parse(readFileSync(join(home, ".copilot/mcp-config.json"), "utf8")).mcpServers), ["mine"]);
+  for (const gone of [".cursor/hooks.json", ".cursor/mcp.json", ".gemini/config/hooks.json", ".gemini/settings.json", ".config/opencode/plugins/flow.ts", ".copilot/hooks/flow.json", ".claude/skills", ".agents", codexHome + "/hooks.json"])
+    assert.ok(!existsSync(join(home, gone)), gone);
+}));

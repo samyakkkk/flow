@@ -98,6 +98,28 @@ terminal.
 T3 Code's npm package and desktop package-manager installs are upstream T3 releases
 and do not install Flow.
 
+## Coding agents
+
+Flow's Brain is available to the coding agents you already use: Claude Code,
+Codex, Cursor, Gemini CLI, OpenCode, GitHub Copilot, and Antigravity. When Flow
+starts on a computer, it registers one hook, one `flow-graph` MCP server, and one
+`flow` skill in each detected agent's own user configuration. Nothing is written
+into your repositories. Restart the agents once and approve their hook or MCP
+trust prompt if they show one; that approval covers every folder.
+
+A folder is connected when its repository belongs to a Brain: any checkout of a
+repository you connected to a Brain, or any project whose Brain you chose in
+Flow, gets the Brain's tools and conversation capture automatically. Running an
+agent in a parent folder that holds several checkouts works when they all belong
+to the same Brain. Folders that belong to no Brain, or whose checkouts belong to
+different Brains, get no Flow tools and nothing is captured. Bind such a folder
+to a Brain from its project in Flow, or with `flow setup --brain <id> --folder
+<path>` in a terminal.
+
+`flow agents resolve --folder <path>` shows what a folder resolves to,
+`flow agents doctor --folder <path>` checks a connected folder end to end, and
+`flow agents uninstall` removes the registrations from this computer.
+
 ## Providers
 
 Open **Settings → Providers** in the web or desktop app, select the environment,

@@ -10,6 +10,7 @@ import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { SharedBrainRuntime, serveSharedBrain, type BrainClient } from "./shared-runtime.ts";
 import { BrainRuntime } from "./BrainRuntime.ts";
 import { makeBrainCurator, selectLocalCuratorCli } from "./curator.ts";
+import { installAgentTools } from "./agent-setup.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime.ts";
 
@@ -91,6 +92,23 @@ export class BrainService extends Context.Service<
         });
         yield* Effect.addFinalizer(() => Effect.promise(close));
       }
+      // The primary instance keeps the user's coding-agent tools current. It
+      // never blocks startup and never touches user config from dev instances.
+      if (process.env.FLOW_AGENT_TOOLS === "auto")
+        yield* Effect.forkScoped(
+          Effect.tryPromise({
+            try: () => installAgentTools({ stateDir: config.stateDir }),
+            catch: (cause) =>
+              new BrainServiceError({
+                message:
+                  cause instanceof Error ? cause.message : "Coding-agent tools not installed",
+              }),
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(`Coding-agent tools were not installed: ${error.message}`),
+            ),
+          ),
+        );
       yield* registerProjects(runtime);
       return BrainService.of({ ready: Effect.succeed(runtime) });
     }),

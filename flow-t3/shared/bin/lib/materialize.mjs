@@ -1,18 +1,27 @@
 import { discoverExecutable } from "./executables.mjs";
 // lib/materialize.mjs — the materializer: renders Flow's four atoms (hook
 // shim wiring, MCP registration, skill, instruction block) into each coding
-// tool's config dialect, per repo. See docs/harness-integrations.md §5.
+// tool's config dialect.
+//
+// Two scopes:
+//   - Machine (default): one registration per tool in the user's own config
+//     (`materializeGlobal`). The hook and MCP lines carry no project; the
+//     shims resolve which Brain owns the current folder at run time
+//     (harness/resolve.mjs). Unbound folders get silent hooks and a tool-less
+//     MCP server, so nothing needs approving per repository.
+//   - Repo (opt-in legacy): the same atoms written into a checkout with the
+//     project baked into the lines (`materializeRepo`), for tools that cannot
+//     use user-scope configuration.
 //
 // Principles:
-//   - Fat/thin split: per-repo files are dumb pointers to ~/.flow/bin/* and
+//   - Fat/thin split: rendered files are dumb pointers to ~/.flow/bin/* and
 //     never change across Flow versions. The hook LINE is frozen forever
 //     (Codex re-requires trust on any definition change).
 //   - Idempotent: JSON-merge and marker-splice; our entries are recognized by
 //     the flow-hook/flow-mcp path or the flow: markers and replaced in place.
-//     Re-running setup repairs drift; --remove restores the repo byte-for-byte
+//     Re-running setup repairs drift; removal restores files byte-for-byte
 //     (we only ever add whole files or marked blocks).
-//   - No secrets in repo files: tokens live in ~/.flow/config.json; repo
-//     artifacts carry only --project/--repo names. Safe for `--share`.
+//   - No secrets in rendered files: tokens live in ~/.flow/config.json.
 
 import {
   mkdirSync,
@@ -40,6 +49,7 @@ export const MCP_PATH = join(FLOW_DIR, "bin", "flow-mcp");
 export const NODE_BIN = process.execPath;
 const MANIFEST_PATH = join(FLOW_DIR, "integrations.json");
 export const ATOMS_VERSION = 2; // bump → `flow setup` re-renders repo files
+export const GLOBAL_VERSION = 1; // bump → Flow re-renders machine-level tool files on start
 
 const BLOCK_BEGIN = "<!-- flow:begin — managed by `flow setup`; edits inside are overwritten -->";
 const BLOCK_END = "<!-- flow:end -->";
@@ -51,7 +61,9 @@ const TOML_END = "# <<< flow:end <<<";
 
 function readJson(p, fallback) {
   try {
-    return JSON.parse(readFileSync(p, "utf-8"));
+    const text = readFileSync(p, "utf-8");
+    // Some tools create their config as an empty file; that is not malformed.
+    return text.trim() === "" ? fallback : JSON.parse(text);
   } catch (error) {
     if (error.code === "ENOENT") return fallback;
     throw new Error(`Cannot read ${p}: ${error.message}`);
@@ -134,7 +146,7 @@ function unspliceBlock(file, begin = BLOCK_BEGIN, end = BLOCK_END) {
   const b = text.indexOf(begin);
   const e = text.indexOf(end);
   if (b < 0 || e <= b) return;
-  const out = (text.slice(0, b) + text.slice(e + end.length)).replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+  const out = (text.slice(0, b) + text.slice(e + end.length)).replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\n+$/, "\n");
   if (out.trim() === "") rmSync(file, { force: true });
   else writeFileSync(file, out, "utf-8");
 }
@@ -279,7 +291,8 @@ export const FlowCapture = async ({ client, directory }: any) => {
   const post = async (sessionID: string, closed: boolean) => {
     try {
       const cfg = JSON.parse(readFileSync(${JSON.stringify(join(FLOW_DIR, "config.json"))}, "utf8"))
-      const p = cfg.projects?.[PROJECT]
+      // Without a baked project the connector resolves the Brain from the session folder.
+      const p = PROJECT ? cfg.projects?.[PROJECT] : { connector: ${JSON.stringify(join(FLOW_DIR, "bin", "agent-connector.mjs"))} }
       if (!p?.orchestratorUrl && !p?.connector) return
       const res: any = await client.session.messages({ path: { id: sessionID } })
       const raw = res?.data ?? res ?? []
@@ -340,12 +353,14 @@ for (let i = 2; i < process.argv.length - 1; i++) {
   if (a.startsWith("--")) args[a.slice(2)] = process.argv[++i];
 }
 const cfg = JSON.parse(readFileSync(${JSON.stringify(join(FLOW_DIR, "config.json"))}, "utf8"));
-const p = cfg.projects?.[args.project];
+const p = args.project ? cfg.projects?.[args.project] : { connector: ${JSON.stringify(join(FLOW_DIR, "bin", "agent-connector.mjs"))} };
 if (!p) {
   console.error(\`flow-mcp: unknown project "\${args.project}" — re-run: flow setup \${args.project ?? "<name>"}\`);
   process.exit(1);
 }
 if (p.connector) {
+  // Machine-level registration: no project on the line; the connector resolves
+  // the Brain from the folder the tool started us in.
   const child = spawn(process.execPath, [p.connector, "mcp", ...process.argv.slice(2)], { stdio: "inherit" });
   child.on("error", () => process.exit(1));
   child.on("exit", code => process.exit(code ?? 1));
@@ -492,6 +507,11 @@ try {
 `;
 }
 
+export const CONNECTOR_FILES = ["agent-connector.mjs", "capture-replay.mjs", "agent-home.mjs", "cloud-setup.mjs", "resolve.mjs"];
+
+// Shims and the connector under ~/.flow/bin, plus (optionally) one project
+// entry. Machine-level installs pass no project: bindings arrive later from
+// the app or from run-time resolution.
 export function materializeMachine({ flowRoot, projectName, projectEntry, shimSource }) {
   mkdirSync(join(FLOW_DIR, "bin"), { recursive: true });
   copyFileSync(shimSource, SHIM_PATH);
@@ -501,16 +521,16 @@ export function materializeMachine({ flowRoot, projectName, projectEntry, shimSo
   writeFileSync(VERBS_CLI_PATH, verbsCliSource(), "utf-8");
   chmodSync(VERBS_CLI_PATH, 0o755);
 
-  if (projectEntry.connector) {
-    for (const name of ["agent-connector.mjs", "capture-replay.mjs", "agent-home.mjs", "cloud-setup.mjs"]) {
+  if (!projectEntry || projectEntry.connector) {
+    for (const name of CONNECTOR_FILES) {
       copyFileSync(join(dirname(shimSource), name), join(FLOW_DIR, "bin", name));
     }
-    projectEntry = { ...projectEntry, connector: join(FLOW_DIR, "bin", "agent-connector.mjs") };
+    if (projectEntry) projectEntry = { ...projectEntry, connector: join(FLOW_DIR, "bin", "agent-connector.mjs") };
   }
   const cfgPath = join(FLOW_DIR, "config.json");
   const cfg = readJson(cfgPath, {});
   cfg.remotes = { ...(cfg.remotes ?? {}), local: { kind: "local", flowRoot } };
-  cfg.projects = { ...(cfg.projects ?? {}), [projectName]: projectEntry };
+  if (projectName && projectEntry) cfg.projects = { ...(cfg.projects ?? {}), [projectName]: projectEntry };
   writeJson(cfgPath, cfg);
   chmodSync(cfgPath, 0o600);
 }
@@ -531,8 +551,13 @@ const HOOK_EVENTS = [
 function shellQuote(value) {
   return "'" + String(value).replaceAll("'", "'\\''") + "'";
 }
+// Machine-level lines omit --project/--repo: the shim resolves the folder.
 function hookCmd(harness, project, repo) {
-  return `ELECTRON_RUN_AS_NODE=1 ${shellQuote(NODE_BIN)} ${shellQuote(SHIM_PATH)} --harness ${shellQuote(harness)} --project ${shellQuote(project)} --repo ${shellQuote(repo)} --remote local`;
+  const binding = project ? ` --project ${shellQuote(project)} --repo ${shellQuote(repo)}` : "";
+  return `ELECTRON_RUN_AS_NODE=1 ${shellQuote(NODE_BIN)} ${shellQuote(SHIM_PATH)} --harness ${shellQuote(harness)}${binding} --remote local`;
+}
+function mcpArgs(project, repo) {
+  return project ? [MCP_PATH, "--project", project, "--repo", repo] : [MCP_PATH];
 }
 
 // GUI-app dialect: explicit node, because the shebang can't resolve one on the
@@ -614,11 +639,11 @@ function renderCodex(ctx) {
 // Machine-level Codex enablement: hooks feature flag + repo trust. Both are
 // additive edits to ~/.codex/config.toml, made only when absent. The /hooks
 // trust review itself is interactive — surfaced to the user by `flow setup`.
-export function ensureCodexMachineConfig(repoDir, codexHome = join(homedir(), ".codex")) {
+export function ensureCodexMachineConfig(repoDir, codexHome = codexHomeDir()) {
   const cfgPath = join(codexHome, "config.toml");
   if (!existsSync(cfgPath)) {
     mkdirSync(codexHome, { recursive: true });
-    writeFileSync(cfgPath, `[features]\nhooks = true\n\n[projects.${JSON.stringify(repoDir)}]\ntrust_level = "trusted"\n`, "utf-8");
+    writeFileSync(cfgPath, `[features]\nhooks = true\n${repoDir ? `\n[projects.${JSON.stringify(repoDir)}]\ntrust_level = "trusted"\n` : ""}`, "utf-8");
     return;
   }
   let text = readFileSync(cfgPath, "utf-8");
@@ -632,10 +657,13 @@ export function ensureCodexMachineConfig(repoDir, codexHome = join(homedir(), ".
   } else {
     text = text.replace(/\n*$/, "\n\n[features]\nhooks = true\n");
   }
-  if (!text.includes(`[projects.${JSON.stringify(repoDir)}]`)) {
+  if (repoDir && !text.includes(`[projects.${JSON.stringify(repoDir)}]`)) {
     text = text.replace(/\n*$/, `\n\n[projects.${JSON.stringify(repoDir)}]\ntrust_level = "trusted"\n`);
   }
   writeFileSync(cfgPath, text, "utf-8");
+}
+function codexHomeDir() {
+  return process.env.CODEX_HOME || join(homedir(), ".codex");
 }
 
 function renderSharedKnowledge({ repoDir, project }) {
@@ -1137,4 +1165,302 @@ export function removeRepo(repoDir) {
     delete manifest.repos[repoDir];
     writeJson(MANIFEST_PATH, manifest);
   }
+}
+
+// ---------------------------------------------------------------------------
+// machine-level rendering: one registration per tool in the user's own
+// configuration. Lines carry no project; the shims resolve the folder's Brain
+// at run time (harness/resolve.mjs), so every folder whose repository belongs
+// to a Brain is connected without per-repo files or per-repo approvals.
+
+function globalInstructionBlock() {
+  return `Flow project memory: folders bound to a Flow Brain expose the flow-graph MCP
+tools. When they are present, call orient first and follow the "flow" skill.
+When they are absent, or orient reports no bound Brain, continue without Flow
+memory. Binding a folder to a Brain happens in the Flow app, never from here.`;
+}
+
+function globalSkillMd() {
+  return `---
+name: flow
+description: Consult the connected Flow Brain (project knowledge graph and distilled team memory) and save durable conclusions back. Use at session start, when something fails unexpectedly, and before finishing non-trivial work.
+---
+
+# Flow project memory
+
+Flow's tools appear as the \`flow-graph\` MCP server only in folders that are
+bound to a Flow Brain. If your tools are deferred, search for \`flow-graph orient\`
+before concluding Flow is unavailable. If the server has no tools, or orient says
+no Brain is bound, continue without Flow memory: binding is done in the Flow app.
+
+- **Orient first.** Call orient at session start and after context loss. Verify the
+  connected Brain name it reports; it labels CONNECTED PROJECT separately from
+  the repository name.
+- **Bind the conversation.** The startup context supplies a Flow conversation
+  handle. Call bind_session with that exact handle before remember or
+  get_chat_memories. Never guess a handle or pick the latest session in a folder.
+- **Search on surprise.** Before deep-diving a failure or unfamiliar area, search
+  the symptom; answers come with file:line anchors. Verify indexed facts against
+  the checkout.
+- **Verify remote references.** If an anchored repository is not cloned here, use
+  source_read or source_search with its registered repository name.
+- **Remember conclusions.** When non-trivial work concludes or the user states a
+  durable rule, remember it verbatim with enough context to stand alone. The
+  distiller files it; never classify notes or upload secrets.
+- **Skip for trivial edits.** One-line fixes do not need memory.
+`;
+}
+
+function globalPaths() {
+  const home = homedir();
+  const codex = codexHomeDir();
+  const copilot = process.env.COPILOT_HOME || join(home, ".copilot");
+  return {
+    claude: {
+      settings: join(home, ".claude", "settings.json"),
+      mcp: join(home, ".claude.json"),
+      skill: join(home, ".claude", "skills", "flow", "SKILL.md"),
+      instructions: join(home, ".claude", "CLAUDE.md"),
+    },
+    codex: {
+      config: join(codex, "config.toml"),
+      hooks: join(codex, "hooks.json"),
+      skill: join(home, ".agents", "skills", "flow", "SKILL.md"),
+      instructions: join(codex, "AGENTS.md"),
+    },
+    cursor: {
+      mcp: join(home, ".cursor", "mcp.json"),
+      hooks: join(home, ".cursor", "hooks.json"),
+      skill: join(home, ".cursor", "skills", "flow", "SKILL.md"),
+    },
+    antigravity: {
+      mcp: join(home, ".gemini", "config", "mcp_config.json"),
+      hooks: join(home, ".gemini", "config", "hooks.json"),
+      skill: join(home, ".gemini", "antigravity", "global_skills", "flow", "SKILL.md"),
+    },
+    gemini: {
+      settings: join(home, ".gemini", "settings.json"),
+      instructions: join(home, ".gemini", "GEMINI.md"),
+    },
+    opencode: {
+      config: join(home, ".config", "opencode", "opencode.json"),
+      plugin: join(home, ".config", "opencode", "plugins", "flow.ts"),
+      package: join(home, ".config", "opencode", "package.json"),
+    },
+    copilot: {
+      mcp: join(copilot, "mcp-config.json"),
+      hooks: join(copilot, "hooks", "flow.json"),
+      skill: join(copilot, "skills", "flow", "SKILL.md"),
+    },
+  };
+}
+
+const globalMcpServer = () => ({ command: NODE_BIN, args: mcpArgs(), env: { ELECTRON_RUN_AS_NODE: "1" } });
+const OPENCODE_PACKAGE = { private: true, dependencies: { "@opencode-ai/plugin": "1.17.20" } };
+
+function writeSkill(path) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, globalSkillMd(), "utf-8");
+}
+
+const GLOBAL_RENDERERS = {
+  claude(p) {
+    const settings = readJson(p.claude.settings, {});
+    settings.hooks = mergeHooksObject(settings.hooks, HOOK_EVENTS, () => hookCmd("claude"));
+    const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"].map(
+      (t) => `mcp__flow-graph__${t}`
+    );
+    settings.permissions = { ...(settings.permissions ?? {}), allow: [...new Set([...(settings.permissions?.allow ?? []), ...readTools])] };
+    writeJson(p.claude.settings, settings);
+    // User-scope MCP servers live in ~/.claude.json next to Claude's own state.
+    const mcp = readJson(p.claude.mcp, {});
+    mcp.mcpServers = { ...(mcp.mcpServers ?? {}), "flow-graph": { type: "stdio", ...globalMcpServer() } };
+    writeJson(p.claude.mcp, mcp);
+    writeSkill(p.claude.skill);
+    spliceBlock(p.claude.instructions, globalInstructionBlock());
+    return Object.values(p.claude);
+  },
+  codex(p) {
+    ensureCodexMachineConfig(undefined, dirname(p.codex.config));
+    spliceBlock(
+      p.codex.config,
+      `[mcp_servers.flow-graph]\ncommand = ${JSON.stringify(NODE_BIN)}\nargs = ${JSON.stringify(mcpArgs())}\nenv = { ELECTRON_RUN_AS_NODE = "1" }`,
+      TOML_BEGIN,
+      TOML_END
+    );
+    const hooksFile = readJson(p.codex.hooks, {});
+    hooksFile.hooks = mergeHooksObject(hooksFile.hooks, HOOK_EVENTS.map((e) => ({ ...e, extra: { timeout: e.name === "SessionEnd" ? 3 : 5 } })), () =>
+      hookCmd("codex")
+    );
+    writeJson(p.codex.hooks, hooksFile);
+    writeSkill(p.codex.skill);
+    spliceBlock(p.codex.instructions, globalInstructionBlock());
+    return Object.values(p.codex);
+  },
+  cursor(p) {
+    const file = readJson(p.cursor.hooks, {});
+    file.version = 1;
+    const hooks = { ...(file.hooks ?? {}) };
+    for (const ev of ["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "sessionEnd"]) {
+      hooks[ev] = [...(hooks[ev] ?? []).filter((e) => !isFlowHook(e)), { command: hookCmd("cursor") }];
+    }
+    file.hooks = hooks;
+    writeJson(p.cursor.hooks, file);
+    const mcp = readJson(p.cursor.mcp, {});
+    mcp.mcpServers = { ...(mcp.mcpServers ?? {}), "flow-graph": globalMcpServer() };
+    writeJson(p.cursor.mcp, mcp);
+    writeSkill(p.cursor.skill);
+    return Object.values(p.cursor);
+  },
+  antigravity(p) {
+    const hooksFile = readJson(p.antigravity.hooks, {});
+    const entry = (name) => [{ type: "command", command: `${hookCmd("antigravity")} --event ${name}`, timeout: 5 }];
+    hooksFile["flow-capture"] = { PostInvocation: entry("PostInvocation"), Stop: entry("Stop") };
+    writeJson(p.antigravity.hooks, hooksFile);
+    // Antigravity pools MCP processes by name across open windows, so a second
+    // workspace can reuse a process resolved for the first one. Known limit.
+    const mcp = readJson(p.antigravity.mcp, {});
+    const servers = { ...(mcp.mcpServers ?? {}) };
+    for (const [key, server] of Object.entries(servers)) if (isAntigravityFlowServer(key, server)) delete servers[key];
+    servers["flow-graph"] = globalMcpServer();
+    mcp.mcpServers = servers;
+    writeJson(p.antigravity.mcp, mcp);
+    writeSkill(p.antigravity.skill);
+    return Object.values(p.antigravity);
+  },
+  gemini(p) {
+    const settings = readJson(p.gemini.settings, {});
+    settings.hooks = mergeHooksObject(
+      settings.hooks,
+      ["SessionStart", "AfterAgent", "AfterTool", "SessionEnd"].map((name) => ({ name, extra: { timeout: 5000 } })),
+      () => hookCmd("gemini")
+    );
+    settings.mcpServers = { ...(settings.mcpServers ?? {}), "flow-graph": globalMcpServer() };
+    writeJson(p.gemini.settings, settings);
+    spliceBlock(p.gemini.instructions, globalInstructionBlock());
+    return Object.values(p.gemini);
+  },
+  opencode(p) {
+    if (!existsSync(p.opencode.package)) writeJson(p.opencode.package, OPENCODE_PACKAGE);
+    mkdirSync(dirname(p.opencode.plugin), { recursive: true });
+    writeFileSync(p.opencode.plugin, opencodePlugin(undefined, undefined), "utf-8");
+    const oc = readJson(p.opencode.config, { $schema: "https://opencode.ai/config.json" });
+    oc.mcp = { ...(oc.mcp ?? {}), "flow-graph": { type: "local", command: [NODE_BIN, ...mcpArgs()], environment: { ELECTRON_RUN_AS_NODE: "1" } } };
+    writeJson(p.opencode.config, oc);
+    return Object.values(p.opencode);
+  },
+  copilot(p) {
+    const argv = [NODE_BIN, SHIM_PATH, "--harness", "copilot", "--remote", "local"];
+    const command = process.platform === "win32"
+      ? "& " + argv.map((arg) => `'${arg.replaceAll("'", "''")}'`).join(" ")
+      : "ELECTRON_RUN_AS_NODE=1 " + argv.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
+    editCopilotJson(p.copilot.hooks, (file) => [
+      [["version"], 1],
+      ...HOOK_EVENTS.map(({ name }) => [["hooks", name], [
+        ...(file.hooks?.[name] ?? []).filter((entry) => !isFlowHook(entry)),
+        { type: "command", command, timeout: 5 },
+      ]]),
+    ]);
+    editCopilotJson(p.copilot.mcp, () => [[["mcpServers", "flow-graph"], { type: "stdio", ...globalMcpServer() }]]);
+    writeSkill(p.copilot.skill);
+    return Object.values(p.copilot);
+  },
+};
+
+export function materializeGlobal({ harnesses }) {
+  const unknown = harnesses.filter((h) => !GLOBAL_RENDERERS[h]);
+  if (unknown.length) throw new Error(`Supported harnesses: ${ALL_HARNESSES.join(", ")}`);
+  const paths = globalPaths();
+  // Validate every JSON file first: a malformed config must never be overwritten.
+  for (const h of harnesses) {
+    for (const file of Object.values(paths[h])) {
+      if (!file.endsWith(".json") || !existsSync(file)) continue;
+      if (h === "copilot") parseCopilotJson(file, readFileSync(file, "utf8"));
+      else readJson(file, {});
+    }
+  }
+  const files = [];
+  for (const h of harnesses) files.push(...GLOBAL_RENDERERS[h](paths));
+  return { files: [...new Set(files)] };
+}
+
+// Strip Flow's entries from every user-scope location, delete files Flow
+// owns, and delete files Flow evidently created (nothing left but scaffolding).
+export function removeGlobal() {
+  const p = globalPaths();
+  const touched = [];
+  const stripJson = (file, edit) => {
+    const value = readJson(file, null);
+    if (!value || typeof value !== "object") return;
+    const before = JSON.stringify(value);
+    edit(value);
+    if (JSON.stringify(value) === before) return;
+    touched.push(file);
+    if (isEmptyShell(value)) rmSync(file, { force: true });
+    else writeJson(file, value);
+  };
+  const stripHooks = (value) => {
+    if (!value.hooks) return;
+    value.hooks = removeFlowHooks(value.hooks);
+    if (Object.keys(value.hooks).length === 0) delete value.hooks;
+  };
+  const dropServer = (value, key = "mcpServers") => {
+    if (value[key]?.["flow-graph"]) {
+      delete value[key]["flow-graph"];
+      if (Object.keys(value[key]).length === 0) delete value[key];
+    }
+  };
+  stripJson(p.claude.settings, (v) => {
+    stripHooks(v);
+    if (Array.isArray(v.permissions?.allow)) {
+      v.permissions.allow = v.permissions.allow.filter((t) => !String(t).startsWith("mcp__flow-graph__"));
+      if (v.permissions.allow.length === 0) delete v.permissions.allow;
+      if (isEmptyShell(v.permissions)) delete v.permissions;
+    }
+  });
+  stripJson(p.claude.mcp, (v) => dropServer(v));
+  stripJson(p.codex.hooks, stripHooks);
+  stripJson(p.cursor.hooks, (v) => {
+    if (!v.hooks) return;
+    for (const [ev, arr] of Object.entries(v.hooks)) {
+      v.hooks[ev] = (arr ?? []).filter((e) => !isFlowHook(e));
+      if (v.hooks[ev].length === 0) delete v.hooks[ev];
+    }
+    if (Object.keys(v.hooks).length === 0) delete v.hooks;
+  });
+  stripJson(p.cursor.mcp, (v) => dropServer(v));
+  stripJson(p.antigravity.hooks, (v) => { delete v["flow-capture"]; });
+  stripJson(p.antigravity.mcp, (v) => {
+    for (const [name, server] of Object.entries(v.mcpServers ?? {})) if (isAntigravityFlowServer(name, server)) delete v.mcpServers[name];
+    if (v.mcpServers && Object.keys(v.mcpServers).length === 0) delete v.mcpServers;
+  });
+  stripJson(p.gemini.settings, (v) => { stripHooks(v); dropServer(v); });
+  stripJson(p.opencode.config, (v) => dropServer(v, "mcp"));
+  const ocPackage = readJson(p.opencode.package, null);
+  if (ocPackage && JSON.stringify(ocPackage) === JSON.stringify(OPENCODE_PACKAGE)) { rmSync(p.opencode.package, { force: true }); touched.push(p.opencode.package); }
+  for (const file of [p.copilot.hooks, p.copilot.mcp]) {
+    if (!existsSync(file) || tryParseCopilotJson(file, readFileSync(file, "utf-8")) === undefined) continue;
+    editCopilotJson(file, (v) => {
+      if (file === p.copilot.hooks) {
+        const hooks = removeFlowHooks(v.hooks);
+        return [[["hooks"], hooks && Object.keys(hooks).length ? hooks : undefined]];
+      }
+      return v.mcpServers?.["flow-graph"] ? [[["mcpServers", "flow-graph"], undefined]] : [];
+    });
+    touched.push(file);
+    if (isEmptyShell(tryParseCopilotJson(file, readFileSync(file, "utf-8")))) rmSync(file, { force: true });
+  }
+  for (const file of [p.claude.skill, p.codex.skill, p.cursor.skill, p.antigravity.skill, p.copilot.skill, p.opencode.plugin]) {
+    if (existsSync(file)) { rmSync(file, { force: true }); touched.push(file); }
+  }
+  for (const file of [p.claude.instructions, p.codex.instructions, p.gemini.instructions]) {
+    if (existsSync(file) && readFileSync(file, "utf-8").includes(BLOCK_BEGIN)) { unspliceBlock(file); touched.push(file); }
+  }
+  if (existsSync(p.codex.config) && readFileSync(p.codex.config, "utf-8").includes(TOML_BEGIN)) { unspliceBlock(p.codex.config, TOML_BEGIN, TOML_END); touched.push(p.codex.config); }
+  for (const file of [p.claude.skill, p.codex.skill, p.cursor.skill, p.antigravity.skill, p.copilot.skill, p.opencode.plugin, p.copilot.hooks]) {
+    for (let dir = dirname(file); dir !== homedir() && dir !== dirname(dir); dir = dirname(dir)) {
+      try { rmdirSync(dir); } catch { break; } // only empty scaffolding goes
+    }
+  }
+  return touched;
 }

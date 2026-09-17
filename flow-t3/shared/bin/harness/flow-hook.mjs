@@ -167,16 +167,18 @@ async function main() {
     (entry) => entry?.type === "session.start" && typeof entry.data?.sessionId === "string"
   )) return;
 
-  // The binding (--project) resolves to a machine-level config entry written
-  // by `flow setup` — never resolved from the payload at capture time.
+  // A --project on the line (legacy per-repo files) names the binding directly.
+  // Machine-level lines carry none: the connector resolves the Brain from the
+  // folder the event belongs to, and an unbound folder is simply skipped.
   const remoteName = args.remote ?? "local";
-  let remote;
-  try {
-    const cfg = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8"));
-    const proj = args.project ? cfg.projects?.[args.project] : undefined;
-    remote = proj ? { url: proj.orchestratorUrl, token: proj.token } : cfg.remotes?.[remoteName];
-  } catch {}
-  const projectEntry = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8")).projects?.[args.project];
+  let cfg = {};
+  try { cfg = JSON.parse(readFileSync(join(FLOW_DIR, "config.json"), "utf8")); } catch {}
+  const projectEntry = args.project
+    ? cfg.projects?.[args.project]
+    : { connector: join(FLOW_DIR, "bin", "agent-connector.mjs") };
+  const remote = args.project && projectEntry && !projectEntry.connector
+    ? { url: projectEntry.orchestratorUrl, token: projectEntry.token }
+    : args.project ? cfg.remotes?.[remoteName] : undefined;
   if (!remote?.url && !projectEntry?.connector) {
     logLine(`no binding for project "${args.project}" / remote "${remoteName}" in ~/.flow/config.json, dropped`);
     return;
@@ -201,10 +203,17 @@ async function main() {
   if (projectEntry?.connector) {
     const { capture } = await import(projectEntry.connector);
     if (args.event) payload.hook_event_name = args.event;
-    const session = await capture(args.project, args.harness, payload);
+    const captured = await capture(args.project, args.harness, payload);
+    if (!captured) return;
+    const session = typeof captured === "string" ? captured : captured.session;
+    const brain = typeof captured === "string" ? null : captured.brain;
     if (session && ["SessionStart", "sessionStart"].includes(payload.hook_event_name ?? payload.hookEventName)) {
-      const message = `Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember or get_chat_memories. Never use another conversation's handle.`;
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } }) + "\n");
+      const message = `${brain ? `Flow Brain ${JSON.stringify(brain)} is connected to this folder; call flow-graph orient first. ` : ""}Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember or get_chat_memories. Never use another conversation's handle.`;
+      // Each dialect injects startup context through its own field name.
+      const output = args.harness === "cursor"
+        ? { additional_context: message }
+        : { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } };
+      process.stdout.write(JSON.stringify(output) + "\n");
     }
     return;
   }

@@ -14,6 +14,7 @@ for (const name of [
   "harness/agent-home.mjs",
   "harness/capture-replay.mjs",
   "harness/flow-hook.mjs",
+  "harness/resolve.mjs",
   "lib/materialize.mjs",
   "lib/executables.mjs",
 ]) {
