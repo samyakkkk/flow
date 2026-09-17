@@ -1832,7 +1832,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("ships the Flow service bootstrap as a loose resource on macOS and Linux", () => {
     // Adoption executes this script with a separate Node process, so it cannot
     // live inside app.asar. Its static imports are all Node built-ins.
-    assert.deepStrictEqual(FLOW_BOOTSTRAP_SCRIPTS, ["flow-release.mjs", "flow-mac-app.mjs"]);
+    assert.deepStrictEqual(FLOW_BOOTSTRAP_SCRIPTS, ["flow-release.mjs"]);
     assert.deepStrictEqual(FLOW_BOOTSTRAP_EXTRA_RESOURCES, [
       { from: "apps/desktop/prod-resources/flow-bootstrap", to: "flow-bootstrap" },
     ]);

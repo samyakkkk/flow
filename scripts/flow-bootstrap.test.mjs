@@ -69,6 +69,11 @@ esac
       '/.flow/checkouts/flow\nexec /missing/node /missing/flow.mjs "$@"\n';
     const launcher = await write(".local/bin/flow", original, 0o700);
     await write(".zshrc", 'alias flow="/missing/flow"\nalias keep="echo yes"\n');
+    // An earlier install of this same release home left a browser-launcher app.
+    await write(
+      "Applications/Flow.app/Contents/flow-browser-launcher",
+      NodePath.join(home, "release") + "\n",
+    );
     await write(".flow/checkouts/flow/data/brain.db", "keep old data");
     await write("Documents/repo/.git", "gitdir: missing");
     await write(
@@ -89,7 +94,9 @@ esac
       env,
       timeout: 150_000,
     });
-    NodeAssert.match(result.stdout, /Installed .*Flow.app/);
+    // The CLI opens a browser; it never installs an app of its own.
+    NodeAssert.match(result.stdout, /Start it any time with:/);
+    NodeAssert.match(result.stdout, /Create your Brain/);
     NodeAssert.match(await NodeFSP.readFile(launcher, "utf8"), /# flow-managed-launcher/);
     const backups = await NodeFSP.readdir(NodePath.join(home, ".flow/retired"));
     NodeAssert.equal(
@@ -107,7 +114,11 @@ esac
       JSON.parse(await NodeFSP.readFile(NodePath.join(home, "Documents/repo/.mcp.json"), "utf8")),
       { mcpServers: { "t3-code": { url: "keep" } } },
     );
-    await NodeFSP.stat(NodePath.join(home, "Applications/Flow.app/Contents/Info.plist"));
+    NodeAssert.equal(
+      await NodeFSP.stat(NodePath.join(home, "Applications/Flow.app")).catch(() => null),
+      null,
+      "the browser-launcher app this home installed earlier should be gone",
+    );
     const runtime = await execute(
       NodePath.join(home, "release/current/runtime/bin/node"),
       ["--version"],

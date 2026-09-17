@@ -13,8 +13,14 @@ const { join } = NodePath;
 const { execFile } = NodeChildProcess;
 const { promisify } = NodeUtil;
 const { fileURLToPath } = NodeURL;
+const { dirname } = NodePath;
 const { test } = NodeTest;
-import { installLauncher, normalizeArgs, resolveReleaseHome } from "./flow-release.mjs";
+import {
+  installLauncher,
+  normalizeArgs,
+  resolveReleaseHome,
+  retireBrowserApp,
+} from "./flow-release.mjs";
 
 const temporaryHome = async (t) => {
   const home = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "flow-cli-test-")));
@@ -100,4 +106,24 @@ test("an updated earlier Cloud CLI install moves itself onto the one entry point
     assert.ok(text.includes(`FLOW_RELEASE_HOME='${home}'`));
     assert.ok(text.includes("scripts/flow-release.mjs"));
   }
+});
+
+test("installing retires only the browser app this installation wrote", async (t) => {
+  const user = await temporaryHome(t);
+  const home = join(user, ".local/share/flow-browser");
+  const apps = join(user, "Applications");
+  const marker = join(apps, "Flow.app/Contents/flow-browser-launcher");
+  await fs.mkdir(dirname(marker), { recursive: true });
+
+  await fs.writeFile(marker, "/somewhere/else\n");
+  assert.equal(await retireBrowserApp(home, apps), null, "another installation's app stays");
+
+  await fs.writeFile(marker, home + "\n");
+  assert.equal(await retireBrowserApp(home, apps), join(apps, "Flow.app"));
+  assert.equal(await fs.stat(join(apps, "Flow.app")).catch(() => null), null);
+
+  // A real desktop app has no ownership marker and must never be removed.
+  await fs.mkdir(join(apps, "Flow.app/Contents/MacOS"), { recursive: true });
+  assert.equal(await retireBrowserApp(home, apps), null);
+  assert.ok(await fs.stat(join(apps, "Flow.app")));
 });

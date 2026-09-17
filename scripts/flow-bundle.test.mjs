@@ -15,7 +15,6 @@ import {
   releaseRuntime,
   stageRelease,
 } from "./flow-release.mjs";
-import { installMacApp } from "./flow-mac-app.mjs";
 
 const execute = NodeUtil.promisify(NodeChildProcess.execFile);
 const name = "flow-browser-darwin-arm64.tar.gz";
@@ -137,21 +136,6 @@ NodeTest.test(
       env: { PATH: "/usr/bin:/bin" },
     });
     NodeAssert.deepEqual(JSON.parse(result.stdout), ["argument with spaces"]);
-    const apps = NodePath.join(f.root, "Applications");
-    const app = await installMacApp(f.home, apps);
-    await execute(NodePath.join(app, "Contents/MacOS/Flow"), ["--no-open"], {
-      env: { HOME: f.root, PATH: "/usr/bin:/bin" },
-    });
-    NodeAssert.match(
-      await NodeFSP.readFile(NodePath.join(f.home, "launcher.log"), "utf8"),
-      /--no-open/,
-    );
-    await installMacApp(f.home, apps);
-    await NodeFSP.writeFile(
-      NodePath.join(app, "Contents/flow-browser-launcher"),
-      "another installation",
-    );
-    await NodeAssert.rejects(installMacApp(f.home, apps), /Another Flow/);
   },
 );
 
