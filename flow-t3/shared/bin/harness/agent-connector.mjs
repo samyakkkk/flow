@@ -87,7 +87,7 @@ export async function mcp(project) {
   // bind_session ties this stdio connection to the conversation the capture hook
   // announced; remember and the conversation’s notes attach to that session.
   const extra = binding ? [
-    { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle. The reply names this conversation’s notes document for read_document.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
+    { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle. The reply names this conversation’s notes document for get_entity.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
   ] : [];
   const instructions = binding
     ? `Flow Brain ${JSON.stringify(binding.name ?? binding.workspace)} is connected to this folder.\n${FLOW_ROUTING}\nBind the exact Flow conversation handle from the startup hook using bind_session before remember. Never infer the latest conversation in a folder.`
@@ -114,7 +114,7 @@ export async function mcp(project) {
           const saved = await readJson(join(home(), 'agent-sessions', binding.project, hash(args.session) + '.json'), null);
           if (!saved || saved.common !== binding.folder.common) throw Error('No captured session matches this handle and repository');
           session = saved.session;
-          result = { content: [{ type: 'text', text: `Bound Flow conversation ${session}. Its notes: read_document notes:t3-${session}` }] };
+          result = { content: [{ type: 'text', text: `Bound Flow conversation ${session}. Its notes: get_entity notes:t3-${session}` }] };
         } else {
           const tool = tools.find(tool => tool.name === name);
           if (!tool) throw Error('Unknown Flow tool');

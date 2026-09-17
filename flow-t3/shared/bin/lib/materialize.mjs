@@ -49,8 +49,8 @@ export const MCP_PATH = join(FLOW_DIR, "bin", "flow-mcp");
 // shebangs fail silently. Bake the absolute node that ran `flow setup`.
 export const NODE_BIN = process.execPath;
 const MANIFEST_PATH = join(FLOW_DIR, "integrations.json");
-export const ATOMS_VERSION = 3; // bump → `flow setup` re-renders repo files
-export const GLOBAL_VERSION = 2; // bump → Flow re-renders machine-level tool files on start
+export const ATOMS_VERSION = 4; // bump → `flow setup` re-renders repo files
+export const GLOBAL_VERSION = 3; // bump → Flow re-renders machine-level tool files on start
 
 const BLOCK_BEGIN = "<!-- flow:begin — managed by `flow setup`; edits inside are overwritten -->";
 const BLOCK_END = "<!-- flow:end -->";
@@ -256,7 +256,7 @@ function instructionBlock(project) {
 Discover the flow-graph MCP tools and call orient first. Verify the connected Brain
 name. Call bind_session with the exact Flow conversation handle from this chat's
 startup hook before remember; its reply names this conversation's notes for
-read_document. If no handle is supplied, project knowledge is available but
+get_entity. If no handle is supplied, project knowledge is available but
 conversation notes are not yet bound. Never
 select another chat or the latest session in this folder. Keep Flow running.
 Run the setup prompt again to repair configuration; the skill alone is not a binding.`;
@@ -1206,19 +1206,22 @@ ${FLOW_ROUTING}
   conversations, and the Brain's docs and skills, each with an id.
 - **Bind the conversation.** The startup context supplies a Flow conversation
   handle. Call bind_session with that exact handle before remember; its reply
-  names this conversation's notes for read_document. Never guess a handle or pick
+  names this conversation's notes for get_entity. Never guess a handle or pick
   the latest session in a folder.
 - **Search before you start, and on surprise.** search_knowledge is one search over
   conversation notes from any chat, maintained docs, skills, Slack and Linear.
   Search the task's key terms before starting and the error text when something
-  fails; then read_document the ids that matter. Verify indexed facts against
+  fails; then get_entity the ids that matter. Verify indexed facts against
   the checkout.
 - **Narrow a search.** Add type:notes, type:doc, type:skill, type:thread or
   type:ticket; node:<id> for what is anchored to a graph node; channel:<name>
   sort:recent for the latest Slack messages. Pass several queries at once.
 - **Continue earlier work.** When asked to continue something, find that
   conversation in orient's list or with search_knowledge type:notes, and
-  read_document its notes before doing anything else.
+  get_entity its notes before doing anything else.
+- **Trace connections.** get_entity shows a node's direct relationships. Before
+  changing a service, API or contract, read_query what depends on it (its blast
+  radius); the tool's description carries a working query and list_schema the types.
 - **Verify remote references.** If an anchored repository is not cloned here, use
   source_read or source_search with its registered repository name.
 - **Remember conclusions.** When non-trivial work concludes or the user states a
