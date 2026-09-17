@@ -163,6 +163,23 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md), and
 [Antigravity](./providers-antigravity.md).
 
+## Remove Flow
+
+```bash
+flow uninstall            # remove Flow, keep your projects, conversations and Brains
+flow uninstall --purge    # remove Flow and delete that data as well
+```
+
+Both unregister Flow from your coding agents, stop and remove the background
+service, and delete the installation and the `flow` command. A `flow` command
+belonging to another installation is left alone, and so is the desktop app,
+which you remove like any other application.
+
+`--purge` also deletes every data home this installation owns and its Brain
+storage in `~/.flow-brain`. Nothing restores that. Backups Flow took of files it
+changed elsewhere (`~/.flow/retired/`) survive a purge, because they are the
+only copy.
+
 ## Next steps
 
 - [Working with threads](./thread-sidebar.md): start tasks and organize parallel work.
