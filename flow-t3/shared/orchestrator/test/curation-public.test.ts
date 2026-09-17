@@ -3,6 +3,7 @@ import * as NodeAssert from "node:assert/strict";
 import Database from "better-sqlite3";
 import { CurationStore } from "../src/curation/store.js";
 import { CurationPublicTools } from "../src/curation/public-tools.js";
+import { parseSearchTokens } from "../src/memory/search-query.js";
 
 const search = (tools: CurationPublicTools, query: string) =>
   JSON.stringify(tools.augment("search_knowledge", { query }, { content: [] }));
@@ -39,7 +40,7 @@ NodeTest.test(
       JSON.stringify(tools.augment("orient", {}, { content: [] })),
       /Standalone health check/,
     );
-    const retained = JSON.parse(tools.call("read_document", { id: skill.id })!.content[0]!.text);
+    const retained = JSON.parse(tools.call("get_entity", { id: skill.id })!.content[0]!.text);
     NodeAssert.equal(retained.status, "superseded");
     NodeAssert.match(retained.text, /Start the standalone process/);
     NodeAssert.equal(store.list({ includeInactive: true }).length, 1);
@@ -112,9 +113,9 @@ NodeTest.test(
     NodeAssert.equal(payload.found, 4);
     // A new conversation picks up where a previous one left off.
     NodeAssert.match(JSON.stringify(payload), /Earlier original task/);
-    const otherChat = JSON.parse(tools.call("read_document", { id: notes.id })!.content[0]!.text);
+    const otherChat = JSON.parse(tools.call("get_entity", { id: notes.id })!.content[0]!.text);
     NodeAssert.match(otherChat.text, /Earlier original task/);
-    const readSkill = JSON.parse(tools.call("read_document", { id: skill.id })!.content[0]!.text);
+    const readSkill = JSON.parse(tools.call("get_entity", { id: skill.id })!.content[0]!.text);
     NodeAssert.equal(readSkill.text, skill.text);
     const orient = JSON.stringify(tools.augment("orient", {}, { content: [] }, "t3-chat-b"));
     NodeAssert.match(orient, /Test regression/);
@@ -123,7 +124,7 @@ NodeTest.test(
     NodeAssert.match(orient, /RECENT CONVERSATIONS/);
     NodeAssert.match(orient, /Earlier original task/);
     NodeAssert.match(orient, new RegExp(notes.id));
-    NodeAssert.match(orient, /TOOLS: find_entity/);
+    NodeAssert.match(orient, /TOOLS: search_knowledge[^\n]*get_entity \[id\] opens anything[^\n]*read_query/);
     // A conversation never lists itself as recent work to pick up.
     const own = JSON.stringify(tools.augment("orient", {}, { content: [] }, notes.sessionId));
     NodeAssert.doesNotMatch(own, /RECENT CONVERSATIONS/);
@@ -191,6 +192,36 @@ NodeTest.test(
     NodeAssert.match(decoded.results, /Existing result/);
     NodeAssert.match(decoded.results, new RegExp(rule.id));
     NodeAssert.match(decoded.results, new RegExp(notes.id));
+    // A Brain document kind is a real filter: the token leaves the keywords, so the
+    // Slack, Linear and memory search returns nothing for a kind it does not own.
+    NodeAssert.deepEqual(
+      [parseSearchTokens("type:notes regression").type, parseSearchTokens("type:notes regression").query],
+      ["notes", "regression"],
+    );
+    // In a batch, each query's documents sit inside that query's section, and the
+    // section's "nothing matched" line goes when documents did match.
+    const none = "(nothing matched — try symptoms, identifiers, or file paths)";
+    const batch = tools.augment(
+      "search_knowledge",
+      { queries: ["regression", "zzzunmatched"] },
+      {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "ok",
+              results: `=== q1: regression ===\n${none}\n=== q2: zzzunmatched ===\n${none}`,
+            }),
+          },
+        ],
+      },
+    ) as typeof envelope;
+    const [first, second] = JSON.parse(batch.content[0]!.text).results.split("=== q2: ");
+    NodeAssert.match(first, new RegExp(rule.id));
+    NodeAssert.ok(!first.includes(none));
+    NodeAssert.match(first, /get_entity \[id\] reads any of these/);
+    NodeAssert.ok(second.includes(none));
+    NodeAssert.doesNotMatch(second, new RegExp(rule.id));
     db.close();
   },
 );

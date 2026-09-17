@@ -140,7 +140,7 @@ it("captures immediately, curates all documents over private MCP, and advances o
     expect(chat.documents?.map((doc) => doc.kind).sort()).toEqual(["doc", "skill"]);
     expect((await worker.document(skillId))?.text).toMatch(/^---\nname: "verify-a-local-test"/);
     expect((await worker.knowledge()).documents).toHaveLength(2);
-    const skill = await worker.call("read_document", { id: skillId }, { session: "chat" });
+    const skill = await worker.call("get_entity", { id: skillId }, { session: "chat" });
     expect(skill.isError).not.toBe(true);
     expect(
       skill.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(),
@@ -148,7 +148,7 @@ it("captures immediately, curates all documents over private MCP, and advances o
     expect((await worker.memories("unrelated")).documents).toEqual([]);
     // Another conversation can read this chat's notes and continue the work.
     const shared = await worker.call(
-      "read_document",
+      "get_entity",
       { id: "notes:t3-chat" },
       { session: "unrelated" },
     );

@@ -6,7 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import { CurationCoordinator } from "./curation/coordinator.js";
 import { CurationStore } from "./curation/store.js";
 import { registerCuratorMcp } from "./curation/tools.js";
-import { CURATION_PUBLIC_TOOLS, CurationPublicTools } from "./curation/public-tools.js";
+import { CurationPublicTools } from "./curation/public-tools.js";
 import type { BrainContributor, BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
 import type { BrainCuratorReply, BrainCuratorRun } from "../../runtime/src/contracts.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -25,7 +25,7 @@ async function session(actor: string) {
 
 if (process.argv.includes("--catalog")) {
   const pair = await session("catalog");
-  process.send?.({ ready: true, tools: [...(await pair.client.listTools()).tools,...CURATION_PUBLIC_TOOLS] });
+  process.send?.({ ready: true, tools: (await pair.client.listTools()).tools });
   await pair.close();
   if (process.connected) process.disconnect();
 } else {
@@ -151,7 +151,7 @@ if (process.argv.includes("--catalog")) {
     };
   };
   const catalog = await session("catalog");
-  const sessionTools = [...(await catalog.client.listTools()).tools, ...CURATION_PUBLIC_TOOLS];
+  const sessionTools = (await catalog.client.listTools()).tools;
   process.send?.({ ready: true, tools: sessionTools });
   await catalog.close();
   let hostedIntegration: import("./integration.js").BrainWorkerIntegration | undefined;

@@ -361,7 +361,7 @@ function corpusHits(
 export function renderSearchResult(res: SearchResult): string {
   const lines: string[] = [];
   if (res.memories.length === 0 && res.corpus.length === 0) {
-    return "(no memories match — try symptoms, identifiers, or file paths)";
+    return "(nothing matched — try symptoms, identifiers, or file paths)";
   }
   if (res.memories.length) {
     lines.push("MEMORY:");

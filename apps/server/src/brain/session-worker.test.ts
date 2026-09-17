@@ -12,7 +12,6 @@ it.effect(
         "get_entity",
         "list_schema",
         "orient",
-        "read_document",
         "read_query",
         "remember",
         "search_knowledge",
