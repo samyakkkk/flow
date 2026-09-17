@@ -1110,17 +1110,15 @@ export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
 // login service. It must ship as a loose file rather than from app.asar
 // because it is executed as a script by a separate Node process.
 //
-// Its static imports are all Node built-ins, so the script alone is enough;
-// `flow-mac-app.mjs` rides along because it is the one sibling a dynamic
-// import could reach (`install-bundle`, which adoption never runs) and it
-// costs one more small file. Every other dynamic import resolves inside the
-// installed release tree, not next to this bootstrap.
+// Its static imports are all Node built-ins, so the script alone is enough.
+// Every dynamic import resolves inside the installed release tree, not next
+// to this bootstrap.
 //
 // Windows is deliberately left out: flow-release.mjs refuses to run anywhere
 // but Apple Silicon macOS and Linux x64, so a Windows desktop never adopts a
 // service.
 export const FLOW_BOOTSTRAP_RESOURCE_DIR = "flow-bootstrap";
-export const FLOW_BOOTSTRAP_SCRIPTS = ["flow-release.mjs", "flow-mac-app.mjs"] as const;
+export const FLOW_BOOTSTRAP_SCRIPTS = ["flow-release.mjs"] as const;
 export const FLOW_BOOTSTRAP_EXTRA_RESOURCES = [
   {
     from: `apps/desktop/prod-resources/${FLOW_BOOTSTRAP_RESOURCE_DIR}`,

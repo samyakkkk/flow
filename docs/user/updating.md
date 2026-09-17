@@ -35,9 +35,10 @@ directories are retained. Preparation checks the server's version command and
 web assets; it does not provide database rollback if a new server fails after
 startup or applies a migration.
 
-Older source-built release installations can adopt the private runtime and
-Applications launcher by rerunning the current installer. Until converted, they
-retain their source-build update path.
+Older source-built release installations can adopt the private runtime by
+rerunning the current installer. Until converted, they retain their source-build
+update path. Rerunning it also removes the `Flow.app` browser launcher that
+earlier installers added, since `flow` now opens your browser directly.
 
 ## Source-checkout installation
 

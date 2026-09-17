@@ -307,12 +307,28 @@ export async function installLauncher(home, prefix, announce = true) {
   if (announce) console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
 }
 
+/** Installs before this one added a `Flow.app` that only opened the browser UI.
+    `flow` opens your browser directly, so the launcher is removed — but only
+    the one this installation wrote, never a desktop app or another install’s. */
+export async function retireBrowserApp(
+  home,
+  directory = process.env.FLOW_APPLICATIONS_DIR || join(homedir(), "Applications"),
+) {
+  const target = join(directory, "Flow.app");
+  const owner = await fs
+    .readFile(join(target, "Contents/flow-browser-launcher"), "utf8")
+    .catch(() => null);
+  if (owner?.trim() !== home) return null;
+  await fs.rm(target, { recursive: true, force: true });
+  return target;
+}
+
 // `<home>/bin/flow` always works. The command on PATH is taken only when it is
 // free or already ours, unless the caller named the prefix and so expects it.
-async function installLaunchers(home, prefix) {
+async function installLaunchers(home, prefix, announce = true) {
   await installLauncher(home, home, false);
   try {
-    await installLauncher(home, resolve(prefix || join(homedir(), ".local")));
+    await installLauncher(home, resolve(prefix || join(homedir(), ".local")), announce);
   } catch (error) {
     if (prefix) throw error;
     console.log(`Another flow command is already installed. Use ${join(home, "bin/flow")}.`);
@@ -516,15 +532,9 @@ export async function main(args) {
   if (args[0] === "install-bundle") {
     if (args.length !== 3 && !(args.length === 5 && args[3] === "--prefix"))
       throw Error("Usage: install-bundle DIRECTORY CHECKSUM [--prefix DIRECTORY]");
-    // Load before adoption moves this bootstrap tree into its final location.
-    const { installMacApp } = await import("./flow-mac-app.mjs");
     await adoptBundle(home, resolve(args[1]), args[2]);
-    await installLaunchers(home, args[4]);
-    if (platform() === "darwin") {
-      const app = await installMacApp(home, process.env.FLOW_APPLICATIONS_DIR);
-      console.log(`Installed ${app}. Open Flow from Applications to get started.`);
-    }
-    return;
+    await retireBrowserApp(home);
+    return installLaunchers(home, args[4], false);
   }
   if (args[0] === "install") {
     if (args.length !== 1 && !(args.length === 3 && args[1] === "--prefix"))

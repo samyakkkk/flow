@@ -76,3 +76,40 @@ fi
 "$FLOW_INSTALL_TEMP/bundle/runtime/bin/node" \
   "$FLOW_INSTALL_TEMP/bundle/scripts/flow-release.mjs" install-bundle \
   "$FLOW_INSTALL_TEMP/bundle" "$FLOW_SHA" "$@"
+
+# `<home>/bin/flow` always exists; the command on PATH is taken only when it is
+# free, so tell people which one actually works for them.
+FLOW_LAUNCHER="$FLOW_RELEASE_HOME/bin/flow"
+FLOW_RUN="$FLOW_LAUNCHER"
+if FLOW_ON_PATH=$(command -v flow 2>/dev/null) &&
+  grep -q '# flow-managed-launcher' "$FLOW_ON_PATH" 2>/dev/null; then
+  FLOW_RUN=flow
+fi
+
+cat <<EOF
+
+Flow is installed.
+
+Start it any time with:
+  $FLOW_RUN                 open Flow in your browser
+  $FLOW_RUN --no-open       print the link instead of opening a browser
+  $FLOW_RUN status | stop | update | --help
+
+Then, in the browser:
+  1. Connect this computer.
+  2. Create your Brain and choose the coding agent that processes your
+     conversations — Claude Code, Codex or OpenCode.
+  3. Pick the projects it should know. Flow indexes their repositories and
+     connects your coding agents to that Brain, so they can orient themselves
+     from it in every session.
+EOF
+if [ "$FLOW_RUN" != flow ]; then
+  printf '\nAdd %s to your PATH to run it as `flow`.\n' "$(dirname "$FLOW_LAUNCHER")"
+fi
+
+# Only offer to open a browser for someone sitting at a terminal: a coding agent
+# or a script running this installer should just get the instructions.
+if [ -t 1 ]; then
+  printf '\nStarting Flow…\n'
+  "$FLOW_LAUNCHER"
+fi

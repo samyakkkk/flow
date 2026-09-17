@@ -65,6 +65,13 @@ test("flow prefers an installed desktop app only on macOS and only in the app fo
       join(home, "Applications/Flow.app"),
     );
     assert.equal(await installedDesktopApp("linux", home, system), null);
+    // A browser-launcher app from an earlier CLI install is not the desktop
+    // app: opening it would leave the user without the browser they expect.
+    await NodeFSP.writeFile(
+      join(home, "Applications/Flow.app/Contents/flow-browser-launcher"),
+      "/some/release/home\n",
+    );
+    assert.equal(await installedDesktopApp("darwin", home, system), null);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
