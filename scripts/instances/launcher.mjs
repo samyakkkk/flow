@@ -204,6 +204,15 @@ export async function installedDesktopApp(
   ]) {
     try {
       await access(join(candidate, "Contents/MacOS/Flow"));
+      // Earlier CLI installs left a Flow.app that only opened the browser UI.
+      // It is not the desktop app, and opening it would hide the browser.
+      if (
+        await access(join(candidate, "Contents/flow-browser-launcher")).then(
+          () => true,
+          () => false,
+        )
+      )
+        continue;
       return candidate;
     } catch {
       // not installed there

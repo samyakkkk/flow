@@ -12,13 +12,12 @@ and installing from a checkout. Desktop downloads are in the
 - A supported provider account; configure its CLI and login in Flow's provider settings.
 
 Flow includes its own Node runtime and ready-built dependencies. You do not need
-Node, npm, Homebrew, Docker, Git, or a compiler to install the browser app.
+Node, npm, Homebrew, Docker, Git, or a compiler to install it.
 
 ## Install with bash
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
-open "$HOME/Applications/Flow.app"
 ```
 
 The installer verifies the release archive's SHA-256 checksum and installs the
@@ -26,9 +25,11 @@ ready-built server, web app, native libraries, and private Node runtime. Your
 system Node installation is not changed. The Brain downloads its embedding model
 automatically on first use.
 
-**Flow.app** is added to your personal `~/Applications` folder. Opening it starts
-Flow and opens your browser; reopening it returns to the existing instance. Drag
-it to the Dock if you want a shortcut. This is a browser launcher, not Electron.
+When you run it in a terminal, the installer starts Flow and opens it in your
+browser. Afterwards `flow` starts or reuses that service and opens it again;
+`flow --no-open` prints the link instead, for a machine without a browser.
+Installing does not add a desktop app — the signed [desktop app](https://github.com/samyakkkk/flow/releases)
+is a separate download, and both use the same local service and Brain.
 
 The optional terminal command is installed in `~/.local/bin`. Add that directory
 to PATH to use `flow` from any terminal. To choose another CLI prefix, append
@@ -41,8 +42,8 @@ It stops only identifiable Flow services and containers; unrelated Redis instanc
 are left running. Changed files and container restart settings are backed up under
 `~/.flow/retired/`. Old Brain data is kept in place and is not migrated.
 Restart any existing terminals and coding-agent sessions to clear their cached
-aliases and hooks. You can open **Flow.app** immediately. Any legacy items that
-cannot be safely identified are reported for review.
+aliases and hooks. Any legacy items that cannot be safely identified are
+reported for review.
 
 If you installed an earlier source-built release, rerun this installer to adopt
 the bundled runtime. Existing data stays in place; an active server keeps running
@@ -161,6 +162,23 @@ their original values.
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md), and
 [Antigravity](./providers-antigravity.md).
+
+## Remove Flow
+
+```bash
+flow uninstall            # remove Flow, keep your projects, conversations and Brains
+flow uninstall --purge    # remove Flow and delete that data as well
+```
+
+Both unregister Flow from your coding agents, stop and remove the background
+service, and delete the installation and the `flow` command. A `flow` command
+belonging to another installation is left alone, and so is the desktop app,
+which you remove like any other application.
+
+`--purge` also deletes every data home this installation owns and its Brain
+storage in `~/.flow-brain`. Nothing restores that. Backups Flow took of files it
+changed elsewhere (`~/.flow/retired/`) survive a purge, because they are the
+only copy.
 
 ## Next steps
 

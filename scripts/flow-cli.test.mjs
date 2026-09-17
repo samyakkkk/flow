@@ -13,8 +13,16 @@ const { join } = NodePath;
 const { execFile } = NodeChildProcess;
 const { promisify } = NodeUtil;
 const { fileURLToPath } = NodeURL;
+const { dirname } = NodePath;
 const { test } = NodeTest;
-import { installLauncher, normalizeArgs, resolveReleaseHome } from "./flow-release.mjs";
+import {
+  brainStore,
+  installLauncher,
+  normalizeArgs,
+  removeInstallation,
+  resolveReleaseHome,
+  retireBrowserApp,
+} from "./flow-release.mjs";
 
 const temporaryHome = async (t) => {
   const home = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "flow-cli-test-")));
@@ -100,4 +108,109 @@ test("an updated earlier Cloud CLI install moves itself onto the one entry point
     assert.ok(text.includes(`FLOW_RELEASE_HOME='${home}'`));
     assert.ok(text.includes("scripts/flow-release.mjs"));
   }
+});
+
+test("installing retires only the browser app this installation wrote", async (t) => {
+  const user = await temporaryHome(t);
+  const home = join(user, ".local/share/flow-browser");
+  const apps = join(user, "Applications");
+  const marker = join(apps, "Flow.app/Contents/flow-browser-launcher");
+  await fs.mkdir(dirname(marker), { recursive: true });
+
+  await fs.writeFile(marker, "/somewhere/else\n");
+  assert.equal(await retireBrowserApp(home, apps), null, "another installation's app stays");
+
+  await fs.writeFile(marker, home + "\n");
+  assert.equal(await retireBrowserApp(home, apps), join(apps, "Flow.app"));
+  assert.equal(await fs.stat(join(apps, "Flow.app")).catch(() => null), null);
+
+  // A real desktop app has no ownership marker and must never be removed.
+  await fs.mkdir(join(apps, "Flow.app/Contents/MacOS"), { recursive: true });
+  assert.equal(await retireBrowserApp(home, apps), null);
+  assert.ok(await fs.stat(join(apps, "Flow.app")));
+});
+
+const installation = async (t, { dataInside = true } = {}) => {
+  const user = await temporaryHome(t);
+  const home = join(user, ".local/share/flow-browser");
+  const dataHome = dataInside
+    ? join(home, "instance-home/instances/primary/data")
+    : join(user, ".t3");
+  for (const directory of [
+    join(home, "releases/one"),
+    join(home, "bin"),
+    dataHome,
+    join(user, ".local/bin"),
+  ])
+    await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(join(dataHome, "userdata.sqlite"), "conversations");
+  await fs.mkdir(brainStore(dataHome), { recursive: true });
+  await fs.writeFile(join(brainStore(dataHome), "graph.rdb"), "brain");
+  const launcher = `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${"'" + home + "'"}\nexec node\n`;
+  await fs.writeFile(join(home, "bin/flow"), launcher);
+  await fs.writeFile(join(user, ".local/bin/flow"), launcher);
+  return { user, home, dataHome };
+};
+
+test("uninstalling removes the program and keeps the data until you ask", async (t) => {
+  const { user, home, dataHome } = await installation(t);
+  const { kept } = await removeInstallation(home, {
+    dataHomes: [dataHome],
+    path: join(user, ".local/bin"),
+    agentHome: join(user, ".flow"),
+  });
+  assert.equal(
+    await fs.stat(join(home, "releases/one")).catch(() => null),
+    null,
+    "the release goes",
+  );
+  assert.equal(
+    await fs.stat(join(user, ".local/bin/flow")).catch(() => null),
+    null,
+    "our launcher goes",
+  );
+  assert.equal(await fs.readFile(join(dataHome, "userdata.sqlite"), "utf8"), "conversations");
+  assert.equal(await fs.readFile(join(brainStore(dataHome), "graph.rdb"), "utf8"), "brain");
+  assert.ok(kept.some((path) => path.startsWith(join(home, "instance-home"))));
+});
+
+test("purging deletes the data and Brain, but never the retired backups", async (t) => {
+  const { user, home, dataHome } = await installation(t, { dataInside: false });
+  const agentHome = join(user, ".flow");
+  await fs.mkdir(join(agentHome, "retired/2026"), { recursive: true });
+  await fs.writeFile(join(agentHome, "retired/2026/settings.json"), "a file Flow replaced");
+  await fs.mkdir(join(agentHome, "bin"), { recursive: true });
+
+  const { kept } = await removeInstallation(home, {
+    purge: true,
+    dataHomes: [dataHome],
+    path: join(user, ".local/bin"),
+    agentHome,
+  });
+  assert.equal(await fs.stat(home).catch(() => null), null);
+  assert.equal(await fs.stat(dataHome).catch(() => null), null);
+  assert.equal(await fs.stat(brainStore(dataHome)).catch(() => null), null);
+  assert.equal(await fs.stat(join(agentHome, "bin")).catch(() => null), null);
+  // The only copy of files Flow changed elsewhere survives a purge.
+  assert.equal(
+    await fs.readFile(join(agentHome, "retired/2026/settings.json"), "utf8"),
+    "a file Flow replaced",
+  );
+  assert.deepEqual(kept, [join(agentHome, "retired")]);
+});
+
+test("uninstalling never removes another installation's flow command", async (t) => {
+  const { user, home, dataHome } = await installation(t);
+  const foreign = join(user, ".local/bin/flow");
+  await fs.writeFile(
+    foreign,
+    "#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME='/opt/other'\n",
+  );
+  await removeInstallation(home, {
+    purge: true,
+    dataHomes: [dataHome],
+    path: join(user, ".local/bin"),
+    agentHome: join(user, ".flow"),
+  });
+  assert.match(await fs.readFile(foreign, "utf8"), /opt\/other/);
 });

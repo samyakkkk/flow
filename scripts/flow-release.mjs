@@ -25,6 +25,7 @@ const bundledAssets = {
   "linux-x64": "flow-browser-linux-x64.tar.gz",
 };
 const checkInterval = 6 * 60 * 60 * 1000;
+const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 const self = fileURLToPath(import.meta.url);
 
 async function json(path) {
@@ -296,7 +297,6 @@ export async function installLauncher(home, prefix, announce = true) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
   const temp = join(bin, `.flow-${randomUUID()}`);
   await fs.writeFile(
     temp,
@@ -307,12 +307,149 @@ export async function installLauncher(home, prefix, announce = true) {
   if (announce) console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
 }
 
+/** Take Flow off this machine: unregister the coding tools, stop and remove the
+    service, then delete the installation. `purge` also deletes its data. The
+    order matters — the registrations and the service are removed while this
+    installation still exists to do it. */
+export async function uninstall(home, purge) {
+  const instances = join(
+    process.env.FLOW_INSTANCE_HOME || join(home, "instance-home"),
+    "instances",
+  );
+  const dataHomes = [];
+  for (const name of await fs.readdir(instances).catch(() => [])) {
+    const config = await json(join(instances, name, "config.json"));
+    if (config?.home) dataHomes.push(config.home);
+  }
+  const step = async (label, args) => {
+    try {
+      await main(args);
+    } catch (error) {
+      // A half-installed or already-stopped Flow must not block the rest.
+      console.error(`Could not ${label}: ${error.message}`);
+    }
+  };
+  await step("unregister Flow from your coding tools", ["agents", "uninstall"]);
+  await step("stop the Flow service", ["stop"]);
+  await step("remove the Flow service", ["service", "uninstall"]);
+
+  const { removed, kept } = await removeInstallation(home, { purge, dataHomes });
+  for (const path of removed) console.log(`Removed ${path}`);
+  for (const path of kept) console.log(`Kept ${path}`);
+  console.log(
+    purge
+      ? "Flow is uninstalled and its data is gone."
+      : "Flow is uninstalled. Your projects, conversations and Brains are kept; `flow uninstall --purge` deletes those too.",
+  );
+}
+
+/** Every `flow` command this installation owns: `<home>/bin/flow` plus whatever
+    it wrote onto PATH. A launcher belonging to another installation, or a
+    `flow` that is somebody else’s program, is never touched. */
+async function ownedLaunchers(home, path = process.env.PATH || "") {
+  const candidates = new Set([join(home, "bin/flow"), join(homedir(), ".local/bin/flow")]);
+  for (const directory of path.split(NodePath.delimiter))
+    if (directory) candidates.add(join(directory, "flow"));
+  const owned = [];
+  for (const file of candidates) {
+    const text = await fs.readFile(file, "utf8").catch(() => null);
+    if (
+      text?.includes("# flow-managed-launcher") &&
+      text.includes(`FLOW_RELEASE_HOME=${quote(home)}`)
+    )
+      owned.push(file);
+  }
+  return owned;
+}
+
+/** Where a data home keeps its graph database: a hash of the Brain directory,
+    because FalkorDB needs a short socket path (apps/server/src/brain/BrainRuntime.ts). */
+export const brainStore = (dataHome) =>
+  join(
+    homedir(),
+    ".flow-brain",
+    createHash("sha256").update(join(dataHome, "userdata/brain")).digest("hex").slice(0, 12),
+  );
+
+/** Delete this installation from disk. Without `purge` the program goes and
+    every data home stays, including one that lives inside the installation.
+    With `purge` the conversations, Brains and agent registrations go too —
+    nothing restores them. Retired backups are always kept: they are the only
+    copy of files Flow changed outside itself. */
+export async function removeInstallation(
+  home,
+  {
+    purge = false,
+    dataHomes = [],
+    agentHome = process.env.FLOW_AGENT_HOME || join(homedir(), ".flow"),
+    ...rest
+  } = {},
+) {
+  const removed = [];
+  const kept = [];
+  const drop = async (target) => {
+    if (!(await fs.stat(target).catch(() => null))) return;
+    await fs.rm(target, { recursive: true, force: true });
+    removed.push(target);
+  };
+  for (const launcher of await ownedLaunchers(home, rest.path)) await drop(launcher);
+  const app = await retireBrowserApp(home, rest.applicationsDir);
+  if (app) removed.push(app);
+
+  if (purge) {
+    for (const dataHome of dataHomes) {
+      await drop(brainStore(dataHome));
+      await drop(dataHome);
+    }
+    // `retired/` holds the only copy of files Flow replaced elsewhere on this
+    // machine, so it outlives the installation that made it.
+    for (const entry of await fs.readdir(agentHome).catch(() => []))
+      if (entry === "retired") kept.push(join(agentHome, entry));
+      else await drop(join(agentHome, entry));
+    if (!kept.length) await drop(agentHome);
+    await drop(home);
+    return { removed, kept };
+  }
+
+  // Keep every data home, including one stored inside this installation.
+  const inside = dataHomes.filter((dataHome) => resolve(dataHome).startsWith(home + NodePath.sep));
+  for (const entry of await fs.readdir(home).catch(() => []))
+    if (
+      inside.some(
+        (dataHome) =>
+          resolve(dataHome).startsWith(join(home, entry) + NodePath.sep) ||
+          resolve(dataHome) === join(home, entry),
+      )
+    )
+      kept.push(join(home, entry));
+    else await drop(join(home, entry));
+  if (!kept.length) await drop(home);
+  else kept.push(...inside);
+  return { removed, kept: [...new Set(kept)] };
+}
+
+/** Installs before this one added a `Flow.app` that only opened the browser UI.
+    `flow` opens your browser directly, so the launcher is removed — but only
+    the one this installation wrote, never a desktop app or another install’s. */
+export async function retireBrowserApp(
+  home,
+  directory = process.env.FLOW_APPLICATIONS_DIR || join(homedir(), "Applications"),
+) {
+  const target = join(directory, "Flow.app");
+  const owner = await fs
+    .readFile(join(target, "Contents/flow-browser-launcher"), "utf8")
+    .catch(() => null);
+  if (owner?.trim() !== home) return null;
+  await fs.rm(target, { recursive: true, force: true });
+  return target;
+}
+
 // `<home>/bin/flow` always works. The command on PATH is taken only when it is
 // free or already ours, unless the caller named the prefix and so expects it.
-async function installLaunchers(home, prefix) {
+async function installLaunchers(home, prefix, announce = true) {
   await installLauncher(home, home, false);
   try {
-    await installLauncher(home, resolve(prefix || join(homedir(), ".local")));
+    await installLauncher(home, resolve(prefix || join(homedir(), ".local")), announce);
   } catch (error) {
     if (prefix) throw error;
     console.log(`Another flow command is already installed. Use ${join(home, "bin/flow")}.`);
@@ -430,6 +567,7 @@ flow brains create --name NAME --cli claude|codex|opencode
 flow agents install|uninstall|resolve|status|doctor|flush|remove [--folder PATH]
 flow status | flow stop | flow restart | flow service install|status|uninstall
 flow update [--check]        Updates also prepare at startup and every six hours; FLOW_AUTO_UPDATE=0 disables that.
+flow uninstall [--purge]     Remove Flow from this computer; --purge also deletes its data
 The packaged CLI includes Node.`;
 
 export function normalizeArgs(args) {
@@ -516,15 +654,9 @@ export async function main(args) {
   if (args[0] === "install-bundle") {
     if (args.length !== 3 && !(args.length === 5 && args[3] === "--prefix"))
       throw Error("Usage: install-bundle DIRECTORY CHECKSUM [--prefix DIRECTORY]");
-    // Load before adoption moves this bootstrap tree into its final location.
-    const { installMacApp } = await import("./flow-mac-app.mjs");
     await adoptBundle(home, resolve(args[1]), args[2]);
-    await installLaunchers(home, args[4]);
-    if (platform() === "darwin") {
-      const app = await installMacApp(home, process.env.FLOW_APPLICATIONS_DIR);
-      console.log(`Installed ${app}. Open Flow from Applications to get started.`);
-    }
-    return;
+    await retireBrowserApp(home);
+    return installLaunchers(home, args[4], false);
   }
   if (args[0] === "install") {
     if (args.length !== 1 && !(args.length === 3 && args[1] === "--prefix"))
@@ -536,6 +668,11 @@ export async function main(args) {
     if (args.length > 2 || (args[1] && args[1] !== "--check"))
       throw Error("Usage: flow update [--check]");
     return update(home, args[1] === "--check");
+  }
+  if (args[0] === "uninstall") {
+    if (args.length > 2 || (args[1] && args[1] !== "--purge"))
+      throw Error("Usage: flow uninstall [--purge]");
+    return uninstall(home, args[1] === "--purge");
   }
   return launch(home, args);
 }
