@@ -119,6 +119,14 @@ NodeTest.test(
     const orient = JSON.stringify(tools.augment("orient", {}, { content: [] }, "t3-chat-b"));
     NodeAssert.match(orient, /Test regression/);
     NodeAssert.match(orient, /notes:t3-chat-b/);
+    // Another conversation is listed by its opening request until extraction titles it.
+    NodeAssert.match(orient, /RECENT CONVERSATIONS/);
+    NodeAssert.match(orient, /Earlier original task/);
+    NodeAssert.match(orient, new RegExp(notes.id));
+    NodeAssert.match(orient, /TOOLS: find_entity/);
+    // A conversation never lists itself as recent work to pick up.
+    const own = JSON.stringify(tools.augment("orient", {}, { content: [] }, notes.sessionId));
+    NodeAssert.doesNotMatch(own, /RECENT CONVERSATIONS/);
     db.close();
   },
 );

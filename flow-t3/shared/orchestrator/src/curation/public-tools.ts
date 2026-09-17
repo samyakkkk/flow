@@ -1,6 +1,6 @@
 import { CurationStore } from "./store.js";
 import { excerpt, record } from "./transcript.js";
-import type { DocumentKind } from "./types.js";
+import type { BrainDocumentSummary, DocumentKind } from "./types.js";
 
 // The one reader for everything search_knowledge or orient hands back an id for.
 // Conversation notes are readable across chats: a new conversation must be able
@@ -28,8 +28,27 @@ const result = (value: unknown, isError = false) => ({
 // `type:<kind>` tokens narrow a search to one document kind; ticket/thread kinds
 // belong to the graph corpus and are left to the gateway untouched.
 const KIND_TOKEN = /(?:^|\s)type:(memory|skill|notes|doc)\b/i;
+const RECENT_CONVERSATIONS = 6;
+const ago = (at: number) => {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60 * 48) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+};
 export class CurationPublicTools {
   constructor(private store: CurationStore) {}
+  // Until extraction names a conversation its notes carry a placeholder title;
+  // the opening words of the original request say more.
+  private title(doc: BrainDocumentSummary): string {
+    if (doc.name !== "Conversation notes") return doc.name;
+    const request = /^> (.+)$/m.exec(this.store.get(doc.id)?.text ?? "")?.[1]?.trim();
+    return request ? JSON.stringify(request.length > 70 ? request.slice(0, 69) + "…" : request) : doc.name;
+  }
+  private titles(label: string, noun: string, docs: BrainDocumentSummary[], shown: number, kind: DocumentKind): string {
+    if (!docs.length) return "";
+    const rest = docs.length > shown ? `; newest ${shown} shown, search_knowledge type:${kind} for the rest` : "";
+    return `\n${label} (${docs.length} ${noun}${rest}):\n${docs.slice(0, shown).map((doc) => `- ${doc.name} [${doc.id}]`).join("\n")}\n`;
+  }
   call(name: string, args: Record<string, unknown>): ReturnType<typeof result> | undefined {
     if (name === "read_document") {
       const doc = typeof args.id === "string" ? this.store.get(args.id) : undefined;
@@ -99,18 +118,19 @@ export class CurationPublicTools {
   augment(name: string, args: Record<string, unknown>, response: unknown, sessionId?: string): unknown {
     let text = "";
     if (name === "orient") {
-      if (sessionId) text += `\nTHIS CONVERSATION: its notes are [notes:${sessionId}] — read_document to recover earlier decisions after compaction.\n`;
-      const skills = this.store.list({ kind: "skill" });
-      const docs = this.store.list({ kind: "doc" });
-      if (docs.length) text += `\nAUTO-DOCS: ${docs.length} maintained context documents — search_knowledge finds them, read_document reads them.\n`;
-      if (skills.length)
+      if (sessionId) text += `\nTHIS CONVERSATION: notes are [notes:${sessionId}] — read_document to recover earlier decisions after compaction.\n`;
+      const recent = this.store
+        .list({ kind: "notes" })
+        .filter((doc) => doc.sessionId !== sessionId)
+        .slice(0, RECENT_CONVERSATIONS);
+      if (recent.length)
         text +=
-          `\nSKILLS (${skills.length}): reusable procedures learned from conversations. read_document with an id fetches the full SKILL.md; search_knowledge type:skill searches by purpose.\n` +
-          skills
-            .slice(0, 30)
-            .map((skill) => `- ${skill.name} [${skill.id}]: ${skill.description}`)
-            .join("\n") +
-          (skills.length > 30 ? "\nUse search_knowledge type:skill for the remaining skills." : "");
+          "\nRECENT CONVERSATIONS (newest first; read_document an id to pick that work up):\n" +
+          recent.map((doc) => `- ${this.title(doc)} — ${ago(doc.updatedAt)} [${doc.id}]`).join("\n") +
+          "\n";
+      text += this.titles("DOCS", "maintained", this.store.list({ kind: "doc" }), 8, "doc");
+      text += this.titles("SKILLS", "learned procedures", this.store.list({ kind: "skill" }), 12, "skill");
+      text += "\nTOOLS: find_entity (code by intent) · get_entity [id] · search_knowledge → read_document [id] · remember · correct_graph\n";
     } else if (name === "search_knowledge") {
       const queries =
         typeof args.query === "string"

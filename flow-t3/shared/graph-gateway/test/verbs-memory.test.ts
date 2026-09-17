@@ -238,22 +238,18 @@ test("orient distinguishes server project identity from caller repository labels
 });
 
 
-test("orient distinguishes unreadable memory from a confirmed empty store", async () => {
+test("orient reports state only and never calls the memory service", async () => {
   const previous = process.env.FLOW_MEMORY_URL;
-  let authorized = false;
-  const fetchMock = mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
-    if (!authorized) return new Response("Unauthorized", { status: 401 });
-    return Response.json(String(url).includes("/stats")
-      ? { memories: 0, observations: 0, bySource: {} }
-      : { global: null, repo: null });
+  const fetchMock = mock.method(globalThis, "fetch", async () => {
+    throw new Error("orient must not fetch");
   });
   try {
     process.env.FLOW_MEMORY_URL = "https://fixture.invalid/v1/memory/search";
-    const unreadable = await callVerb("orient", { repo: "fixture" });
-    assert.match(unreadable, /MEMORY: unavailable/);
-    assert.ok(!unreadable.includes("MEMORY: none yet"));
-    authorized = true;
-    assert.match(await callVerb("orient", { repo: "fixture" }), /MEMORY: none yet/);
+    const result = await callVerb("orient", { repo: "fixture" });
+    assert.match(result, /GRAPH: \d+ nodes/);
+    assert.ok(!result.includes("MEMORY:"));
+    assert.ok(!result.includes("HOW TO USE"));
+    assert.equal(fetchMock.mock.callCount(), 0);
   } finally {
     fetchMock.mock.restore();
     if (previous === undefined) delete process.env.FLOW_MEMORY_URL;

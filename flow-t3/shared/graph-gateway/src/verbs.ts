@@ -804,57 +804,13 @@ const orientInput = {
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
-interface MemoryStats {
-  memories: number;
-  observations: number;
-  bySource: Record<string, number>;
-}
-
-// The ambient tier: rendered orient docs (repo + global), served verbatim and
-// IN FULL — this is the auto-authored AGENTS.md, deliberately uncapped (the
-// curation happened at write time; nothing here is ranked at read time).
-async function fetchOrientDocs(repo: string): Promise<{ global: string | null; repo: string | null } | null> {
-  const url =
-    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/orient-doc") ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/orient-doc` : "");
-  if (!url) return null;
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}`, {
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as { global: string | null; repo: string | null };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchMemoryStats(): Promise<MemoryStats | null> {
-  const url =
-    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/stats") ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/stats` : "");
-  if (!url) return null;
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(url, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
-    if (!res.ok) return null;
-    return (await res.json()) as MemoryStats;
-  } catch {
-    return null;
-  }
-}
-
 async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || sessionValue("FLOW_REPO") || "";
   const branch = input.branch || sessionValue("FLOW_BRANCH") || "";
 
-  const [repoRows, counts, memStats, orientDocs] = await Promise.all([
+  const [repoRows, counts] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
-    fetchMemoryStats(),
-    fetchOrientDocs(repo),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -887,60 +843,17 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
   if (repoRow) {
-    out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 500)} [${repoRow.id}]`);
+    out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 4000)} [${repoRow.id}]`);
   } else {
     out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
   }
   out.push("");
-  // Orient docs — the ambient tier, verbatim and uncapped. Curation happened
-  // at write time (distiller nomination + earned inclusion); serving is dumb.
-  if (orientDocs?.repo) {
-    out.push(orientDocs.repo);
-    out.push("");
-  }
-  if (orientDocs?.global) {
-    out.push(orientDocs.global);
-    out.push("");
-  }
-  out.push(
-    `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
-      ((serviceIds as Array<{ id: string }>).length
-        ? ` Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(", ")}.`
-        : ""),
-  );
-  out.push("");
-  // MEMORY — cross-session distilled knowledge + corpus, reached via
-  // search_knowledge (retrieve-only). Counts orient the agent to whether it's
-  // worth a look; the one-liner tells it how to query.
-  if (!memStats) {
-    out.push("MEMORY: unavailable — the memory service could not be read. This does not mean memory is empty; verify the connection and credentials before relying on memory results.");
-  } else if (memStats.memories > 0 || memStats.observations > 0) {
-    const srcBits = Object.entries(memStats.bySource)
-      .sort((a, b) => b[1] - a[1])
-      .map(([s, n]) => `${n} ${s}`)
-      .join(", ");
-    out.push(
-      `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
-        (srcBits ? ` from ${srcBits} observations` : "") +
-        `. Search it like you grep — symptoms, identifiers, file paths work best (search_knowledge). ` +
-        `get_entity on a node also shows a headline index of the memories/tickets/threads anchored to it. ` +
-        `Drill into any [mem:…]/[obs:…]/[lin:…] with get_entity (batch ids[] works). ` +
-        `Scope a search to a node with search_knowledge node:<node_id> (composes with type:memory|ticket|thread).`,
-    );
-  } else {
-    out.push(
-      "MEMORY: none yet — it fills as sessions end. Query with search_knowledge (symptoms, identifiers, file paths work best); " +
-        "get_entity shows a per-node headline index once memories anchor to nodes.",
-    );
-  }
-  out.push("");
-  out.push(
-    "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
-      "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract might govern — contracts hang off nodes, not files. Traverse with read_query. " +
-      "If a referenced repository is not cloned locally, verify it with source_read or source_search using the registered repo name; results include the exact commit and default to the indexed revision. " +
-      "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
-      "Store back as you work: remember (when the user says 'remember this', states a durable rule, or a hard-won discovery surfaces — send the text, the distiller files it), correct_graph (when the graph contradicts the code).",
-  );
+  // Orient reports state only. How to use the tools lives in their descriptions
+  // and the agent instructions; conversations, docs and skills are appended by
+  // the Brain host, which owns that store.
+  out.push(`GRAPH: ${total} nodes${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.`);
+  if ((serviceIds as Array<{ id: string }>).length)
+    out.push(`Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(" ")}`);
   return out.join("\n");
 }
 
