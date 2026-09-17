@@ -14,7 +14,9 @@ import { prepareNativeFalkor } from "./native.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
 import {
   BrainWorkspace as WorkspaceSchema,
+  type BrainCli,
   type BrainCommand,
+  type ChatMemoryList,
   type BrainTransferRequest,
   type BrainState,
   type BrainSource,
@@ -32,6 +34,7 @@ import { BrainEmbeddings } from "./embeddings.ts";
 import { indexRepository } from "./indexer.ts";
 import { startBuilderBridge } from "./builder-bridge.ts";
 import { BrainCliUnavailableError, githubRepository, run } from "./process.ts";
+import { chooseNotesCli, classifyAgentIssue } from "./agent-issue.ts";
 import type {
   BrainContributor,
   BrainDocumentSync,
@@ -720,6 +723,7 @@ export class BrainRuntime {
               };
             return {
               ...result,
+              ...(workspace.remote ? { notesCli: await this.notesCli(workspace) } : {}),
               projectIds: this.projectBindings.idsFor(
                 workspace.id,
                 (id) => this.legacyProjectBrainId(id),
@@ -729,6 +733,20 @@ export class BrainRuntime {
           }),
       ),
     };
+  }
+  /**
+   * The agent on this computer that writes conversation notes. A local Brain
+   * uses its own agent. A cloud Brain uses the one chosen here when it is
+   * installed, else the machine default's provider, else any installed agent.
+   */
+  private async notesCli(workspace: Workspace): Promise<BrainCli> {
+    if (!workspace.remote) return workspace.cli;
+    return chooseNotesCli({
+      remote: true,
+      chosen: workspace.cli,
+      installed: this.clis.filter((cli) => cli.installed).map((cli) => cli.id),
+      machineDefault: await this.localCuratorCli?.().catch(() => undefined),
+    });
   }
   private async cloud(workspace: Workspace) {
     if (!workspace.remote) throw new Error("Brain is not remote.");
@@ -981,6 +999,24 @@ export class BrainRuntime {
       return workspace.id;
     }
     const workspace = this.workspace(command.workspaceId);
+    if (command.action === "configureNotes") {
+      // Notes are written on this computer even for a cloud Brain, so this
+      // choice is local and never forwarded.
+      if (!this.clis.some((cli) => cli.id === command.cli && cli.installed))
+        throw new Error(`Install ${command.cli} before choosing it.`);
+      const previous = workspace.cli;
+      workspace.cli = command.cli;
+      try {
+        await this.save();
+      } catch (error) {
+        workspace.cli = previous;
+        throw error;
+      }
+      const worker = this.sessionWorkers.get(workspace.id);
+      this.sessionWorkers.delete(workspace.id);
+      if (worker) await (await worker).close();
+      return null;
+    }
     if (workspace.remote) {
       const client = await this.cloud(workspace);
       if (command.action === "importFolder") {
@@ -1314,11 +1350,7 @@ export class BrainRuntime {
             ? async (request) =>
                 this.runCurator!({
                   ...request,
-                  cli: workspace.remote
-                    ? ((await this.localCuratorCli?.()) ??
-                      this.clis.find((cli) => cli.installed)?.id ??
-                      workspace.cli)
-                    : workspace.cli,
+                  cli: await this.notesCli(workspace),
                   sessionId: `${workspace.id}:${request.sessionId}`,
                 })
             : undefined,
@@ -1384,7 +1416,7 @@ export class BrainRuntime {
       const local = await (await this.sessionWorker(workspace)).memories(session, revision);
       const syncError = this.documentSyncErrors.get(workspace.id);
       return {
-        ...local,
+        ...(await this.withNotesAgent(workspace, local)),
         ...(syncError
           ? {
               extractionError:
@@ -1394,7 +1426,18 @@ export class BrainRuntime {
       };
     }
     const worker = await this.sessionWorker(workspace);
-    return worker.memories(session, revision);
+    return this.withNotesAgent(workspace, await worker.memories(session, revision));
+  }
+  private async withNotesAgent(
+    workspace: Workspace,
+    memories: ChatMemoryList,
+  ): Promise<ChatMemoryList> {
+    const curatorCli = await this.notesCli(workspace);
+    const issue =
+      memories.status === "error"
+        ? classifyAgentIssue(memories.extractionError, curatorCli, "Notes")
+        : undefined;
+    return { ...memories, curatorCli, ...(issue ? { extractionIssue: issue } : {}) };
   }
   async brainDocument(workspaceId: string, documentId: string) {
     const workspace = this.workspaces.find((entry) => entry.id === workspaceId);

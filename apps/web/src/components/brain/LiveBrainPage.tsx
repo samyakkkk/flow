@@ -62,10 +62,15 @@ export function LiveBrainPage({
   selectedWorkspaceId,
   selectedEnvironmentId,
   onSelectionChange,
+  openSettings = false,
+  onSettingsClosed,
 }: {
   selectedWorkspaceId: string | null;
   selectedEnvironmentId: string | null;
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
+  /** Open Brain settings on arrival, for links that ask to change the Brain's agent. */
+  openSettings?: boolean;
+  onSettingsClosed?: () => void;
 }) {
   const primary = usePrimaryEnvironmentId();
   const { environments, isReady } = useEnvironments();
@@ -84,6 +89,8 @@ export function LiveBrainPage({
       }
       selectedWorkspaceId={selectedWorkspaceId}
       onSelectionChange={onSelectionChange}
+      openSettings={openSettings}
+      onSettingsClosed={onSettingsClosed}
       environmentSelector={
         <BrainSelect
           label="Brain computer"
@@ -106,6 +113,8 @@ function BrainController({
   selectedWorkspaceId,
   onSelectionChange,
   environmentSelector,
+  openSettings,
+  onSettingsClosed,
 }: {
   environmentId: EnvironmentId | null;
   environmentsReady: boolean;
@@ -113,6 +122,8 @@ function BrainController({
   selectedWorkspaceId: string | null;
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
   environmentSelector: React.ReactNode;
+  openSettings: boolean;
+  onSettingsClosed: (() => void) | undefined;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const prepared = usePreparedConnection(environmentId);
@@ -123,7 +134,8 @@ function BrainController({
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The controller remounts per environment, so the arrival request is read once here.
+  const [settingsOpen, setSettingsOpen] = useState(openSettings);
   const mounted = useRef(true);
   const pending = useRef<Promise<unknown> | null>(null);
   const transportError = useRef(false);
@@ -450,7 +462,13 @@ function BrainController({
         send={send}
         onCreated={(id) => onSelectionChange(id, environmentId)}
       />
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Dialog
+        open={settingsOpen}
+        onOpenChange={(open) => {
+          setSettingsOpen(open);
+          if (!open) onSettingsClosed?.();
+        }}
+      >
         <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle>Brain settings</DialogTitle>
@@ -508,6 +526,28 @@ function BrainController({
                 </Button>
               </div>
             )}
+            {workspace?.remote && (
+              <div className="space-y-2">
+                <p className="text-sm">Conversation notes agent</p>
+                <BrainCliSelect
+                  value={workspace.notesCli ?? workspace.cli}
+                  clis={state?.clis ?? []}
+                  disabled={busy}
+                  onChange={(value) =>
+                    void send({
+                      action: "configureNotes",
+                      workspaceId: workspace.id,
+                      cli: value as BrainCli,
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  This Brain lives in the cloud, but notes from your conversations are written on
+                  this computer by this agent. Switch it if that agent is signed out or has reached
+                  its usage limit.
+                </p>
+              </div>
+            )}
             {workspace && !workspace.remote && (
               <div className="space-y-2">
                 <p className="text-sm">Default indexing CLI</p>
@@ -524,7 +564,9 @@ function BrainController({
                   }
                 />
                 <p className="text-xs text-muted-foreground">
-                  Used when you connect or reindex a source. Running jobs keep their selected CLI.
+                  Used when you connect or reindex a source, and to write conversation notes.
+                  Running jobs keep their selected CLI. Switch it if this agent is signed out or has
+                  reached its usage limit.
                 </p>
               </div>
             )}

@@ -54,12 +54,15 @@ function BrainDocumentDialogContent({
   environmentId,
   workspaceId,
   onClose,
+  details,
 }: {
   document: BrainDocumentSummary | null;
   initial?: BrainDocument | undefined;
   environmentId: EnvironmentId;
   workspaceId: string;
   onClose: () => void;
+  /** Extra context shown under the document's dates, such as who writes these notes. */
+  details?: React.ReactNode;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const [loaded, setLoaded] = useState<BrainDocument | null>(
@@ -149,6 +152,7 @@ function BrainDocumentDialogContent({
                 ? "The task, progress, and corrections preserved from this conversation."
                 : "Context learned from conversations and retained in this brain."}
           </DialogDescription>
+          {details ? <p className="text-xs text-muted-foreground">{details}</p> : null}
           {!!(loaded ?? document)?.contributors?.length && (
             <p className="text-xs text-muted-foreground">
               Contributors:{" "}

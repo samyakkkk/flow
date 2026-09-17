@@ -25,6 +25,7 @@ import { useProjectBrainChoice } from "./useProjectBrainChoice";
 import { Button } from "../ui/button";
 import { BrainDocumentDialog, BrainDocumentLibrary } from "./BrainDocuments";
 import { ConversationNotesPreview } from "./ConversationNotesPreview";
+import { cliName } from "./BrainControls";
 
 export function ChatBrainPanel({
   environmentId,
@@ -179,7 +180,8 @@ export function ChatBrainPanel({
     : notes?.status === "extracting"
       ? "Updating notes, auto-docs, and skills…"
       : notes?.status === "error"
-        ? "Extraction needs attention. Flow will retry."
+        ? // A recognised cause (signed out, usage limit) says what to do; Flow retries either way.
+          (notes.extractionIssue?.message ?? "Extraction needs attention. Flow will retry.")
         : notes?.status === "disabled"
           ? "Automatic extraction is disabled."
           : savedNow
@@ -187,6 +189,20 @@ export function ChatBrainPanel({
             : notes?.notes
               ? "Saved automatically from this conversation"
               : "Ready for conversation notes";
+  const notesAgent =
+    brain && notes?.curatorCli ? (
+      <>
+        Notes are written by {cliName(notes.curatorCli)} on this computer
+        {brain.remote ? ", even though this Brain lives in the cloud" : ""}.{" "}
+        <Link
+          to="/brain"
+          search={{ brain: brain.id, environment: environmentId, settings: true }}
+          className="text-primary hover:underline"
+        >
+          Change
+        </Link>
+      </>
+    ) : null;
   return (
     <>
       <aside
@@ -352,7 +368,7 @@ export function ChatBrainPanel({
               compact
               environmentId={environmentId}
               workspaceId={brain.id}
-              documents={(notes?.documents ?? []).filter(doc => doc.kind !== "memory")}
+              documents={(notes?.documents ?? []).filter((doc) => doc.kind !== "memory")}
             />
           )}
           <section aria-label="Conversation notes" className="mt-3 border-t border-border/60 pt-3">
@@ -382,9 +398,6 @@ export function ChatBrainPanel({
             </div>
             {notesExpanded && (
               <>
-                <p role="status" className="px-2 py-2 text-[11px] text-muted-foreground">
-                  {memoryStatus}
-                </p>
                 {notes?.notes ? (
                   <button
                     type="button"
@@ -402,9 +415,27 @@ export function ChatBrainPanel({
                       : "Notes help you and your agent pick up where this conversation left off."}
                   </p>
                 )}
+                <p
+                  role="status"
+                  className={
+                    notes?.extractionIssue
+                      ? "px-2 py-2 text-[11px] text-destructive"
+                      : "px-2 py-2 text-[11px] text-muted-foreground"
+                  }
+                >
+                  {memoryStatus}
+                </p>
+                {/* Who writes the notes matters when they stop; the full view always says. */}
+                {notesAgent && notes?.status === "error" ? (
+                  <p className="px-2 pb-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {notesAgent}
+                  </p>
+                ) : null}
                 {notes?.extractionError && (
                   <details className="px-2 pb-2 text-xs text-destructive">
-                    <summary className="cursor-pointer">Extraction needs attention</summary>
+                    <summary className="cursor-pointer">
+                      {notes.extractionIssue ? "Details" : "Extraction needs attention"}
+                    </summary>
                     <p className="mt-2 break-words">{notes.extractionError}</p>
                   </details>
                 )}
@@ -421,6 +452,7 @@ export function ChatBrainPanel({
           environmentId={environmentId}
           workspaceId={brain.id}
           onClose={() => setView(null)}
+          details={notesAgent}
         />
       )}
       <Dialog

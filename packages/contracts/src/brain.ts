@@ -116,11 +116,20 @@ export const BrainTransferRequest = Schema.Struct({
   data: Schema.optionalKey(Schema.String),
 });
 export type BrainTransferRequest = typeof BrainTransferRequest.Type;
+/** A reason the Brain's agent cannot run that the user can fix themselves. */
+export const BrainAgentIssue = Schema.Struct({
+  kind: Schema.Literals(["signedOut", "usageLimit", "unavailable"]),
+  cli: BrainCli,
+  message: Schema.String,
+});
+export type BrainAgentIssue = typeof BrainAgentIssue.Type;
 export const BrainWorkspace = Schema.Struct({
   migration: Schema.optionalKey(BrainMigration),
   id: Schema.String,
   name: Schema.String,
   cli: BrainCli,
+  /** The agent on this computer that writes conversation notes; differs from `cli` for a cloud Brain. */
+  notesCli: Schema.optionalKey(BrainCli),
   sources: Schema.Array(BrainSource),
   projectIds: Schema.optional(Schema.Array(ProjectId)),
   remote: Schema.optionalKey(
@@ -176,6 +185,9 @@ export const ChatMemoryList = Schema.Struct({
   notes: Schema.optionalKey(Schema.NullOr(BrainDocument)),
   documents: Schema.optionalKey(Schema.Array(BrainDocumentSummary)),
   extractionError: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  extractionIssue: Schema.optionalKey(BrainAgentIssue),
+  /** The agent on this computer that writes this conversation's notes. */
+  curatorCli: Schema.optionalKey(BrainCli),
 });
 export type ChatMemoryList = typeof ChatMemoryList.Type;
 export const BrainHarness = Schema.Literals([
@@ -262,6 +274,12 @@ export const BrainCommand = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("create"), name: Schema.String, cli: BrainCli }),
   Schema.Struct({ action: Schema.Literal("configure"), workspaceId: Schema.String, cli: BrainCli }),
+  /** Choose the agent on this computer that writes conversation notes. */
+  Schema.Struct({
+    action: Schema.Literal("configureNotes"),
+    workspaceId: Schema.String,
+    cli: BrainCli,
+  }),
   Schema.Struct({
     action: Schema.Literal("import"),
     workspaceId: Schema.String,

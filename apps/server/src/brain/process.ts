@@ -2,6 +2,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
 import * as NodeChildProcess from "node:child_process";
 
+import { classifyAgentIssue, cliFromExecutable } from "./agent-issue.ts";
+
 export class BrainCliUnavailableError extends Error {
   constructor(executable: string) {
     super(
@@ -150,6 +152,13 @@ export async function runStreaming(
     }, options.timeout);
     options.signal.addEventListener("abort", abort, { once: true });
     if (options.signal.aborted) abort();
+    // A bounded tail, kept only to recognise sign-out and usage-limit failures.
+    let tail = "";
+    const remember = (chunk: Buffer) => {
+      tail = (tail + chunk.toString("utf8")).slice(-8192);
+    };
+    child.stdout.on("data", remember);
+    child.stderr.on("data", remember);
     const lines = readline.createInterface({ input: child.stdout });
     lines.on("line", (line) => {
       try {
@@ -176,13 +185,17 @@ export async function runStreaming(
       kill("SIGTERM");
       output.end(() => {
         if (failure) reject(failure);
-        else if (code !== 0)
+        else if (code !== 0) {
+          const cli = cliFromExecutable(executable);
+          const issue = cli ? classifyAgentIssue(tail, cli, "Indexing") : undefined;
           reject(
             new Error(
-              `${executable} indexing failed (exit ${code}). Check its sign-in and usage limits. The graph already written is preserved.`,
+              issue
+                ? `${issue.message} The graph already written is preserved.`
+                : `${executable} indexing failed (exit ${code}). Check its sign-in and usage limits. The graph already written is preserved.`,
             ),
           );
-        else resolve();
+        } else resolve();
       });
     });
   });
