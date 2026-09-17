@@ -136,7 +136,7 @@ ${cli} install --state-dir ${quote(input.stateDir)}
 ${command}
 3. Restart the coding agents and approve their hook or MCP trust prompts once. Setup cannot approve a trust dialog. Do not change unrelated settings.
 4. In a connected folder, run ${cli} doctor --folder '<folder>'. Confirm the Brain name and that the capture queue drained. Call flow-graph orient in the configured agent.
-5. The startup hook supplies a Flow conversation handle. Call bind_session with that exact handle before remember or get_chat_memories. If the harness does not expose the handle to the model, report conversation-note access as unverified; never select the most recent session in a folder.
+5. The startup hook supplies a Flow conversation handle. Call bind_session with that exact handle before remember; its reply names the conversation's notes document for read_document. If the harness does not expose the handle to the model, report conversation-note access as unverified; never select the most recent session in a folder.
 6. Test a short conversation and check its saved notes in Flow after curation completes. Report configuration, MCP, capture and curation separately; do not claim that a connection check proves curation.
 
 Manual commands:

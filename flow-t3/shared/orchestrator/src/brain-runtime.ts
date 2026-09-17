@@ -164,13 +164,13 @@ if (process.argv.includes("--catalog")) {
         database: db,
         tools: sessionTools,
         async call(name, args, sessionId) {
-          const result = publicDocuments.call(name, args, `t3-${sessionId}`);
+          const result = publicDocuments.call(name, args);
           if (result) return result;
           const pair = await session(`t3:${sessionId}`);
           try {
             const lookup = (arguments_: Record<string, unknown>) => sessionContext.run({ session: `t3-${sessionId}` }, () => pair.client.callTool({ name, arguments: arguments_ }));
-            const value = name === "get_entity" ? await publicDocuments.batch(args, `t3-${sessionId}`, lookup) : undefined;
-            return publicDocuments.augment(name, args, value ?? await lookup(args));
+            const value = name === "get_entity" ? await publicDocuments.batch(args, lookup) : undefined;
+            return publicDocuments.augment(name, args, value ?? await lookup(args), `t3-${sessionId}`);
           } finally { await pair.close(); }
         },
       });
@@ -254,14 +254,14 @@ if (process.argv.includes("--catalog")) {
       } else if (message.method === "call") {
         const context = message.params.context as SessionContext;
         const name=String(message.params.name), args=message.params.arguments as Record<string,unknown>;
-        result = publicDocuments.call(name,args,`t3-${context.session}`);
+        result = publicDocuments.call(name,args);
         if (!result) {
           const pair = await session(context.actor ?? `t3:${context.session}`);
           try {
             const lookup = (arguments_:Record<string,unknown>) => sessionContext.run({ ...context, session: `t3-${context.session}` }, () => pair.client.callTool({name, arguments:arguments_}));
-            result = name === "get_entity" ? await publicDocuments.batch(args,`t3-${context.session}`,lookup) : undefined;
+            result = name === "get_entity" ? await publicDocuments.batch(args,lookup) : undefined;
             result ??= await lookup(args);
-            result = publicDocuments.augment(name,args,result);
+            result = publicDocuments.augment(name,args,result,`t3-${context.session}`);
           } finally { await pair.close(); }
         }
       } else throw new Error("Unknown brain operation");

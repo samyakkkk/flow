@@ -208,7 +208,7 @@ async function main() {
     const session = typeof captured === "string" ? captured : captured.session;
     const brain = typeof captured === "string" ? null : captured.brain;
     if (session && ["SessionStart", "sessionStart"].includes(payload.hook_event_name ?? payload.hookEventName)) {
-      const message = `${brain ? `Flow Brain ${JSON.stringify(brain)} is connected to this folder; call flow-graph orient first. ` : ""}Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember or get_chat_memories. Never use another conversation's handle.`;
+      const message = `${brain ? `Flow Brain ${JSON.stringify(brain)} is connected to this folder; call flow-graph orient first. ` : ""}Flow conversation handle: ${session}. Call flow-graph bind_session with this exact handle before remember; its reply names this conversation's notes document. Never use another conversation's handle.`;
       // Each dialect injects startup context through its own field name.
       const output = args.harness === "cursor"
         ? { additional_context: message }

@@ -9,7 +9,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 import { BrainService } from "./BrainService.ts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
@@ -18,7 +17,6 @@ import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 
-const encodeToolResult = Schema.encodeEffect(McpSchema.CallToolResult);
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -50,16 +48,6 @@ it.effect(
           properties?: Readonly<Record<string, unknown>>;
         }> = [];
         const runtime = {
-          chatMemories: async (id: ProjectId, session: string) => {
-            expect(id).toBe(projectId);
-            expect(session).toBe(scope.threadId);
-            return {
-              memories: [
-                { id: "note-a", text: "Only this chat", createdAt: 1, origin: "user_stated" },
-              ],
-              status: "idle",
-            };
-          },
           callProjectTool: async (id: ProjectId) => {
             readProjects.push(id);
             return { content: [{ type: "text", text: "Only project A's brain" }] };
@@ -102,29 +90,6 @@ it.effect(
             );
           expect(result.isError).not.toBe(true);
           expect(readProjects).toEqual([projectId]);
-          const memories = yield* server
-            .callTool({ name: "get_chat_memories", arguments: { session: "other-chat" } })
-            .pipe(
-              Effect.provideService(McpSchema.McpServerClient, client),
-              Effect.provideService(McpInvocationContext, scope),
-            );
-          expect(memories.content).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "text",
-                text: expect.stringContaining("Only this chat"),
-              }),
-            ]),
-          );
-          // Direct registry calls alone miss the class-instance check performed
-          // when MCP serializes the response over the wire.
-          const encoded = yield* encodeToolResult(memories);
-          expect(encoded.content).toEqual(memories.content);
-          const deniedMemories = yield* server
-            .callTool({ name: "get_chat_memories", arguments: {} })
-            .pipe(Effect.provideService(McpSchema.McpServerClient, client));
-          expect(deniedMemories.isError).toBe(true);
-          expect((yield* encodeToolResult(deniedMemories)).isError).toBe(true);
           const denied = yield* server.callTool({ name: "search_knowledge", arguments: {} }).pipe(
             Effect.provideService(McpSchema.McpServerClient, client),
             Effect.provideService(McpInvocationContext, {
@@ -138,14 +103,6 @@ it.effect(
             {
               event: "brain.tool.completed",
               properties: { tool: "search_knowledge", success: true },
-            },
-            {
-              event: "brain.tool.completed",
-              properties: { tool: "get_chat_memories", success: true },
-            },
-            {
-              event: "brain.tool.completed",
-              properties: { tool: "get_chat_memories", success: false },
             },
             {
               event: "brain.tool.completed",

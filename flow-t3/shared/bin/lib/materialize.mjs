@@ -200,7 +200,7 @@ ${instructionBlock(project)}
 Search Flow on unexpected failures. Verify indexed facts against the checkout.
 Save verbatim durable decisions with enough context to stand alone. Never guess a
 conversation handle, classify notes yourself, or upload secrets. After compaction,
-orient again and read get_chat_memories for the explicitly bound conversation.
+orient again and read_document this conversation's notes (bind_session names their id).
 `;
   return `---
 name: flow
@@ -258,8 +258,9 @@ function instructionBlock(project) {
   if (binding?.connector) return `This folder is configured for Flow Brain ${JSON.stringify(binding.name)}.
 Discover the flow-graph MCP tools and call orient first. Verify the connected Brain
 name. Call bind_session with the exact Flow conversation handle from this chat's
-startup hook before remember or get_chat_memories. If no handle is supplied,
-project knowledge is available but conversation notes are not yet bound. Never
+startup hook before remember; its reply names this conversation's notes for
+read_document. If no handle is supplied, project knowledge is available but
+conversation notes are not yet bound. Never
 select another chat or the latest session in this folder. Keep Flow running.
 Run the setup prompt again to repair configuration; the skill alone is not a binding.`;
   return `This repo is connected to Flow project "${project}" (knowledge graph + team
@@ -1197,8 +1198,9 @@ no Brain is bound, continue without Flow memory: binding is done in the Flow app
   connected Brain name it reports; it labels CONNECTED PROJECT separately from
   the repository name.
 - **Bind the conversation.** The startup context supplies a Flow conversation
-  handle. Call bind_session with that exact handle before remember or
-  get_chat_memories. Never guess a handle or pick the latest session in a folder.
+  handle. Call bind_session with that exact handle before remember; its reply
+  names this conversation's notes for read_document. Never guess a handle or pick
+  the latest session in a folder.
 - **Search on surprise.** Before deep-diving a failure or unfamiliar area, search
   the symptom; answers come with file:line anchors. Verify indexed facts against
   the checkout.
