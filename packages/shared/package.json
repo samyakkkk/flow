@@ -247,6 +247,10 @@
       "types": "./src/devHome.ts",
       "import": "./src/devHome.ts"
     },
+    "./homeBaseDir": {
+      "types": "./src/homeBaseDir.ts",
+      "import": "./src/homeBaseDir.ts"
+    },
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"

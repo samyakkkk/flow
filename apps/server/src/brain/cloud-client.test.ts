@@ -1,7 +1,7 @@
 // @effect-diagnostics globalFetch:off - Tests the standalone HTTP transport boundary.
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { generateKeyPairSync, createVerify } from "node:crypto";
-import { CloudClient, cloudEndpoint } from "./cloud-client.ts";
+import * as NodeCrypto from "node:crypto";
+import { CloudClient, cloudEndpoint, cloudSignInTarget, signInToCloud } from "./cloud-client.ts";
 import { GithubConnection } from "../../../../flow-t3/shared/runtime/src/github.ts";
 afterEach(() => vi.unstubAllGlobals());
 describe("cloud transport", () => {
@@ -50,7 +50,7 @@ describe("cloud transport", () => {
 });
 describe("deployment GitHub credentials", () => {
   it("signs and caches read-only installation tokens", async () => {
-    const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const keys = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
     const fetcher = vi
       .fn()
       .mockImplementation(
@@ -76,7 +76,7 @@ describe("deployment GitHub credentials", () => {
     const init = fetcher.mock.calls[0]![1];
     expect(JSON.parse(init.body)).toEqual({ permissions: { contents: "read" } });
     const jwt = init.headers.authorization.slice(7).split(".");
-    const verifier = createVerify("RSA-SHA256");
+    const verifier = NodeCrypto.createVerify("RSA-SHA256");
     verifier.update(jwt.slice(0, 2).join("."));
     expect(verifier.verify(keys.publicKey, Buffer.from(jwt[2], "base64url"))).toBe(true);
   });
@@ -107,5 +107,56 @@ describe("deployment GitHub credentials", () => {
     await expect(
       new GithubConnection({ kind: "token", token: "synthetic-example" }).status(),
     ).rejects.toThrow("HTTP 403");
+  });
+});
+
+describe("individual Cloud sign-in", () => {
+  it("exchanges an invitation and password without storing either in the endpoint", async () => {
+    const invite = "a".repeat(64);
+    const credential = "b".repeat(64);
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          token: credential,
+          user: { id: "person", email: "person@example.com" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      await signInToCloud(
+        `https://brain.example/invite#${invite}`,
+        "person@example.com",
+        "test-password",
+      ),
+    ).toEqual({
+      endpoint: "https://brain.example",
+      token: credential,
+      account: { id: "person", email: "person@example.com" },
+    });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe("https://brain.example/auth/connect");
+    expect(init.redirect).toBe("error");
+    expect(JSON.parse(init.body)).toEqual({
+      email: "person@example.com",
+      password: "test-password",
+      invitation: invite,
+    });
+    expect(() => cloudSignInTarget("https://brain.example/reset#" + invite)).toThrow();
+    expect(() => cloudSignInTarget("https://brain.example/invite?token=" + invite)).toThrow();
+    expect(() => cloudSignInTarget("http://brain.example")).toThrow();
+  });
+  it("does not expose remote errors that could echo passwords", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ error: "password-echo" }), { status: 400 }),
+        ),
+    );
+    await expect(
+      signInToCloud("https://brain.example", "person@example.com", "password-echo"),
+    ).rejects.toThrow("Cloud sign-in failed");
   });
 });

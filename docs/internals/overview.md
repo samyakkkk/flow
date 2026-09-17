@@ -2,8 +2,10 @@
 
 T3 Code keeps execution in the environment that owns the workspace. Web, desktop, and mobile
 clients control it over authenticated RPC. A remote client must never substitute its own filesystem,
-provider credentials, or machine state for the environment's. The desktop app bundles a server,
-but its renderer follows the same boundary.
+provider credentials, or machine state for the environment's. The desktop app attaches by default to
+the persistent Flow service that owns the data home rather than running its own server; it still
+bundles one, used only behind `FLOW_DESKTOP_LEGACY_BACKEND=1` for one release. Either way its
+renderer follows the same boundary. See [service ownership](./service-ownership.md).
 
 ## Ownership boundaries
 

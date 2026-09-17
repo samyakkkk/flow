@@ -15,6 +15,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as NodeOS from "node:os";
 
+import { legacyBaseDirProbePath, resolveHomeBaseDir } from "@t3tools/shared/homeBaseDir";
+
 function logPathHydrationWarning(message: string, error?: unknown): void {
   process.stderr.write(
     `[server] ${message} ${error instanceof Error ? error.message : (error ?? "")}\n`,
@@ -131,9 +133,24 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 });
 
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
-  const { join, resolve } = yield* Path.Path;
-  if (!raw || raw.trim().length === 0) {
-    return join(NodeOS.homedir(), ".t3");
-  }
-  return resolve(yield* expandHomePath(raw.trim()));
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const homeDirectory = NodeOS.homedir();
+  const explicit = raw?.trim();
+  const isExplicit = explicit !== undefined && explicit.length > 0;
+  const baseDir = resolveHomeBaseDir({
+    explicit,
+    homeDirectory,
+    joinPath: path.join,
+    // Only the default branch needs the probe, and an unreadable home must not
+    // fail a command that never looks at it.
+    legacyHomeExists: isExplicit
+      ? false
+      : yield* fs
+          .exists(legacyBaseDirProbePath(homeDirectory, path.join))
+          .pipe(Effect.orElseSucceed(() => false)),
+  });
+  // `~` expansion and relative paths are the caller's, so only an explicit
+  // selection goes through them; the default is already absolute.
+  return isExplicit ? path.resolve(yield* expandHomePath(baseDir)) : baseDir;
 });

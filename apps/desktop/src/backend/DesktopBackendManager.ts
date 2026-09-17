@@ -115,6 +115,21 @@ export interface PreflightFailure {
   readonly reason: string;
   readonly fatal: boolean;
   readonly retryLimit?: number;
+  // Set only by an attached backend (DesktopAttachedBackend.ts), where the
+  // failure is about the *service* rather than this app's ability to spawn a
+  // child. `reason` stays the human sentence; `kind` is what the UI branches
+  // on to offer the right recovery (update, start the service, install it,
+  // retry).
+  readonly attach?: AttachFailure;
+}
+
+// Why an attached backend could not be used. Ordered from "the service is
+// there but we must not talk to it" to "there is no service at all".
+export type AttachFailureKind = "incompatible" | "stopped" | "not-installed" | "unreachable";
+
+export interface AttachFailure {
+  readonly kind: AttachFailureKind;
+  readonly detail: string;
 }
 
 interface BackendProcessExit {
@@ -267,12 +282,27 @@ export interface DesktopBackendInstance {
   readonly start: Effect.Effect<void>;
   readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
+  // Mints a single-use bootstrap credential for this instance's server on
+  // request; `DesktopLocalEnvironmentAuth` exchanges it for the renderer's
+  // bearer. Only backends that cannot carry a token in their config (the
+  // attached Flow service) implement it: `currentConfig` must stay synchronous
+  // because the renderer bridge reads it over a sync IPC channel.
+  readonly mintBootstrapCredential?: Effect.Effect<Option.Option<string>>;
+  // Where this instance's server currently answers, or None when it has none
+  // (not started, or attach failed). Cheap and side-effect free on purpose:
+  // the `flow://app` protocol reads it on every request.
+  readonly httpBaseUrl?: Effect.Effect<Option.Option<URL>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   // Polls desiredRunning + the instance's own ready flag until the
   // backend reports ready, or the timeout elapses. Returns true on
   // ready, false on timeout. Used by the WSL backend swap to drive its
   // rollback path.
   readonly waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean>;
+  // True when this instance attached to a server it does not own (see
+  // DesktopAttachedBackend.ts). Quit and update-install both skip stopping
+  // these: the service outlives the app, and shutting it down would take the
+  // brain and every external coding session down with it.
+  readonly detached?: boolean;
 }
 
 // Spec describing one backend instance to spawn. The configResolve
@@ -672,6 +702,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     })),
   );
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
+  // Only while the child is actually ready: before that the port is resolved
+  // but nothing is listening on it, and callers use this to decide where to
+  // send renderer traffic.
+  const httpBaseUrl = Ref.get(state).pipe(
+    Effect.map((current) =>
+      current.ready
+        ? Option.map(current.config, (config) => config.httpBaseUrl)
+        : Option.none<URL>(),
+    ),
+  );
 
   const cancelRestart = Effect.gen(function* () {
     const restartFiber = yield* Ref.modify(state, (current) => [
@@ -1162,6 +1202,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     start,
     stop,
     currentConfig,
+    httpBaseUrl,
     snapshot,
     waitForReady,
   } satisfies DesktopBackendInstance;

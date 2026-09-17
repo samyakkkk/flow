@@ -18,6 +18,7 @@ const defaultInput = {
   isPackaged: false,
   resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
   runningUnderArm64Translation: false,
+  legacyHomeExists: true,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 const makeEnvironmentLayer = (
@@ -72,6 +73,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appRoot, "/repo");
       assert.equal(environment.serverRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.bundledClientDir, "/repo/apps/server/dist/client");
       assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.flow.desktop.dev");
       assert.equal(environment.linuxWmClass, "flow-dev");
@@ -104,6 +106,25 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("locates the Flow service bootstrap in the repo and in the package", () =>
+    Effect.gen(function* () {
+      // Adoption runs this script with Electron's embedded Node; packaged
+      // builds ship it loose under resources/ (see build-desktop-artifact.ts).
+      const development = yield* makeEnvironment();
+      assert.equal(development.flowReleaseScriptPath, "/repo/scripts/flow-release.mjs");
+
+      const packaged = yield* makeEnvironment({
+        isPackaged: true,
+        appPath: "/Applications/Flow.app/Contents/Resources/app.asar",
+        resourcesPath: "/Applications/Flow.app/Contents/Resources",
+      });
+      assert.equal(
+        packaged.flowReleaseScriptPath,
+        "/Applications/Flow.app/Contents/Resources/flow-bootstrap/flow-release.mjs",
+      );
+    }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({
@@ -118,6 +139,12 @@ describe("DesktopEnvironment", () => {
       assert.equal(
         environment.backendEntryPath,
         "/install/resources/server.asar/apps/server/dist/bin.mjs",
+      );
+      // The renderer's static fallback reads out of the same server tree, so
+      // packaged Windows must point it at the sidecar too.
+      assert.equal(
+        environment.bundledClientDir,
+        "/install/resources/server.asar/apps/server/dist/client",
       );
     }),
   );

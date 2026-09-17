@@ -32,6 +32,7 @@ const environmentLayer = (input: {
     isPackaged: input.isPackaged ?? true,
     resourcesPath: input.resourcesPath,
     runningUnderArm64Translation: false,
+    legacyHomeExists: true,
   }).pipe(
     Layer.provide(
       Layer.mergeAll(

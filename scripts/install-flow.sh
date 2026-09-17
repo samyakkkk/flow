@@ -18,7 +18,7 @@ while [ "$#" -gt 0 ]; do
 done
 FLOW_NODE=$(command -v node || true)
 [ -n "$FLOW_NODE" ] || { echo 'Install Node.js 24.13.1+ (24.x) first.' >&2; exit 1; }
-"$FLOW_NODE" -e 'const [m,n,p]=process.versions.node.split(".").map(Number); if (m!==24 || n<13 || (n===13 && p<1)) { console.error("Use Node.js 24.13.1+ (24.x)."); process.exit(1); }'
+"$FLOW_NODE" -e 'const [m,n,p]=process.versions.node.split(".").map(Number); if (m!==24 || n<13 || (n===13 && p<1)) { console.error(`Use Node.js 24.13.1+ (24.x). Found ${process.version} at ${process.execPath}; put a 24.x node first on PATH, e.g. PATH="$(dirname "$(nvm which 24)"):$PATH" bash scripts/install-flow.sh`); process.exit(1); }'
 if [ "$FLOW_BUILD" = 1 ]; then
   cd "$FLOW_SOURCE"
   # This installer ships only the local browser app. The shared web package

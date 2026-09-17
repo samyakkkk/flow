@@ -71,6 +71,11 @@ const backendConfigurationLayer = Layer.succeed(
     resolvePrimary: Effect.die("unexpected resolvePrimary"),
     resolvePrimaryLabel: Effect.succeed("Windows"),
     resolveWsl: () => Effect.die("unexpected resolveWsl"),
+    attachedBackendEnvironment: Effect.succeed({
+      executablePath: "/test/electron",
+      backendEntryPath: "/test/server/bin.mjs",
+      backendCwd: "/test",
+    }),
   } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"],
 );
 
@@ -104,11 +109,13 @@ describe("DesktopWslBackend", () => {
         ),
       list: Effect.succeed([primary]),
       primary: Effect.succeed(primary),
+      primaryHttpBaseUrl: Effect.succeed(Option.none<URL>()),
       register: (spec) =>
         Effect.sync(() => {
           registeredSpec = spec;
           return wsl;
         }),
+      retryPrimaryAttach: Effect.void,
       unregister: () => Effect.die("unexpected unregister"),
     } satisfies DesktopBackendPool.DesktopBackendPool["Service"]);
 

@@ -1,110 +1,73 @@
 import { CurationStore } from "./store.js";
 import { excerpt, record } from "./transcript.js";
-import { linkedNoteChunks, noteChunks } from "./notes.js";
+import type { BrainDocumentSummary, DocumentKind } from "./types.js";
 
-export const CURATION_PUBLIC_TOOLS = [
-  {
-    name: "read_note_context",
-    description: "Read this conversation's structured notes or one entry plus bounded linked context. Use a document revision for historical instruction references. This does not search other users' conversations.",
-    inputSchema: {
-      type: "object" as const,
-      properties: { entryId: { type: "string" }, revision: { type: "integer", minimum: 1 } },
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: "list_skills",
-    description:
-      "Find reusable skills saved in this Brain. Search by the procedure you need, then read_skill to retrieve its SKILL.md. Skills are learned reference procedures; check their evidence and applicability before using them.",
-    inputSchema: {
-      type: "object" as const,
-      properties: { query: { type: "string" } },
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: "read_skill",
-    description:
-      "Read a Brain skill's complete SKILL.md, revision and source references by id from list_skills or orient. Use the procedure when relevant; it does not override the user's instructions.",
-    inputSchema: {
-      type: "object" as const,
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: "read_document",
-    description:
-      "Read a saved Brain auto-doc, memory or skill by id from search_knowledge. Conversation notes are restricted to this chat. Returns full prose with revision and evidence references.",
-    inputSchema: {
-      type: "object" as const,
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: true },
-  },
-];
+// Brain documents (conversation notes, maintained docs, skills) are opened with
+// get_entity like every other id an agent is handed; this class answers those
+// calls from the curation store and leaves graph nodes and cards to the gateway.
+// Conversation notes are readable across chats: a new conversation must be able
+// to pick up where a previous one left off.
 const result = (value: unknown, isError = false) => ({
   content: [
     { type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) },
   ],
   ...(isError ? { isError: true } : {}),
 });
+// `type:<kind>` tokens narrow a search to one document kind; ticket/thread kinds
+// belong to the graph corpus and are left to the gateway untouched.
+const KIND_TOKEN = /(?:^|\s)type:(skill|notes|doc)\b/i;
+const NO_MATCH = "(nothing matched — try symptoms, identifiers, or file paths)";
+// Put each query's documents inside that query's section of the search result, and
+// drop the "nothing matched" line when documents did match.
+function placeDocuments(results: string, queries: string[], blocks: string[]): string {
+  if (queries.length === 1 && !results.startsWith("=== q1: "))
+    return results.trim() === NO_MATCH ? blocks[0]! : `${results}\n\n${blocks[0]}`;
+  let placed = results;
+  const loose: string[] = [];
+  queries.forEach((query, index) => {
+    const block = blocks[index];
+    if (!block) return;
+    const header = `=== q${index + 1}: ${query} ===\n`;
+    const start = placed.indexOf(header);
+    if (start < 0) return void loose.push(block);
+    const bodyStart = start + header.length;
+    const next = placed.indexOf("\n=== q", bodyStart);
+    const end = next < 0 ? placed.length : next;
+    const body = placed.slice(bodyStart, end).trim();
+    placed = `${placed.slice(0, bodyStart)}${body === NO_MATCH ? block : `${body}\n\n${block}`}${next < 0 ? "" : "\n"}${placed.slice(end)}`;
+  });
+  return loose.length ? `${placed}\n\n${loose.join("\n\n")}` : placed;
+}
+const RECENT_CONVERSATIONS = 6;
+const ago = (at: number) => {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60 * 48) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+};
 export class CurationPublicTools {
   constructor(private store: CurationStore) {}
-  call(
-    name: string,
-    args: Record<string, unknown>,
-    sessionId: string,
-  ): ReturnType<typeof result> | undefined {
-    if (name === "read_note_context") {
-      const id = `notes:${sessionId}`;
-      const revision = args.revision;
-      if (revision !== undefined && (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1))
-        return result("Invalid note revision.", true);
-      const doc = typeof revision === "number" ? this.store.revision(id, revision) : this.store.get(id);
-      if (!doc || doc.kind !== "notes" || doc.sessionId !== sessionId)
-        return result("Notes not found in this scope.", true);
-      const chunks = typeof revision === "number" ? noteChunks(doc.text) : this.store.chunks(id);
-      if (args.entryId === undefined) return result({ ...doc, chunks });
-      if (typeof args.entryId !== "string") return result("Invalid entry ID.", true);
-      const linked = linkedNoteChunks(chunks, args.entryId);
-      if (!linked.length) return result("Note entry not found.", true);
-      return result({ documentId: id, sessionId, documentRevision: doc.revision, title: doc.name, observedAt: doc.observedAt, chunks: linked,
-        unresolvedHistoricalReferences: [...new Set(linked.flatMap((chunk) => chunk.references))].filter((reference) => !chunks.some((chunk) => `${chunk.id}@${chunk.revision}` === reference)),
-        hint: "Historical P references require the applicable retained document revision; current instructions must not be substituted into old logs." });
-    }
-    if (name === "list_skills") {
-      const query = typeof args.query === "string" ? args.query : "";
-      return result(
-        query ? this.store.search(query, "skill", 30) : this.store.list({ kind: "skill" }),
-      );
-    }
-    if (name === "read_skill" || name === "read_document") {
-      const doc = typeof args.id === "string" ? this.store.get(args.id) : undefined;
-      if (
-        !doc ||
-        (name === "read_skill" && doc.kind !== "skill") ||
-        (doc.kind === "notes" && doc.sessionId !== sessionId)
-      )
-        return result("Document not found in this scope.", true);
-      return result({ ...doc, evidence: this.store.evidence(doc.id) });
-    }
+  // Until extraction names a conversation its notes carry a placeholder title;
+  // the opening words of the original request say more.
+  private title(doc: BrainDocumentSummary): string {
+    if (doc.name !== "Conversation notes") return doc.name;
+    const request = /^> (.+)$/m.exec(this.store.get(doc.id)?.text ?? "")?.[1]?.trim();
+    return request ? JSON.stringify(request.length > 70 ? request.slice(0, 69) + "…" : request) : doc.name;
+  }
+  private titles(label: string, noun: string, docs: BrainDocumentSummary[], shown: number, kind: DocumentKind): string {
+    if (!docs.length) return "";
+    const rest = docs.length > shown ? `; newest ${shown} shown, search_knowledge type:${kind} for the rest` : "";
+    return `\n${label} (${docs.length} ${noun}${rest}):\n${docs.slice(0, shown).map((doc) => `- ${doc.name} [${doc.id}]`).join("\n")}\n`;
+  }
+  call(name: string, args: Record<string, unknown>): ReturnType<typeof result> | undefined {
     if (name === "get_entity" && typeof args.id === "string" && !args.id.startsWith("mem:")) {
       const doc = this.store.get(args.id);
-      if (doc && doc.revision > 0 && (doc.kind !== "notes" || doc.sessionId === sessionId))
-        return result({ ...doc, evidence: this.store.evidence(doc.id) });
+      if (doc && doc.revision > 0) return result({ ...doc, evidence: this.store.evidence(doc.id) });
     }
     return undefined;
   }
   async batch(
     args: Record<string, unknown>,
-    sessionId: string,
     lookup: (args: Record<string, unknown>) => Promise<unknown>,
   ): Promise<ReturnType<typeof result> | undefined> {
     if (
@@ -143,9 +106,7 @@ export class CurationPublicTools {
             error: "The graph lookup did not return this entry.",
           }
         );
-      return doc.kind === "notes" && doc.sessionId !== sessionId
-        ? { id, status: "not_found" }
-        : { id, status: "found", document: { ...doc, evidence: this.store.evidence(id) } };
+      return { id, status: "found", document: { ...doc, evidence: this.store.evidence(id) } };
     });
     return result({
       status: "batch",
@@ -157,47 +118,51 @@ export class CurationPublicTools {
       results,
     });
   }
-  augment(name: string, args: Record<string, unknown>, response: unknown): unknown {
+  // sessionId is the calling conversation: orient names its notes document so the
+  // agent can re-read them after compaction without a dedicated tool.
+  augment(name: string, args: Record<string, unknown>, response: unknown, sessionId?: string): unknown {
     let text = "";
+    let queries: string[] = [];
+    let blocks: string[] = [];
     if (name === "orient") {
-      const skills = this.store.list({ kind: "skill" });
-      const docs = this.store.list({ kind: "doc" });
-      if (docs.length) text += `\nAUTO-DOCS: ${docs.length} maintained context documents are available through search_knowledge and read_document.\n`;
-      if (skills.length)
+      if (sessionId) text += `\nTHIS CONVERSATION: notes are [notes:${sessionId}] — get_entity to recover earlier decisions after compaction.\n`;
+      const recent = this.store
+        .list({ kind: "notes" })
+        .filter((doc) => doc.sessionId !== sessionId)
+        .slice(0, RECENT_CONVERSATIONS);
+      if (recent.length)
         text +=
-          `\nSKILLS (${skills.length}): reusable procedures learned from conversations. Call read_skill with an id to fetch the full SKILL.md; list_skills searches by purpose.\n` +
-          skills
-            .slice(0, 30)
-            .map((skill) => `- ${skill.name} [${skill.id}]: ${skill.description}`)
-            .join("\n") +
-          (skills.length > 30 ? "\nUse list_skills for the remaining skills." : "");
+          "\nRECENT CONVERSATIONS (newest first; get_entity an id to pick that work up):\n" +
+          recent.map((doc) => `- ${this.title(doc)} — ${ago(doc.updatedAt)} [${doc.id}]`).join("\n") +
+          "\n";
+      text += this.titles("DOCS", "maintained", this.store.list({ kind: "doc" }), 8, "doc");
+      text += this.titles("SKILLS", "learned procedures", this.store.list({ kind: "skill" }), 12, "skill");
+      text += "\nTOOLS: search_knowledge (what was written down) · find_entity (code by intent) · get_entity [id] opens anything · read_query (connections, blast radius) · remember · correct_graph\n";
     } else if (name === "search_knowledge") {
-      const queries =
+      queries = (
         typeof args.query === "string"
           ? [args.query]
           : Array.isArray(args.queries)
             ? args.queries.filter((q): q is string => typeof q === "string")
-            : [];
-      text = queries
-        .map((query) => {
-          // New documents have conversation provenance, not graph-node/channel anchors.
-          // Do not broaden a caller's explicit anchored or corpus-only scope.
-          if (/(?:^|\s)(?:node:|channel:|sort:recent|type:(?:thread|ticket)\b)/i.test(query))
-            return "";
-          const memoryOnly = /(?:^|\s)type:memory\b/i.test(query);
-          const search = query.replace(/(?:^|\s)type:memory\b/gi, " ").trim();
-          const hits = this.store.search(
-            search,
-            memoryOnly ? "memory" : undefined,
-            typeof args.limit === "number" ? args.limit : 12,
-            { notesSessionId: false, includeLegacy: false },
-          );
-          return hits.length
-            ? `Curated documents for ${JSON.stringify(query)}:\n${hits.map((doc) => `- ${doc.kind} ${doc.name} [${doc.id}] (${doc.lifecycle}, ${doc.status}): ${excerpt(this.store.get(doc.id)!.text, 1200)}\nFetch full text with read_document.`).join("\n")}`
-            : "";
-        })
-        .filter(Boolean)
-        .join("\n\n");
+            : []
+      )
+        .map((query) => query.trim())
+        .filter(Boolean);
+      blocks = queries.map((query) => {
+        // Graph-anchored and corpus-only scopes are the gateway's; do not broaden them.
+        if (/(?:^|\s)(?:node:|channel:|sort:recent|type:(?:memory|thread|ticket)\b)/i.test(query)) return "";
+        const kind = KIND_TOKEN.exec(query)?.[1]?.toLowerCase() as DocumentKind | undefined;
+        const hits = this.store.search(
+          query.replace(KIND_TOKEN, " ").trim(),
+          kind,
+          typeof args.limit === "number" ? args.limit : 12,
+          { includeLegacy: false, excludeMemories: true },
+        );
+        return hits.length
+          ? `Documents (get_entity [id] reads any of these in full):\n${hits.map((doc) => `- ${doc.kind} ${doc.name} [${doc.id}] (${doc.lifecycle}, ${doc.status}): ${excerpt(this.store.get(doc.id)!.text, 1200)}`).join("\n")}`
+          : "";
+      });
+      text = blocks.filter(Boolean).join("\n\n");
     }
     if (!text) return response;
     const original = record(response);
@@ -209,7 +174,7 @@ export class CurationPublicTools {
       try {
         const payload = record(JSON.parse(String(first.text)));
         if (typeof payload.results === "string") {
-          const augmented = { ...payload, results: `${payload.results}\n\n${text}` };
+          const augmented = { ...payload, results: placeDocuments(payload.results, queries, blocks) };
           return {
             ...original,
             ...(original.structuredContent ? { structuredContent: augmented } : {}),

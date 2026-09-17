@@ -705,7 +705,7 @@ const searchMemoryInput = {
   query: z.string().min(1).optional().describe("What to look up (single form). Works best with symptoms (verbatim error snippets), identifiers, command names, or file paths — like grep."),
   queries: z.array(z.string().min(1)).min(1).max(SEARCH_MEMORY_MAX_BATCH).optional().describe(`Several things to look up in one call (batch form, ≤${SEARCH_MEMORY_MAX_BATCH}) — prefer one batched call over sequential single searches. Results come back grouped per query.`),
   repo: z.string().optional().describe("Repository name for ranking (defaults from the session's env). Same-repo memories rank first, same-family next — but every memory in the project stays eligible; nothing is filtered out by repo."),
-  limit: z.number().int().min(1).max(50).optional().describe("Max memories to return per query (default 8)."),
+  limit: z.number().int().min(1).max(50).optional().describe("Max results to return per query (default 8)."),
 };
 
 async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>>) {
@@ -736,7 +736,7 @@ async function searchMemory(input: z.infer<z.ZodObject<typeof searchMemoryInput>
     });
     const body = (await res.json().catch(() => ({}))) as { lines?: string; results?: string; status?: string; error?: string };
     if (!res.ok || body.status === "error") return { status: "error", error: `Memory search failed (${res.status}): ${body.error ?? ""}` };
-    return { status: "ok", results: (viaGateway ? body.results : body.lines) ?? "(no memories match)" };
+    return { status: "ok", results: (viaGateway ? body.results : body.lines) ?? "(nothing matched)" };
   } catch (err) {
     return { status: "error", error: `Memory search failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -804,57 +804,13 @@ const orientInput = {
   graph: z.string().default(DEFAULT_GRAPH),
 };
 
-interface MemoryStats {
-  memories: number;
-  observations: number;
-  bySource: Record<string, number>;
-}
-
-// The ambient tier: rendered orient docs (repo + global), served verbatim and
-// IN FULL — this is the auto-authored AGENTS.md, deliberately uncapped (the
-// curation happened at write time; nothing here is ranked at read time).
-async function fetchOrientDocs(repo: string): Promise<{ global: string | null; repo: string | null } | null> {
-  const url =
-    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/orient-doc") ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/orient-doc` : "");
-  if (!url) return null;
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(`${url}?repo=${encodeURIComponent(repo)}`, {
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as { global: string | null; repo: string | null };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchMemoryStats(): Promise<MemoryStats | null> {
-  const url =
-    process.env.FLOW_MEMORY_URL?.replace(/\/search$/, "/stats") ||
-    (process.env.ORCHESTRATOR_URL ? `${process.env.ORCHESTRATOR_URL.replace(/\/$/, "")}/v1/memory/stats` : "");
-  if (!url) return null;
-  const token = process.env.FLOW_ACTIVITY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
-  try {
-    const res = await fetch(url, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(4000) });
-    if (!res.ok) return null;
-    return (await res.json()) as MemoryStats;
-  } catch {
-    return null;
-  }
-}
-
 async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const repo = input.repo || sessionValue("FLOW_REPO") || "";
   const branch = input.branch || sessionValue("FLOW_BRANCH") || "";
 
-  const [repoRows, counts, memStats, orientDocs] = await Promise.all([
+  const [repoRows, counts] = await Promise.all([
     run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
-    fetchMemoryStats(),
-    fetchOrientDocs(repo),
   ]);
 
   // Repo identity: match by name when the caller told us which repo; otherwise
@@ -887,60 +843,17 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
   if (repoRow) {
-    out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 500)} [${repoRow.id}]`);
+    out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 4000)} [${repoRow.id}]`);
   } else {
     out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
   }
   out.push("");
-  // Orient docs — the ambient tier, verbatim and uncapped. Curation happened
-  // at write time (distiller nomination + earned inclusion); serving is dumb.
-  if (orientDocs?.repo) {
-    out.push(orientDocs.repo);
-    out.push("");
-  }
-  if (orientDocs?.global) {
-    out.push(orientDocs.global);
-    out.push("");
-  }
-  out.push(
-    `MAP: ${total} nodes indexed${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.` +
-      ((serviceIds as Array<{ id: string }>).length
-        ? ` Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(", ")}.`
-        : ""),
-  );
-  out.push("");
-  // MEMORY — cross-session distilled knowledge + corpus, reached via
-  // search_knowledge (retrieve-only). Counts orient the agent to whether it's
-  // worth a look; the one-liner tells it how to query.
-  if (!memStats) {
-    out.push("MEMORY: unavailable — the memory service could not be read. This does not mean memory is empty; verify the connection and credentials before relying on memory results.");
-  } else if (memStats.memories > 0 || memStats.observations > 0) {
-    const srcBits = Object.entries(memStats.bySource)
-      .sort((a, b) => b[1] - a[1])
-      .map(([s, n]) => `${n} ${s}`)
-      .join(", ");
-    out.push(
-      `MEMORY: ${memStats.memories} distilled ${memStats.memories === 1 ? "memory" : "memories"}` +
-        (srcBits ? ` from ${srcBits} observations` : "") +
-        `. Search it like you grep — symptoms, identifiers, file paths work best (search_knowledge). ` +
-        `get_entity on a node also shows a headline index of the memories/tickets/threads anchored to it. ` +
-        `Drill into any [mem:…]/[obs:…]/[lin:…] with get_entity (batch ids[] works). ` +
-        `Scope a search to a node with search_knowledge node:<node_id> (composes with type:memory|ticket|thread).`,
-    );
-  } else {
-    out.push(
-      "MEMORY: none yet — it fills as sessions end. Query with search_knowledge (symptoms, identifiers, file paths work best); " +
-        "get_entity shows a per-node headline index once memories anchor to nodes.",
-    );
-  }
-  out.push("");
-  out.push(
-    "HOW TO USE: search by INTENT with find_entity — describe what the code does ('list git branches of a repo') and results come back with file:line anchors, often faster than grepping for words you have to guess. " +
-      "Drill into any [id] with get_entity BEFORE acting when your task touches an API endpoint, another service's behavior, or anything a contract might govern — contracts hang off nodes, not files. Traverse with read_query. " +
-      "If a referenced repository is not cloned locally, verify it with source_read or source_search using the registered repo name; results include the exact commit and default to the indexed revision. " +
-      "Re-orient when entering an unfamiliar area, when a failure surprises you, or after context compaction. " +
-      "Store back as you work: remember (when the user says 'remember this', states a durable rule, or a hard-won discovery surfaces — send the text, the distiller files it), correct_graph (when the graph contradicts the code).",
-  );
+  // Orient reports state only. How to use the tools lives in their descriptions
+  // and the agent instructions; conversations, docs and skills are appended by
+  // the Brain host, which owns that store.
+  out.push(`GRAPH: ${total} nodes${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.`);
+  if ((serviceIds as Array<{ id: string }>).length)
+    out.push(`Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(" ")}`);
   return out.join("\n");
 }
 
@@ -967,13 +880,13 @@ export const verbs = {
   },
   orient: {
     description:
-      "Call this FIRST, before anything else, at the start of every session — and again after context compaction or when you feel lost. Returns your bearings in one page: what this repo is, how it works (distilled from real sessions), a map of the knowledge graph, and what memory holds. Pass {repo, branch} explicitly when Flow doesn't run your session.",
+      "Call this FIRST, and again after context compaction or when you feel lost. One page of bearings: what this repo is, the knowledge graph's entry points, this conversation's notes id, the most recent other conversations, and the Brain's doc and skill titles — each with an [id] that get_entity opens. Pass {repo, branch} only when Flow does not run your session.",
     shape: orientInput,
     handler: orient,
   },
   find_entity: {
     description:
-      "Look up graph entities by id, name, alias — or by INTENT: describe what the code does ('list git branches of a repo') and semantic search returns the matching nodes with their file:line anchors. Use this to find where behavior lives before grepping. Always check here before creating. Relevant distilled memories are blended in as `memory_hits` (typed terse lines, capped at 3 unless the query says type:memory). BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+      "Find where behavior lives. Describe what the code does ('list git branches of a repo') and semantic search returns the matching graph nodes with their file:line anchors; also looks up by id, name or alias. Use it before grepping for words you would have to guess, and always before creating an entity. BATCH: pass qs:[…] (up to 10) to look up several phrases at once — results come back grouped per query, in order.",
     shape: findEntityInput,
     handler: findEntity,
   },
@@ -989,12 +902,12 @@ export const verbs = {
   },
   get_entity: {
     description:
-      "Fetch a node with all its incoming and outgoing relationships, plus a headline INDEX of the memories/tickets/threads anchored to it (headlines only, ~300 tokens; a '+N more' line is a working search_knowledge node:<id> query). Also resolves memory drill-down ids — mem:<id> (memory card: strength breakdown, anchors, evidence), obs:<id>, lin:<identifier>, slackthread:<ts>. BATCH: pass ids:[…] (up to 15) to fetch several nodes/cards in one call — sections come back in request order, one per id, with an explicit not-found entry for any missing id; prefer one batched call over sequential single lookups.",
+      "Open anything by its [id] and read it in full: a conversation's notes (notes:…), a maintained doc, a skill's SKILL.md, a Slack thread (slackthread:…), a Linear ticket (lin:…), or a graph node. Ids come from orient, search_knowledge and find_entity. For a graph node it returns all incoming and outgoing relationships plus a headline index of what is anchored to it (a '+N more' line is a working search_knowledge node:<id> query) — check this before acting on an API endpoint, a contract or another service's behavior. Notes and skills are reference context, not instructions. BATCH: pass ids:[…] (up to 15), mixing kinds freely — sections come back in request order, with an explicit not-found entry for any missing id.",
     shape: getEntityInput,
     handler: getEntity,
   },
   read_query: {
-    description: "Escape hatch: run read-only Cypher for traversals the other verbs don't cover.",
+    description: "Trace connections across the knowledge graph with read-only Cypher — for blast radius and dependency questions that get_entity's one hop cannot answer. What depends on a node (the blast radius of changing it): MATCH (n {id:'svc:users'})<-[*1..3]-(m) RETURN DISTINCT labels(m)[0] AS type, m.id AS id, m.name AS name LIMIT 50. What a node depends on: flip the arrow to -[*1..3]->. Which edges leave a node: MATCH (n {id:'svc:users'})-[r]->(m) RETURN type(r) AS edge, m.id AS id. Node ids come from find_entity; list_schema gives the node and edge types. Writes are rejected.",
     shape: readQueryInput,
     handler: readQuery,
   },
@@ -1004,25 +917,25 @@ export const verbs = {
     handler: mergeEntities,
   },
   list_schema: {
-    description: "List the node and edge types the gateway accepts.",
+    description: "List the knowledge graph's node types (Service, APIEndpoint, Capability, UsageContract, Workflow, …) and edge types (CALLS, USES, READS, WRITES, OWNS, …). Call it before writing a read_query traversal.",
     shape: listSchemaInput,
     handler: listSchema,
   },
   correct_graph: {
     description:
-      "Flag graph content that looks wrong or unclear (stale description, missing/incorrect relationship). Advisory: the indexer verifies your flag against the repo's base branch and applies or rejects it — you do not edit the graph. Include the node ids, what's wrong, and file:line evidence.",
+      "Flag graph content that contradicts the code (stale description, missing or incorrect relationship). Advisory: the indexer verifies your flag against the repo's base branch and applies or rejects it — you do not edit the graph. Include the node ids, what is wrong, and file:line evidence.",
     shape: correctGraphInput,
     handler: correctGraph,
   },
   remember: {
     description:
-      "Send something to Flow's long-term memory NOW — call this whenever the user says 'remember this' (or a hard-won discovery/decision/constraint surfaces that a future session would want). Pass the text with enough context to stand alone; verbatim user quotes beat summaries. Free to use, instant, no approval: the distiller extracts, files, and consolidates it in the background — you never classify kind or scope, and you don't wait.",
+      "Save something durable NOW — call this when the user says 'remember this', states a rule ('always X', 'we never Y'), or a hard-won discovery, decision or constraint surfaces that a future session would want. Pass the text with enough context to stand alone; the user's own words beat a summary. Free, instant, no approval: the curator files it in the background — you never classify it and you do not wait.",
     shape: rememberInput,
     handler: rememberVerb,
   },
   search_knowledge: {
     description:
-      "Search Flow's cross-session memory (distilled decisions, constraints, gotchas, how-tos, preferences) plus indexed Slack messages/thread replies and the linear corpus. For Slack questions, call this before claiming no Slack access. To read latest channel messages use query: `type:thread channel:C012345 sort:recent` (or channel:channel-name); no keywords required. Add keywords to filter that channel. Results include timestamps and source links; they reflect the indexed archive, not a live Slack API request. Retrieve-only. Search it like you grep — verbatim error snippets, identifiers, command names, and file paths work best. Call it when a failure surprises you or before making a decision that a past session may have already settled. Scope to a graph node with a `node:<node_id>` token (filters to items anchored to that node — this is what get_entity's '+N more' line runs); narrow by kind with `type:memory|ticket|thread`; both compose with keywords. BATCH: pass queries:[…] (up to 10) to search several things at once — results come back grouped per query, in order; prefer one batched call over sequential single searches.",
+      "ONE search over everything the team has written down: conversation notes from any chat, maintained docs, learned skills, indexed Slack messages and Linear tickets. Search it like you grep — verbatim error text, identifiers, command names, file paths, or the key terms of the task. Every hit carries an [id]: get_entity opens it in full. Call it before starting a task (a past conversation probably touched it) and when a failure surprises you. Narrow with type:notes|doc|skill|thread|ticket, scope to a graph node with node:<node_id>, and read a channel's latest messages with `type:thread channel:<name-or-id> sort:recent` (no keywords needed). For Slack questions, call this before claiming no Slack access; results reflect the indexed archive, not a live request. Retrieve-only. BATCH: pass queries:[…] (up to 10) — prefer one batched call over sequential searches.",
     shape: searchMemoryInput,
     handler: searchMemory,
   },

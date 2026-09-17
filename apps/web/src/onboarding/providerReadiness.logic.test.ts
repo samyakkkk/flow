@@ -336,3 +336,23 @@ describe("resolveOnboardingProviderInstallCommand", () => {
     );
   });
 });
+
+it("offers OpenCode setup and login alongside Claude and Codex", () => {
+  expect(resolveOnboardingProviderInstallCommand("opencode", "darwin")).toBe(
+    "curl -fsSL https://opencode.ai/install | bash",
+  );
+  expect(resolveOnboardingProviderInstallCommand("opencode", "windows")).toBe(
+    "npm install -g opencode-ai",
+  );
+  expect(
+    resolveOnboardingProviderLoginCommand(
+      {
+        ...readyCodex,
+        driver: ProviderDriverKind.make("opencode"),
+        instanceId: ProviderInstanceId.make("opencode"),
+      },
+      DEFAULT_SERVER_SETTINGS,
+      "darwin",
+    ),
+  ).toBe("opencode auth login");
+});

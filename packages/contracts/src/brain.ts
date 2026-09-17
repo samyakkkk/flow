@@ -11,7 +11,9 @@ export const BrainEntity = Schema.Struct({
   source: Schema.String,
   properties: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
+export const BrainContributor = Schema.Struct({ id: Schema.String, email: Schema.String });
 export const BrainMemory = Schema.Struct({
+  contributors: Schema.optionalKey(Schema.Array(BrainContributor)),
   id: Schema.String,
   kind: Schema.Literals(["Decision", "Preference", "Gotcha"]),
   title: Schema.String,
@@ -20,6 +22,7 @@ export const BrainMemory = Schema.Struct({
   entityIds: Schema.Array(Schema.String),
 });
 export const BrainDocumentSummary = Schema.Struct({
+  contributors: Schema.optionalKey(Schema.Array(BrainContributor)),
   folder: Schema.optionalKey(Schema.String),
   id: Schema.String,
   kind: Schema.Literals(["notes", "doc", "memory", "skill"]),
@@ -90,6 +93,7 @@ export const BrainSource = Schema.Struct({
 });
 export type BrainSource = typeof BrainSource.Type;
 export const BrainMigration = Schema.Struct({
+  account: Schema.optionalKey(BrainContributor),
   endpoint: Schema.String,
   brainId: Schema.String,
   status: Schema.Literals(["transferring", "error"]),
@@ -112,15 +116,25 @@ export const BrainTransferRequest = Schema.Struct({
   data: Schema.optionalKey(Schema.String),
 });
 export type BrainTransferRequest = typeof BrainTransferRequest.Type;
+/** A reason the Brain's agent cannot run that the user can fix themselves. */
+export const BrainAgentIssue = Schema.Struct({
+  kind: Schema.Literals(["signedOut", "usageLimit", "unavailable"]),
+  cli: BrainCli,
+  message: Schema.String,
+});
+export type BrainAgentIssue = typeof BrainAgentIssue.Type;
 export const BrainWorkspace = Schema.Struct({
   migration: Schema.optionalKey(BrainMigration),
   id: Schema.String,
   name: Schema.String,
   cli: BrainCli,
+  /** The agent on this computer that writes conversation notes; differs from `cli` for a cloud Brain. */
+  notesCli: Schema.optionalKey(BrainCli),
   sources: Schema.Array(BrainSource),
   projectIds: Schema.optional(Schema.Array(ProjectId)),
   remote: Schema.optionalKey(
     Schema.Struct({
+      account: Schema.optionalKey(BrainContributor),
       endpoint: Schema.String,
       brainId: Schema.String,
       status: Schema.Literals(["ready", "error"]),
@@ -171,14 +185,46 @@ export const ChatMemoryList = Schema.Struct({
   notes: Schema.optionalKey(Schema.NullOr(BrainDocument)),
   documents: Schema.optionalKey(Schema.Array(BrainDocumentSummary)),
   extractionError: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  extractionIssue: Schema.optionalKey(BrainAgentIssue),
+  /** The agent on this computer that writes this conversation's notes. */
+  curatorCli: Schema.optionalKey(BrainCli),
 });
 export type ChatMemoryList = typeof ChatMemoryList.Type;
+export const BrainHarness = Schema.Literals([
+  "claude",
+  "codex",
+  "cursor",
+  "gemini",
+  "opencode",
+  "copilot",
+  "antigravity",
+]);
+export type BrainHarness = typeof BrainHarness.Type;
+export const BrainAgentIntegration = Schema.Struct({
+  configured: Schema.Boolean,
+  harnesses: Schema.Array(BrainHarness),
+  detected: Schema.Array(BrainHarness),
+  brainName: Schema.NullOr(Schema.String),
+  workspaceId: Schema.NullOr(Schema.String),
+  pendingCaptures: Schema.Number,
+  message: Schema.String,
+});
+export type BrainAgentIntegration = typeof BrainAgentIntegration.Type;
+/** Machine-level coding-agent registrations on the computer hosting an environment. */
+export const BrainAgentTools = Schema.Struct({
+  installed: Schema.Array(BrainHarness),
+  detected: Schema.Array(BrainHarness),
+});
+export type BrainAgentTools = typeof BrainAgentTools.Type;
 export const BrainCommand = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("connectCloud"),
     workspaceId: Schema.optionalKey(Schema.String),
     endpoint: Schema.String,
-    token: Schema.String,
+    email: Schema.String,
+    password: Schema.String,
+    /** Local CLI that curates this machine's conversation notes; defaults to the remote Brain's. */
+    cli: Schema.optionalKey(BrainCli),
   }),
   Schema.Struct({ action: Schema.Literal("disconnectCloud"), workspaceId: Schema.String }),
   Schema.Struct({
@@ -190,6 +236,17 @@ export const BrainCommand = Schema.Union([
     action: Schema.Literal("readChat"),
     threadId: ThreadId,
     revision: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({ action: Schema.Literal("agentSetup"), workspaceId: Schema.String }),
+  Schema.Struct({
+    action: Schema.Literal("agentIntegration"),
+    projectId: ProjectId,
+    operation: Schema.Literals(["status", "configure", "remove", "retry"]),
+    harnesses: Schema.optionalKey(Schema.Array(BrainHarness)),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("agentTools"),
+    operation: Schema.Literals(["status", "install"]),
   }),
   Schema.Struct({ action: Schema.Literal("start") }),
   Schema.Struct({
@@ -217,6 +274,12 @@ export const BrainCommand = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("create"), name: Schema.String, cli: BrainCli }),
   Schema.Struct({ action: Schema.Literal("configure"), workspaceId: Schema.String, cli: BrainCli }),
+  /** Choose the agent on this computer that writes conversation notes. */
+  Schema.Struct({
+    action: Schema.Literal("configureNotes"),
+    workspaceId: Schema.String,
+    cli: BrainCli,
+  }),
   Schema.Struct({
     action: Schema.Literal("import"),
     workspaceId: Schema.String,
@@ -247,6 +310,11 @@ export const BrainCommand = Schema.Union([
 export type BrainCommand = typeof BrainCommand.Type;
 export const BrainResponse = Schema.Struct({
   state: BrainState,
+  agentIntegration: Schema.optionalKey(BrainAgentIntegration),
+  agentTools: Schema.optionalKey(BrainAgentTools),
+  agentSetup: Schema.optionalKey(
+    Schema.Struct({ instructions: Schema.String, command: Schema.String }),
+  ),
   chatMemories: Schema.optional(ChatMemoryList),
   document: Schema.optionalKey(Schema.NullOr(BrainDocument)),
   error: Schema.NullOr(Schema.String),

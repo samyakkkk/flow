@@ -11,6 +11,7 @@ import { BRAND } from "@t3tools/shared/branding";
  * HTTPS and pairs through the tailnet URL instead.
  */
 import {
+  AuthAdministrativeScopes,
   AuthStandardClientScopes,
   ExecutionEnvironmentDescriptor,
   PortSchema,
@@ -427,13 +428,20 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
   readonly config: ServerConfig.ServerConfig["Service"];
   readonly ttl: Option.Option<Duration.Duration>;
   readonly label: Option.Option<string>;
+  // Administrative scopes are what the desktop needs to manage connections
+  // once it attaches. Same trust boundary as the default mint — the caller
+  // already has read/write access to this server's auth database — so the
+  // flag only widens scope, it does not widen who may ask.
+  readonly admin: boolean;
 }) {
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
     return yield* environmentAuth.createPairingLink({
-      scopes: AuthStandardClientScopes,
-      subject: "one-time-token",
-      label: Option.getOrElse(input.label, () => "t3 pair"),
+      scopes: input.admin ? AuthAdministrativeScopes : AuthStandardClientScopes,
+      subject: input.admin ? "desktop-attach" : "one-time-token",
+      label: Option.getOrElse(input.label, () =>
+        input.admin ? `${BRAND.name} desktop` : "t3 pair",
+      ),
       ...(Option.isSome(input.ttl) ? { ttl: input.ttl.value } : {}),
     });
   }).pipe(
@@ -459,6 +467,20 @@ const labelFlag = Flag.string("label").pipe(
   Flag.optional,
 );
 
+const adminFlag = Flag.boolean("admin").pipe(
+  Flag.withDescription(
+    "Mint administrative scopes instead of the standard client scopes. Used by the desktop app when it attaches to this server.",
+  ),
+  Flag.withDefault(false),
+);
+
+const jsonFlag = Flag.boolean("json").pipe(
+  Flag.withDescription(
+    "Print the minted credential and its pairing URL as JSON on stdout and nothing else. Skips the QR code and the human-readable notes.",
+  ),
+  Flag.withDefault(false),
+);
+
 const tailscaleFlag = Flag.boolean("tailscale").pipe(
   Flag.withDescription(
     "Publish the server over Tailscale Serve HTTPS and pair through the tailnet URL.",
@@ -476,6 +498,8 @@ export const pairCommand = Command.make("pair", {
   baseDir: baseDirFlag,
   ttl: ttlFlag,
   label: labelFlag,
+  admin: adminFlag,
+  json: jsonFlag,
   tailscale: tailscaleFlag,
   tailscaleServePort: tailscaleServePortFlag,
 }).pipe(
@@ -515,8 +539,31 @@ export const pairCommand = Command.make("pair", {
       }
 
       const config = yield* makePairServerConfig({ target, logLevel });
-      const issued = yield* mintPairingLink({ config, ttl: flags.ttl, label: flags.label });
+      const issued = yield* mintPairingLink({
+        config,
+        ttl: flags.ttl,
+        label: flags.label,
+        admin: flags.admin,
+      });
       const pairingUrl = buildPairingUrl(pairingBaseUrl, issued.credential);
+
+      if (flags.json) {
+        // Machine-readable mode has exactly one consumer shape: a caller that
+        // parses stdout. Notes and the QR code would corrupt it.
+        yield* Console.log(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is a presentation DTO.
+          JSON.stringify({
+            credential: issued.credential,
+            // The URL the human-readable mode prints, so a caller that wants to
+            // open the app in a browser does not have to rebuild it and get the
+            // dev-server/tailnet base wrong.
+            pairingUrl,
+            expiresAt: DateTime.formatIso(issued.expiresAt),
+            scopes: issued.scopes,
+          }),
+        );
+        return;
+      }
 
       yield* Console.log(
         formatPairOutput({

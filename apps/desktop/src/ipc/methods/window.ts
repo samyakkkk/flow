@@ -112,6 +112,29 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         // missing build tools): it has stopped retrying, so an indefinite
         // "Connecting…" would be misleading — its error is surfaced by the
         // WSL-state UI instead.
+        // The attached primary is the exception to "skip the primary": its
+        // failure is about the Flow *service*, and the renderer's recovery
+        // screen is the only place that says so. Endpoints stay null — there
+        // is nothing to dial — and the typed kind is what the screen branches
+        // on.
+        const parkedFailure = Option.isSome(config)
+          ? Option.getOrUndefined(config.value.preflightFailure)
+          : undefined;
+        if (isPrimary && parkedFailure?.attach !== undefined) {
+          bootstraps.push({
+            id: instance.id,
+            label: yield* instance.label,
+            runningDistro: null,
+            httpBaseUrl: null,
+            wsBaseUrl: null,
+            attachFailure: {
+              kind: parkedFailure.attach.kind,
+              reason: parkedFailure.reason,
+              detail: parkedFailure.attach.detail,
+            },
+          });
+          continue;
+        }
         const fatalPreflight =
           Option.isSome(config) &&
           Option.isSome(config.value.preflightFailure) &&

@@ -1004,3 +1004,25 @@ NodeTest.test(
     }
   },
 );
+
+NodeTest.test("sync stamps authenticated contributors, ignores forged authors, and preserves contributors across revisions", () => {
+  const local = fixture();
+  const remote = fixture();
+  const actor = { id: "member-one", email: "one@example.com" };
+  const second = { id: "member-two", email: "two@example.com" };
+  const document = local.store.save(local.cp, { kind: "doc", name: "Team decision", text: "Use separate accounts for Brain access.", evidence: [2] });
+  const batch = local.store.pendingSync().map((item) => ({ ...item, document: { ...item.document, contributors: [{ id: "forged", email: "forged@example.com" }] } }));
+  const [ack] = remote.store.applySync("computer-one", batch, actor);
+  NodeAssert.deepEqual(remote.store.get(ack!.remoteId)!.contributors, [actor]);
+  NodeAssert.deepEqual(remote.store.list()[0]!.contributors, [actor]);
+  NodeAssert.deepEqual(remote.store.search("accounts")[0]!.contributors, [actor]);
+  remote.store.applySync("computer-one", batch, second);
+  NodeAssert.deepEqual(remote.store.get(ack!.remoteId)!.contributors, [actor], "a replay does not claim a new contribution");
+  local.store.save({ ...local.cp, after: 2, through: 4 }, { id: document.id, kind: "doc", expectedRevision: 1, text: "Use separate accounts and permissions for Brain access.", evidence: [4] });
+  remote.store.applySync("computer-one", local.store.pendingSync(), second);
+  NodeAssert.deepEqual(remote.store.get(ack!.remoteId)!.contributors, [actor, second]);
+  const restarted = new CurationStore(remote.db);
+  NodeAssert.deepEqual(restarted.get(ack!.remoteId)!.contributors, [actor, second]);
+  NodeAssert.deepEqual(restarted.revision(ack!.remoteId, 1)!.contributors, [actor]);
+  local.db.close(); remote.db.close();
+});

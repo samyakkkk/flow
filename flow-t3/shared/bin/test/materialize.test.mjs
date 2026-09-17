@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "jsonc-parser";
 
-const materializer = new URL("../../bin/lib/materialize.mjs", import.meta.url).href;
+const materializer = new URL("../lib/materialize.mjs", import.meta.url).href;
 
 for (const harness of ["opencode", "gemini", "antigravity"]) {
   test(`${harness}-only setup installs and restores shared knowledge without Codex`, () => fixture(({ repoDir, invoke }) => {
@@ -40,12 +40,12 @@ function fixture(run) {
   const git = spawnSync("git", ["init", "-q", repoDir]);
   assert.equal(git.status, 0);
   const ctx = { repoDir, project: "test-project", repo: "test-repo", harnesses: ["copilot"] };
-  function invoke(code) {
+  function invoke(code, extraEnv = {}) {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import * as m from ${JSON.stringify(materializer)};
       const ctx = ${JSON.stringify(ctx)};
       ${code}
-    `], { env: { ...process.env, HOME: home, COPILOT_HOME: "" }, encoding: "utf8" });
+    `], { env: { ...process.env, HOME: home, COPILOT_HOME: "", ...extraEnv }, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   }
@@ -76,7 +76,7 @@ test("Copilot setup, repeated setup, and removal preserve user configuration", (
   const cli = parse(installed[".github/mcp.json"]);
   assert.deepEqual(cli.mcpServers["flow-graph"], vscode.servers["flow-graph"]);
   const hooks = parse(installed[".github/hooks/flow.json"]);
-  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"]);
+  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["PostToolUse", "SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"]);
   assert.equal(hooks.hooks.Stop.length, 2);
   assert.match(hooks.hooks.Stop[1].command, /'--harness' 'copilot'/);
   assert.ok(!existsSync(join(repoDir, ".claude")), "Copilot installs independently of Claude");
@@ -233,4 +233,78 @@ test("Antigravity MCP identities are stable per binding and do not collide acros
   assert.notEqual(render("test-project", "different-repo"), first);
   invoke("m.removeRepo(ctx.repoDir);");
   assert.equal(readFileSync(file, "utf8"), original);
+}));
+
+// The Cloud CLI points FLOW_AGENT_HOME at <home>/agents, so the shim path is not
+// under ~/.flow. Flow must still recognize its own hooks there, or removal strands
+// them and the next setup appends a duplicate (double capture).
+test("hooks under a custom agent home are recognized on re-setup and removal", () => fixture(({ home, repoDir, invoke }) => {
+  const env = { FLOW_AGENT_HOME: join(home, "agents") };
+  const harnesses = "['claude', 'codex', 'cursor']";
+  const hookFiles = [".claude/settings.json", ".codex/hooks.json", ".cursor/hooks.json"];
+
+  invoke(`m.materializeRepo({ ...ctx, harnesses: ${harnesses} });`, env);
+  const installed = readFileSync(join(repoDir, hookFiles[0]), "utf8");
+  assert.match(installed, /agents\/bin\/flow-hook/, "shim path should follow FLOW_AGENT_HOME");
+
+  invoke(`m.materializeRepo({ ...ctx, harnesses: ${harnesses} });`, env);
+  for (const rel of hookFiles) {
+    const hooks = JSON.parse(readFileSync(join(repoDir, rel), "utf8")).hooks;
+    for (const [event, entries] of Object.entries(hooks)) {
+      assert.equal(entries.length, 1, `${rel} ${event} duplicated on re-setup`);
+    }
+  }
+
+  invoke("m.removeRepo(ctx.repoDir)", env);
+  for (const rel of hookFiles) {
+    assert.ok(!existsSync(join(repoDir, rel)), `${rel} left behind after removal`);
+  }
+}));
+
+test("machine-scope rendering registers every tool once in user configuration and removal restores it", () => fixture(({ home, invoke }) => {
+  const codexHome = join(home, ".codex");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  mkdirSync(join(home, ".copilot"), { recursive: true });
+  const userSettings = { permissions: { allow: ["Read"] }, hooks: { Stop: [{ hooks: [{ type: "command", command: "mine" }] }] } };
+  writeFileSync(join(home, ".claude/settings.json"), JSON.stringify(userSettings));
+  writeFileSync(join(home, ".claude.json"), '{"numStartups":1}');
+  writeFileSync(join(home, ".claude/CLAUDE.md"), "# Mine\n");
+  writeFileSync(join(codexHome, "config.toml"), 'model = "x"\n');
+  writeFileSync(join(home, ".copilot/mcp-config.json"), '{\n  // mine\n  "mcpServers": { "mine": { "command": "m" } },\n}\n');
+  const all = "['claude','codex','cursor','antigravity','gemini','opencode','copilot']";
+  invoke(`m.materializeGlobal({ harnesses: ${all} }); m.materializeGlobal({ harnesses: ${all} });`, { CODEX_HOME: codexHome, COPILOT_HOME: join(home, ".copilot") });
+  const claude = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+  assert.equal(claude.hooks.Stop.length, 2);
+  assert.equal(claude.hooks.SessionStart.length, 1);
+  assert.doesNotMatch(claude.hooks.SessionStart[0].hooks[0].command, /--project/);
+  assert.ok(claude.permissions.allow.includes("Read") && claude.permissions.allow.includes("mcp__flow-graph__orient"));
+  const claudeJson = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+  assert.equal(claudeJson.numStartups, 1);
+  assert.equal(claudeJson.mcpServers["flow-graph"].type, "stdio");
+  assert.match(readFileSync(join(home, ".claude/CLAUDE.md"), "utf8"), /^# Mine\n\n<!-- flow:begin/);
+  const codex = readFileSync(join(codexHome, "config.toml"), "utf8");
+  assert.equal(codex.match(/mcp_servers\.flow-graph/g).length, 1);
+  assert.match(codex, /hooks = true/);
+  assert.equal(JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8")).hooks.SessionStart.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, ".cursor/hooks.json"), "utf8")).hooks.sessionStart.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, ".cursor/mcp.json"), "utf8")).mcpServers["flow-graph"].args.length, 1);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/config/hooks.json"), "utf8"))["flow-capture"].Stop);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/config/mcp_config.json"), "utf8")).mcpServers["flow-graph"]);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini/settings.json"), "utf8")).mcpServers["flow-graph"]);
+  assert.ok(JSON.parse(readFileSync(join(home, ".config/opencode/opencode.json"), "utf8")).mcp["flow-graph"]);
+  assert.match(readFileSync(join(home, ".config/opencode/plugins/flow.ts"), "utf8"), /PROJECT = undefined/);
+  const copilot = parse(readFileSync(join(home, ".copilot/mcp-config.json"), "utf8"));
+  assert.ok(copilot.mcpServers.mine && copilot.mcpServers["flow-graph"]);
+  assert.equal(parse(readFileSync(join(home, ".copilot/hooks/flow.json"), "utf8")).hooks.Stop.length, 1);
+  for (const skill of [".claude/skills/flow/SKILL.md", ".agents/skills/flow/SKILL.md", ".cursor/skills/flow/SKILL.md", ".gemini/antigravity/global_skills/flow/SKILL.md", ".copilot/skills/flow/SKILL.md"])
+    assert.match(readFileSync(join(home, skill), "utf8"), /flow-graph/);
+  invoke("m.removeGlobal()", { CODEX_HOME: codexHome, COPILOT_HOME: join(home, ".copilot") });
+  assert.deepEqual(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")), userSettings);
+  assert.deepEqual(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")), { numStartups: 1 });
+  assert.equal(readFileSync(join(home, ".claude/CLAUDE.md"), "utf8"), "# Mine\n");
+  assert.equal(readFileSync(join(codexHome, "config.toml"), "utf8"), 'model = "x"\n\n[features]\nhooks = true\n');
+  assert.deepEqual(Object.keys(parse(readFileSync(join(home, ".copilot/mcp-config.json"), "utf8")).mcpServers), ["mine"]);
+  for (const gone of [".cursor/hooks.json", ".cursor/mcp.json", ".gemini/config/hooks.json", ".gemini/settings.json", ".config/opencode/plugins/flow.ts", ".copilot/hooks/flow.json", ".claude/skills", ".agents", codexHome + "/hooks.json"])
+    assert.ok(!existsSync(join(home, gone)), gone);
 }));

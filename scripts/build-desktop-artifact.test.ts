@@ -25,6 +25,8 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  FLOW_BOOTSTRAP_EXTRA_RESOURCES,
+  FLOW_BOOTSTRAP_SCRIPTS,
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
@@ -590,6 +592,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     for (const resource of [
       ...WSL_RUNTIME_EXTRA_RESOURCES,
       ...LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
+      ...FLOW_BOOTSTRAP_EXTRA_RESOURCES,
     ]) {
       assert.include(
         DESKTOP_FILE_EXCLUSIONS,
@@ -604,6 +607,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/resources/browser-secret/**/*",
       "!apps/desktop/prod-resources/browser-secret",
       "!apps/desktop/prod-resources/browser-secret/**/*",
+      "!apps/desktop/resources/flow-bootstrap",
+      "!apps/desktop/resources/flow-bootstrap/**/*",
+      "!apps/desktop/prod-resources/flow-bootstrap",
+      "!apps/desktop/prod-resources/flow-bootstrap/**/*",
       "!apps/desktop/prod-resources/windows-server",
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -666,9 +673,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
       assert.notProperty(win, "asarUnpack");
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      // The Flow service bootstrap ships on macOS and Linux only: it refuses
+      // to run anywhere else, so a Windows desktop never adopts a service.
+      assert.deepStrictEqual(mac.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...FLOW_BOOTSTRAP_EXTRA_RESOURCES,
+      ]);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
+        ...FLOW_BOOTSTRAP_EXTRA_RESOURCES,
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
@@ -1814,6 +1827,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+  });
+
+  it("ships the Flow service bootstrap as a loose resource on macOS and Linux", () => {
+    // Adoption executes this script with a separate Node process, so it cannot
+    // live inside app.asar. Its static imports are all Node built-ins.
+    assert.deepStrictEqual(FLOW_BOOTSTRAP_SCRIPTS, ["flow-release.mjs", "flow-mac-app.mjs"]);
+    assert.deepStrictEqual(FLOW_BOOTSTRAP_EXTRA_RESOURCES, [
+      { from: "apps/desktop/prod-resources/flow-bootstrap", to: "flow-bootstrap" },
+    ]);
   });
 
   it("packages the WSL server and production dependencies as one compressed runtime", () => {

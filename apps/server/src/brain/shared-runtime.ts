@@ -1,3 +1,8 @@
+import { replay } from "@flow/brain-setup/replay";
+import {
+  normalizeHook,
+  normalizeOpencodeMessage,
+} from "../../../../flow-t3/shared/orchestrator/src/ingest/adapters.ts";
 import { ProjectBrainBindings } from "./project-bindings.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Private local instance transport.
 // @effect-diagnostics globalFetch:off - Local transport outside the Effect runtime.
@@ -17,7 +22,11 @@ import {
   ProjectId,
 } from "@t3tools/contracts";
 import type { BrainRuntime } from "./BrainRuntime.ts";
-import type { BrainCapture, BrainSessionContext } from "./session-worker.ts";
+import {
+  originalBrainTools,
+  type BrainCapture,
+  type BrainSessionContext,
+} from "./session-worker.ts";
 export type BrainClient = Pick<
   BrainRuntime,
   | "projectBindings"
@@ -49,6 +58,8 @@ const Capture = Schema.Struct({
 });
 const Request = Schema.Struct({
   method: Schema.Literals([
+    "hook",
+    "tools",
     "state",
     "command",
     "call",
@@ -59,6 +70,14 @@ const Request = Schema.Struct({
     "branches",
   ]),
   instance: Schema.String,
+  hook: Schema.optionalKey(
+    Schema.Struct({
+      harness: Schema.String,
+      receipt: Schema.String,
+      occurredAt: Schema.Number,
+      event: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ),
   metadataOnly: Schema.optional(Schema.Boolean),
   revision: Schema.optionalKey(Schema.String),
   workspace: Schema.optionalKey(Schema.String),
@@ -96,6 +115,42 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
       if (!/^[a-zA-Z0-9-]{1,100}$/.test(input.instance)) throw Error("Invalid source instance");
       let result: unknown;
       switch (input.method) {
+        case "hook": {
+          if (!input.workspace || !input.context || !input.hook)
+            throw Error("Missing hook binding");
+          const hook = normalizeHook(
+            input.hook.harness,
+            input.hook.event,
+            input.context.repo ?? null,
+          );
+          if (!hook.externalId) throw Error("Hook has no native conversation ID");
+          const events =
+            input.hook.harness === "opencode" && Array.isArray(input.hook.event.messages)
+              ? input.hook.event.messages.flatMap((message) => {
+                  const event = normalizeOpencodeMessage(message);
+                  return event ? [event] : [];
+                })
+              : hook.events;
+          if (!events.length && hook.closed)
+            events.push({ kind: "update", data: { sessionUpdate: "turn_complete" } });
+          for (const [index, event] of events.entries()) {
+            await runtime.captureBrainEvent(input.workspace, {
+              ...event,
+              context: {
+                ...input.context,
+                session: `${input.instance}:${input.hook.harness}:${hook.externalId}`,
+              },
+              receipt: `${input.hook.receipt}:${index}`,
+              occurredAt: input.hook.occurredAt,
+              closed: hook.closed && index === events.length - 1,
+            });
+          }
+          result = { accepted: events.length };
+          break;
+        }
+        case "tools":
+          result = await originalBrainTools();
+          break;
         case "state":
           result = await runtime.state(undefined, input.metadataOnly);
           break;
@@ -166,7 +221,19 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
       mode: 0o600,
     },
   );
+  let replaying: Promise<void> | undefined;
+  const retry = setInterval(() => {
+    if (!replaying)
+      replaying = replay(stateDir)
+        .catch(() => {})
+        .finally(() => {
+          replaying = undefined;
+        });
+  }, 5000);
+  retry.unref();
   return async () => {
+    clearInterval(retry);
+    await replaying;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await NodeFSP.rm(file, { force: true });

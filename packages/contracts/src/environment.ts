@@ -151,12 +151,23 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
+/** The desktop-attach protocol generation this build speaks. Bumped only when
+    an attaching desktop and the server it attaches to can no longer agree —
+    the credential handshake or the attach contract itself changing, not a new
+    capability, which the optional capability keys already cover. */
+export const DESKTOP_PROTOCOL = 1;
+
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   capabilities: ExecutionEnvironmentCapabilities,
+  /** The desktop-attach protocol generation this server speaks. A desktop
+      client supports a `[min, max]` range and attaches only to a server
+      inside it. Absent on older servers, which the desktop treats as
+      incompatible rather than guessing a generation. */
+  desktopProtocol: Schema.optionalKey(Schema.Int),
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
 

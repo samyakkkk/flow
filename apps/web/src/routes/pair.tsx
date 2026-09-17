@@ -38,6 +38,12 @@ function PairRouteView() {
     return <HostedPairingRouteSurface />;
   }
 
+  // The root route renders the recovery screen over everything in this state,
+  // so this branch never paints; it exists so the union stays exhaustive.
+  if (authGateState.status !== "requires-auth") {
+    return null;
+  }
+
   return (
     <PairingRouteSurface
       auth={authGateState.auth}

@@ -23,18 +23,29 @@ Brain instead of asking you to explain the codebase and its decisions again.
   <img src="./docs/images/flow-workspace.webp" alt="Flow workspace with an agent session, Auto-Skills, and conversation notes" width="1200">
 </p>
 
-## Download
+## Install
 
-| Platform                  | Availability                                                                                                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS 15+ · Apple Silicon | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-arm64.dmg)** · signed, notarized, and auto-updating  |
-| macOS · Intel             | **[Download Flow 0.1.3 (.dmg)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x64.dmg)** · signed, notarized, and auto-updating    |
-| Linux · x64               | **[Download Flow 0.1.3 (.AppImage)](https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.3/Flow-0.1.3-x86_64.AppImage)** · Ubuntu 24.04 or compatible |
-| Windows                   | Planned                                                                                                                                                                |
+```bash
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
+```
 
-See the [Flow 0.1.3 release](https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.3)
-for checksums and updater assets. The macOS app checks for updates automatically;
-installing from source requires manual updates.
+<p align="center"><sub>Apple Silicon macOS 15+ · installs the <code>flow</code> command and Flow's local service</sub></p>
+
+<p align="center"><strong>or</strong></p>
+
+<p align="center">
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg"><img src="./docs/images/download-macos-apple-silicon.svg" alt="Download Flow for macOS (Apple Silicon)" width="194"></a>
+  &nbsp;
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg"><img src="./docs/images/download-macos-intel.svg" alt="Download Flow for macOS (Intel)" width="194"></a>
+  &nbsp;
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage"><img src="./docs/images/download-linux.svg" alt="Download Flow for Linux (x64 AppImage)" width="194"></a>
+</p>
+
+<p align="center"><sub>Flow 0.1.4 · signed, notarized, auto-updating · <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4">checksums</a> · Windows planned</sub></p>
+
+Both share one local Flow service and one Brain, and coding agents you run outside
+Flow keep their Brain when the app is closed. See [Install Flow](./docs/user/install.md)
+and [Run Flow in the background](./docs/user/local-instances.md).
 
 ## Why Flow
 
@@ -92,11 +103,11 @@ project and begin working without configuring a separate service.
 - Shared team Brains, so knowledge follows the project across teammates
 - Linear integration for issues, decisions, and delivery context
 - Slack integration for searchable conversations and shared project context
-- Native installers for macOS Intel and Linux x64
+- Windows desktop app
 
 ## Get started
 
-1. Install Flow and open the app.
+1. Install Flow, as the desktop app or with the install script, and open it.
 2. Add a local project.
 3. Choose or create its Brain.
 4. Select a coding provider and start a thread.
@@ -121,7 +132,8 @@ multiple accounts, and remote environments.
 
 ## Documentation
 
-- [Browser app and source installation](./docs/user/install.md)
+- [Install with the script or from source](./docs/user/install.md)
+- [Run Flow in the background](./docs/user/local-instances.md)
 - [Working with threads](./docs/user/thread-sidebar.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)

@@ -62,10 +62,15 @@ export function LiveBrainPage({
   selectedWorkspaceId,
   selectedEnvironmentId,
   onSelectionChange,
+  openSettings = false,
+  onSettingsClosed,
 }: {
   selectedWorkspaceId: string | null;
   selectedEnvironmentId: string | null;
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
+  /** Open Brain settings on arrival, for links that ask to change the Brain's agent. */
+  openSettings?: boolean;
+  onSettingsClosed?: () => void;
 }) {
   const primary = usePrimaryEnvironmentId();
   const { environments, isReady } = useEnvironments();
@@ -84,6 +89,8 @@ export function LiveBrainPage({
       }
       selectedWorkspaceId={selectedWorkspaceId}
       onSelectionChange={onSelectionChange}
+      openSettings={openSettings}
+      onSettingsClosed={onSettingsClosed}
       environmentSelector={
         <BrainSelect
           label="Brain computer"
@@ -106,6 +113,8 @@ function BrainController({
   selectedWorkspaceId,
   onSelectionChange,
   environmentSelector,
+  openSettings,
+  onSettingsClosed,
 }: {
   environmentId: EnvironmentId | null;
   environmentsReady: boolean;
@@ -113,6 +122,8 @@ function BrainController({
   selectedWorkspaceId: string | null;
   onSelectionChange: (workspaceId: string | null, environmentId: string | null) => void;
   environmentSelector: React.ReactNode;
+  openSettings: boolean;
+  onSettingsClosed: (() => void) | undefined;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const prepared = usePreparedConnection(environmentId);
@@ -123,7 +134,8 @@ function BrainController({
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The controller remounts per environment, so the arrival request is read once here.
+  const [settingsOpen, setSettingsOpen] = useState(openSettings);
   const mounted = useRef(true);
   const pending = useRef<Promise<unknown> | null>(null);
   const transportError = useRef(false);
@@ -237,8 +249,7 @@ function BrainController({
           workspace?.remote?.status === "error"
             ? {
                 title: "Cloud Brain unavailable",
-                description:
-                  workspace.remote.message + " Reconnect to this server to access its knowledge.",
+                description: workspace.remote.message,
               }
             : connectionNotice
         }
@@ -369,8 +380,10 @@ function BrainController({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-medium">Connected projects</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Projects that use this brain's knowledge.
+                <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+                  Projects that use this brain's knowledge. The brain follows their repositories:
+                  any checkout of one, opened here or in a coding tool like Claude Code, Codex or
+                  Cursor on this computer, reads this brain and adds its conversations as notes.
                 </p>
               </div>
               <BrainSelect
@@ -436,7 +449,7 @@ function BrainController({
         )}
       </BrainPage>
       <ConnectCloudDialog
-        workspace={workspace && !workspace.remote ? workspace : undefined}
+        workspace={workspace}
         open={cloudOpen}
         onOpenChange={setCloudOpen}
         send={send}
@@ -449,7 +462,13 @@ function BrainController({
         send={send}
         onCreated={(id) => onSelectionChange(id, environmentId)}
       />
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Dialog
+        open={settingsOpen}
+        onOpenChange={(open) => {
+          setSettingsOpen(open);
+          if (!open) onSettingsClosed?.();
+        }}
+      >
         <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle>Brain settings</DialogTitle>
@@ -465,6 +484,9 @@ function BrainController({
             {workspace?.remote && (
               <div className="space-y-2">
                 <p className="text-sm break-all">{workspace.remote.endpoint}</p>
+                {workspace.remote.account && (
+                  <p className="text-sm">Signed in as {workspace.remote.account.email}</p>
+                )}
                 <a
                   href={workspace.remote.endpoint}
                   target="_blank"
@@ -473,6 +495,15 @@ function BrainController({
                 >
                   Open cloud dashboard
                 </a>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setCloudOpen(true);
+                  }}
+                >
+                  Sign in again
+                </Button>
                 <p className="text-xs text-muted-foreground">
                   Disconnecting removes this computer’s connection. The remote Brain and its data
                   stay on the server.
@@ -495,6 +526,28 @@ function BrainController({
                 </Button>
               </div>
             )}
+            {workspace?.remote && (
+              <div className="space-y-2">
+                <p className="text-sm">Conversation notes agent</p>
+                <BrainCliSelect
+                  value={workspace.notesCli ?? workspace.cli}
+                  clis={state?.clis ?? []}
+                  disabled={busy}
+                  onChange={(value) =>
+                    void send({
+                      action: "configureNotes",
+                      workspaceId: workspace.id,
+                      cli: value as BrainCli,
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  This Brain lives in the cloud, but notes from your conversations are written on
+                  this computer by this agent. Switch it if that agent is signed out or has reached
+                  its usage limit.
+                </p>
+              </div>
+            )}
             {workspace && !workspace.remote && (
               <div className="space-y-2">
                 <p className="text-sm">Default indexing CLI</p>
@@ -511,7 +564,9 @@ function BrainController({
                   }
                 />
                 <p className="text-xs text-muted-foreground">
-                  Used when you connect or reindex a source. Running jobs keep their selected CLI.
+                  Used when you connect or reindex a source, and to write conversation notes.
+                  Running jobs keep their selected CLI. Switch it if this agent is signed out or has
+                  reached its usage limit.
                 </p>
               </div>
             )}

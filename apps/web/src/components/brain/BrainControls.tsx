@@ -12,6 +12,7 @@ import {
   DialogPanel,
   DialogFooter,
 } from "../ui/dialog";
+import { connectCloudCommand, connectCloudOutcome, connectCloudReady } from "./connectCloud";
 
 export type SendBrainCommand = (
   command: BrainCommand,
@@ -82,7 +83,8 @@ export function CreateBrainDialog({
 }) {
   const [location, setLocation] = useState<"local" | "remote">("local");
   const [endpoint, setEndpoint] = useState("");
-  const [token, setToken] = useState("");
+  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [name, setName] = useState(initialName);
   const [cli, setCli] = useState<BrainCli | null>(null);
   const [busy, setBusy] = useState(false);
@@ -91,7 +93,9 @@ export function CreateBrainDialog({
   async function create() {
     if (
       busy ||
-      (location === "local" ? !selected || !name.trim() : !endpoint.trim() || !token.trim())
+      (location === "local"
+        ? !selected || !name.trim()
+        : !connectCloudReady({ endpoint, email, password }))
     )
       return;
     setBusy(true);
@@ -99,15 +103,19 @@ export function CreateBrainDialog({
     try {
       const result = await send(
         location === "remote"
-          ? { action: "connectCloud", endpoint: endpoint.trim(), token: token.trim() }
+          ? connectCloudCommand({ endpoint, email, password, cli: selected })
           : { action: "create", name, cli: selected! },
       );
-      if (!result || result.error || !result.createdWorkspaceId) {
-        setError(result?.error ?? "Could not create the brain. Check the connection and retry.");
+      const outcome = connectCloudOutcome(
+        result,
+        "Could not create the brain. Check the connection and retry.",
+      );
+      if (!outcome.ok) {
+        setError(outcome.error);
         return;
       }
-      setToken("");
-      onCreated(result.createdWorkspaceId);
+      setPassword("");
+      onCreated(outcome.workspaceId);
       onOpenChange(false);
       setName(initialName);
     } finally {
@@ -119,7 +127,7 @@ export function CreateBrainDialog({
       open={open}
       onOpenChange={(next) => {
         if (!busy) {
-          setToken("");
+          setPassword("");
           setError("");
           onOpenChange(next);
         }
@@ -151,7 +159,7 @@ export function CreateBrainDialog({
                     onChange={() => {
                       setLocation(value);
                       setError("");
-                      setToken("");
+                      setPassword("");
                     }}
                   />
                   {value === "local" ? "This computer" : "Remote Brain"}
@@ -161,11 +169,11 @@ export function CreateBrainDialog({
             {location === "remote" ? (
               <>
                 <p className="text-sm text-muted-foreground">
-                  Enter your remote Brain’s URL and access token. Its shared knowledge will be
-                  available to your projects.
+                  Enter your remote Brain’s URL or invitation link, email, and password. Its shared
+                  knowledge will be available to your projects.
                 </p>
                 <label className="block space-y-2 text-sm">
-                  Server URL
+                  Brain URL or invitation link
                   <Input
                     required
                     type="url"
@@ -176,57 +184,68 @@ export function CreateBrainDialog({
                   />
                 </label>
                 <label className="block space-y-2 text-sm">
-                  Access token
+                  Email
+                  <Input
+                    required
+                    type="email"
+                    autoComplete="username"
+                    value={email}
+                    disabled={busy}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </label>
+                <label className="block space-y-2 text-sm">
+                  Password
                   <Input
                     required
                     type="password"
-                    autoComplete="off"
-                    value={token}
+                    autoComplete="current-password"
+                    value={password}
                     disabled={busy}
-                    onChange={(event) => setToken(event.target.value)}
+                    onChange={(event) => setPassword(event.target.value)}
                   />
                 </label>
               </>
             ) : (
-              <>
-                <label className="block space-y-2 text-sm">
-                  Brain name
-                  <Input
-                    autoFocus
-                    required
-                    maxLength={80}
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="e.g. Acme platform"
-                  />
-                </label>
-                <fieldset className="space-y-2">
-                  <legend className="mb-2 text-sm">Build knowledge with</legend>
-                  {state?.clis.map((entry) => (
-                    <label
-                      key={entry.id}
-                      className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
-                    >
-                      <input
-                        type="radio"
-                        name="brain-cli"
-                        checked={selected === entry.id}
-                        disabled={!entry.installed || busy}
-                        onChange={() => setCli(entry.id)}
-                      />
-                      <span>
-                        <span className="block font-medium">{cliName(entry.id)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {entry.installed
-                            ? "Uses your existing CLI sign-in"
-                            : "Not installed on this computer"}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
-                </fieldset>
-              </>
+              <label className="block space-y-2 text-sm">
+                Brain name
+                <Input
+                  autoFocus
+                  required
+                  maxLength={80}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="e.g. Acme platform"
+                />
+              </label>
             )}
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-sm">
+                {location === "remote" ? "Write conversation notes with" : "Build knowledge with"}
+              </legend>
+              {state?.clis.map((entry) => (
+                <label
+                  key={entry.id}
+                  className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${!entry.installed ? "opacity-50" : selected === entry.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="radio"
+                    name="brain-cli"
+                    checked={selected === entry.id}
+                    disabled={!entry.installed || busy}
+                    onChange={() => setCli(entry.id)}
+                  />
+                  <span>
+                    <span className="block font-medium">{cliName(entry.id)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {entry.installed
+                        ? "Uses your existing CLI sign-in"
+                        : "Not installed on this computer"}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -239,7 +258,7 @@ export function CreateBrainDialog({
               variant="outline"
               disabled={busy}
               onClick={() => {
-                setToken("");
+                setPassword("");
                 setError("");
                 onOpenChange(false);
               }}
@@ -252,7 +271,7 @@ export function CreateBrainDialog({
                 busy ||
                 (location === "local"
                   ? !name.trim() || !selected
-                  : !endpoint.trim() || !token.trim())
+                  : !connectCloudReady({ endpoint, email, password }))
               }
             >
               {location === "remote"
@@ -277,14 +296,16 @@ export function ConnectCloudDialog({
   send,
   onConnected,
 }: {
-  workspace?: { id: string; name: string } | undefined;
+  workspace?: { id: string; name: string; remote?: { endpoint: string } } | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   send: SendBrainCommand;
   onConnected: (id: string) => void;
 }) {
-  const [endpoint, setEndpoint] = useState("");
-  const [token, setToken] = useState("");
+  const [enteredEndpoint, setEndpoint] = useState("");
+  const endpoint = enteredEndpoint || workspace?.remote?.endpoint || "";
+  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function connect() {
@@ -292,18 +313,14 @@ export function ConnectCloudDialog({
     setBusy(true);
     setError("");
     try {
-      const result = await send({
-        action: "connectCloud",
-        ...(workspace ? { workspaceId: workspace.id } : {}),
-        endpoint: endpoint.trim(),
-        token: token.trim(),
-      });
-      if (!result || result.error || !result.createdWorkspaceId) {
-        setError(result?.error ?? "Could not connect to the cloud Brain.");
+      const result = await send(connectCloudCommand({ endpoint, email, password }, workspace?.id));
+      const outcome = connectCloudOutcome(result, "Could not connect to the cloud Brain.");
+      if (!outcome.ok) {
+        setError(outcome.error);
         return;
       }
-      setToken("");
-      onConnected(result.createdWorkspaceId);
+      setPassword("");
+      onConnected(outcome.workspaceId);
       onOpenChange(false);
     } finally {
       setBusy(false);
@@ -314,7 +331,7 @@ export function ConnectCloudDialog({
       open={open}
       onOpenChange={(next) => {
         if (!busy) {
-          setToken("");
+          setPassword("");
           setError("");
           onOpenChange(next);
         }
@@ -331,13 +348,15 @@ export function ConnectCloudDialog({
             <DialogTitle>Connect cloud Brain</DialogTitle>
             <DialogDescription>
               {workspace
-                ? `Move “${workspace.name}” to your team's Cloud Brain. All docs, skills and conversation notes transfer automatically. Missing repositories will be indexed in Cloud. Your local data is kept as a backup.`
+                ? workspace.remote
+                  ? `Sign in again to ${workspace.name} using your email and password.`
+                  : `Move “${workspace.name}” to your team's Cloud Brain. All docs, skills and conversation notes transfer automatically. Missing repositories will be indexed in Cloud. Your local data is kept as a backup.`
                 : "Connect to your team's Cloud Brain. Its shared knowledge will appear here."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <label className="block space-y-2 text-sm">
-              Server URL
+              Brain URL or invitation link
               <Input
                 required
                 type="url"
@@ -347,13 +366,28 @@ export function ConnectCloudDialog({
               />
             </label>
             <label className="block space-y-2 text-sm">
-              Access token
+              Email
+              <Input
+                required
+                type="email"
+                autoComplete="username"
+                value={email}
+                disabled={busy}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              New invitation? Choose a password of at least 12 characters. Already a member? Use
+              your existing password. Ask your administrator for password resets.
+            </p>
+            <label className="block space-y-2 text-sm">
+              Password
               <Input
                 required
                 type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
             </label>
             {error && (
@@ -368,13 +402,16 @@ export function ConnectCloudDialog({
               variant="outline"
               disabled={busy}
               onClick={() => {
-                setToken("");
+                setPassword("");
                 onOpenChange(false);
               }}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !endpoint.trim() || !token.trim()}>
+            <Button
+              type="submit"
+              disabled={busy || !connectCloudReady({ endpoint, email, password })}
+            >
               {busy ? "Connecting cloud…" : "Connect Brain"}
             </Button>
           </DialogFooter>

@@ -8,11 +8,75 @@ import * as NodeOS from "node:os";
 const { tmpdir } = NodeOS;
 import * as NodePath from "node:path";
 const { join } = NodePath;
-import { parse, configure, sourceRoot } from "./launcher.mjs";
+import { parse, configure, sourceRoot, installedDesktopApp } from "./launcher.mjs";
 import { cleanEnvironment } from "./supervisor.mjs";
 test("normal launch does not depend on instance arguments", () => {
   assert.equal(parse([]).name, "primary");
   assert.throws(() => parse(["--isolated"]), /development|dev/);
+});
+test("an explicit home is recorded once and never moved afterwards", async () => {
+  assert.equal(parse(["--home", "/srv/flow"]).home, "/srv/flow");
+  assert.throws(() => parse(["--home"]), /requires a value/);
+  assert.throws(() => parse(["stop", "--home", "/srv/flow"]), /only when starting/);
+  const directory = await mkdtemp(join(tmpdir(), "flow-home-test-"));
+  try {
+    const adopted = join(directory, "adopted");
+    const saved = await configure(parse(["--home", adopted]), directory);
+    assert.equal(saved.home, adopted);
+    assert.deepEqual(await configure(parse([]), directory), saved);
+    await assert.rejects(
+      configure(parse(["--home", join(directory, "elsewhere")]), directory),
+      /never moved/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("the launcher records its runtime and backfills older registries", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-node-test-"));
+  try {
+    const saved = await configure(parse([]), directory);
+    assert.equal(saved.node, process.execPath);
+    // A registry written before `node` existed gains it on the next launch and
+    // changes nothing else.
+    const { node: _node, ...older } = saved;
+    await NodeFSP.writeFile(join(directory, "config.json"), JSON.stringify(older));
+    const reopened = await configure(parse([]), directory);
+    assert.deepEqual(reopened, saved);
+    assert.equal(
+      JSON.parse(await NodeFSP.readFile(join(directory, "config.json"), "utf8")).node,
+      process.execPath,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("flow prefers an installed desktop app only on macOS and only in the app folders", async () => {
+  assert.equal(parse(["--browser"]).browser, true);
+  const home = await mkdtemp(join(tmpdir(), "flow-app-test-"));
+  try {
+    const system = join(home, "system-applications");
+    assert.equal(await installedDesktopApp("darwin", home, system), null);
+    assert.equal(await installedDesktopApp("linux", home, system), null);
+    await mkdir(join(home, "Applications/Flow.app/Contents/MacOS"), { recursive: true });
+    await NodeFSP.writeFile(join(home, "Applications/Flow.app/Contents/MacOS/Flow"), "");
+    assert.equal(
+      await installedDesktopApp("darwin", home, system),
+      join(home, "Applications/Flow.app"),
+    );
+    assert.equal(await installedDesktopApp("linux", home, system), null);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+test("storage defaults to the instance directory when no home is given", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-home-default-test-"));
+  try {
+    const saved = await configure(parse(["dev", "test1", "--code", sourceRoot]), directory);
+    assert.equal(saved.home, join(directory, "data"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 test("mode and destructive flag conflicts are rejected", () => {
   assert.throws(() => parse(["dev", "test1", "--isolated", "--shared-brain"]), /one/);

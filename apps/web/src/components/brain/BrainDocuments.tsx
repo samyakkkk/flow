@@ -32,7 +32,11 @@ export function documentLifecycle(document: BrainDocumentSummary): string {
   if (document.status === "resolved") return "Resolved · lesson retained";
   if (document.lifecycle === "temporal") return "Time-sensitive context";
   if (document.lifecycle === "issue") return "Open issue";
-  return document.kind === "skill" ? "Reusable procedure" : document.kind === "doc" ? "Maintained context" : "Retained memory";
+  return document.kind === "skill"
+    ? "Reusable procedure"
+    : document.kind === "doc"
+      ? "Maintained context"
+      : "Retained memory";
 }
 
 export function BrainDocumentDialog(props: Parameters<typeof BrainDocumentDialogContent>[0]) {
@@ -50,12 +54,15 @@ function BrainDocumentDialogContent({
   environmentId,
   workspaceId,
   onClose,
+  details,
 }: {
   document: BrainDocumentSummary | null;
   initial?: BrainDocument | undefined;
   environmentId: EnvironmentId;
   workspaceId: string;
   onClose: () => void;
+  /** Extra context shown under the document's dates, such as who writes these notes. */
+  details?: React.ReactNode;
 }) {
   const execute = useAtomCommand(brainCommand, { reportFailure: false });
   const [loaded, setLoaded] = useState<BrainDocument | null>(
@@ -128,7 +135,13 @@ function BrainDocumentDialogContent({
             ) : (
               <BookOpenIcon className="size-4 text-primary" />
             )}
-            {skill ? "SKILL.md" : document?.kind === "notes" ? "Conversation notes" : document?.kind === "doc" ? "Auto-Doc" : "Memory"}
+            {skill
+              ? "SKILL.md"
+              : document?.kind === "notes"
+                ? "Conversation notes"
+                : document?.kind === "doc"
+                  ? "Auto-Doc"
+                  : "Memory"}
             {document && <span className="ml-auto">Revision {document.revision}</span>}
           </div>
           <DialogTitle>{document?.name ?? "Brain document"}</DialogTitle>
@@ -139,6 +152,13 @@ function BrainDocumentDialogContent({
                 ? "The task, progress, and corrections preserved from this conversation."
                 : "Context learned from conversations and retained in this brain."}
           </DialogDescription>
+          {details ? <p className="text-xs text-muted-foreground">{details}</p> : null}
+          {!!(loaded ?? document)?.contributors?.length && (
+            <p className="text-xs text-muted-foreground">
+              Contributors:{" "}
+              {(loaded ?? document)?.contributors?.map((user) => user.email).join(", ")}
+            </p>
+          )}
         </DialogHeader>
         <DialogPanel>
           {error && (
@@ -243,18 +263,22 @@ export function BrainDocumentLibrary({
           <SearchIcon className="size-4" />
           <input
             aria-label={
-              selectedKind === "doc" ? "Search auto-docs" : selectedKind === "skill"
-                ? "Search auto-skills"
-                : selectedKind === "memory"
-                  ? "Search memories"
-                  : "Search auto-docs and skills"
+              selectedKind === "doc"
+                ? "Search auto-docs"
+                : selectedKind === "skill"
+                  ? "Search auto-skills"
+                  : selectedKind === "memory"
+                    ? "Search memories"
+                    : "Search auto-docs and skills"
             }
             placeholder={
-              selectedKind === "doc" ? "Search auto-docs…" : selectedKind === "skill"
-                ? "Search auto-skills…"
-                : selectedKind === "memory"
-                  ? "Search memories…"
-                  : "Search auto-docs and skills…"
+              selectedKind === "doc"
+                ? "Search auto-docs…"
+                : selectedKind === "skill"
+                  ? "Search auto-skills…"
+                  : selectedKind === "memory"
+                    ? "Search memories…"
+                    : "Search auto-docs and skills…"
             }
             className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
             value={query}
@@ -276,14 +300,17 @@ export function BrainDocumentLibrary({
               key={kind}
               className="rounded-xl border border-dashed border-border px-6 py-12 text-center text-sm text-muted-foreground"
             >
-              {kind === "doc" ? "No auto-docs yet. Durable context will appear as you work in connected chats." : kind === "skill"
-                ? "No auto-skills yet. Reusable procedures will appear as you work in connected chats."
-                : "No memories yet. Decisions, lessons, and useful context will appear as you work in connected chats."}
+              {kind === "doc"
+                ? "No auto-docs yet. Durable context will appear as you work in connected chats."
+                : kind === "skill"
+                  ? "No auto-skills yet. Reusable procedures will appear as you work in connected chats."
+                  : "No memories yet. Decisions, lessons, and useful context will appear as you work in connected chats."}
             </p>
           ) : null;
         const visible = all.filter((doc) => matches(`${doc.name} ${doc.description}`));
         const oldVisible = old.filter((doc) => matches(`${doc.title} ${doc.body}`));
-        const Icon = kind === "skill" ? FileCode2Icon : kind === "doc" ? BookOpenIcon : SparklesIcon;
+        const Icon =
+          kind === "skill" ? FileCode2Icon : kind === "doc" ? BookOpenIcon : SparklesIcon;
         const label = kind === "doc" ? "Auto-Docs" : kind === "skill" ? "Auto-Skills" : "Memories";
         return (
           <section
@@ -302,13 +329,23 @@ export function BrainDocumentLibrary({
                 </h2>
                 {!compact && (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {kind === "doc" ? "Maintained facts, customer context, and standing constraints." : kind === "skill"
-                      ? "Procedures your agents can find, read, and reuse."
-                      : "Decisions, lessons, and context carried across conversations."}
+                    {kind === "doc"
+                      ? "Maintained facts, customer context, and standing constraints."
+                      : kind === "skill"
+                        ? "Procedures your agents can find, read, and reuse."
+                        : "Decisions, lessons, and context carried across conversations."}
                   </p>
                 )}
               </div>
-              <button type="button" aria-label={`${collapsed[kind] ? "Expand" : "Collapse"} ${label}`} aria-expanded={!collapsed[kind]} onClick={() => setCollapsed((previous) => ({ ...previous, [kind]: !previous[kind] }))} className="rounded-lg p-1 text-muted-foreground hover:bg-muted">
+              <button
+                type="button"
+                aria-label={`${collapsed[kind] ? "Expand" : "Collapse"} ${label}`}
+                aria-expanded={!collapsed[kind]}
+                onClick={() =>
+                  setCollapsed((previous) => ({ ...previous, [kind]: !previous[kind] }))
+                }
+                className="rounded-lg p-1 text-muted-foreground hover:bg-muted"
+              >
                 <ChevronDownIcon className={`size-4 ${collapsed[kind] ? "" : "rotate-180"}`} />
               </button>
             </header>

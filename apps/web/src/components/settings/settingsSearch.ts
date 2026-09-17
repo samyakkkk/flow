@@ -508,6 +508,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "flow-service",
+    title: "Service",
+    to: "/settings/connections",
+    searchTerms: [
+      "flow service background login launchd systemd start stop restart supervisor persistent capture brain quit",
+    ],
+  },
+  {
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",

@@ -58,6 +58,7 @@ const environmentInput = {
   isPackaged: false,
   resourcesPath: "/repo/resources",
   runningUnderArm64Translation: false,
+  legacyHomeExists: true,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 function makeFakeBrowserWindow() {

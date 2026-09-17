@@ -1,5 +1,7 @@
 /** Host-neutral boundary used by local T3 and private cloud hosts. */
 export interface BrainSessionContext {
+  /** Authenticated identity supplied by the remote host, never the agent. */
+  actor?: string;
   repo?: string;
   branch?: string;
   session: string;

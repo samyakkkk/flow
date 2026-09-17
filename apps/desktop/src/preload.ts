@@ -100,6 +100,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setTailscaleServeEnabled: (input) =>
     ipcRenderer.invoke(IpcChannels.SET_TAILSCALE_SERVE_ENABLED_CHANNEL, input),
   getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
+  getFlowServiceStatus: () => ipcRenderer.invoke(IpcChannels.GET_FLOW_SERVICE_STATUS_CHANNEL),
+  stopFlowService: () => ipcRenderer.invoke(IpcChannels.STOP_FLOW_SERVICE_CHANNEL),
+  restartFlowService: () => ipcRenderer.invoke(IpcChannels.RESTART_FLOW_SERVICE_CHANNEL),
+  startFlowService: () => ipcRenderer.invoke(IpcChannels.START_FLOW_SERVICE_CHANNEL),
+  retryFlowServiceAttach: () => ipcRenderer.invoke(IpcChannels.RETRY_FLOW_SERVICE_ATTACH_CHANNEL),
+  getFlowServiceAdoption: () => ipcRenderer.invoke(IpcChannels.GET_FLOW_SERVICE_ADOPTION_CHANNEL),
+  openFlowServiceInBrowser: () =>
+    ipcRenderer.invoke(IpcChannels.OPEN_FLOW_SERVICE_IN_BROWSER_CHANNEL),
+  relaunchWithLegacyBackend: () =>
+    ipcRenderer.invoke(IpcChannels.RELAUNCH_WITH_LEGACY_BACKEND_CHANNEL),
   getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
   setWslBackendEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),

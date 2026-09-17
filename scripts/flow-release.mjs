@@ -271,13 +271,27 @@ export async function update(home, checkOnly = false) {
   }
 }
 
-export async function installLauncher(home, prefix) {
+// One Flow install per machine, in the folder install.sh and the desktop apps
+// have always used. The retired Cloud CLI installed elsewhere; its hooks and
+// service unit record absolute paths, so such an install is adopted where it
+// is rather than moved. Desktop apps resolve the same way
+// (apps/desktop/src/backend/serviceDiscovery.ts), as does install.sh.
+export const releaseHomeNames = ["flow-browser", "flow-cloud-cli"];
+export async function resolveReleaseHome(env = process.env, homeDirectory = homedir()) {
+  if (env.FLOW_RELEASE_HOME) return resolve(env.FLOW_RELEASE_HOME);
+  const share = join(homeDirectory, ".local/share");
+  for (const name of releaseHomeNames)
+    if (await fs.stat(join(share, name, "current")).catch(() => null)) return join(share, name);
+  return join(share, releaseHomeNames[0]);
+}
+
+export async function installLauncher(home, prefix, announce = true) {
   const bin = join(prefix, "bin");
   await fs.mkdir(bin, { recursive: true });
   const target = join(bin, "flow");
   try {
     const existing = await fs.readFile(target, "utf8");
-    if (!existing.includes("\n# flow-managed-launcher\n"))
+    if (!/\n# flow-(managed|cloud-cli)-launcher\n/.test(existing))
       throw Error(`Refusing to overwrite ${target}. Choose another --prefix.`);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -290,7 +304,19 @@ export async function installLauncher(home, prefix) {
     { mode: 0o755 },
   );
   await fs.rename(temp, target);
-  console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
+  if (announce) console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
+}
+
+// `<home>/bin/flow` always works. The command on PATH is taken only when it is
+// free or already ours, unless the caller named the prefix and so expects it.
+async function installLaunchers(home, prefix) {
+  await installLauncher(home, home, false);
+  try {
+    await installLauncher(home, resolve(prefix || join(homedir(), ".local")));
+  } catch (error) {
+    if (prefix) throw error;
+    console.log(`Another flow command is already installed. Use ${join(home, "bin/flow")}.`);
+  }
 }
 
 export async function selectPrimaryRelease({ directory, home, launcher }) {
@@ -394,7 +420,85 @@ export async function prepareAutomaticUpdate(home) {
     await spawnReleaseCommand(home, ["update"]);
 }
 
+export const usage = `Flow — local and Cloud Brains, one service for the CLI, browser and desktop apps.
+flow [--web|--no-open]       Start or reuse Flow and open it
+flow setup [--harness detected|all|claude,codex,…]   Install Flow's tools for your coding agents
+flow setup --brain ID [--folder PATH]               Bind a folder to a Brain
+flow setup --cloud URL --cloud-brain ID --enrollment-file FILE [--folder PATH]
+flow brains list
+flow brains create --name NAME --cli claude|codex|opencode
+flow agents install|uninstall|resolve|status|doctor|flush|remove [--folder PATH]
+flow status | flow stop | flow restart | flow service install|status|uninstall
+flow update [--check]        Updates also prepare at startup and every six hours; FLOW_AUTO_UPDATE=0 disables that.
+The packaged CLI includes Node.`;
+
+export function normalizeArgs(args) {
+  if (args.length === 1 && args[0] === "--web") return [];
+  if (args[0] === "doctor") return ["agents", ...args];
+  // Lifecycle commands report and return; they never open a window.
+  if (["status", "stop", "restart"].includes(args[0]))
+    return args.includes("--no-open") ? args : [...args, "--no-open"];
+  if (args[0] !== "setup") return args;
+  if (args.includes("--local") && args.includes("--cloud"))
+    throw Error("Choose --local or --cloud, not both.");
+  const setup = args.flatMap((arg) => (arg === "--local" ? ["--local", "true"] : [arg]));
+  // Without a Brain, setup installs machine-level tools; folders bind later.
+  if (!setup.includes("--harness") && !setup.includes("--brain") && !setup.includes("--cloud"))
+    setup.push("--harness", "detected");
+  return setup;
+}
+
+// Installed hook shims are copies; keep them matching the code that now runs.
+async function refreshAgentShims(agentHome) {
+  const shims = join(agentHome, "bin");
+  if (!(await fs.stat(shims).catch(() => null))) return;
+  const source = join(NodePath.dirname(self), "../flow-t3/shared/bin/harness");
+  for (const [from, to] of [
+    ["flow-hook.mjs", "flow-hook"],
+    ...[
+      "agent-connector.mjs",
+      "capture-replay.mjs",
+      "agent-home.mjs",
+      "cloud-setup.mjs",
+      "resolve.mjs",
+      "routing.mjs",
+    ].map((name) => [name, name]),
+  ]) {
+    if (!(await fs.stat(join(source, from)).catch(() => null))) return;
+    const temporary = join(shims, `.${to}-${randomUUID()}`);
+    await fs.copyFile(join(source, from), temporary);
+    await fs.rename(temporary, join(shims, to));
+  }
+}
+
 export async function main(args) {
+  if (args[0] === "--help" || args[0] === "help") return console.log(usage);
+  args = normalizeArgs(args);
+  const requestedHome = await resolveReleaseHome();
+  process.env.FLOW_RELEASE_HOME = requestedHome;
+  process.env.FLOW_INSTANCE_HOME ||= join(requestedHome, "instance-home");
+  // Installs made by the retired Cloud CLI keep their hooks under the CLI home,
+  // as copies that only this entry point refreshes. The machine-wide `~/.flow`
+  // is owned by the running service and is never touched from here.
+  const cloudAgentHome = join(requestedHome, "agents");
+  if (!process.env.FLOW_AGENT_HOME && (await fs.stat(cloudAgentHome).catch(() => null))) {
+    process.env.FLOW_AGENT_HOME = cloudAgentHome;
+    await refreshAgentShims(cloudAgentHome);
+  }
+  if (args[0] === "setup" || args[0] === "agents" || args[0] === "brains") {
+    if ((args[0] === "setup" || args[0] === "brains") && !args.includes("--state-dir")) {
+      await main(["--no-open"]);
+      const { primaryStateDir } = await import("./instances/service-discovery.mjs");
+      args = [...args, "--state-dir", await primaryStateDir(process.env.FLOW_INSTANCE_HOME)];
+    }
+    if (args[0] === "brains") {
+      const { manageBrains } = await import("./cli-brains.mjs");
+      return manageBrains(args.slice(1));
+    }
+    const connector = await import("../flow-t3/shared/bin/harness/agent-connector.mjs");
+    return connector.main(args[0] === "agents" ? args.slice(1) : args);
+  }
+
   const [major, minor, patch] = process.versions.node.split(".").map(Number);
   if (major !== 24 || minor < 13 || (minor === 13 && patch < 1))
     throw Error("Install Node.js 24.13.1+ (24.x) first.");
@@ -407,19 +511,15 @@ export async function main(args) {
     throw Error("Flow's local Brain supports Apple Silicon macOS 15+ and Linux x64.");
   if (platform() === "darwin" && Number(NodeOS.release().split(".")[0]) < 24)
     throw Error("Flow's local Brain requires macOS 15 or later.");
-  const requestedHome = resolve(
-    process.env.FLOW_RELEASE_HOME || join(homedir(), ".local/share/flow-browser"),
-  );
-  await fs.mkdir(requestedHome, { recursive: true });
+  await fs.mkdir(requestedHome, { recursive: true, mode: 0o700 });
   const home = await fs.realpath(requestedHome);
-  process.env.FLOW_INSTANCE_HOME ||= join(home, "instance-home");
   if (args[0] === "install-bundle") {
     if (args.length !== 3 && !(args.length === 5 && args[3] === "--prefix"))
       throw Error("Usage: install-bundle DIRECTORY CHECKSUM [--prefix DIRECTORY]");
     // Load before adoption moves this bootstrap tree into its final location.
     const { installMacApp } = await import("./flow-mac-app.mjs");
     await adoptBundle(home, resolve(args[1]), args[2]);
-    await installLauncher(home, resolve(args[4] || join(homedir(), ".local")));
+    await installLaunchers(home, args[4]);
     if (platform() === "darwin") {
       const app = await installMacApp(home, process.env.FLOW_APPLICATIONS_DIR);
       console.log(`Installed ${app}. Open Flow from Applications to get started.`);
@@ -430,17 +530,13 @@ export async function main(args) {
     if (args.length !== 1 && !(args.length === 3 && args[1] === "--prefix"))
       throw Error("Usage: install [--prefix DIRECTORY]");
     await update(home);
-    return installLauncher(home, resolve(args[2] || join(homedir(), ".local")));
+    return installLaunchers(home, args[2]);
   }
   if (args[0] === "update") {
     if (args.length > 2 || (args[1] && args[1] !== "--check"))
       throw Error("Usage: flow update [--check]");
     return update(home, args[1] === "--check");
   }
-  if (args[0] === "--help" || args[0] === "help")
-    console.log(
-      "flow update [--check]\nAutomatic preparation: at startup and every six hours while running. FLOW_AUTO_UPDATE=0 disables it.",
-    );
   return launch(home, args);
 }
 

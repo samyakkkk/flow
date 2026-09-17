@@ -2,7 +2,10 @@ export type DocumentKind = "notes" | "doc" | "memory" | "skill";
 export type DocumentLifecycle = "standing" | "temporal" | "issue";
 export type DocumentStatus = "active" | "resolved" | "superseded";
 
+export interface BrainContributor { id: string; email: string }
+
 export interface BrainDocumentSummary {
+  contributors?: BrainContributor[];
   folder?: string;
   id: string;
   kind: DocumentKind;

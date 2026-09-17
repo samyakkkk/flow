@@ -27,6 +27,8 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  /** Whether `~/.t3/userdata` exists — see `@t3tools/shared/homeBaseDir`. */
+  readonly legacyHomeExists: boolean;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -61,6 +63,19 @@ export class DesktopEnvironment extends Context.Service<
     // extracts on demand (see DesktopWslServerTree).
     readonly serverRoot: string;
     readonly backendEntryPath: string;
+    // The built web client that ships next to the server in the desktop
+    // artifact. The `flow://app` protocol serves it directly when no Flow
+    // service is reachable, so the window (and the recovery screen) still
+    // renders with nothing to proxy to. Dev never reads it — the renderer
+    // target there is Vite — and the path may not exist in a repo checkout.
+    readonly bundledClientDir: string;
+    // `scripts/flow-release.mjs`, the Flow service bootstrap. First-launch
+    // adoption runs it with Electron's embedded Node to install the
+    // independent Flow release and register it as a login service; the
+    // desktop's own bundled server is never the service. Absent on packaged
+    // Windows, where that bootstrap does not run (see
+    // scripts/build-desktop-artifact.ts).
+    readonly flowReleaseScriptPath: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
@@ -78,7 +93,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly linuxApplicationsDir: string;
     readonly appImagePath: Option.Option<string>;
     readonly userDataDirName: string;
-    readonly legacyUserDataDirName: string;
+    readonly legacyUserDataDirNames: readonly string[];
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
@@ -87,6 +102,9 @@ export class DesktopEnvironment extends Context.Service<
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = BRAND.name;
+
+// Mirrors the staged resource directory in scripts/build-desktop-artifact.ts.
+const FLOW_BOOTSTRAP_RESOURCE_DIR = "flow-bootstrap";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -161,6 +179,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
+    legacyHomeExists: input.legacyHomeExists,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
@@ -179,8 +198,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = isDevelopment ? "flow-dev" : "flow";
+  // Profiles created under the app's earlier names. An existing one keeps being
+  // used where it is, so an update never loses a login, drafts or settings.
+  const legacyUserDataDirNames = isDevelopment
+    ? ["t3code-dev", "T3 Code (Dev)"]
+    : ["t3code", "T3 Code (Alpha)"];
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -211,6 +234,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appRoot,
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
+    bundledClientDir: path.join(serverRoot, "apps/server/dist/client"),
+    // Packaged builds carry the bootstrap as an extra resource next to the
+    // other staged resources; dev runs the repo's own copy.
+    flowReleaseScriptPath: input.isPackaged
+      ? path.join(resourcesPath, FLOW_BOOTSTRAP_RESOURCE_DIR, "flow-release.mjs")
+      : path.join(rootDir, "scripts", "flow-release.mjs"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged
@@ -232,7 +261,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
-    legacyUserDataDirName,
+    legacyUserDataDirNames,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({
       platform: input.platform,

@@ -179,13 +179,19 @@ const bootstrap = Effect.gen(function* () {
   const serverExposureState = yield* serverExposure.configureFromSettings({ port: backendPort });
   const backendConfig = yield* serverExposure.backendConfig;
   const electronProtocol = yield* ElectronProtocol.ElectronProtocol;
-  const rendererTarget = environment.isDevelopment
-    ? Option.getOrThrow(environment.devServerUrl)
-    : backendConfig.httpBaseUrl;
+  // Dev renders from Vite, which is up before the app is. Packaged renders
+  // from whatever server the primary instance is currently attached to — the
+  // Flow service, whose address this process does not choose and does not
+  // know until the attach completes. Resolving per request is what lets the
+  // window follow an attach that finishes (or moves) after registration, and
+  // what lets a failed attach fall back to the bundled client.
+  const rendererTarget: () => Effect.Effect<Option.Option<URL>> = environment.isDevelopment
+    ? () => Effect.succeed(environment.devServerUrl)
+    : () => pool.primaryHttpBaseUrl;
   yield* electronProtocol.registerDesktopProtocol({
     scheme: ElectronProtocol.getDesktopScheme(environment.isDevelopment),
-    targetOrigin: rendererTarget,
-    backendOrigin: backendConfig.httpBaseUrl,
+    resolveTarget: rendererTarget,
+    bundledClientDir: environment.bundledClientDir,
     clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
   });
   yield* logBootstrapInfo("bootstrap resolved backend endpoint", {
@@ -318,7 +324,10 @@ const scopedProgram = Effect.scoped(
         // cascade, so leaving the WSL instance for its parent scope
         // finalizer means it gets hard-killed by the OS instead of
         // receiving SIGTERM + grace. Stops run concurrently.
-        const instances = yield* pool.list;
+        // Attached instances are skipped: the app does not own the Flow
+        // service, and quitting must leave it (and the brain, and every
+        // external coding session's capture endpoint) running.
+        const instances = (yield* pool.list).filter((instance) => instance.detached !== true);
         yield* Effect.forEach(instances, (instance) => instance.stop(), {
           concurrency: "unbounded",
         });

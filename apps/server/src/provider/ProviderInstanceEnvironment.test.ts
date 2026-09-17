@@ -28,6 +28,7 @@ describe("mergeProviderInstanceEnvironment", () => {
       );
 
       expect(environment).toEqual({
+        FLOW_SESSION_ID: "t3-managed",
         CODEX_HOME: path.join(NodeOS.homedir(), tail),
         CLAUDE_CONFIG_DIR: path.join(NodeOS.homedir(), tail),
         CUSTOM_VALUE: value,
@@ -47,7 +48,7 @@ describe("mergeProviderInstanceEnvironment", () => {
         [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
         baseEnv,
       ),
-    ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom" });
+    ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom", FLOW_SESSION_ID: "t3-managed" });
   });
 
   it("overrides inherited environment values and preserves empty strings", () => {
@@ -65,4 +66,16 @@ describe("mergeProviderInstanceEnvironment", () => {
       PATH: "/bin",
     });
   });
+});
+
+it("marks managed provider processes without mutating the parent or accepting an override", () => {
+  const base = { PATH: "/bin" };
+  expect(mergeProviderInstanceEnvironment(undefined, base).FLOW_SESSION_ID).toBe("t3-managed");
+  expect(
+    mergeProviderInstanceEnvironment(
+      [{ name: "FLOW_SESSION_ID", value: "", sensitive: false }],
+      base,
+    ).FLOW_SESSION_ID,
+  ).toBe("t3-managed");
+  expect(base).toEqual({ PATH: "/bin" });
 });

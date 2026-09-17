@@ -138,3 +138,127 @@ export function resolveOnboardingLandingProject<T>(
 export function onboardingProjectKey(environmentId: EnvironmentId, path: string): string {
   return JSON.stringify([environmentId, path]);
 }
+
+/** Compare server-returned canonical macOS paths with paths chosen in the browser. */
+export function projectIsWithinFolder(project: string, folder: string): boolean {
+  const normalize = (value: string) =>
+    value
+      .replaceAll("\\", "/")
+      .replace(/^\/private\/tmp(?=\/|$)/, "/tmp")
+      .replace(/\/$/, "");
+  const root = normalize(folder);
+  const candidate = normalize(project);
+  return candidate === root || candidate.startsWith(root + "/");
+}
+
+/** Internal indexer directories are not user projects. Temporary folders require an explicit choice. */
+export function isSuggestedBrainProject(
+  path: string,
+  chosenFolders: readonly string[] = [],
+): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (/\/(?:userdata\/brain\/workspaces|\.t3\/worktrees)\//.test(normalized)) return false;
+  if (/\/data\/projects\/[^/]+\/workspace\/repos\//.test(normalized)) return false;
+  if (chosenFolders.some((folder) => projectIsWithinFolder(path, folder))) return true;
+  return !/^(?:\/private)?\/tmp(?:\/|$)|^\/private\/var\/folders\//.test(normalized);
+}
+
+/** Match HTTPS/SSH GitHub URLs using repository identity, never directory names. */
+export function githubRepositoryKey(value: string): string | null {
+  const cleaned = value.trim().replace(/^git@github\.com:/i, "https://github.com/");
+  const match =
+    /^(?:https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
+      cleaned,
+    );
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
+/** Reuse the nearest known parent project; internal indexing clones never qualify. */
+export function matchGithubProjects(
+  repository: string,
+  candidates: readonly AgentSessionProjectCandidate[],
+  projects: readonly { path: string; title: string; projectId?: ProjectId | undefined }[],
+  chosenFolders: readonly string[] = [],
+): AgentSessionProjectCandidate[] {
+  const key = githubRepositoryKey(repository);
+  if (!key) return [];
+  const matches = new Map<string, AgentSessionProjectCandidate>();
+  for (const candidate of candidates) {
+    if (!isSuggestedBrainProject(candidate.path, chosenFolders)) continue;
+    if (!candidate.git?.repository || githubRepositoryKey(candidate.git.repository) !== key)
+      continue;
+    const parent = projects
+      .filter(
+        (project) =>
+          isSuggestedBrainProject(project.path, chosenFolders) &&
+          projectIsWithinFolder(candidate.path, project.path),
+      )
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    const path = parent?.path ?? candidate.path;
+    const { projectId: _checkoutProjectId, ...checkout } = candidate;
+    matches.set(
+      path,
+      parent
+        ? {
+            ...checkout,
+            path,
+            title: parent.title,
+            alreadyImported: Boolean(parent.projectId),
+            ...(parent.projectId ? { projectId: parent.projectId, alreadyImported: true } : {}),
+            git: path === candidate.path ? candidate.git : null,
+          }
+        : candidate,
+    );
+  }
+  return [...matches.values()];
+}
+
+/** A folder offered for a remote Brain source counts only when its origin is that repository. */
+export function folderMatchesRemoteSource(
+  repository: string,
+  origin: string | null | undefined,
+): boolean {
+  const key = githubRepositoryKey(repository);
+  const originKey = origin ? githubRepositoryKey(origin) : null;
+  return key !== null && originKey !== null && key === originKey;
+}
+
+export interface RemoteBrainSourceMatch {
+  /** The remote Brain's repository URL, as the Brain reports it. */
+  readonly repository: string;
+  readonly candidates: readonly AgentSessionProjectCandidate[];
+}
+
+/**
+ * Line a connected remote Brain's indexed repositories up with local checkouts
+ * so onboarding can preselect them. Sources the client cannot match — a repo
+ * that is not cloned here, or a non-GitHub source — come back as `unmatched`
+ * for the folder picker. Sources that resolve to the same GitHub repository are
+ * reported once.
+ */
+export function matchRemoteBrainSources(
+  repositories: readonly string[],
+  candidates: readonly AgentSessionProjectCandidate[],
+  projects: readonly { path: string; title: string; projectId?: ProjectId | undefined }[],
+  chosenFolders: readonly string[] = [],
+): { matched: readonly RemoteBrainSourceMatch[]; unmatched: readonly string[] } {
+  const matched: RemoteBrainSourceMatch[] = [];
+  const unmatched: string[] = [];
+  const seen = new Set<string>();
+  for (const repository of repositories) {
+    const key = githubRepositoryKey(repository);
+    if (key === null) {
+      if (!seen.has(repository)) {
+        seen.add(repository);
+        unmatched.push(repository);
+      }
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found = matchGithubProjects(repository, candidates, projects, chosenFolders);
+    if (found.length === 0) unmatched.push(repository);
+    else matched.push({ repository, candidates: found });
+  }
+  return { matched, unmatched };
+}

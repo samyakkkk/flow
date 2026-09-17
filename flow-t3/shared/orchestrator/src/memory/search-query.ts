@@ -4,8 +4,10 @@
 // to svc:users matching "hmac"; the tokens are stripped before FTS/embedding so
 // they don't pollute the meaningful-token match. `node` / `type` params take
 // precedence over the in-query tokens when both are given.
-export type SearchTypeFilter = "memory" | "ticket" | "thread";
-const TYPE_FILTERS = new Set<SearchTypeFilter>(["memory", "ticket", "thread"]);
+// notes/doc/skill are Brain documents served by the curation store; naming them
+// here strips the token and keeps memories, Slack and Linear out of the result.
+export type SearchTypeFilter = "memory" | "ticket" | "thread" | "notes" | "doc" | "skill";
+const TYPE_FILTERS = new Set<SearchTypeFilter>(["memory", "ticket", "thread", "notes", "doc", "skill"]);
 
 export interface ParsedQuery {
   query: string; // query with node:/type: tokens removed

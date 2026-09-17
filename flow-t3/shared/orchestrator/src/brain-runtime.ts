@@ -6,8 +6,8 @@ import * as NodeCrypto from "node:crypto";
 import { CurationCoordinator } from "./curation/coordinator.js";
 import { CurationStore } from "./curation/store.js";
 import { registerCuratorMcp } from "./curation/tools.js";
-import { CURATION_PUBLIC_TOOLS, CurationPublicTools } from "./curation/public-tools.js";
-import type { BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
+import { CurationPublicTools } from "./curation/public-tools.js";
+import type { BrainContributor, BrainDocumentSync, BrainDocumentSyncAck } from "./curation/types.js";
 import type { BrainCuratorReply, BrainCuratorRun } from "../../runtime/src/contracts.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -25,7 +25,7 @@ async function session(actor: string) {
 
 if (process.argv.includes("--catalog")) {
   const pair = await session("catalog");
-  process.send?.({ ready: true, tools: [...(await pair.client.listTools()).tools,...CURATION_PUBLIC_TOOLS] });
+  process.send?.({ ready: true, tools: (await pair.client.listTools()).tools });
   await pair.close();
   if (process.connected) process.disconnect();
 } else {
@@ -151,7 +151,7 @@ if (process.argv.includes("--catalog")) {
     };
   };
   const catalog = await session("catalog");
-  const sessionTools = [...(await catalog.client.listTools()).tools, ...CURATION_PUBLIC_TOOLS];
+  const sessionTools = (await catalog.client.listTools()).tools;
   process.send?.({ ready: true, tools: sessionTools });
   await catalog.close();
   let hostedIntegration: import("./integration.js").BrainWorkerIntegration | undefined;
@@ -164,13 +164,13 @@ if (process.argv.includes("--catalog")) {
         database: db,
         tools: sessionTools,
         async call(name, args, sessionId) {
-          const result = publicDocuments.call(name, args, `t3-${sessionId}`);
+          const result = publicDocuments.call(name, args);
           if (result) return result;
           const pair = await session(`t3:${sessionId}`);
           try {
             const lookup = (arguments_: Record<string, unknown>) => sessionContext.run({ session: `t3-${sessionId}` }, () => pair.client.callTool({ name, arguments: arguments_ }));
-            const value = name === "get_entity" ? await publicDocuments.batch(args, `t3-${sessionId}`, lookup) : undefined;
-            return publicDocuments.augment(name, args, value ?? await lookup(args));
+            const value = name === "get_entity" ? await publicDocuments.batch(args, lookup) : undefined;
+            return publicDocuments.augment(name, args, value ?? await lookup(args), `t3-${sessionId}`);
           } finally { await pair.close(); }
         },
       });
@@ -240,6 +240,7 @@ if (process.argv.includes("--catalog")) {
         result = documents.applySync(
           String(message.params.origin),
           message.params.items as BrainDocumentSync[],
+          message.params.contributor as BrainContributor | undefined,
         );
       } else if (message.method === "documents") {
         const id = typeof message.params.id === "string" ? message.params.id : undefined;
@@ -253,14 +254,14 @@ if (process.argv.includes("--catalog")) {
       } else if (message.method === "call") {
         const context = message.params.context as SessionContext;
         const name=String(message.params.name), args=message.params.arguments as Record<string,unknown>;
-        result = publicDocuments.call(name,args,`t3-${context.session}`);
+        result = publicDocuments.call(name,args);
         if (!result) {
-          const pair = await session(`t3:${context.session}`);
+          const pair = await session(context.actor ?? `t3:${context.session}`);
           try {
             const lookup = (arguments_:Record<string,unknown>) => sessionContext.run({ ...context, session: `t3-${context.session}` }, () => pair.client.callTool({name, arguments:arguments_}));
-            result = name === "get_entity" ? await publicDocuments.batch(args,`t3-${context.session}`,lookup) : undefined;
+            result = name === "get_entity" ? await publicDocuments.batch(args,lookup) : undefined;
             result ??= await lookup(args);
-            result = publicDocuments.augment(name,args,result);
+            result = publicDocuments.augment(name,args,result,`t3-${context.session}`);
           } finally { await pair.close(); }
         }
       } else throw new Error("Unknown brain operation");

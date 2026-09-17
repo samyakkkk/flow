@@ -47,7 +47,11 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
-import { resolveInitialServerAuthGateState } from "../environments/primary";
+import {
+  readPrimaryAttachFailure,
+  resolveInitialServerAuthGateState,
+} from "../environments/primary";
+import { FlowServiceRecoverySurface } from "../components/desktop/FlowServiceRecoverySurface";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
@@ -82,6 +86,20 @@ export const Route = createRootRoute({
       };
     }
 
+    // A desktop that could not attach to the Flow service has no server to
+    // authenticate against, so this has to come before the auth bootstrap:
+    // otherwise the app spends fifteen seconds retrying a dead endpoint and
+    // lands in the generic error boundary instead of the recovery screen.
+    const attachFailure = readPrimaryAttachFailure();
+    if (attachFailure) {
+      return {
+        authGateState: {
+          status: "service-unavailable",
+          attachFailure,
+        } as const,
+      };
+    }
+
     const authGateState = await resolveInitialServerAuthGateState();
     return {
       authGateState,
@@ -98,6 +116,8 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const attachFailure =
+    authGateState.status === "service-unavailable" ? authGateState.attachFailure : null;
   const returningFromWelcomeRef = useRef(pathname === "/welcome");
 
   useEffect(() => {
@@ -114,6 +134,18 @@ function RootRouteView() {
       window.cancelAnimationFrame(frame);
     };
   }, [pathname]);
+
+  // Before every other branch: with no service there is no workspace, no
+  // pairing target and no settings to route to, so the recovery screen owns
+  // the window until the user gets out of it.
+  if (attachFailure) {
+    return (
+      <>
+        <DocumentTitleSync />
+        <FlowServiceRecoverySurface failure={attachFailure} />
+      </>
+    );
+  }
 
   if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
     return (

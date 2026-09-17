@@ -1,6 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off - the bundled-client fallback is
+// plain Node fs/path (see ElectronProtocol.ts); the fixtures here match it.
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as Option from "effect/Option";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
@@ -36,8 +42,8 @@ describe("ElectronProtocol", () => {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
             scheme: "flow-dev",
-            targetOrigin: new URL("http://127.0.0.1:3773/"),
-            backendOrigin: new URL("http://127.0.0.1:3774/"),
+            resolveTarget: () => Effect.succeed(Option.some(new URL("http://127.0.0.1:3773/"))),
+            bundledClientDir: "/nonexistent-client",
             clerkFrontendApiHostname: "clerk.t3.codes",
           });
           assert.isDefined(handler);
@@ -100,8 +106,8 @@ describe("ElectronProtocol", () => {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
             scheme: "t3code",
-            targetOrigin: new URL("http://127.0.0.1:3773/"),
-            backendOrigin: new URL("http://127.0.0.1:3773/"),
+            resolveTarget: () => Effect.succeed(Option.some(new URL("http://127.0.0.1:3773/"))),
+            bundledClientDir: "/nonexistent-client",
             clerkFrontendApiHostname: undefined,
           });
           return yield* Effect.promise(() => handler!(new Request("flow://other/")));
@@ -128,8 +134,8 @@ describe("ElectronProtocol", () => {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
             scheme: "flow-dev",
-            targetOrigin: new URL("http://127.0.0.1:5733/"),
-            backendOrigin: new URL("http://127.0.0.1:3773/"),
+            resolveTarget: () => Effect.succeed(Option.some(new URL("http://127.0.0.1:5733/"))),
+            bundledClientDir: "/nonexistent-client",
             clerkFrontendApiHostname: undefined,
           });
           return yield* Effect.promise(() => handler!(new Request("flow-dev://app/")));
@@ -152,8 +158,8 @@ describe("ElectronProtocol", () => {
       const error = yield* Effect.scoped(
         protocol.registerDesktopProtocol({
           scheme: "flow-dev",
-          targetOrigin: new URL("http://127.0.0.1:3773/"),
-          backendOrigin: new URL("http://127.0.0.1:3774/"),
+          resolveTarget: () => Effect.succeed(Option.some(new URL("http://127.0.0.1:3773/"))),
+          bundledClientDir: "/nonexistent-client",
           clerkFrontendApiHostname: undefined,
         }),
       ).pipe(Effect.flip);
@@ -177,8 +183,8 @@ describe("ElectronProtocol", () => {
         Effect.scoped(
           protocol.registerDesktopProtocol({
             scheme: "t3code",
-            targetOrigin: new URL("http://127.0.0.1:3773/"),
-            backendOrigin: new URL("http://127.0.0.1:3773/"),
+            resolveTarget: () => Effect.succeed(Option.some(new URL("http://127.0.0.1:3773/"))),
+            bundledClientDir: "/nonexistent-client",
             clerkFrontendApiHostname: undefined,
           }),
         ),
@@ -195,11 +201,150 @@ describe("ElectronProtocol", () => {
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
+  it.effect("follows the attached server as it changes, resolving per request", () =>
+    Effect.gen(function* () {
+      let handler: ((request: Request) => Promise<Response>) | undefined;
+      handleMock.mockImplementation((_scheme, nextHandler) => {
+        handler = nextHandler;
+      });
+      netFetchMock.mockResolvedValue(new Response("ok"));
+      let target = new URL("http://127.0.0.1:3773/");
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const protocol = yield* ElectronProtocol.ElectronProtocol;
+          yield* protocol.registerDesktopProtocol({
+            scheme: "flow",
+            resolveTarget: () => Effect.sync(() => Option.some(target)),
+            bundledClientDir: "/nonexistent-client",
+            clerkFrontendApiHostname: undefined,
+          });
+
+          yield* Effect.promise(() => handler!(new Request("flow://app/api/health")));
+          target = new URL("http://127.0.0.1:9999/");
+          yield* Effect.promise(() => handler!(new Request("flow://app/api/health")));
+        }),
+      );
+
+      assert.deepEqual(
+        netFetchMock.mock.calls.map((call) => call[0]),
+        ["http://127.0.0.1:3773/api/health", "http://127.0.0.1:9999/api/health"],
+      );
+    }).pipe(Effect.provide(ElectronProtocol.layer)),
+  );
+
+  describe("without a reachable server", () => {
+    const withBundledClient = <A, E, R>(
+      use: (clientDir: string) => Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E, R> =>
+      Effect.acquireUseRelease(
+        Effect.promise(async () => {
+          const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "flow-client-"));
+          await NodeFSP.mkdir(NodePath.join(dir, "assets"));
+          await NodeFSP.writeFile(NodePath.join(dir, "index.html"), "<html>shell</html>");
+          await NodeFSP.writeFile(NodePath.join(dir, "assets", "app.js"), "export {};");
+          return dir;
+        }),
+        use,
+        (dir) => Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),
+      );
+
+    const request = (clientDir: string, url: string, headers?: Record<string, string>) =>
+      Effect.gen(function* () {
+        let handler: ((value: Request) => Promise<Response>) | undefined;
+        handleMock.mockImplementation((_scheme, nextHandler) => {
+          handler = nextHandler;
+        });
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const protocol = yield* ElectronProtocol.ElectronProtocol;
+            yield* protocol.registerDesktopProtocol({
+              scheme: "flow",
+              resolveTarget: () => Effect.succeed(Option.none()),
+              bundledClientDir: clientDir,
+              clerkFrontendApiHostname: undefined,
+            });
+            return yield* Effect.promise(() =>
+              handler!(new Request(url, { headers: headers ?? {} })),
+            );
+          }),
+        );
+      });
+
+    it.effect("serves the bundled shell for the root and for unknown client routes", () =>
+      withBundledClient((clientDir) =>
+        Effect.gen(function* () {
+          for (const url of ["flow://app/", "flow://app/unknown/route"]) {
+            const response = yield* request(clientDir, url, { accept: "text/html" });
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+            assert.equal(yield* Effect.promise(() => response.text()), "<html>shell</html>");
+            assert.include(
+              response.headers.get("content-security-policy") ?? "",
+              "default-src 'self'",
+            );
+          }
+          assert.equal(netFetchMock.mock.calls.length, 0);
+        }),
+      ).pipe(Effect.provide(ElectronProtocol.layer)),
+    );
+
+    it.effect("serves bundled assets with their own content type", () =>
+      withBundledClient((clientDir) =>
+        Effect.gen(function* () {
+          const response = yield* request(clientDir, "flow://app/assets/app.js");
+          assert.equal(response.status, 200);
+          assert.equal(response.headers.get("content-type"), "text/javascript; charset=utf-8");
+          assert.equal(yield* Effect.promise(() => response.text()), "export {};");
+          assert.include(
+            response.headers.get("content-security-policy") ?? "",
+            "default-src 'self'",
+          );
+        }),
+      ).pipe(Effect.provide(ElectronProtocol.layer)),
+    );
+
+    it.effect("refuses paths that escape the bundled client directory", () =>
+      withBundledClient((clientDir) =>
+        Effect.gen(function* () {
+          // URL parsing already collapses literal `..`; the encoded-slash form
+          // survives into the pathname, so the resolve-inside check is what
+          // stops it.
+          const response = yield* request(
+            clientDir,
+            "flow://app/assets/%2e%2e%2f%2e%2e%2fetc/passwd",
+          );
+          assert.equal(response.status, 403);
+        }),
+      ).pipe(Effect.provide(ElectronProtocol.layer)),
+    );
+
+    it.effect("fails server paths as server failures instead of serving the shell", () =>
+      withBundledClient((clientDir) =>
+        Effect.gen(function* () {
+          for (const path of ["/api/x", "/ws", "/oauth/callback", "/.well-known/t3/environment"]) {
+            const response = yield* request(clientDir, `flow://app${path}`, {
+              accept: "text/html",
+            });
+            assert.equal(response.status, 503);
+            assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+            assert.deepEqual((yield* Effect.promise(() => response.json())) as unknown, {
+              error: "flow-service-unavailable",
+              detail: "The Flow service is not reachable.",
+            });
+            assert.include(
+              response.headers.get("content-security-policy") ?? "",
+              "default-src 'self'",
+            );
+          }
+        }),
+      ).pipe(Effect.provide(ElectronProtocol.layer)),
+    );
+  });
+
   it("keeps executable sources host-restricted while allowing runtime network resources", () => {
     const policy = ElectronProtocol.makeDesktopContentSecurityPolicy({
       scheme: "t3code",
-      targetOrigin: new URL("http://127.0.0.1:3773/"),
-      backendOrigin: new URL("http://127.0.0.1:3773/"),
       clerkFrontendApiHostname: "clerk.t3.codes",
     });
     const directives = Object.fromEntries(

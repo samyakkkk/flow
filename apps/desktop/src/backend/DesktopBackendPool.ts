@@ -86,6 +86,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -94,8 +95,16 @@ import * as FileSystem from "effect/FileSystem";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as DesktopAttachedBackend from "./DesktopAttachedBackend.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import type { DesktopFlowServiceActionResult } from "@t3tools/contracts";
+import * as FlowService from "./flowService.ts";
+import * as DesktopServiceAdoption from "./DesktopServiceAdoption.ts";
+import * as FlowServiceRecovery from "./flowServiceRecovery.ts";
+import { flowServiceSupportsHost } from "./serviceDiscovery.ts";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -138,6 +147,12 @@ export class DesktopBackendPoolCannotUnregisterPrimaryError extends Schema.Tagge
   }
 }
 
+// An instance that does not report an address (older instance kinds, test
+// doubles) reads as "no server", which is exactly how the protocol treats a
+// backend it cannot reach.
+const primaryHttpBaseUrl = (instance: DesktopBackendInstance): Effect.Effect<Option.Option<URL>> =>
+  instance.httpBaseUrl ?? Effect.succeed(Option.none());
+
 export class DesktopBackendPool extends Context.Service<
   DesktopBackendPool,
   {
@@ -152,6 +167,12 @@ export class DesktopBackendPool extends Context.Service<
     // exposed as a typed effect so consumers don't have to handle the
     // Option for the case that's guaranteed to be present.
     readonly primary: Effect.Effect<DesktopBackendInstance>;
+    // Where the primary's server currently answers, or None when there is
+    // none (attach failed, or has not completed yet). The `flow://app`
+    // protocol resolves its proxy target through this on every request, so it
+    // stays a cheap read and never mints a credential the way `currentConfig`
+    // does.
+    readonly primaryHttpBaseUrl: Effect.Effect<Option.Option<URL>>;
     // Build a fresh DesktopBackendInstance from `spec` and add it to the
     // registry. The pool owns the instance's scope: unregister(id) or pool
     // teardown closes it and runs the instance's auto-stop finalizer. The
@@ -169,6 +190,12 @@ export class DesktopBackendPool extends Context.Service<
     readonly unregister: (
       id: BackendInstanceId,
     ) => Effect.Effect<void, DesktopBackendPoolCannotUnregisterPrimaryError>;
+    // Run the primary's start again, in the background, and let the user adopt
+    // once more if adoption already failed this session. `start` on the
+    // attached primary can wait out a service that is still booting (two
+    // minutes), so this returns as soon as the attempt is under way rather
+    // than holding an IPC call open for it.
+    readonly retryPrimaryAttach: Effect.Effect<void>;
   }
 >()("@t3tools/desktop/backend/DesktopBackendPool") {}
 
@@ -208,10 +235,106 @@ type UnregisterAction =
   | { readonly _tag: "Wait"; readonly done: Deferred.Deferred<void> }
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
+/** What `handleAttachFailure` needs from the world. Injected so the recovery
+    decision can be tested without a window, a filesystem or a real service
+    installation. */
+export interface AttachFailureRecovery {
+  readonly adopt: () => Effect.Effect<DesktopServiceAdoption.AdoptionOutcome>;
+  /** Start an installed-but-stopped service (see `flowService.startFlowService`). */
+  readonly startService: () => Effect.Effect<DesktopFlowServiceActionResult>;
+  readonly logStep: (step: Record<string, unknown>) => Effect.Effect<void>;
+  /** Put the failure in front of the user. The window renders the recovery
+      screen from the parked failure the bridge hands it; nothing is passed
+      here beyond "show it", so the copy lives in one place (the renderer). */
+  readonly surface: () => Effect.Effect<void>;
+}
+
+/**
+ * The attached primary's preflight-failure handler.
+ *
+ * `not-installed` is the one failure with an automatic recovery: this desktop
+ * is the first launch after the service model landed, so it installs the Flow
+ * release and registers the service (see DesktopServiceAdoption), then returns
+ * true to ask the attached instance for one more attach attempt. Adoption runs
+ * at most once per session — a second `not-installed` after a completed
+ * adoption means something is wrong that re-running would not fix.
+ *
+ * Every other kind stays inert on purpose: starting or updating the service is
+ * the service layer's job, and a private child would compete with it for the
+ * instance lock.
+ */
+export const makeAttachFailureHandler = Effect.fn("desktop.backendPool.makeAttachFailureHandler")(
+  function* (recovery: AttachFailureRecovery) {
+    const adoptionAttempted = yield* Ref.make(false);
+    const startAttempted = yield* Ref.make(false);
+
+    const handle = Effect.fn("desktop.backendPool.primaryAttachFailed")(function* (
+      failure: DesktopBackendManager.PreflightFailure,
+    ) {
+      yield* recovery.logStep({
+        event: "attach-failed",
+        reason: failure.reason,
+        kind: failure.attach?.kind ?? "unknown",
+      });
+      // A stopped service is started, once per session: the app opening is
+      // the user asking for Flow, and the service layer owns the start (the
+      // service manager or the launcher). If that does not work, the recovery
+      // screen says so and offers the same action by hand.
+      if (failure.attach?.kind === "stopped" && !(yield* Ref.get(startAttempted))) {
+        yield* Ref.set(startAttempted, true);
+        const started = yield* recovery.startService();
+        yield* recovery.logStep({
+          event: "service-start",
+          ok: started.ok,
+          reason: started.reason,
+          detail: started.detail,
+        });
+        if (started.ok) return true;
+        yield* recovery.surface();
+        return false;
+      }
+      if (failure.attach?.kind !== "not-installed" || (yield* Ref.get(adoptionAttempted))) {
+        yield* recovery.surface();
+        return false;
+      }
+
+      yield* Ref.set(adoptionAttempted, true);
+      const outcome = yield* recovery.adopt();
+      if (outcome._tag !== "already-adopted") {
+        for (const step of outcome.journal.steps) {
+          yield* recovery.logStep({
+            event: "adoption-step",
+            step: step.name,
+            ok: step.ok,
+            ...(step.detail === undefined ? {} : { detail: step.detail }),
+          });
+        }
+      }
+      yield* recovery.logStep({ event: "adoption-outcome", outcome: outcome._tag });
+      if (outcome._tag === "failed") {
+        yield* recovery.surface();
+        return false;
+      }
+      return true;
+    });
+
+    // An explicit retry from the recovery screen is the user saying "try the
+    // whole thing again", including an adoption that failed the first time.
+    // Automatic retries stay capped at one adoption per session.
+    const allowAdoption = Effect.all([
+      Ref.set(adoptionAttempted, false),
+      Ref.set(startAttempted, false),
+    ]).pipe(Effect.asVoid);
+
+    return { handle, allowAdoption };
+  },
+);
+
 export const layer = Layer.effect(
   DesktopBackendPool,
   Effect.gen(function* () {
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -278,7 +401,83 @@ export const layer = Layer.effect(
       },
     );
 
-    const primary = yield* DesktopBackendManager.makeBackendInstance({
+    // The primary backend is the `flow` service the app attaches to. The old
+    // private-child backend stays available behind FLOW_DESKTOP_LEGACY_BACKEND
+    // for exactly one release as the migration rollback, then this branch and
+    // `makeLegacyPrimary` go away.
+    // Either the env var (a developer or an operator choosing the rollback for
+    // every launch) or a one-shot marker the recovery screen left behind
+    // ("Continue with the built-in server"). The marker is consumed as it is
+    // read, so the next ordinary launch attaches again and the choice is never
+    // a mode the user cannot leave.
+    // Intel Macs and Windows have no Flow CLI build, so there is no service to
+    // attach to or install; without this they would land on the recovery
+    // screen at every launch.
+    const hostPlatform = yield* HostProcessPlatform;
+    const hostArchitecture = yield* HostProcessArchitecture;
+    const legacyPrimaryRequested =
+      !flowServiceSupportsHost(hostPlatform, hostArchitecture) ||
+      process.env.FLOW_DESKTOP_LEGACY_BACKEND === "1" ||
+      FlowServiceRecovery.consumeLegacyBackendMarker(environment.stateDir);
+
+    const attachRecovery = yield* makeAttachFailureHandler({
+      adopt: () =>
+        DesktopServiceAdoption.adoptService({
+          homeDirectory: environment.homeDirectory,
+          executablePath: process.execPath,
+          flowReleaseScriptPath: environment.flowReleaseScriptPath,
+        }),
+      startService: () =>
+        Effect.promise(() =>
+          FlowService.startFlowService({
+            host: process.platform,
+            uid: typeof process.getuid === "function" ? process.getuid() : 0,
+            homeDirectory: environment.homeDirectory,
+            // An older registry has no recorded runtime; this binary is a Node 24.
+            fallbackNodePath: process.execPath,
+            fallbackNodeEnv: { ELECTRON_RUN_AS_NODE: "1" },
+          }),
+        ),
+      logStep: (step) => logBackendPoolWarning("flow service attach recovery", step),
+      // The recovery screen is the surface. Opening the window is all this
+      // side has to do: the bridge already carries the parked failure, so the
+      // renderer decides what to say and which actions to offer. The error box
+      // stays only as the last resort for a window that will not open at all.
+      surface: () =>
+        desktopWindow.ensureMain.pipe(
+          Effect.asVoid,
+          Effect.catch((error) =>
+            logBackendPoolWarning("failed to open the Flow service recovery window", {
+              error: error.message,
+            }).pipe(
+              Effect.andThen(
+                electronDialog.showErrorBox(
+                  `${BRAND.name} could not connect to its service`,
+                  `${BRAND.name} could not open a window to show what went wrong. Check the service with \`flow service status\`.`,
+                ),
+              ),
+            ),
+          ),
+        ),
+    });
+
+    const makeAttachedPrimary = DesktopAttachedBackend.makeAttachedBackendInstance({
+      id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
+      label: configuration.resolvePrimaryLabel,
+      environment: yield* configuration.attachedBackendEnvironment,
+      onReady: (httpBaseUrl) =>
+        desktopWindow.handleBackendReady(httpBaseUrl).pipe(
+          Effect.catch((error) =>
+            logBackendPoolWarning("failed to open main window after backend readiness", {
+              error: error.message,
+            }),
+          ),
+        ),
+      onShutdown: () => desktopWindow.handleBackendNotReady,
+      onPreflightFailed: attachRecovery.handle,
+    });
+
+    const makeLegacyPrimary = DesktopBackendManager.makeBackendInstance({
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Keep this lazy. The pool layer is initialized before startup loads
       // persisted desktop settings, so resolving the primary label here would
@@ -303,6 +502,8 @@ export const layer = Layer.effect(
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
     });
+
+    const primary = yield* legacyPrimaryRequested ? makeLegacyPrimary : makeAttachedPrimary;
 
     const instancesRef = yield* SynchronizedRef.make<
       ReadonlyMap<BackendInstanceId, RegisteredInstance>
@@ -438,8 +639,13 @@ export const layer = Layer.effect(
         ),
       ),
       primary: Effect.succeed(primary),
+      primaryHttpBaseUrl: primaryHttpBaseUrl(primary),
       register,
       unregister,
+      retryPrimaryAttach: attachRecovery.allowAdoption.pipe(
+        Effect.andThen(Effect.forkIn(primary.start, layerScope)),
+        Effect.asVoid,
+      ),
     });
   }),
 );
@@ -468,8 +674,10 @@ export const layerTest = (
         get: (id) => Effect.succeed(Option.fromNullishOr(byId.get(id))),
         list: Effect.succeed(Array.from(byId.values())),
         primary: Effect.succeed(primary),
+        primaryHttpBaseUrl: primaryHttpBaseUrl(primary),
         register: () => Effect.die("DesktopBackendPool.layerTest does not support register"),
         unregister: () => Effect.die("DesktopBackendPool.layerTest does not support unregister"),
+        retryPrimaryAttach: primary.start,
       });
     }),
   );

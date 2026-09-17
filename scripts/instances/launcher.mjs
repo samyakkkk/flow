@@ -55,21 +55,29 @@ export function parse(args) {
       if (!input.name || !/^[a-z][a-z0-9-]{0,47}$/.test(input.name) || reserved.has(input.name))
         throw Error("Choose a dev name using lowercase letters, digits and hyphens.");
     }
+  } else if (args[0] === "service") {
+    input.action = args.shift();
+    input.verb = args.shift();
+    if (!["install", "status", "uninstall"].includes(input.verb))
+      throw Error("Usage: flow service install|status|uninstall [--home PATH]");
   } else if (["status", "stop", "restart"].includes(args[0])) input.action = args.shift();
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (flag === "--no-open") input.noOpen = true;
+    else if (flag === "--browser") input.browser = true;
     else if (flag === "--replace") input.replace = true;
     else if (flag === "--fresh") input.fresh = true;
     else if (["--isolated", "--ui-only", "--shared-brain"].includes(flag)) {
       if (input.mode) throw Error("Choose only one development mode.");
       input.mode = flag.slice(2);
-    } else if (["--code", "--from"].includes(flag)) {
+    } else if (["--code", "--from", "--home"].includes(flag)) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw Error(`${flag} requires a value.`);
       input[flag.slice(2)] = value;
     } else throw Error(`Unknown option: ${flag}`);
   }
+  // --home is the one configuration flag primary accepts: the installer records
+  // where this machine's data already lives (see configure()).
   if (!input.dev && (input.mode || input.from || input.fresh || input.code || input.replace))
     throw Error(
       "Instance configuration flags belong to flow dev NAME. Use flow restart for primary.",
@@ -77,9 +85,13 @@ export function parse(args) {
   if (input.fresh && (input.replace || (input.mode && input.mode !== "isolated")))
     throw Error("--fresh creates a new isolated unit; it cannot replace or share another unit.");
   if (input.mode === "isolated" && input.from) throw Error("--isolated cannot use --from.");
+  // `flow service install` also records the home the service adopts.
+  const configurable =
+    input.action === "start" || (input.action === "service" && input.verb === "install");
   if (
-    input.action !== "start" &&
-    (input.mode || input.from || input.fresh || input.code || input.replace)
+    (input.action !== "start" &&
+      (input.mode || input.from || input.fresh || input.code || input.replace)) ||
+    (!configurable && input.home)
   )
     throw Error("Configuration flags apply only when starting a development instance.");
   return input;
@@ -112,10 +124,20 @@ export async function configure(input, directory) {
     if (input.fresh) throw Error(`${input.name} already exists. Use a new name for --fresh.`);
     if (input.code && (await realpath(resolve(input.code))) !== saved.code)
       throw Error("Use a new instance name to run a different checkout.");
+    if (input.home && resolve(input.home) !== saved.home)
+      throw Error("This instance already stores its data elsewhere; a home is never moved.");
     if ((input.mode && input.mode !== saved.mode) || (input.from && input.from !== saved.from))
       throw Error(
         "Use a new instance name for a different brain mode/source. --replace preserves configuration.",
       );
+    // Older registries predate `node`. Backfilling it is the one edit made to a
+    // saved config: it changes nothing about identity or storage, and it is
+    // what lets a client start a stopped service with the right runtime.
+    if (typeof saved.node !== "string") {
+      const updated = { ...saved, node: process.execPath };
+      await atomic(join(directory, "config.json"), updated);
+      return updated;
+    }
     return saved;
   }
   const code = await realpath(
@@ -136,7 +158,14 @@ export async function configure(input, directory) {
     mode,
     ...(from ? { from } : {}),
     dev: input.dev,
-    home: join(directory, "data"),
+    // An explicit home lets a service adopt data that already exists elsewhere;
+    // it is recorded once and honored verbatim on every later launch, because
+    // moving a home orphans the brain store and every managed worktree.
+    home: input.home ? resolve(input.home) : join(directory, "data"),
+    // The runtime this launcher runs under (nvm's node for a checkout, the
+    // private runtime for a release). Clients that need to start a stopped
+    // service run the launcher with it instead of guessing.
+    node: process.execPath,
   };
   await atomic(join(directory, "config.json"), config);
   return config;
@@ -160,6 +189,45 @@ async function openBrowser(url) {
         ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
         : ["xdg-open", [url]];
   await exec(...command).catch(() => console.log(`Open ${url}`));
+}
+/** The installed Flow desktop app, if any. Only the two standard macOS
+    application folders count; anything else is a build, not an install. */
+export async function installedDesktopApp(
+  platform = NodeOS.platform(),
+  home = homedir(),
+  systemApplications = "/Applications",
+) {
+  if (platform !== "darwin") return null;
+  for (const candidate of [
+    join(systemApplications, "Flow.app"),
+    join(home, "Applications/Flow.app"),
+  ]) {
+    try {
+      await access(join(candidate, "Contents/MacOS/Flow"));
+      return candidate;
+    } catch {
+      // not installed there
+    }
+  }
+  return null;
+}
+/** Open the desktop app when it is installed, else the browser. The app is
+    told which registry this service lives in: it attaches to the release
+    registry by default and would otherwise not find a checkout's service. It
+    mints its own credential, so the pairing URL is only printed for a browser. */
+async function openClient(url, input) {
+  const app = input.browser ? null : await installedDesktopApp();
+  if (!app) return openBrowser(url);
+  try {
+    // `open` forwards this shell's environment to the app. Hand it the same
+    // scrubbed environment the supervisor gives the server, so a T3CODE_* or
+    // FLOW_* variable in a developer's shell cannot point the app elsewhere.
+    const env = (await import("./supervisor.mjs")).cleanEnvironment(process.env);
+    await exec("open", ["-a", app, "--env", `FLOW_INSTANCE_HOME=${registryRoot()}`], { env });
+    console.log(`Opened ${app}. Browser: ${url} (or run flow --browser)`);
+  } catch {
+    await openBrowser(url);
+  }
 }
 export async function lockLauncher(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -194,18 +262,25 @@ export async function start(input) {
       status = null;
     }
     if (!status) {
-      const log = openSync(join(directory, "runtime.log"), "a", 0o600);
-      const child = spawn(
-        process.execPath,
-        [join(sourceRoot, "scripts/flow.mjs"), "--supervise", directory],
-        { detached: true, stdio: ["ignore", log, log], env: process.env },
-      );
-      closeSync(log);
-      await new Promise((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-      });
-      child.unref();
+      // An installed service owns the supervisor's lifecycle; starting a second
+      // one here would race it for the instance lock.
+      const service = await import("./service.mjs");
+      const managed = input.name === "primary" ? await service.managedService() : null;
+      if (managed?.loaded) await service.restartManaged(managed);
+      else {
+        const log = openSync(join(directory, "runtime.log"), "a", 0o600);
+        const child = spawn(
+          process.execPath,
+          [join(sourceRoot, "scripts/flow.mjs"), "--supervise", directory],
+          { detached: true, stdio: ["ignore", log, log], env: process.env },
+        );
+        closeSync(log);
+        await new Promise((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+        child.unref();
+      }
     }
     status = await waitFor(directory, (value) => value?.phase === "ready");
     console.log(
@@ -234,7 +309,7 @@ export async function start(input) {
     const frontend = new URL(status.url);
     pairingUrl.host = frontend.host;
     pairingUrl.protocol = frontend.protocol;
-    if (!input.noOpen) await openBrowser(pairingUrl.toString());
+    if (!input.noOpen) await openClient(pairingUrl.toString(), input);
     else console.log(`Pairing URL: ${pairingUrl}`);
     return status;
   } finally {
@@ -247,9 +322,11 @@ export async function main(args) {
     throw Error("The managed launcher currently supports macOS and Linux.");
   if (input.action === "supervise")
     return (await import("./supervisor.mjs")).supervise(input.directory);
+  if (input.action === "service")
+    return (await import("./service.mjs")).service(input.verb, { home: input.home });
   if (input.action === "help")
     return console.log(
-      "flow [status|stop|restart] [--no-open]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
+      "flow [status|stop|restart] [--home PATH] [--no-open|--browser]\nflow service install|status|uninstall [--home PATH]\nflow dev NAME [--isolated|--ui-only|--shared-brain] [--from primary] [--code PATH] [--replace|--fresh] [--no-open]\nflow dev list\nflow dev status NAME\nflow dev stop NAME",
     );
   if (input.action === "list") {
     const directory = join(registryRoot(), "instances");

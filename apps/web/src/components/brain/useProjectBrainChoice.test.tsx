@@ -189,7 +189,13 @@ it("connects a remote brain from creation without requiring a local CLI or creat
     renderer!.root
       .findAllByType("input")
       .find((node) => node.props.type === "password")!
-      .props.onChange({ target: { value: "test-access" } });
+      .props.onChange({ target: { value: "test-password" } });
+  });
+  await act(async () => {
+    renderer!.root
+      .findAllByType("input")
+      .find((input) => input.props.type === "email")!
+      .props.onChange({ target: { value: "member@example.com" } });
   });
   expect(findButton("Connect remote Brain").props.disabled).toBe(false);
   await act(async () => {
@@ -197,7 +203,12 @@ it("connects a remote brain from creation without requiring a local CLI or creat
   });
   expect(state.execute).toHaveBeenLastCalledWith({
     environmentId,
-    input: { action: "connectCloud", endpoint: "https://brain.example.com", token: "test-access" },
+    input: {
+      action: "connectCloud",
+      endpoint: "https://brain.example.com",
+      email: "member@example.com",
+      password: "test-password",
+    },
   });
   expect(text(renderer!.root)).toContain("remote-brain");
 });

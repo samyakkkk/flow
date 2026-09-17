@@ -14,6 +14,8 @@ import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
+import { AuthAdministrativeScopes } from "@t3tools/contracts";
+
 import { cli } from "../bin.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
@@ -195,6 +197,49 @@ describe("t3 pair", () => {
         off: () => undefined,
       }),
     ),
+  );
+
+  it.effect("prints only JSON with administrative scopes under --admin --json", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-admin-test-"));
+        const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
+        yield* persistServerRuntimeState({
+          path: statePath,
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+
+        const output = yield* captureStdout(
+          runCli(["pair", "--base-dir", baseDir, "--admin", "--json"]),
+        );
+
+        // The desktop parses this stdout; a QR code or a note would corrupt it.
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
+        const parsed = JSON.parse(output.trim()) as {
+          readonly credential: string;
+          readonly pairingUrl: string;
+          readonly expiresAt: string;
+          readonly scopes: ReadonlyArray<string>;
+        };
+        assert.isTrue(parsed.credential.length > 0);
+        assert.isTrue(Number.isFinite(Date.parse(parsed.expiresAt)));
+        assert.deepEqual([...parsed.scopes], [...AuthAdministrativeScopes]);
+        // Callers open this URL rather than rebuilding it from the origin.
+        assert.equal(parsed.pairingUrl, `${origin}/pair#token=${parsed.credential}`);
+        assert.notInclude(output, "Pairing URL");
+
+        const listed = yield* captureStdout(
+          runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
+        );
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
+        const credentials = JSON.parse(listed) as ReadonlyArray<{ readonly label?: string }>;
+        assert.equal(credentials.length, 1);
+        assert.equal(credentials[0]?.label, `${BRAND.name} desktop`);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("pairs through the recorded dev web URL for dev servers", () =>

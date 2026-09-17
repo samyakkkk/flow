@@ -69,6 +69,7 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
  * test, so the layer is built per run rather than shared.
  */
 interface ScannerTestInput {
+  readonly roots?: readonly string[];
   readonly claudeHomePath: string;
   readonly codexHomePath: string;
   readonly importedWorkspaceRoots?: ReadonlyArray<string>;
@@ -102,7 +103,7 @@ const makeScannerTestLayer = (input: ScannerTestInput) =>
 const runScan = (input: ScannerTestInput) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.scan;
+    return yield* scanner.scanRoots(input.roots ?? []);
   }).pipe(Effect.provide(makeScannerTestLayer(input)));
 
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
@@ -842,26 +843,30 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("excludes T3-managed worktree sandboxes", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const fileSystem = yield* FileSystem.FileSystem;
+    // Both base-dir names: an install adopted at `~/.t3` and a fresh one at
+    // `~/.flow` manage worktrees the same way.
+    for (const baseDirName of [".t3", ".flow"]) {
+      it.effect(`excludes T3-managed worktree sandboxes under ${baseDirName}`, () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+          const fileSystem = yield* FileSystem.FileSystem;
 
-        const worktreeCwd = path.join(claudeHomePath, ".t3", "worktrees", "t3code", "wt-1");
-        yield* fileSystem.makeDirectory(worktreeCwd, { recursive: true });
-        yield* writeTranscript({
-          filePath: path.join(claudeHomePath, "projects", "-slug", "a.jsonl"),
-          contents: claudeSessionLine(worktreeCwd),
-          mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
-        });
+          const worktreeCwd = path.join(claudeHomePath, baseDirName, "worktrees", "t3code", "wt-1");
+          yield* fileSystem.makeDirectory(worktreeCwd, { recursive: true });
+          yield* writeTranscript({
+            filePath: path.join(claudeHomePath, "projects", "-slug", "a.jsonl"),
+            contents: claudeSessionLine(worktreeCwd),
+            mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+          });
 
-        const result = yield* runScan({ claudeHomePath, codexHomePath });
+          const result = yield* runScan({ claudeHomePath, codexHomePath });
 
-        expect(result.candidates).toEqual([]);
-      }),
-    );
+          expect(result.candidates).toEqual([]);
+        }),
+      );
+    }
 
     it.effect("excludes Codex scratch directories and Downloads", () =>
       Effect.gen(function* () {
@@ -994,6 +999,32 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const result = yield* runScan({ claudeHomePath, codexHomePath, configBaseDir });
 
         expect(result.candidates).toEqual([]);
+      }),
+    );
+
+    it.effect("offers repositories found under an explicit parent without agent history", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const parent = yield* makeTempDir("flow-parent-");
+        const repository = path.join(parent, "team", "repo");
+        yield* fs.makeDirectory(path.join(repository, ".git"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(repository, ".git", "config"),
+          '[remote "origin"]\nurl = https://github.com/example/repo.git\n',
+        );
+        const result = yield* runScan({
+          roots: [parent],
+          claudeHomePath: yield* makeTempDir("flow-claude-"),
+          codexHomePath: yield* makeTempDir("flow-codex-"),
+        });
+        expect(result.candidates).toHaveLength(1);
+        expect(result.candidates[0]).toMatchObject({
+          title: "repo",
+          sources: [],
+          threadCount: 0,
+          git: { repository: "example/repo" },
+        });
       }),
     );
 
