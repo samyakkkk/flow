@@ -23,7 +23,19 @@ const macAssetName = "flow-browser-darwin-arm64.tar.gz";
 const bundledAssets = {
   "darwin-arm64": macAssetName,
   "linux-x64": "flow-browser-linux-x64.tar.gz",
+  // No native graph database exists for Windows, so this bundle carries none:
+  // the computer connects to a Cloud Brain instead of hosting one.
+  "win32-x64": "flow-browser-win32-x64.tar.gz",
 };
+const windows = platform() === "win32";
+/** Where a bundle keeps its private Node and Git, which differ on Windows. */
+export const bundledNode = (directory, win = windows) =>
+  join(directory, win ? "runtime/bin/node.exe" : "runtime/bin/node");
+export const bundledGit = (directory, win = windows) =>
+  join(directory, win ? "runtime/git/cmd/git.exe" : "runtime/git/bin/git");
+// Git for Windows puts a GNU tar on PATH that reads `C:` as a remote host; the
+// one Windows ships understands drive letters.
+const tar = windows ? join(process.env.SystemRoot || "C:\\Windows", "System32/tar.exe") : "tar";
 const checkInterval = 6 * 60 * 60 * 1000;
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 const self = fileURLToPath(import.meta.url);
@@ -143,11 +155,11 @@ export async function verifyBundle(directory) {
     !tagPattern.test(bundle.tag)
   )
     throw Error("This Flow bundle does not support this platform.");
-  await fs.access(join(directory, "runtime/bin/node"), NodeFS.constants.X_OK);
-  await fs.access(join(directory, "runtime/git/bin/git"), NodeFS.constants.X_OK);
+  await fs.access(bundledNode(directory), NodeFS.constants.X_OK);
+  await fs.access(bundledGit(directory), NodeFS.constants.X_OK);
   await fs.access(join(directory, "apps/web/dist/index.html"));
   await run(
-    join(directory, "runtime/bin/node"),
+    bundledNode(directory),
     [join(directory, "apps/server/src/bin.ts"), "--version"],
     directory,
   );
@@ -155,8 +167,26 @@ export async function verifyBundle(directory) {
 }
 
 export async function releaseRuntime(directory) {
-  const bundled = join(directory, "runtime/bin/node");
+  const bundled = bundledNode(directory);
   return (await fs.stat(bundled).catch(() => null)) ? bundled : process.execPath;
+}
+
+/** Make `<home>/current` name this release. A relative symlink swapped in by
+    rename is atomic on POSIX. Windows needs a privilege to create symlinks and
+    cannot rename over a directory link, so it uses a junction and replaces it
+    in two steps; `rmdir` removes only the junction, never what it points at. */
+export async function pointCurrent(home, target, win = windows) {
+  const current = join(home, "current");
+  const link = join(home, `.current-${randomUUID()}`);
+  if (!win) {
+    await fs.symlink(NodePath.relative(home, target), link);
+    return fs.rename(link, current);
+  }
+  await fs.symlink(resolve(target), link, "junction");
+  await fs.rmdir(current).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+  await fs.rename(link, current);
 }
 
 export async function adoptBundle(home, directory, checksum) {
@@ -181,9 +211,7 @@ export async function adoptBundle(home, directory, checksum) {
       await atomic(join(directory, "flow-release.json"), receipt);
       await fs.rename(directory, target);
     }
-    const link = join(home, `.current-${randomUUID()}`);
-    await fs.symlink(NodePath.relative(home, target), link);
-    await fs.rename(link, join(home, "current"));
+    await pointCurrent(home, target);
     return receipt;
   } finally {
     lock.close();
@@ -214,7 +242,7 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
       await fs.writeFile(archive, bytes);
       const source = join(temporary, "source");
       await fs.mkdir(source);
-      await run("tar", ["-xzf", archive, "-C", source], temporary);
+      await run(tar, ["-xzf", archive, "-C", source], temporary);
       for (const entry of [
         "scripts/flow-release.mjs",
         "scripts/flow.mjs",
@@ -237,9 +265,7 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
     }
   }
   if (receipt.tag !== release.tag) throw Error("Installed release identity does not match.");
-  const link = join(home, `.current-${randomUUID()}`);
-  await fs.symlink(NodePath.relative(home, directory), link);
-  await fs.rename(link, join(home, "current"));
+  await pointCurrent(home, directory);
   return receipt;
 }
 
@@ -286,25 +312,34 @@ export async function resolveReleaseHome(env = process.env, homeDirectory = home
   return join(share, releaseHomeNames[0]);
 }
 
+/** The text of the `flow` command for this installation. Windows gets a batch
+    file: `%~dp0`-free and fully quoted, since a home may contain spaces. */
+export function launcherScript(home, node, win = windows) {
+  const entry = join(home, "current/scripts/flow-release.mjs");
+  // Node prints an ExperimentalWarning for node:sqlite on every run; it is
+  // noise in front of the one line a person is looking for.
+  return win
+    ? `@echo off\r\nrem flow-managed-launcher\r\nset "FLOW_RELEASE_HOME=${home}"\r\n"${node}" --disable-warning=ExperimentalWarning "${entry}" %*\r\n`
+    : `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(node)} --disable-warning=ExperimentalWarning ${quote(entry)} "$@"\n`;
+}
+const launcherName = (win = windows) => (win ? "flow.cmd" : "flow");
+const managedLauncher = /(?:^|\n)(?:# |rem )flow-(?:managed|cloud-cli)-launcher\r?\n/;
+
 export async function installLauncher(home, prefix, announce = true) {
   const bin = join(prefix, "bin");
   await fs.mkdir(bin, { recursive: true });
-  const target = join(bin, "flow");
+  const target = join(bin, launcherName());
   try {
     const existing = await fs.readFile(target, "utf8");
-    if (!/\n# flow-(managed|cloud-cli)-launcher\n/.test(existing))
+    if (!managedLauncher.test(existing))
       throw Error(`Refusing to overwrite ${target}. Choose another --prefix.`);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   const temp = join(bin, `.flow-${randomUUID()}`);
-  await fs.writeFile(
-    temp,
-    // Node prints an ExperimentalWarning for node:sqlite on every run; it is
-    // noise in front of the one line a person is looking for.
-    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(await releaseRuntime(join(home, "current")))} --disable-warning=ExperimentalWarning ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
-    { mode: 0o755 },
-  );
+  await fs.writeFile(temp, launcherScript(home, await releaseRuntime(join(home, "current"))), {
+    mode: 0o755,
+  });
   await fs.rename(temp, target);
   if (announce) console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
 }
@@ -349,15 +384,19 @@ export async function uninstall(home, purge) {
     it wrote onto PATH. A launcher belonging to another installation, or a
     `flow` that is somebody else’s program, is never touched. */
 async function ownedLaunchers(home, path = process.env.PATH || "") {
-  const candidates = new Set([join(home, "bin/flow"), join(homedir(), ".local/bin/flow")]);
+  const name = launcherName();
+  const candidates = new Set([join(home, "bin", name), join(homedir(), ".local/bin", name)]);
   for (const directory of path.split(NodePath.delimiter))
-    if (directory) candidates.add(join(directory, "flow"));
+    if (directory) candidates.add(join(directory, name));
   const owned = [];
   for (const file of candidates) {
     const text = await fs.readFile(file, "utf8").catch(() => null);
+    // Owned means ours *and* pointing at this home, in either launcher form.
     if (
-      text?.includes("# flow-managed-launcher") &&
-      text.includes(`FLOW_RELEASE_HOME=${quote(home)}`)
+      text &&
+      managedLauncher.test(text) &&
+      (text.includes(`FLOW_RELEASE_HOME=${quote(home)}`) ||
+        text.includes(`"FLOW_RELEASE_HOME=${home}"`))
     )
       owned.push(file);
   }
@@ -519,7 +558,7 @@ async function launch(home, args) {
     }
     process.env.PATH = [
       NodePath.dirname(runtime),
-      join(code, "runtime/git/bin"),
+      NodePath.dirname(bundledGit(code)),
       join(tools, "bin"),
       join(homedir(), ".local/bin"),
       process.env.PATH || "",
@@ -649,10 +688,11 @@ export async function main(args) {
   if (
     !(
       (platform() === "darwin" && arch() === "arm64") ||
-      (platform() === "linux" && arch() === "x64")
+      (platform() === "linux" && arch() === "x64") ||
+      (platform() === "win32" && arch() === "x64")
     )
   )
-    throw Error("Flow's local Brain supports Apple Silicon macOS 15+ and Linux x64.");
+    throw Error("Flow supports Apple Silicon macOS 15+, Linux x64 and Windows x64.");
   if (platform() === "darwin" && Number(NodeOS.release().split(".")[0]) < 24)
     throw Error("Flow's local Brain requires macOS 15 or later.");
   await fs.mkdir(requestedHome, { recursive: true, mode: 0o700 });

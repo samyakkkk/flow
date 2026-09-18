@@ -17,7 +17,11 @@ const { dirname } = NodePath;
 const { test } = NodeTest;
 import {
   brainStore,
+  bundledGit,
+  bundledNode,
   installLauncher,
+  launcherScript,
+  pointCurrent,
   normalizeArgs,
   removeInstallation,
   resolveReleaseHome,
@@ -213,4 +217,40 @@ test("uninstalling never removes another installation's flow command", async (t)
     agentHome: join(user, ".flow"),
   });
   assert.match(await fs.readFile(foreign, "utf8"), /opt\/other/);
+});
+
+test("Windows gets a batch launcher that survives a home with spaces", () => {
+  const home = "C:\\Users\\Ada Lovelace\\AppData\\Local\\flow-browser";
+  const script = launcherScript(home, `${home}\\current\\runtime\\bin\\node.exe`, true);
+  assert.match(script, /^@echo off\r\nrem flow-managed-launcher\r\n/);
+  // `set "NAME=value"` keeps spaces and a trailing quote out of the value.
+  assert.ok(script.includes(`set "FLOW_RELEASE_HOME=${home}"`));
+  assert.ok(script.includes(`"${home}\\current\\runtime\\bin\\node.exe" --disable-warning`));
+  assert.ok(script.trimEnd().endsWith("%*"), "arguments are forwarded");
+  // And the POSIX form is unchanged.
+  assert.match(
+    launcherScript("/home/ada/flow", "/usr/bin/node", false),
+    /^#!\/bin\/sh\n# flow-managed-launcher\n/,
+  );
+});
+
+test("a bundle keeps Node and Git where each platform expects them", () => {
+  assert.ok(bundledNode("/b", false).endsWith("runtime/bin/node"));
+  assert.ok(bundledGit("/b", false).endsWith("runtime/git/bin/git"));
+  assert.match(bundledNode("C:\\b", true), /node\.exe$/);
+  assert.match(bundledGit("C:\\b", true), /cmd[\\/]git\.exe$/);
+});
+
+test("pointing current at a new release replaces the old one and keeps both trees", async (t) => {
+  const home = await temporaryHome(t);
+  for (const name of ["one", "two"]) {
+    await fs.mkdir(join(home, "releases", name), { recursive: true });
+    await fs.writeFile(join(home, "releases", name, "marker"), name);
+  }
+  await pointCurrent(home, join(home, "releases/one"));
+  assert.equal(await fs.readFile(join(home, "current/marker"), "utf8"), "one");
+  await pointCurrent(home, join(home, "releases/two"));
+  assert.equal(await fs.readFile(join(home, "current/marker"), "utf8"), "two");
+  // Replacing the pointer must never delete the release it used to name.
+  assert.equal(await fs.readFile(join(home, "releases/one/marker"), "utf8"), "one");
 });
