@@ -123,11 +123,7 @@ try {
   }
   if (platform === "linux") await prepareCpuLockfile(source, temporary);
   if (windows) {
-    // install-flow.sh's build, without a POSIX shell. pnpm's default layout
-    // nests packages deep enough to pass Windows' 260-character path limit
-    // once installed under a user profile; the hoisted layout stays short and
-    // leaves only workspace packages as links.
-    await NodeFSP.appendFile(NodePath.join(source, ".npmrc"), "\nnode-linker=hoisted\n");
+    // install-flow.sh's build, without a POSIX shell.
     Object.assign(process.env, {
       FLOW_INSTALL_CPU: "current",
       FLOW_INSTALL_OS: "current",
@@ -229,8 +225,7 @@ try {
       gitVersion: windows ? minGit.version : gitVersion,
     }) + "\n",
   );
-  // Pruning walks pnpm's virtual store, which the hoisted layout does not have.
-  if (!windows) await pruneBrowserBundle(source);
+  await pruneBrowserBundle(source);
   await run(node, [NodePath.join(source, "apps/server/src/bin.ts"), "--version"], source);
   await run(node, [NodePath.join(source, "scripts/verify-browser-runtime.mjs")], source);
   // Last, once nothing else needs to resolve a workspace package from here.

@@ -24,6 +24,7 @@ import {
   bundledNode,
   installLauncher,
   launcherScript,
+  moveDirectory,
   pointCurrent,
   normalizeArgs,
   removeInstallation,
@@ -286,4 +287,29 @@ test("a file the system holds locked is handed back, not fatal", async (t) => {
   assert.deepEqual(deferred, [home]);
   assert.ok(removed.includes(dataHome), "everything that could go, went");
   assert.equal(await fs.stat(dataHome).catch(() => null), null);
+});
+
+test("moving a release into place outlasts a handle Windows has not let go of", async () => {
+  let calls = 0;
+  const busy = async () => {
+    calls += 1;
+    if (calls < 3) throw Object.assign(Error("operation not permitted"), { code: "EPERM" });
+  };
+  await moveDirectory("a", "b", { rename: busy, wait: 0 });
+  assert.equal(calls, 3);
+  // It gives up rather than spin forever, and other errors are not retried.
+  const stuck = async () => {
+    throw Object.assign(Error("operation not permitted"), { code: "EPERM" });
+  };
+  await assert.rejects(
+    moveDirectory("a", "b", { rename: stuck, wait: 0, attempts: 3 }),
+    /not permitted/,
+  );
+  calls = 0;
+  const missing = async () => {
+    calls += 1;
+    throw Object.assign(Error("no such file"), { code: "ENOENT" });
+  };
+  await assert.rejects(moveDirectory("a", "b", { rename: missing, wait: 0 }), /no such file/);
+  assert.equal(calls, 1);
 });

@@ -171,6 +171,24 @@ export async function releaseRuntime(directory) {
   return (await fs.stat(bundled).catch(() => null)) ? bundled : process.execPath;
 }
 
+/** Move a release into place. On Windows a rename fails while anything still
+    holds a handle inside the directory, and a just-exited program or an
+    antivirus scan of it does for a moment; retrying briefly is the remedy. */
+export async function moveDirectory(
+  from,
+  to,
+  { rename = fs.rename, attempts = 40, wait = 250 } = {},
+) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await rename(from, to);
+    } catch (error) {
+      if (!["EPERM", "EBUSY", "EACCES"].includes(error.code) || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+}
+
 /** Make `<home>/current` name this release. A relative symlink swapped in by
     rename is atomic on POSIX. Windows needs a privilege to create symlinks and
     cannot rename over a directory link, so it uses a junction and replaces it
@@ -237,7 +255,7 @@ export async function adoptBundle(home, directory, checksum) {
       throw Error("Release already exists with a different checksum.");
     if (!existing) {
       await atomic(join(directory, "flow-release.json"), receipt);
-      await fs.rename(directory, target);
+      await moveDirectory(directory, target);
       // Junctions are absolute, so the rename left them pointing at staging.
       await restoreLinks(target);
     }
@@ -290,7 +308,7 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
       await fs.access(join(source, "apps/web/dist/index.html"));
       receipt = { tag: release.tag, sha256: createHash("sha256").update(bytes).digest("hex") };
       await atomic(join(source, "flow-release.json"), receipt);
-      await fs.rename(source, directory);
+      await moveDirectory(source, directory);
       await restoreLinks(directory);
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
