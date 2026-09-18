@@ -118,6 +118,62 @@ jobs:
           name: flow-browser-release-${{ matrix.os }}
           path: release-browser/*
           if-no-files-found: error
+  # Windows runs the server and browser UI against a Brain hosted elsewhere;
+  # FalkorDB has no Windows build, so this bundle carries no database.
+  package-windows:
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+      - name: Test installer and launcher
+        run: node --test scripts/bundle-links.test.mjs scripts/flow-cli.test.mjs scripts/instances/style.test.mjs
+      - name: Prepare release source
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\flow-source", release-browser | Out-Null
+          # .claude holds a symlink, which Windows cannot extract without a privilege.
+          git archive --format=tar -o "$env:RUNNER_TEMP\flow-source.tar" HEAD -- . ':(exclude).repos' ':(exclude).claude'
+          & "$env:SystemRoot\System32\tar.exe" -xf "$env:RUNNER_TEMP\flow-source.tar" -C "$env:RUNNER_TEMP\flow-source"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract the release source.' }
+      - name: Build and verify ready-to-run package
+        env:
+          FLOW_VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/build-browser-bundle.mjs "$env:RUNNER_TEMP\flow-source" "$env:GITHUB_WORKSPACE\release-browser" "$env:FLOW_VERSION"
+      - name: Pin the Windows installer to this release
+        env:
+          FLOW_VERSION: ${{ needs.version.outputs.version }}
+        run: (Get-Content install.ps1 -Raw).Replace('__FLOW_CLI_VERSION__', $env:FLOW_VERSION) | Set-Content -NoNewline release-browser\install.ps1
+      - name: Install as a new user would, then start Flow
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:USERPROFILE = "$env:RUNNER_TEMP\cli user"   # a profile with a space in it
+          $env:FLOW_RELEASE_HOME = "$env:USERPROFILE\.local\share\flow-browser"
+          $staging = "$env:USERPROFILE\staging"
+          New-Item -ItemType Directory -Force $staging | Out-Null
+          $archive = (Get-ChildItem release-browser\flow-browser-win32-x64.tar.gz).FullName
+          "{0:N0} MB" -f ((Get-Item $archive).Length / 1MB)
+          $digest = (Get-Content "$archive.sha256").Split()[0]
+          & "$env:SystemRoot\System32\tar.exe" -xzf $archive -C $staging
+          & "$staging\runtime\bin\node.exe" "$staging\scripts\flow-release.mjs" install-bundle $staging $digest
+          if ($LASTEXITCODE -ne 0) { throw 'install-bundle failed' }
+          $flow = "$env:FLOW_RELEASE_HOME\bin\flow.cmd"
+          & $flow --no-open
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:FLOW_RELEASE_HOME\instance-home\instances\primary\runtime.log" -Tail 80; throw 'flow did not start' }
+          & $flow status
+          & $flow stop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flow-browser-windows-${{ github.run_id }}
+          path: release-browser/*
+          if-no-files-found: error
   publish:
     if: github.event_name != 'pull_request'
     needs: [version, package]

@@ -189,7 +189,35 @@ export async function pointCurrent(home, target, win = windows) {
   await fs.rename(link, current);
 }
 
+/** Recreate the directory links a Windows bundle records instead of shipping
+    (see bundle-links.mjs for why). Safe to repeat: a release is verified where
+    it is staged and linked again once renamed into place, because a junction
+    does not follow its directory. Lives here, not beside recordLinks, because
+    this file is also shipped alone as the desktop apps' bootstrap. */
+export const linkManifest = "flow-links.json";
+export async function restoreLinks(root, type = "junction") {
+  const links = await json(join(root, linkManifest));
+  if (!links) return 0;
+  for (const link of links) {
+    const path = resolve(root, link.path);
+    const target = resolve(NodePath.dirname(path), link.target);
+    for (const resolved of [path, target])
+      if (NodePath.relative(root, resolved).startsWith(".."))
+        throw Error(`Bundle link leaves the release: ${link.path}`);
+    const existing = await fs.lstat(path).catch(() => null);
+    if (existing && !existing.isSymbolicLink())
+      throw Error(`Bundle link would replace real files: ${link.path}`);
+    // rm without `recursive` removes the link itself, never its target.
+    if (existing) await fs.rm(path);
+    await fs.mkdir(NodePath.dirname(path), { recursive: true });
+    await fs.symlink(target, path, type);
+  }
+  return links.length;
+}
+
 export async function adoptBundle(home, directory, checksum) {
+  // A Windows bundle ships its directory links as a manifest (bundle-links.mjs).
+  await restoreLinks(directory);
   const bundle = await verifyBundle(directory);
   if (!bundle || !/^[a-f0-9]{64}$/.test(checksum)) throw Error("Invalid verified Flow bundle.");
   const lock = new DatabaseSync(join(home, "update-lock.sqlite"));
@@ -210,6 +238,8 @@ export async function adoptBundle(home, directory, checksum) {
     if (!existing) {
       await atomic(join(directory, "flow-release.json"), receipt);
       await fs.rename(directory, target);
+      // Junctions are absolute, so the rename left them pointing at staging.
+      await restoreLinks(target);
     }
     await pointCurrent(home, target);
     return receipt;
@@ -255,11 +285,13 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
         throw Error("Bundle version does not match release.");
       if (Object.values(bundledAssets).includes(release.assetName) && !bundle)
         throw Error("Release is missing its prebuilt bundle.");
+      await restoreLinks(source);
       await build(source);
       await fs.access(join(source, "apps/web/dist/index.html"));
       receipt = { tag: release.tag, sha256: createHash("sha256").update(bytes).digest("hex") };
       await atomic(join(source, "flow-release.json"), receipt);
       await fs.rename(source, directory);
+      await restoreLinks(directory);
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }
