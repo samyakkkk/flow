@@ -849,26 +849,14 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(`CONNECTED PROJECT: ${process.env.FLOW_PROJECT_NAME ? JSON.stringify(process.env.FLOW_PROJECT_NAME) : "(identity unavailable)"}`);
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
-  // Say what is actually missing: a graph with nodes has been indexed even when
-  // no overview names this repository.
+  // Only a real overview earns this line. Without one the section is left out
+  // rather than filled with a placeholder: the graph below is what to query.
   if (repoRow?.description) {
     out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 4000)} [${repoRow.id}]`);
-  } else if (repoRow) {
-    out.push(`WHAT THIS IS: (no overview written for [${repoRow.id}] yet)`);
-  } else if (repositories.length) {
-    // True whether this repository was never indexed or indexed without an
-    // overview: either way there is none to show, and these are the ones there are.
-    const known = repositories.map((r) => `[${r.id}]`).join(" ");
-    out.push(`WHAT THIS IS: (no overview recorded for "${repo}"; this Brain has ${known})`);
-  } else if (total === 0) {
-    out.push(`WHAT THIS IS: (nothing indexed in this Brain yet)`);
-  } else {
-    out.push(`WHAT THIS IS: (no repository overview recorded yet)`);
+    out.push("");
   }
-  out.push("");
-  // Orient reports state only. How to use the tools lives in their descriptions
-  // and the agent instructions; conversations, docs and skills are appended by
-  // the Brain host, which owns that store.
+  // Conversations, docs, skills and the instruction to query this Brain are
+  // appended by the Brain host, which owns that store.
   out.push(`GRAPH: ${total} nodes${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.`);
   if ((serviceIds as Array<{ id: string }>).length)
     out.push(`Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(" ")}`);

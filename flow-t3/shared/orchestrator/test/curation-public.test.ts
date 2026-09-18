@@ -124,7 +124,10 @@ NodeTest.test(
     NodeAssert.match(orient, /RECENT CONVERSATIONS/);
     NodeAssert.match(orient, /Earlier original task/);
     NodeAssert.match(orient, new RegExp(notes.id));
-    NodeAssert.match(orient, /TOOLS: search_knowledge[^\n]*get_entity \[id\] opens anything[^\n]*read_query/);
+    // Orient tells the agent to query the Brain first and how, tool by tool.
+    NodeAssert.match(orient, /QUERY THIS BRAIN FIRST/);
+    for (const tool of ["find_entity", "search_knowledge", "get_entity [id]", "read_query", "remember", "correct_graph"])
+      NodeAssert.ok(orient.includes(tool), `orient names ${tool}`);
     // A conversation never lists itself as recent work to pick up.
     const own = JSON.stringify(tools.augment("orient", {}, { content: [] }, notes.sessionId));
     NodeAssert.doesNotMatch(own, /RECENT CONVERSATIONS/);
