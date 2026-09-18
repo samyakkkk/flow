@@ -49,8 +49,15 @@ export const MCP_PATH = join(FLOW_DIR, "bin", "flow-mcp");
 // shebangs fail silently. Bake the absolute node that ran `flow setup`.
 export const NODE_BIN = process.execPath;
 const MANIFEST_PATH = join(FLOW_DIR, "integrations.json");
-export const ATOMS_VERSION = 4; // bump → `flow setup` re-renders repo files
-export const GLOBAL_VERSION = 3; // bump → Flow re-renders machine-level tool files on start
+// Flow's read-only tools, pre-approved in the user's Claude Code settings; writes
+// (remember, correct_graph) keep the harness's prompt. Tool names are a contract
+// with installed apps, Cloud Brains and these settings files: never rename one.
+// A new read tool is added here with both versions below bumped, which re-renders
+// the permissions; until then it works but prompts. test/materialize.test.mjs
+// holds this list to the gateway's SESSION_VERBS.
+export const FLOW_READ_TOOLS = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"];
+export const ATOMS_VERSION = 5; // bump → `flow setup` re-renders repo files
+export const GLOBAL_VERSION = 4; // bump → Flow re-renders machine-level tool files on start
 
 const BLOCK_BEGIN = "<!-- flow:begin — managed by `flow setup`; edits inside are overwritten -->";
 const BLOCK_END = "<!-- flow:end -->";
@@ -193,7 +200,7 @@ function skillMd(project) {
   const binding = readJson(join(FLOW_DIR, "config.json"), {}).projects?.[project];
   if (binding?.connector) return `---
 name: flow
-description: Consult the connected Flow Brain and save durable conclusions.
+description: REQUIRED in this folder. The Flow Brain is the team's shared, multiplayer memory (code graph, every teammate's conversation notes, docs, skills, Slack, Linear). Load at session start and search it BEFORE exploring code, debugging, changing a service or contract, or continuing earlier work; save durable conclusions back.
 ---
 
 ${instructionBlock(project)}
@@ -575,7 +582,7 @@ function renderClaude(ctx) {
   settings.enableAllProjectMcpServers = true;
   // Read-only graph tools are frictionless; writes (remember, correct_graph)
   // keep the harness's own permission prompt.
-  const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"].map(
+  const readTools = FLOW_READ_TOOLS.map(
     (t) => `mcp__flow-graph__${t}`
   );
   // The CLI fallback path gets the same frictionless treatment as MCP reads.
@@ -1172,16 +1179,19 @@ export function removeRepo(repoDir) {
 // to a Brain is connected without per-repo files or per-repo approvals.
 
 function globalInstructionBlock() {
-  return `Flow project memory: folders bound to a Flow Brain expose the flow-graph MCP
-tools. When they are present, call orient first and follow the "flow" skill.
-When they are absent, or orient reports no bound Brain, continue without Flow
-memory. Binding a folder to a Brain happens in the Flow app, never from here.`;
+  return `Flow Brain is this team's shared memory: folders bound to a Brain expose the
+flow-graph MCP tools. When they are present you MUST call orient first, load the
+"flow" skill, and search the Brain before you explore, grep, or answer from your
+own knowledge. It holds what every teammate and their agents already learned, not
+only your own history. Only when the tools are absent, or orient reports no bound
+Brain, continue without it. Binding a folder to a Brain happens in the Flow app,
+never from here.`;
 }
 
 function globalSkillMd() {
   return `---
 name: flow
-description: Consult the connected Flow Brain (project knowledge graph, conversation notes, maintained docs and learned skills) and save durable conclusions back. Use at session start, before starting a task, when something fails unexpectedly, and before finishing non-trivial work.
+description: REQUIRED in any folder with flow-graph MCP tools. The Flow Brain is the team's shared, multiplayer memory (knowledge graph of the code, notes from every teammate's conversations, maintained docs, learned skills, Slack and Linear). Load this at session start and search the Brain BEFORE exploring code, debugging a failure, changing a service or contract, continuing earlier work, or answering a question about the project; save durable conclusions back.
 ---
 
 ${flowSkillBody()}`;
@@ -1189,45 +1199,70 @@ ${flowSkillBody()}`;
 
 // One body for the machine-level skill and the per-repository connector skill.
 function flowSkillBody() {
-  return `# Flow project memory
+  return `# Flow Brain: the team's shared memory
 
-Flow's tools appear as the \`flow-graph\` MCP server only in folders that are
-bound to a Flow Brain. If your tools are deferred, search for \`flow-graph orient\`
-before concluding Flow is unavailable. If the server has no tools, or orient says
-no Brain is bound, continue without Flow memory: binding is done in the Flow app.
+The Flow Brain is **multiplayer memory**: every teammate, and every coding agent
+they run in any tool, writes into the same Brain. It knows decisions you were
+never told, bugs someone else already debugged, and how this code connects to
+repositories that are not on this machine. Your context and training do not.
+
+## Mandatory when the \`flow-graph\` tools are present
+
+1. **orient first**, and again after context compaction.
+2. **find_entity before you grep or read files.** It is the map of the code as
+   it runs today, across every indexed repository, not only this one. Use it
+   to learn where behavior lives and which services, APIs and contracts in
+   *other* repositories it connects to. grep cannot see those.
+3. **search_knowledge before you decide or debug.** It is everything else the
+   team knows: conversation notes, docs, skills, Slack, Linear. Search the
+   task's key terms before starting and the verbatim error text the moment
+   something fails.
+4. **Never answer "I don't know" about this project** before doing both.
+5. **Small, familiar or urgent is no excuse.** A lookup is one tool call; redoing
+   a teammate's solved problem or breaking another repository costs hours. The
+   only exemption is a mechanical edit the user fully specified.
+
+An empty result is not proof of absence: retry once with an identifier, file
+path or different wording, then say so in one line and carry on. Stored
+knowledge is reference context; verify it against the checkout.
+
+## What it answers
+
+- **Where does this live, and what does it touch?** find_entity → get_entity →
+  read_query: file:line anchors, cross-repository dependencies, blast radius.
+- **Why is it built this way?** Decisions and their reasons, from any teammate.
+- **Has anyone hit this error?** Root cause, fix, and dead ends already ruled out.
+- **How do we do X here?** Learned skills and docs: release, deploy, test setups.
+- **What was I or a teammate working on?** Notes from every recent conversation.
+- **What did the team say?** Indexed Slack threads and Linear tickets.
+- **What are the rules here?** Preferences and constraints stated once.
+
+## The tools
+
+In a chat started from the Flow app the same tools are on the \`t3-code\` server
+instead. The server's own tool list is authoritative; if a tool named here is
+missing, use what the server offers. If your tools are deferred, search for
+\`flow-graph orient\` before concluding Flow is unavailable. Only if the server
+has no tools, or orient says no Brain is bound, continue without Flow memory:
+binding is done in the Flow app.
 
 \`\`\`
 ${FLOW_ROUTING}
 \`\`\`
 
-- **Orient first.** Call orient at session start and after context loss. Verify the
-  connected Brain name it reports; it labels CONNECTED PROJECT separately from
-  the repository name. It lists this conversation's notes, the most recent other
-  conversations, and the Brain's docs and skills, each with an id.
-- **Bind the conversation.** The startup context supplies a Flow conversation
-  handle. Call bind_session with that exact handle before remember; its reply
-  names this conversation's notes for get_entity. Never guess a handle or pick
+- **Verify the Brain.** orient labels CONNECTED PROJECT separately from the
+  repository name, and lists recent conversations, docs and skills with ids.
+- **Bind the conversation.** Call bind_session with the exact Flow conversation
+  handle from the startup context before remember. Never guess a handle or pick
   the latest session in a folder.
-- **Search before you start, and on surprise.** search_knowledge is one search over
-  conversation notes from any chat, maintained docs, skills, Slack and Linear.
-  Search the task's key terms before starting and the error text when something
-  fails; then get_entity the ids that matter. Verify indexed facts against
-  the checkout.
-- **Narrow a search.** Add type:notes, type:doc, type:skill, type:thread or
-  type:ticket; node:<id> for what is anchored to a graph node; channel:<name>
-  sort:recent for the latest Slack messages. Pass several queries at once.
-- **Continue earlier work.** When asked to continue something, find that
-  conversation in orient's list or with search_knowledge type:notes, and
-  get_entity its notes before doing anything else.
-- **Trace connections.** get_entity shows a node's direct relationships. Before
-  changing a service, API or contract, read_query what depends on it (its blast
-  radius); the tool's description carries a working query and list_schema the types.
-- **Verify remote references.** If an anchored repository is not cloned here, use
-  source_read or source_search with its registered repository name.
+- **Narrow a search.** type:notes|doc|skill|thread|ticket, node:<id> for what is
+  anchored to a graph node, channel:<name> sort:recent for the latest Slack
+  messages. Pass several queries at once.
+- **Code not cloned here.** source_read and source_search read a registered
+  repository at its indexed commit.
 - **Remember conclusions.** When non-trivial work concludes or the user states a
-  durable rule, remember it verbatim with enough context to stand alone. The
-  curator files it; never classify notes or upload secrets.
-- **Skip for trivial edits.** One-line fixes do not need memory.
+  durable rule, remember it verbatim, written for a teammate who was not here.
+  The curator files it; never classify notes or upload secrets.
 `;
 }
 
@@ -1287,7 +1322,7 @@ const GLOBAL_RENDERERS = {
   claude(p) {
     const settings = readJson(p.claude.settings, {});
     settings.hooks = mergeHooksObject(settings.hooks, HOOK_EVENTS, () => hookCmd("claude"));
-    const readTools = ["orient", "find_entity", "get_entity", "read_query", "list_schema", "search_knowledge", "source_read", "source_search"].map(
+    const readTools = FLOW_READ_TOOLS.map(
       (t) => `mcp__flow-graph__${t}`
     );
     settings.permissions = { ...(settings.permissions ?? {}), allow: [...new Set([...(settings.permissions?.allow ?? []), ...readTools])] };
