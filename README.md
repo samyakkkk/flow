@@ -31,6 +31,22 @@ curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh |
 
 <p align="center"><sub>Apple Silicon macOS 15+ or Linux x64 · installs the <code>flow</code> command and Flow's local service</sub></p>
 
+Windows x64, in PowerShell. Windows connects to a Brain hosted on Flow Cloud or another computer; it does not host one:
+
+```powershell
+irm https://raw.githubusercontent.com/samyakkkk/flow/release/install.ps1 | iex
+```
+
+Joining your team's Cloud Brain? Copy the command from its dashboard instead: it is the same installer with your Brain and a one-time setup credential on the end, so one paste installs Flow and connects it.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash -s -- --cloud https://brain.example.com --cloud-brain <id> --enrollment <credential>
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/samyakkkk/flow/release/install.ps1))) -Cloud https://brain.example.com -CloudBrain <id> -Enrollment <credential>
+```
+
 <p align="center"><strong>or</strong></p>
 
 <p align="center">
