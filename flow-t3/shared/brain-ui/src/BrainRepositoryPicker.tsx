@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export interface BrainRepository {
   readonly name: string;
@@ -8,13 +8,15 @@ export interface BrainRepository {
 }
 
 /** Presentation and selection state only. Hosts own credentials, transport, and import commands. */
-export function BrainRepositoryPicker({ connectedRepositories, connection, loadRepositories, loadBranches, connect, onConnected }: {
+export function BrainRepositoryPicker({ connectedRepositories, connection, loadRepositories, loadBranches, connect, onConnected, autoBrowse = false }: {
   connectedRepositories: readonly string[];
   connection: ReactNode;
   loadRepositories: () => Promise<readonly BrainRepository[]>;
   loadBranches: (repository: string) => Promise<readonly string[]>;
   connect: (repository: string, branch?: string) => Promise<void>;
   onConnected: () => void;
+  /** List repositories on open, for hosts whose credential already scopes the list (a GitHub App installation). */
+  autoBrowse?: boolean;
 }) {
   const [repositories, setRepositories] = useState<readonly BrainRepository[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -56,6 +58,7 @@ export function BrainRepositoryPicker({ connectedRepositories, connection, loadR
     } catch (error) { setError(error instanceof Error ? error.message : "Could not connect the repository. Retry."); }
     finally { setBusy(false); }
   }
+  useEffect(() => { if (autoBrowse) void browse(); }, [autoBrowse]);
   const visible = repositories.filter((repo) => repo.name.toLowerCase().includes(query.toLowerCase()));
   return <div className="flow-brain-repository-picker" aria-busy={busy}>
     <form className="flow-brain-repository-form" onSubmit={(event) => { event.preventDefault(); void submit([[repository, branch]]); }}>
