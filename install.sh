@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Validate options before changing any existing installation.
-if [ "$#" -ne 0 ] && { [ "$#" -ne 2 ] || [ "${1:-}" != --prefix ]; }; then
-  echo 'Usage: install.sh [--prefix DIRECTORY]' >&2
-  exit 1
+# Validate options before changing any existing installation. A Cloud dashboard
+# hands out this command with its own --cloud options appended, so one paste
+# installs Flow and connects it to that Brain.
+FLOW_USAGE='Usage: install.sh [--prefix DIRECTORY] [--cloud URL --cloud-brain ID --enrollment CREDENTIAL]'
+FLOW_PREFIX_ARGS=()
+FLOW_CLOUD=; FLOW_CLOUD_BRAIN=; FLOW_ENROLLMENT=
+while [ "$#" -gt 0 ]; do
+  [ "$#" -ge 2 ] || { echo "$FLOW_USAGE" >&2; exit 1; }
+  case "$1" in
+    --prefix) FLOW_PREFIX_ARGS=(--prefix "$2") ;;
+    --cloud) FLOW_CLOUD=$2 ;;
+    --cloud-brain) FLOW_CLOUD_BRAIN=$2 ;;
+    --enrollment) FLOW_ENROLLMENT=$2 ;;
+    *) echo "$FLOW_USAGE" >&2; exit 1 ;;
+  esac
+  shift 2
+done
+if [ -n "$FLOW_CLOUD$FLOW_CLOUD_BRAIN$FLOW_ENROLLMENT" ]; then
+  case "$FLOW_CLOUD" in https://?*) ;; *) echo 'The Cloud URL must start with https://.' >&2; exit 1 ;; esac
+  case "$FLOW_CLOUD_BRAIN" in ''|*[!A-Za-z0-9-]*) echo 'Copy the whole command from your Cloud dashboard: the Brain ID is missing.' >&2; exit 1 ;; esac
+  case "$FLOW_ENROLLMENT" in ''|*[!a-f0-9]*) echo 'Copy the whole command from your Cloud dashboard: the setup credential is missing.' >&2; exit 1 ;; esac
 fi
 FLOW_CLEANUP_PATH="$PATH"
-if [ "$#" -eq 2 ]; then
-  mkdir -p "$2/bin"
-  FLOW_CLEANUP_PATH="$(cd "$2/bin" && pwd -P):$PATH"
+if [ "${#FLOW_PREFIX_ARGS[@]}" -eq 2 ]; then
+  mkdir -p "${FLOW_PREFIX_ARGS[1]}/bin"
+  FLOW_CLEANUP_PATH="$(cd "${FLOW_PREFIX_ARGS[1]}/bin" && pwd -P):$PATH"
 fi
 
 # Download the ready-built Flow CLI, including its private Node runtime.
@@ -75,7 +92,7 @@ if [ "$FLOW_TARGET" = darwin-arm64 ]; then
 fi
 "$FLOW_INSTALL_TEMP/bundle/runtime/bin/node" --disable-warning=ExperimentalWarning \
   "$FLOW_INSTALL_TEMP/bundle/scripts/flow-release.mjs" install-bundle \
-  "$FLOW_INSTALL_TEMP/bundle" "$FLOW_SHA" "$@"
+  "$FLOW_INSTALL_TEMP/bundle" "$FLOW_SHA" ${FLOW_PREFIX_ARGS[@]+"${FLOW_PREFIX_ARGS[@]}"}
 
 # Colour only for a terminal that wants it (https://no-color.org).
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
@@ -94,6 +111,21 @@ if FLOW_ON_PATH=$(command -v flow 2>/dev/null) &&
   FLOW_RUN=flow
 fi
 
+# Connect the Brain the dashboard named. Its credential works once and for ten
+# minutes, so it goes through a private file and is never printed.
+FLOW_CONNECTED=
+if [ -n "$FLOW_CLOUD" ]; then
+  printf 'Connecting this computer to %s…\n' "$FLOW_CLOUD"
+  (umask 077 && printf %s "$FLOW_ENROLLMENT" > "$FLOW_INSTALL_TEMP/enrollment")
+  if "$FLOW_LAUNCHER" setup --cloud "$FLOW_CLOUD" --cloud-brain "$FLOW_CLOUD_BRAIN" \
+    --enrollment-file "$FLOW_INSTALL_TEMP/enrollment" --harness detected >/dev/null; then
+    FLOW_CONNECTED=yes
+  else
+    FLOW_CONNECTED=no
+  fi
+  rm -f "$FLOW_INSTALL_TEMP/enrollment"
+fi
+
 cat <<EOF
 
 ${FLOW_GREEN}Flow is installed.${FLOW_OFF}
@@ -103,6 +135,22 @@ ${FLOW_BOLD}Start it any time with:${FLOW_OFF}
   ${FLOW_CYAN}$FLOW_RUN --no-open${FLOW_OFF}       print the link instead of opening a browser
   ${FLOW_DIM}$FLOW_RUN status | stop | update | --help${FLOW_OFF}
 
+EOF
+if [ "$FLOW_CONNECTED" = yes ]; then
+  cat <<EOF
+${FLOW_BOLD}Connected to your team's Brain at $FLOW_CLOUD.${FLOW_OFF}
+  Restart your coding agents and approve Flow's prompts once. In a checkout of
+  any repository that Brain knows, they start every session with its memory.
+EOF
+elif [ "$FLOW_CONNECTED" = no ]; then
+  cat <<EOF >&2
+${FLOW_BOLD}Connecting to $FLOW_CLOUD did not work${FLOW_OFF} (see the message above).
+  The command from the dashboard works once and for ten minutes: copy a new one
+  and run it again. Flow itself is installed and will be reused.
+EOF
+  exit 1
+else
+  cat <<EOF
 ${FLOW_BOLD}Then, in the browser:${FLOW_OFF}
   1. Connect this computer.
   2. Create your Brain and choose the coding agent that processes your
@@ -111,6 +159,7 @@ ${FLOW_BOLD}Then, in the browser:${FLOW_OFF}
      connects your coding agents to that Brain, so they can orient themselves
      from it in every session.
 EOF
+fi
 if [ "$FLOW_RUN" != flow ]; then
   printf '\n%sAdd %s to your PATH to run it as `flow`.%s\n' "$FLOW_BOLD" "$(dirname "$FLOW_LAUNCHER")" "$FLOW_OFF"
 fi

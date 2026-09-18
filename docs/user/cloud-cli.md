@@ -1,15 +1,17 @@
 # Flow CLI: local and Cloud Brains
 
-Open your Brain's Cloud dashboard, choose **Copy setup prompt**, and give the
-prompt to a coding agent on the machine where you work. The prompt installs
-Flow's CLI and registers Flow once in each supported coding tool detected on
-that machine; checkouts of the Brain's repositories connect automatically, and
-you can bind other folders explicitly. Restart those tools and approve their
-integration prompts once. The setup prompt expires after ten minutes; copy
-another if needed.
+Open your Brain's Cloud dashboard, choose **Connect this computer**, copy the
+command for macOS and Linux or for Windows, and paste it into a terminal on the
+machine where you work. It is Flow's ordinary installer with your Brain and a
+one-time setup credential on the end: it installs Flow if needed, connects that
+Brain, and registers Flow once in each supported coding tool detected on the
+machine. Checkouts of the Brain's repositories connect automatically, and you
+can bind other folders explicitly. Restart those tools and approve their
+integration prompts once. The command works once and for ten minutes; copy
+another if needed, and treat it like a password until then.
 
-This installation supports Apple Silicon macOS 15+ and Ubuntu 24.04-compatible
-Linux x64. No desktop app is required. An installed, signed-in coding provider is
+This installation supports Apple Silicon macOS 15+, Ubuntu 24.04-compatible
+Linux x64 and Windows x64. No desktop app is required. An installed, signed-in coding provider is
 needed for local conversation processing. Knowledge is stored in your Cloud
 Brain; conversation capture and curation run on your machine.
 
