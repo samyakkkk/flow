@@ -175,22 +175,18 @@ try {
     await run("bash", [NodePath.join(source, "scripts/install-flow.sh"), "--build-only"], source);
   }
   await run(node, [NodePath.join(source, "scripts/verify-browser-install.mjs")], source);
-  // Platform-independent logic, covered by the macOS and Linux builds. On
-  // Windows `vp test run` never exits (it hung a CI job until its timeout), so
-  // that build relies on the install and runtime verifiers instead.
-  if (!windows)
-    await run(
-      NodePath.join(source, "node_modules/.bin/vp"),
-      [
-        "test",
-        "run",
-        "apps/server/src/flowBrowserUpdate.test.ts",
-        "apps/server/src/brain/BrainRuntime.clis.test.ts",
-        "apps/server/src/provider/Layers/ProviderRegistry.test.ts",
-        "apps/web/src/components/sidebar/flowBrowserUpdate.test.ts",
-      ],
-      source,
-    );
+  await (windows ? runShim : run)(
+    NodePath.join(source, `node_modules/.bin/vp${windows ? ".cmd" : ""}`),
+    [
+      "test",
+      "run",
+      "apps/server/src/flowBrowserUpdate.test.ts",
+      "apps/server/src/brain/BrainRuntime.clis.test.ts",
+      "apps/server/src/provider/Layers/ProviderRegistry.test.ts",
+      "apps/web/src/components/sidebar/flowBrowserUpdate.test.ts",
+    ],
+    source,
+  );
   if (!windows) {
     const { prepareNativeFalkor } = await import(
       NodeURL.pathToFileURL(NodePath.join(source, "apps/server/src/brain/native.ts"))

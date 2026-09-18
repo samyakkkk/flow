@@ -123,3 +123,6 @@ await new Promise((resolve, reject) => {
 console.log(
   `Browser installation verified: ${count} packages, ${NodeOS.platform()}/${NodeOS.arch()}, no unrelated workspace or platform payloads.`,
 );
+// On Windows node-pty's console host keeps the event loop alive after the
+// terminal has exited, so a passed check would otherwise never return.
+process.exit(0);
