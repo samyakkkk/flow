@@ -400,10 +400,26 @@ export async function uninstall(home, purge) {
   };
   await step("unregister Flow from your coding tools", ["agents", "uninstall"]);
   await step("stop the Flow service", ["stop"]);
-  await step("remove the Flow service", ["service", "uninstall"]);
+  if (!windows) await step("remove the Flow service", ["service", "uninstall"]);
 
-  const { removed, kept } = await removeInstallation(home, { purge, dataHomes });
+  const { removed, kept, deferred } = await removeInstallation(home, { purge, dataHomes });
   for (const path of removed) console.log(`Removed ${path}`);
+  if (deferred.length) {
+    // `rmdir` removes a junction itself, never the directory it points at.
+    const paths = [...new Set([...deferred, ...(kept.length ? [] : [home])])];
+    const script = [
+      "ping -n 3 127.0.0.1 >nul",
+      ...paths.map((path) => `rmdir /s /q "${path}" 2>nul & del /f /q "${path}" 2>nul`),
+    ].join(" & ");
+    spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${script}"`], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      cwd: homedir(),
+    }).unref();
+    for (const path of deferred) console.log(`Removing ${path} as this command exits`);
+  }
   for (const path of kept) console.log(`Kept ${path}`);
   console.log(
     purge
@@ -460,10 +476,20 @@ export async function removeInstallation(
 ) {
   const removed = [];
   const kept = [];
+  // Windows will not delete a program that is running, and `flow uninstall`
+  // runs on the Node inside the installation. What is locked is left for the
+  // caller to remove once this process has exited.
+  const deferred = [];
+  const remove = rest.remove ?? ((target) => fs.rm(target, { recursive: true, force: true }));
   const drop = async (target) => {
-    if (!(await fs.stat(target).catch(() => null))) return;
-    await fs.rm(target, { recursive: true, force: true });
-    removed.push(target);
+    if (!(await fs.lstat(target).catch(() => null))) return;
+    try {
+      await remove(target);
+      removed.push(target);
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) throw error;
+      deferred.push(target);
+    }
   };
   for (const launcher of await ownedLaunchers(home, rest.path)) await drop(launcher);
   const app = await retireBrowserApp(home, rest.applicationsDir);
@@ -481,7 +507,7 @@ export async function removeInstallation(
       else await drop(join(agentHome, entry));
     if (!kept.length) await drop(agentHome);
     await drop(home);
-    return { removed, kept };
+    return { removed, kept, deferred };
   }
 
   // Keep every data home, including one stored inside this installation.
@@ -496,9 +522,9 @@ export async function removeInstallation(
     )
       kept.push(join(home, entry));
     else await drop(join(home, entry));
-  if (!kept.length) await drop(home);
+  if (!kept.length && !deferred.length) await drop(home);
   else kept.push(...inside);
-  return { removed, kept: [...new Set(kept)] };
+  return { removed, kept: [...new Set(kept)], deferred };
 }
 
 /** Installs before this one added a `Flow.app` that only opened the browser UI.

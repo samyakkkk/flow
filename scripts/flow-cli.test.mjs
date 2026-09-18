@@ -254,3 +254,21 @@ test("pointing current at a new release replaces the old one and keeps both tree
   // Replacing the pointer must never delete the release it used to name.
   assert.equal(await fs.readFile(join(home, "releases/one/marker"), "utf8"), "one");
 });
+
+test("a file the system holds locked is handed back, not fatal", async (t) => {
+  // Windows refuses to delete the Node that `flow uninstall` is running on.
+  const { user, home, dataHome } = await installation(t);
+  const { removed, deferred } = await removeInstallation(home, {
+    purge: true,
+    dataHomes: [dataHome],
+    path: join(user, ".local/bin"),
+    agentHome: join(user, ".flow"),
+    remove: async (target) => {
+      if (target === home) throw Object.assign(Error("resource busy"), { code: "EBUSY" });
+      await fs.rm(target, { recursive: true, force: true });
+    },
+  });
+  assert.deepEqual(deferred, [home]);
+  assert.ok(removed.includes(dataHome), "everything that could go, went");
+  assert.equal(await fs.stat(dataHome).catch(() => null), null);
+});
