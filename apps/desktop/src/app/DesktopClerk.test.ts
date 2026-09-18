@@ -35,6 +35,7 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
     isDevelopment,
     appDataDirectory: "/tmp/app-data",
     userDataDirName: isDevelopment ? "flow-dev" : "flow",
+    userDataPath: isDevelopment ? "/tmp/app-data/flow-dev" : "/tmp/app-data/flow",
     legacyUserDataDirNames: isDevelopment
       ? ["t3code-dev", "T3 Code (Dev)"]
       : ["t3code", "T3 Code (Alpha)"],
@@ -93,6 +94,27 @@ describe("DesktopClerk", () => {
       assert.deepEqual(events, ["setPath:userData:/tmp/app-data/flow-dev", "createClerkBridge"]);
       storageMock.mockClear();
       createClerkBridgeMock.mockClear();
+    });
+  });
+
+  it.effect("creates the SDK bridge before yielding to the event loop", () => {
+    // Clerk registers a privileged URL scheme when the bridge is created, and
+    // Electron refuses that once the app is ready. Any await before it hands
+    // the event loop to Electron, which then fires ready first — Flow 0.1.5
+    // quit on launch this way. A microtask queued up front runs at the first
+    // such await, so it must still be waiting when the bridge exists.
+    const events: string[] = [];
+    createClerkBridgeMock.mockImplementation(() => {
+      events.push("createClerkBridge");
+      return { cleanup: () => {}, isPrimaryInstance: true };
+    });
+    return Effect.gen(function* () {
+      yield* Effect.sync(() => queueMicrotask(() => events.push("event loop turn")));
+      yield* Effect.scoped(Layer.build(makeDesktopClerkLayer(false, events)));
+      assert.deepEqual(events.slice(0, 2), [
+        "setPath:userData:/tmp/app-data/flow",
+        "createClerkBridge",
+      ]);
     });
   });
 
