@@ -126,7 +126,7 @@ jobs:
     # Not yet proven end to end, and not published: a failure here must never
     # hold back or fail a macOS/Linux release. Remove once it is green.
     continue-on-error: true
-    timeout-minutes: 45
+    timeout-minutes: 25
     defaults:
       run:
         shell: pwsh

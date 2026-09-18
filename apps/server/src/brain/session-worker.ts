@@ -23,6 +23,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Schema from "effect/Schema";
+import { tsxLoader } from "./builder-assets.ts";
 import { McpSchema } from "effect/unstable/ai";
 
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -66,15 +67,7 @@ export async function startSessionWorker(
     ),
   );
   const child = NodeChildProcess.fork(filename, catalog ? ["--catalog"] : [], {
-    execArgv: filename.endsWith(".ts")
-      ? [
-          "--import",
-          NodePath.resolve(
-            here,
-            "../../../../flow-t3/shared/graph-gateway/node_modules/tsx/dist/loader.mjs",
-          ),
-        ]
-      : [],
+    execArgv: filename.endsWith(".ts") ? ["--import", tsxLoader()] : [],
     env: {
       ...inherited,
       ...environment,
