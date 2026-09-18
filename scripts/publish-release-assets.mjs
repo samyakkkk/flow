@@ -2,9 +2,15 @@
 // Publishing a Flow release uploads ~1 GB, and GitHub's upload service is not
 // reliable at that size: single requests return HTTP 400/500, and a slow day
 // can spend a job's whole time budget on one file. So every asset is uploaded
-// on its own, an asset already stored with the right size is left alone (a
-// rerun resumes instead of starting over), and a versioned release stays a
-// draft until it holds exactly what was built.
+// on its own, an asset already stored with the identical contents is left
+// alone (a rerun resumes instead of starting over), and a versioned release
+// stays a draft until it holds exactly what was built.
+//
+// "Identical" means the SHA-256 GitHub stores, never the byte size: an updater
+// manifest is the same size at every version, so comparing sizes silently kept
+// a rolling feed pointing at the previous release.
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
@@ -17,19 +23,35 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const runGh = async (args) =>
   (await execFile("gh", args, { maxBuffer: 16 * 1024 * 1024 })).stdout;
 
-/** What the release already holds, or null when it does not exist yet. */
+/** What the release already holds, or null when it does not exist yet. Read
+    through the API rather than `gh release view`, which does not report the
+    digest GitHub computed for each stored asset. */
 export async function storedRelease(tag, gh) {
   try {
-    const json = await gh(["release", "view", tag, "--json", "isDraft,assets"]);
-    const release = JSON.parse(json);
+    const release = JSON.parse(await gh(["api", `repos/{owner}/{repo}/releases/tags/${tag}`]));
     return {
-      isDraft: release.isDraft === true,
-      assets: new Map((release.assets ?? []).map((asset) => [asset.name, asset.size])),
+      isDraft: release.draft === true,
+      assets: new Map(
+        (release.assets ?? []).map((asset) => [
+          asset.name,
+          // Older assets predate stored digests; without one, upload again.
+          typeof asset.digest === "string" ? asset.digest.replace(/^sha256:/, "") : null,
+        ]),
+      ),
     };
   } catch {
     return null;
   }
 }
+
+export const sha256 = (path) =>
+  new Promise((resolve, reject) => {
+    const hash = NodeCrypto.createHash("sha256");
+    NodeFS.createReadStream(path)
+      .on("error", reject)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("hex")));
+  });
 
 export async function publishReleaseAssets(input) {
   const {
@@ -69,7 +91,7 @@ export async function publishReleaseAssets(input) {
   const held = stored?.assets ?? new Map();
   for (const file of files) {
     const name = NodePath.basename(file.path);
-    if (held.get(name) === file.size) {
+    if (file.digest && held.get(name) === file.digest) {
       log(`Already uploaded ${name}`);
       continue;
     }
@@ -122,7 +144,7 @@ export async function collect(directory) {
   for (const name of names.sort()) {
     const path = NodePath.join(directory, name);
     const stat = await NodeFSP.stat(path);
-    if (stat.isFile()) files.push({ path, size: stat.size });
+    if (stat.isFile()) files.push({ path, size: stat.size, digest: await sha256(path) });
   }
   return orderForUpload(files);
 }
