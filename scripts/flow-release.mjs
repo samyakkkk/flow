@@ -23,7 +23,19 @@ const macAssetName = "flow-browser-darwin-arm64.tar.gz";
 const bundledAssets = {
   "darwin-arm64": macAssetName,
   "linux-x64": "flow-browser-linux-x64.tar.gz",
+  // No native graph database exists for Windows, so this bundle carries none:
+  // the computer connects to a Cloud Brain instead of hosting one.
+  "win32-x64": "flow-browser-win32-x64.tar.gz",
 };
+const windows = platform() === "win32";
+/** Where a bundle keeps its private Node and Git, which differ on Windows. */
+export const bundledNode = (directory, win = windows) =>
+  join(directory, win ? "runtime/bin/node.exe" : "runtime/bin/node");
+export const bundledGit = (directory, win = windows) =>
+  join(directory, win ? "runtime/git/cmd/git.exe" : "runtime/git/bin/git");
+// Git for Windows puts a GNU tar on PATH that reads `C:` as a remote host; the
+// one Windows ships understands drive letters.
+const tar = windows ? join(process.env.SystemRoot || "C:\\Windows", "System32/tar.exe") : "tar";
 const checkInterval = 6 * 60 * 60 * 1000;
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 const self = fileURLToPath(import.meta.url);
@@ -143,11 +155,11 @@ export async function verifyBundle(directory) {
     !tagPattern.test(bundle.tag)
   )
     throw Error("This Flow bundle does not support this platform.");
-  await fs.access(join(directory, "runtime/bin/node"), NodeFS.constants.X_OK);
-  await fs.access(join(directory, "runtime/git/bin/git"), NodeFS.constants.X_OK);
+  await fs.access(bundledNode(directory), NodeFS.constants.X_OK);
+  await fs.access(bundledGit(directory), NodeFS.constants.X_OK);
   await fs.access(join(directory, "apps/web/dist/index.html"));
   await run(
-    join(directory, "runtime/bin/node"),
+    bundledNode(directory),
     [join(directory, "apps/server/src/bin.ts"), "--version"],
     directory,
   );
@@ -155,11 +167,57 @@ export async function verifyBundle(directory) {
 }
 
 export async function releaseRuntime(directory) {
-  const bundled = join(directory, "runtime/bin/node");
+  const bundled = bundledNode(directory);
   return (await fs.stat(bundled).catch(() => null)) ? bundled : process.execPath;
 }
 
+/** Make `<home>/current` name this release. A relative symlink swapped in by
+    rename is atomic on POSIX. Windows needs a privilege to create symlinks and
+    cannot rename over a directory link, so it uses a junction and replaces it
+    in two steps; `rmdir` removes only the junction, never what it points at. */
+export async function pointCurrent(home, target, win = windows) {
+  const current = join(home, "current");
+  const link = join(home, `.current-${randomUUID()}`);
+  if (!win) {
+    await fs.symlink(NodePath.relative(home, target), link);
+    return fs.rename(link, current);
+  }
+  await fs.symlink(resolve(target), link, "junction");
+  await fs.rmdir(current).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+  await fs.rename(link, current);
+}
+
+/** Recreate the directory links a Windows bundle records instead of shipping
+    (see bundle-links.mjs for why). Safe to repeat: a release is verified where
+    it is staged and linked again once renamed into place, because a junction
+    does not follow its directory. Lives here, not beside recordLinks, because
+    this file is also shipped alone as the desktop apps' bootstrap. */
+export const linkManifest = "flow-links.json";
+export async function restoreLinks(root, type = "junction") {
+  const links = await json(join(root, linkManifest));
+  if (!links) return 0;
+  for (const link of links) {
+    const path = resolve(root, link.path);
+    const target = resolve(NodePath.dirname(path), link.target);
+    for (const resolved of [path, target])
+      if (NodePath.relative(root, resolved).startsWith(".."))
+        throw Error(`Bundle link leaves the release: ${link.path}`);
+    const existing = await fs.lstat(path).catch(() => null);
+    if (existing && !existing.isSymbolicLink())
+      throw Error(`Bundle link would replace real files: ${link.path}`);
+    // rm without `recursive` removes the link itself, never its target.
+    if (existing) await fs.rm(path);
+    await fs.mkdir(NodePath.dirname(path), { recursive: true });
+    await fs.symlink(target, path, type);
+  }
+  return links.length;
+}
+
 export async function adoptBundle(home, directory, checksum) {
+  // A Windows bundle ships its directory links as a manifest (bundle-links.mjs).
+  await restoreLinks(directory);
   const bundle = await verifyBundle(directory);
   if (!bundle || !/^[a-f0-9]{64}$/.test(checksum)) throw Error("Invalid verified Flow bundle.");
   const lock = new DatabaseSync(join(home, "update-lock.sqlite"));
@@ -180,10 +238,10 @@ export async function adoptBundle(home, directory, checksum) {
     if (!existing) {
       await atomic(join(directory, "flow-release.json"), receipt);
       await fs.rename(directory, target);
+      // Junctions are absolute, so the rename left them pointing at staging.
+      await restoreLinks(target);
     }
-    const link = join(home, `.current-${randomUUID()}`);
-    await fs.symlink(NodePath.relative(home, target), link);
-    await fs.rename(link, join(home, "current"));
+    await pointCurrent(home, target);
     return receipt;
   } finally {
     lock.close();
@@ -214,7 +272,7 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
       await fs.writeFile(archive, bytes);
       const source = join(temporary, "source");
       await fs.mkdir(source);
-      await run("tar", ["-xzf", archive, "-C", source], temporary);
+      await run(tar, ["-xzf", archive, "-C", source], temporary);
       for (const entry of [
         "scripts/flow-release.mjs",
         "scripts/flow.mjs",
@@ -227,19 +285,19 @@ export async function stageRelease(home, release, { fetcher = fetch, build = bui
         throw Error("Bundle version does not match release.");
       if (Object.values(bundledAssets).includes(release.assetName) && !bundle)
         throw Error("Release is missing its prebuilt bundle.");
+      await restoreLinks(source);
       await build(source);
       await fs.access(join(source, "apps/web/dist/index.html"));
       receipt = { tag: release.tag, sha256: createHash("sha256").update(bytes).digest("hex") };
       await atomic(join(source, "flow-release.json"), receipt);
       await fs.rename(source, directory);
+      await restoreLinks(directory);
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }
   }
   if (receipt.tag !== release.tag) throw Error("Installed release identity does not match.");
-  const link = join(home, `.current-${randomUUID()}`);
-  await fs.symlink(NodePath.relative(home, directory), link);
-  await fs.rename(link, join(home, "current"));
+  await pointCurrent(home, directory);
   return receipt;
 }
 
@@ -286,25 +344,34 @@ export async function resolveReleaseHome(env = process.env, homeDirectory = home
   return join(share, releaseHomeNames[0]);
 }
 
+/** The text of the `flow` command for this installation. Windows gets a batch
+    file: `%~dp0`-free and fully quoted, since a home may contain spaces. */
+export function launcherScript(home, node, win = windows) {
+  const entry = join(home, "current/scripts/flow-release.mjs");
+  // Node prints an ExperimentalWarning for node:sqlite on every run; it is
+  // noise in front of the one line a person is looking for.
+  return win
+    ? `@echo off\r\nrem flow-managed-launcher\r\nset "FLOW_RELEASE_HOME=${home}"\r\n"${node}" --disable-warning=ExperimentalWarning "${entry}" %*\r\n`
+    : `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(node)} --disable-warning=ExperimentalWarning ${quote(entry)} "$@"\n`;
+}
+const launcherName = (win = windows) => (win ? "flow.cmd" : "flow");
+const managedLauncher = /(?:^|\n)(?:# |rem )flow-(?:managed|cloud-cli)-launcher\r?\n/;
+
 export async function installLauncher(home, prefix, announce = true) {
   const bin = join(prefix, "bin");
   await fs.mkdir(bin, { recursive: true });
-  const target = join(bin, "flow");
+  const target = join(bin, launcherName());
   try {
     const existing = await fs.readFile(target, "utf8");
-    if (!/\n# flow-(managed|cloud-cli)-launcher\n/.test(existing))
+    if (!managedLauncher.test(existing))
       throw Error(`Refusing to overwrite ${target}. Choose another --prefix.`);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   const temp = join(bin, `.flow-${randomUUID()}`);
-  await fs.writeFile(
-    temp,
-    // Node prints an ExperimentalWarning for node:sqlite on every run; it is
-    // noise in front of the one line a person is looking for.
-    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(await releaseRuntime(join(home, "current")))} --disable-warning=ExperimentalWarning ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
-    { mode: 0o755 },
-  );
+  await fs.writeFile(temp, launcherScript(home, await releaseRuntime(join(home, "current"))), {
+    mode: 0o755,
+  });
   await fs.rename(temp, target);
   if (announce) console.log(`Installed ${target}. Add ${bin} to PATH, then run flow.`);
 }
@@ -333,10 +400,26 @@ export async function uninstall(home, purge) {
   };
   await step("unregister Flow from your coding tools", ["agents", "uninstall"]);
   await step("stop the Flow service", ["stop"]);
-  await step("remove the Flow service", ["service", "uninstall"]);
+  if (!windows) await step("remove the Flow service", ["service", "uninstall"]);
 
-  const { removed, kept } = await removeInstallation(home, { purge, dataHomes });
+  const { removed, kept, deferred } = await removeInstallation(home, { purge, dataHomes });
   for (const path of removed) console.log(`Removed ${path}`);
+  if (deferred.length) {
+    // `rmdir` removes a junction itself, never the directory it points at.
+    const paths = [...new Set([...deferred, ...(kept.length ? [] : [home])])];
+    const script = [
+      "ping -n 3 127.0.0.1 >nul",
+      ...paths.map((path) => `rmdir /s /q "${path}" 2>nul & del /f /q "${path}" 2>nul`),
+    ].join(" & ");
+    spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${script}"`], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      cwd: homedir(),
+    }).unref();
+    for (const path of deferred) console.log(`Removing ${path} as this command exits`);
+  }
   for (const path of kept) console.log(`Kept ${path}`);
   console.log(
     purge
@@ -349,15 +432,19 @@ export async function uninstall(home, purge) {
     it wrote onto PATH. A launcher belonging to another installation, or a
     `flow` that is somebody else’s program, is never touched. */
 async function ownedLaunchers(home, path = process.env.PATH || "") {
-  const candidates = new Set([join(home, "bin/flow"), join(homedir(), ".local/bin/flow")]);
+  const name = launcherName();
+  const candidates = new Set([join(home, "bin", name), join(homedir(), ".local/bin", name)]);
   for (const directory of path.split(NodePath.delimiter))
-    if (directory) candidates.add(join(directory, "flow"));
+    if (directory) candidates.add(join(directory, name));
   const owned = [];
   for (const file of candidates) {
     const text = await fs.readFile(file, "utf8").catch(() => null);
+    // Owned means ours *and* pointing at this home, in either launcher form.
     if (
-      text?.includes("# flow-managed-launcher") &&
-      text.includes(`FLOW_RELEASE_HOME=${quote(home)}`)
+      text &&
+      managedLauncher.test(text) &&
+      (text.includes(`FLOW_RELEASE_HOME=${quote(home)}`) ||
+        text.includes(`"FLOW_RELEASE_HOME=${home}"`))
     )
       owned.push(file);
   }
@@ -389,10 +476,20 @@ export async function removeInstallation(
 ) {
   const removed = [];
   const kept = [];
+  // Windows will not delete a program that is running, and `flow uninstall`
+  // runs on the Node inside the installation. What is locked is left for the
+  // caller to remove once this process has exited.
+  const deferred = [];
+  const remove = rest.remove ?? ((target) => fs.rm(target, { recursive: true, force: true }));
   const drop = async (target) => {
-    if (!(await fs.stat(target).catch(() => null))) return;
-    await fs.rm(target, { recursive: true, force: true });
-    removed.push(target);
+    if (!(await fs.lstat(target).catch(() => null))) return;
+    try {
+      await remove(target);
+      removed.push(target);
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) throw error;
+      deferred.push(target);
+    }
   };
   for (const launcher of await ownedLaunchers(home, rest.path)) await drop(launcher);
   const app = await retireBrowserApp(home, rest.applicationsDir);
@@ -410,7 +507,7 @@ export async function removeInstallation(
       else await drop(join(agentHome, entry));
     if (!kept.length) await drop(agentHome);
     await drop(home);
-    return { removed, kept };
+    return { removed, kept, deferred };
   }
 
   // Keep every data home, including one stored inside this installation.
@@ -425,9 +522,9 @@ export async function removeInstallation(
     )
       kept.push(join(home, entry));
     else await drop(join(home, entry));
-  if (!kept.length) await drop(home);
+  if (!kept.length && !deferred.length) await drop(home);
   else kept.push(...inside);
-  return { removed, kept: [...new Set(kept)] };
+  return { removed, kept: [...new Set(kept)], deferred };
 }
 
 /** Installs before this one added a `Flow.app` that only opened the browser UI.
@@ -519,7 +616,7 @@ async function launch(home, args) {
     }
     process.env.PATH = [
       NodePath.dirname(runtime),
-      join(code, "runtime/git/bin"),
+      NodePath.dirname(bundledGit(code)),
       join(tools, "bin"),
       join(homedir(), ".local/bin"),
       process.env.PATH || "",
@@ -649,10 +746,11 @@ export async function main(args) {
   if (
     !(
       (platform() === "darwin" && arch() === "arm64") ||
-      (platform() === "linux" && arch() === "x64")
+      (platform() === "linux" && arch() === "x64") ||
+      (platform() === "win32" && arch() === "x64")
     )
   )
-    throw Error("Flow's local Brain supports Apple Silicon macOS 15+ and Linux x64.");
+    throw Error("Flow supports Apple Silicon macOS 15+, Linux x64 and Windows x64.");
   if (platform() === "darwin" && Number(NodeOS.release().split(".")[0]) < 24)
     throw Error("Flow's local Brain requires macOS 15 or later.");
   await fs.mkdir(requestedHome, { recursive: true, mode: 0o700 });

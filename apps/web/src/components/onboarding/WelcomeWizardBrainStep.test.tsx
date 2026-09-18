@@ -169,6 +169,27 @@ describe("onboarding Brain step", () => {
     expect(onContinue).toHaveBeenCalledWith(environmentId);
   });
 
+  it("offers only a team Brain on a computer that cannot host one", async () => {
+    // Windows has no native graph database, so there is no local Brain to
+    // create and no choice to make: the step is the connect form.
+    runtime.execute.mockImplementation(async (atom: string) => {
+      if (atom !== "brainCommand") return { _tag: "Success", value: {} };
+      const response = brainResponse({});
+      return {
+        _tag: "Success",
+        value: { ...response, state: { ...response.state, localBrains: false } },
+      };
+    });
+    await render();
+
+    expect(
+      renderer!.root.findAllByType("button").filter((node) => node.props.role === "radio"),
+    ).toEqual([]);
+    expect(labelled("Brain name")).toBeUndefined();
+    expect(labelled("Brain URL or invitation link")).toBeDefined();
+    expect(text(primaryButton())).toContain("Connect Brain");
+  });
+
   it("swaps the create fields for connect fields and requires all three", async () => {
     await render();
     await act(async () => modeButton("Connect to your team Brain").props.onClick());

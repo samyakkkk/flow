@@ -259,7 +259,7 @@ function BrainController({
             : (error ??
               (workspace?.remote?.status === "error" ? workspace.remote.message : selectionError))
         }
-        onCreate={() => setCreateOpen(true)}
+        {...(state?.localBrains === false ? {} : { onCreate: () => setCreateOpen(true) })}
         indexingFailures={workspace?.sources.filter((source) => source.status === "error") ?? []}
         indexingBusy={busy || !canRequest || workspace?.remote?.status === "error"}
         onRetryIndexing={(sourceId) => {
@@ -306,14 +306,17 @@ function BrainController({
               >
                 <SettingsIcon size={16} />
               </Button>
-              <Button
-                variant="outline"
-                disabled={!state || !canRequest || busy}
-                onClick={() => setCreateOpen(true)}
-              >
-                <PlusIcon size={14} />
-                New brain
-              </Button>
+              {/* A computer that cannot host a Brain only connects to a Cloud one. */}
+              {state?.localBrains === false ? null : (
+                <Button
+                  variant="outline"
+                  disabled={!state || !canRequest || busy}
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <PlusIcon size={14} />
+                  New brain
+                </Button>
+              )}
             </div>
           </header>
         }
