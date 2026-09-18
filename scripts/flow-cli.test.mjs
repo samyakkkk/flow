@@ -10,6 +10,9 @@ const assert = NodeAssert;
 const fs = NodeFSP;
 const { tmpdir } = NodeOS;
 const { join } = NodePath;
+// These run on Windows too, where the launcher is a batch file named flow.cmd.
+const win = process.platform === "win32";
+const flowCommand = win ? "flow.cmd" : "flow";
 const { execFile } = NodeChildProcess;
 const { promisify } = NodeUtil;
 const { fileURLToPath } = NodeURL;
@@ -78,41 +81,56 @@ test("a machine has one Flow install, and a retired Cloud CLI install is adopted
   assert.equal(await resolveReleaseHome({}, home), join(share, "flow-cloud-cli"));
   await fs.mkdir(join(share, "flow-browser/current"), { recursive: true });
   assert.equal(await resolveReleaseHome({}, home), join(share, "flow-browser"));
-  assert.equal(await resolveReleaseHome({ FLOW_RELEASE_HOME: "/opt/flow" }, home), "/opt/flow");
-});
-
-test("takes over an earlier Cloud CLI launcher but never someone else's flow", async (t) => {
-  const home = await temporaryHome(t);
-  const target = join(home, "bin/flow");
-  await fs.mkdir(join(home, "bin"));
-  await fs.writeFile(target, "#!/bin/sh\n# flow-cloud-cli-launcher\nexec old\n");
-  await installLauncher(home, home, false);
-  assert.match(await fs.readFile(target, "utf8"), /# flow-managed-launcher\n.*FLOW_RELEASE_HOME/s);
-  await fs.writeFile(target, "#!/bin/sh\nexec something-else\n");
-  await assert.rejects(installLauncher(home, home, false), /Refusing to overwrite/);
-});
-
-test("an updated earlier Cloud CLI install moves itself onto the one entry point", async (t) => {
-  const user = await temporaryHome(t);
-  const home = join(user, ".local/share/flow-cloud-cli");
-  await fs.mkdir(join(home, "bin"), { recursive: true });
-  await fs.mkdir(join(user, ".local/bin"), { recursive: true });
-  const old = "#!/bin/sh\n# flow-cloud-cli-launcher\nexec old\n";
-  await fs.writeFile(join(home, "bin/flow"), old);
-  await fs.writeFile(join(user, ".local/bin/flow"), old);
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    [fileURLToPath(new URL("./flow-cloud-cli.mjs", import.meta.url)), "--help"],
-    { env: { ...process.env, HOME: user, FLOW_CLOUD_CLI_HOME: home, FLOW_RELEASE_HOME: "" } },
+  assert.equal(
+    await resolveReleaseHome({ FLOW_RELEASE_HOME: "/opt/flow" }, home),
+    NodePath.resolve("/opt/flow"),
   );
-  assert.match(stdout, /flow setup/);
-  for (const launcher of [join(home, "bin/flow"), join(user, ".local/bin/flow")]) {
-    const text = await fs.readFile(launcher, "utf8");
-    assert.match(text, /# flow-managed-launcher/);
-    assert.ok(text.includes(`FLOW_RELEASE_HOME='${home}'`));
-    assert.ok(text.includes("scripts/flow-release.mjs"));
-  }
 });
+
+// The retired Cloud CLI never ran on Windows, so there is nothing to take over there.
+test(
+  "takes over an earlier Cloud CLI launcher but never someone else's flow",
+  { skip: win },
+  async (t) => {
+    const home = await temporaryHome(t);
+    const target = join(home, "bin/flow");
+    await fs.mkdir(join(home, "bin"));
+    await fs.writeFile(target, "#!/bin/sh\n# flow-cloud-cli-launcher\nexec old\n");
+    await installLauncher(home, home, false);
+    assert.match(
+      await fs.readFile(target, "utf8"),
+      /# flow-managed-launcher\n.*FLOW_RELEASE_HOME/s,
+    );
+    await fs.writeFile(target, "#!/bin/sh\nexec something-else\n");
+    await assert.rejects(installLauncher(home, home, false), /Refusing to overwrite/);
+  },
+);
+
+test(
+  "an updated earlier Cloud CLI install moves itself onto the one entry point",
+  { skip: win },
+  async (t) => {
+    const user = await temporaryHome(t);
+    const home = join(user, ".local/share/flow-cloud-cli");
+    await fs.mkdir(join(home, "bin"), { recursive: true });
+    await fs.mkdir(join(user, ".local/bin"), { recursive: true });
+    const old = "#!/bin/sh\n# flow-cloud-cli-launcher\nexec old\n";
+    await fs.writeFile(join(home, "bin/flow"), old);
+    await fs.writeFile(join(user, ".local/bin/flow"), old);
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [fileURLToPath(new URL("./flow-cloud-cli.mjs", import.meta.url)), "--help"],
+      { env: { ...process.env, HOME: user, FLOW_CLOUD_CLI_HOME: home, FLOW_RELEASE_HOME: "" } },
+    );
+    assert.match(stdout, /flow setup/);
+    for (const launcher of [join(home, "bin/flow"), join(user, ".local/bin/flow")]) {
+      const text = await fs.readFile(launcher, "utf8");
+      assert.match(text, /# flow-managed-launcher/);
+      assert.ok(text.includes(`FLOW_RELEASE_HOME='${home}'`));
+      assert.ok(text.includes("scripts/flow-release.mjs"));
+    }
+  },
+);
 
 test("installing retires only the browser app this installation wrote", async (t) => {
   const user = await temporaryHome(t);
@@ -150,9 +168,9 @@ const installation = async (t, { dataInside = true } = {}) => {
   await fs.writeFile(join(dataHome, "userdata.sqlite"), "conversations");
   await fs.mkdir(brainStore(dataHome), { recursive: true });
   await fs.writeFile(join(brainStore(dataHome), "graph.rdb"), "brain");
-  const launcher = `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${"'" + home + "'"}\nexec node\n`;
-  await fs.writeFile(join(home, "bin/flow"), launcher);
-  await fs.writeFile(join(user, ".local/bin/flow"), launcher);
+  const launcher = launcherScript(home, "node");
+  await fs.writeFile(join(home, "bin", flowCommand), launcher);
+  await fs.writeFile(join(user, ".local/bin", flowCommand), launcher);
   return { user, home, dataHome };
 };
 
@@ -169,7 +187,7 @@ test("uninstalling removes the program and keeps the data until you ask", async 
     "the release goes",
   );
   assert.equal(
-    await fs.stat(join(user, ".local/bin/flow")).catch(() => null),
+    await fs.stat(join(user, ".local/bin", flowCommand)).catch(() => null),
     null,
     "our launcher goes",
   );
@@ -205,11 +223,8 @@ test("purging deletes the data and Brain, but never the retired backups", async 
 
 test("uninstalling never removes another installation's flow command", async (t) => {
   const { user, home, dataHome } = await installation(t);
-  const foreign = join(user, ".local/bin/flow");
-  await fs.writeFile(
-    foreign,
-    "#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME='/opt/other'\n",
-  );
+  const foreign = join(user, ".local/bin", flowCommand);
+  await fs.writeFile(foreign, launcherScript(NodePath.resolve("/opt/other"), "node"));
   await removeInstallation(home, {
     purge: true,
     dataHomes: [dataHome],
@@ -235,8 +250,8 @@ test("Windows gets a batch launcher that survives a home with spaces", () => {
 });
 
 test("a bundle keeps Node and Git where each platform expects them", () => {
-  assert.ok(bundledNode("/b", false).endsWith("runtime/bin/node"));
-  assert.ok(bundledGit("/b", false).endsWith("runtime/git/bin/git"));
+  assert.equal(bundledNode("/b", false), join("/b", "runtime/bin/node"));
+  assert.equal(bundledGit("/b", false), join("/b", "runtime/git/bin/git"));
   assert.match(bundledNode("C:\\b", true), /node\.exe$/);
   assert.match(bundledGit("C:\\b", true), /cmd[\\/]git\.exe$/);
 });
