@@ -137,7 +137,15 @@ export class CurationPublicTools {
           "\n";
       text += this.titles("DOCS", "maintained", this.store.list({ kind: "doc" }), 8, "doc");
       text += this.titles("SKILLS", "learned procedures", this.store.list({ kind: "skill" }), 12, "skill");
-      text += "\nTOOLS: search_knowledge (what was written down) · find_entity (code by intent) · get_entity [id] opens anything · read_query (connections, blast radius) · remember · correct_graph\n";
+      // Agents read orient and then go straight to the files. Say what to do,
+      // not just what exists: querying this Brain is the first step.
+      text +=
+        "\nQUERY THIS BRAIN FIRST — before reading files or guessing, ask it:\n" +
+        "  find_entity \"what the code does\"   → where it lives, with file:line\n" +
+        "  search_knowledge \"symptom or name\" → decisions, past fixes, gotchas\n" +
+        "  get_entity [id]                    → open any id above: service, notes, doc, skill\n" +
+        "  read_query                         → connections and blast radius\n" +
+        "Save what's worth keeping with remember; flag a wrong graph with correct_graph.\n";
     } else if (name === "search_knowledge") {
       queries = (
         typeof args.query === "string"

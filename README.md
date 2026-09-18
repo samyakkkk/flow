@@ -29,19 +29,19 @@ Brain instead of asking you to explain the codebase and its decisions again.
 curl -fsSL https://raw.githubusercontent.com/samyakkkk/flow/release/install.sh | bash
 ```
 
-<p align="center"><sub>Apple Silicon macOS 15+ · installs the <code>flow</code> command and Flow's local service</sub></p>
+<p align="center"><sub>Apple Silicon macOS 15+ or Linux x64 · installs the <code>flow</code> command and Flow's local service</sub></p>
 
 <p align="center"><strong>or</strong></p>
 
 <p align="center">
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-arm64.dmg"><img src="./docs/images/download-macos-apple-silicon.svg" alt="Download Flow for macOS (Apple Silicon)" width="194"></a>
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.5/Flow-0.1.5-arm64.dmg"><img src="./docs/images/download-macos-apple-silicon.svg" alt="Download Flow for macOS (Apple Silicon)" width="194"></a>
   &nbsp;
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x64.dmg"><img src="./docs/images/download-macos-intel.svg" alt="Download Flow for macOS (Intel)" width="194"></a>
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.5/Flow-0.1.5-x64.dmg"><img src="./docs/images/download-macos-intel.svg" alt="Download Flow for macOS (Intel)" width="194"></a>
   &nbsp;
-  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.4/Flow-0.1.4-x86_64.AppImage"><img src="./docs/images/download-linux.svg" alt="Download Flow for Linux (x64 AppImage)" width="194"></a>
+  <a href="https://github.com/samyakkkk/flow/releases/download/flow-desktop-v0.1.5/Flow-0.1.5-x86_64.AppImage"><img src="./docs/images/download-linux.svg" alt="Download Flow for Linux (x64 AppImage)" width="194"></a>
 </p>
 
-<p align="center"><sub>Flow 0.1.4 · signed, notarized, auto-updating · <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.4">checksums</a> · Windows planned</sub></p>
+<p align="center"><sub>Flow 0.1.5 · signed, notarized, auto-updating · <a href="https://github.com/samyakkkk/flow/releases/tag/flow-desktop-v0.1.5">checksums</a> · Windows planned</sub></p>
 
 Both share one local Flow service and one Brain, and coding agents you run outside
 Flow keep their Brain when the app is closed. See [Install Flow](./docs/user/install.md)

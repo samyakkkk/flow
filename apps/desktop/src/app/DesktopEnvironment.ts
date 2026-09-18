@@ -29,6 +29,9 @@ export interface MakeDesktopEnvironmentInput {
   readonly runningUnderArm64Translation: boolean;
   /** Whether `~/.t3/userdata` exists — see `@t3tools/shared/homeBaseDir`. */
   readonly legacyHomeExists: boolean;
+  /** Synchronous existence probe for the profile folder, made before Electron
+      is ready (see `userDataPath`). main.ts passes `existsSync`. */
+  readonly userDataDirExists?: (path: string) => boolean;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -93,6 +96,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly linuxApplicationsDir: string;
     readonly appImagePath: Option.Option<string>;
     readonly userDataDirName: string;
+    readonly userDataPath: string;
     readonly legacyUserDataDirNames: readonly string[];
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
@@ -204,6 +208,16 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const legacyUserDataDirNames = isDevelopment
     ? ["t3code-dev", "T3 Code (Dev)"]
     : ["t3code", "T3 Code (Alpha)"];
+  // Decided here, once and synchronously. The Clerk bridge must be created
+  // before Electron's `ready`, and it needs this path first; an async
+  // existence check in between let `ready` win, and the app quit on launch
+  // on a Mac with no earlier profile (Flow 0.1.5).
+  const userDataDirExists = input.userDataDirExists ?? (() => false);
+  const userDataPath =
+    legacyUserDataDirNames
+      .map((name) => path.join(appDataDirectory, name))
+      .find((candidate) => userDataDirExists(candidate)) ??
+    path.join(appDataDirectory, userDataDirName);
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -261,6 +275,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
+    userDataPath,
     legacyUserDataDirNames,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({

@@ -300,7 +300,9 @@ export async function installLauncher(home, prefix, announce = true) {
   const temp = join(bin, `.flow-${randomUUID()}`);
   await fs.writeFile(
     temp,
-    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(await releaseRuntime(join(home, "current")))} ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
+    // Node prints an ExperimentalWarning for node:sqlite on every run; it is
+    // noise in front of the one line a person is looking for.
+    `#!/bin/sh\n# flow-managed-launcher\nexport FLOW_RELEASE_HOME=${quote(home)}\nexec ${quote(await releaseRuntime(join(home, "current")))} --disable-warning=ExperimentalWarning ${quote(join(home, "current/scripts/flow-release.mjs"))} "$@"\n`,
     { mode: 0o755 },
   );
   await fs.rename(temp, target);
@@ -522,7 +524,11 @@ async function launch(home, args) {
       join(homedir(), ".local/bin"),
       process.env.PATH || "",
     ].join(NodePath.delimiter);
-    await run(runtime, [join(code, "scripts/flow.mjs"), ...args], code);
+    await run(
+      runtime,
+      ["--disable-warning=ExperimentalWarning", join(code, "scripts/flow.mjs"), ...args],
+      code,
+    );
   } finally {
     commandLock.close();
   }

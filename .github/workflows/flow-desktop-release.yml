@@ -251,9 +251,10 @@ jobs:
     name: Publish desktop release
     needs: [preflight, build]
     runs-on: ubuntu-24.04
-    # Uploads ~1 GB twice (versioned, then the rolling feed). A cut-off mid-way leaves
-    # the rolling feed without assets and breaks auto-update, so leave real headroom.
-    timeout-minutes: 45
+    # Uploads ~1 GB twice (versioned, then the rolling feed) and GitHub's upload
+    # service has needed over an hour for that. A rerun resumes, but give one
+    # run enough room to finish on its own.
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:
@@ -298,65 +299,13 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          # GitHub's upload service sometimes returns HTTP 500 for one large
-          # asset. Upload file by file with retries so one bad request cannot
-          # sink a release, and publish only once every asset is in place.
-          upload() {
-            local tag="$1" file="$2" attempt
-            for attempt in 1 2 3 4 5; do
-              if gh release upload "$tag" "$file" --clobber --repo "$GITHUB_REPOSITORY"; then return 0; fi
-              echo "Upload of $(basename "$file") to $tag failed (attempt $attempt)." >&2
-              sleep $((attempt * 20))
-            done
-            return 1
-          }
-          # Installers first, updater manifests last: a manifest must never
-          # point at a file that has not arrived yet.
-          mapfile -t assets < <(ls release-assets/* | grep -v '/latest.*\.yml$'; ls release-assets/latest*.yml)
-
-          state=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
-          if [[ "$state" == "false" ]]; then
-            echo "Release $RELEASE_TAG is already published." >&2
-            exit 1
-          fi
-          if [[ "$state" == "missing" ]]; then
-            gh release create "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Flow $RELEASE_VERSION" \
-              --generate-notes \
-              --draft \
-              --latest=false
-          fi
-          for file in "${assets[@]}"; do upload "$RELEASE_TAG" "$file"; done
-          expected=$(ls release-assets | sort)
-          stored=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
-          if [[ "$expected" != "$stored" ]]; then
-            echo "Release $RELEASE_TAG does not hold exactly the built assets." >&2
-            diff <(echo "$expected") <(echo "$stored") >&2 || true
-            exit 1
-          fi
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
-
-          rolling_tag=flow-desktop-latest
-          if ! gh release view "$rolling_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$rolling_tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --prerelease \
-              --title "Latest Flow desktop update" \
-              --notes "Rolling update feed for the latest signed Flow desktop release."
-          fi
-          # Installed apps read this feed. Add the new files before removing the
-          # old ones so the feed is never empty, even if this step is cut off.
-          for file in "${assets[@]}"; do upload "$rolling_tag" "$file"; done
-          gh release view "$rolling_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            while read -r asset; do
-              if [[ ! -e "release-assets/$asset" ]]; then
-                gh release delete-asset "$rolling_tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes
-              fi
-            done
+          node scripts/publish-release-assets.mjs "$RELEASE_TAG" release-assets \
+            --title "Flow $RELEASE_VERSION" --target "$GITHUB_SHA" --generate-notes
+          node scripts/publish-release-assets.mjs flow-desktop-latest release-assets --rolling \
+            --title "Latest Flow desktop update" --target "$GITHUB_SHA" \
+            --notes "Rolling update feed for the latest signed Flow desktop release."

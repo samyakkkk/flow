@@ -1,3 +1,4 @@
+import { canonicalRemote } from "../../graph-gateway/src/repo-identity.js";
 import { indexRepoPrompt } from "./index-prompt.js";
 import { validateImagePaths } from "./slack-agent/images.js";
 // opencode.ts — Job queue for opencode sessions: index_repo | enrich | answer | continue | correct_graph.
@@ -384,6 +385,9 @@ export function repoStatuses(): RepoStatus[] {
 // can never show a stale model-invented head_commit again. Best-effort:
 // graph metadata must not fail the job that just succeeded.
 async function stampRepoNode(name: string, branch: string, head: string | null): Promise<void> {
+  // The git remote is how sessions find this node: they name the repo by their
+  // checkout's origin, not by the name it was registered under.
+  const remote = canonicalRemote(listWorkspaceRepos().find((entry) => entry.name === name)?.url);
   try {
     const gatewayUrl = (process.env.GATEWAY_URL ?? "http://127.0.0.1:7433").replace(/\/+$/, "");
     const token = process.env.GATEWAY_TOKEN || process.env.FLOW_ADMIN_TOKEN || "";
@@ -398,6 +402,7 @@ async function stampRepoNode(name: string, branch: string, head: string | null):
         confirm: true,
         props: {
           default_branch: branch,
+          ...(remote ? { remote } : {}),
           ...(head ? { head_commit: head } : {}),
           indexed_at: new Date().toISOString(),
         },
