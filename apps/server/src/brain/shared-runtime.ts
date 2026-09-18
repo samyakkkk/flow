@@ -149,7 +149,9 @@ export async function serveSharedBrain(runtime: BrainRuntime, stateDir: string) 
           break;
         }
         case "tools":
-          result = await originalBrainTools();
+          result = input.workspace
+            ? await runtime.brainTools(input.workspace)
+            : await originalBrainTools();
           break;
         case "state":
           result = await runtime.state(undefined, input.metadataOnly);

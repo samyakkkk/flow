@@ -1,6 +1,10 @@
 // @effect-diagnostics globalFetch:off - Tests the standalone HTTP transport boundary.
+// @effect-diagnostics nodeBuiltinImport:off - Temporary directory for the native tool catalog cache.
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { CloudClient, cloudEndpoint, cloudSignInTarget, signInToCloud } from "./cloud-client.ts";
 import { GithubConnection } from "../../../../flow-t3/shared/runtime/src/github.ts";
 afterEach(() => vi.unstubAllGlobals());
@@ -46,6 +50,26 @@ describe("cloud transport", () => {
     await expect(client.state()).rejects.toThrow("Cloud Brain is unavailable (HTTP 502)");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     await expect(client.state()).rejects.toThrow("offline");
+  });
+  it("serves the cloud's tool catalog from cache, including while the cloud is offline", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "flow-cloud-tools-"));
+    const catalog = [{ name: "cloud_only", inputSchema: { type: "object" } }];
+    const fetcher = vi
+      .fn()
+      .mockImplementation(async () => new Response(JSON.stringify({ result: catalog })));
+    vi.stubGlobal("fetch", fetcher);
+    const client = new CloudClient("https://brain.example", "secret", "one", "brain", directory);
+    expect((await client.tools()).map((tool) => tool.name)).toEqual(["cloud_only"]);
+    await client.tools();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body).method).toBe("tools");
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const restarted = new CloudClient("https://brain.example", "secret", "one", "brain", directory);
+    expect((await restarted.tools()).map((tool) => tool.name)).toEqual(["cloud_only"]);
+    const uncached = new CloudClient("https://brain.example", "secret", "one", "brain");
+    await expect(uncached.tools()).rejects.toThrow("offline");
+    await NodeFSP.rm(directory, { recursive: true, force: true });
   });
 });
 describe("deployment GitHub credentials", () => {

@@ -5,11 +5,12 @@ import { ProjectBrainBindings } from "./project-bindings.ts";
 import { brainResourceEnvironment, type BrainCuratorRunner } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
 import {
+  originalBrainTools,
   startSessionWorker,
   type BrainCapture,
   type BrainSessionContext,
 } from "./session-worker.ts";
-import { prepareNativeFalkor } from "./native.ts";
+import { nativeFalkorSupported, prepareNativeFalkor } from "./native.ts";
 // @effect-diagnostics globalDate:off - Persisted wall-clock timestamps at the native adapter boundary.
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
 import {
@@ -425,7 +426,20 @@ export class BrainRuntime {
     this.writes = pending.catch(() => {});
     return pending;
   }
+  /** This computer can host a Brain only where a native graph database exists. */
+  get localBrains() {
+    return nativeFalkorSupported(this.host.platform, this.host.architecture);
+  }
   async start() {
+    if (!this.localBrains) {
+      // Not an error: a Cloud Brain needs no local database, and that is the
+      // only kind this computer connects to.
+      this.database = {
+        status: "stopped",
+        message: "This computer connects to a Cloud Brain; it cannot host one.",
+      };
+      return;
+    }
     if (this.db?.isRunning) return;
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -536,7 +550,11 @@ export class BrainRuntime {
   private flowGraph(workspace: Workspace) {
     return this.db!.selectGraph(`flow_brain_${workspace.id.replaceAll("-", "")}`);
   }
+  /** Startup gate: the server refuses to run with a Brain runtime that should
+      have a database and does not. A host that cannot host a Brain has none by
+      design, and must still start so it can connect to one elsewhere. */
   assertAvailable() {
+    if (!this.localBrains && !this.closed) return;
     if (!this.db?.isRunning || this.closed)
       throw new Error(this.database.message || "The app's brain runtime is unavailable.");
   }
@@ -668,6 +686,7 @@ export class BrainRuntime {
       };
     return {
       transferVersion: 1,
+      localBrains: this.localBrains,
       configuredProjectIds: this.projectBindings.configuredProjectIds(),
       database: this.database,
       embeddings: { status: this.embeddings.status, message: this.embeddings.message },
@@ -971,6 +990,9 @@ export class BrainRuntime {
       return null;
     }
     if (command.action === "create") {
+      // The UI never offers this here; refuse it for any other caller too.
+      if (!this.localBrains)
+        throw new Error("This computer cannot host a Brain. Connect a Cloud Brain instead.");
       const name = command.name.trim();
       if (!name || name.length > 80)
         throw new Error("Workspace name must contain 1–80 characters.");
@@ -1448,6 +1470,27 @@ export class BrainRuntime {
         (await this.cloud(workspace)).document(documentId)
       );
     return (await this.sessionWorker(workspace)).document(documentId);
+  }
+  /**
+   * The tool catalog a coding agent is shown for one Brain. A Cloud Brain runs
+   * the calls, so it supplies the catalog; `remember` is the exception because
+   * conversation notes are written on this computer.
+   */
+  async brainTools(workspaceId: string) {
+    const local = await originalBrainTools();
+    const workspace = this.workspace(workspaceId);
+    if (!workspace.remote) return local;
+    try {
+      const remote = await (await this.cloud(workspace)).tools();
+      return [
+        ...remote.filter((tool) => tool.name !== "remember"),
+        ...local.filter((tool) => tool.name === "remember"),
+      ];
+    } catch {
+      // Never reached and never cached: show this version's catalog so the agent
+      // still starts. Its calls report the unavailable cloud; nothing runs locally.
+      return local;
+    }
   }
   async callProjectTool(
     projectId: ProjectId,

@@ -201,6 +201,9 @@ test('the MCP server serves no tools in an unbound folder and the Brain tools on
   assert.match(replies[0].result.instructions, /Team Brain/);
   assert.match(replies[0].result.instructions, /Every \[id\][\s\S]*opens with get_entity/);
   assert.deepEqual(replies[1].result.tools.map(tool => tool.name), ['orient', 'remember', 'get_entity', 'bind_session']);
+  // A chat run by Flow has the same tools on its own t3-code server; never twice.
+  const hosted = (await f.run([mcp], input, { FLOW_SESSION_ID: 't3-managed' })).stdout.trim().split('\n').map(JSON.parse);
+  assert.match(hosted[0].result.instructions, /t3-code/); assert.deepEqual(hosted[1].result.tools, []);
 });
 
 test('offline captures persist redacted, replay with stable receipts, and skip T3-managed sessions', async t => {

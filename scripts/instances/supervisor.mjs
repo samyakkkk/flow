@@ -260,8 +260,10 @@ export async function supervise(directory) {
         env.FLOW_SHARED_BRAIN_HOME = join(sourceConfig.home, "userdata");
       }
       env.FLOW_MANAGED_INSTANCE_ID = config.id;
-      // Only the primary instance owns the user's coding-agent tool files.
-      if (config.name === "primary") env.FLOW_AGENT_TOOLS = "auto";
+      // Only the primary instance owns the user's coding-agent tool files. Not
+      // on Windows yet: the hook commands Flow writes are POSIX shell, and a
+      // broken hook in someone's Claude or Codex config is worse than none.
+      if (config.name === "primary" && NodeOS.platform() !== "win32") env.FLOW_AGENT_TOOLS = "auto";
       if (releaseHome) {
         env.FLOW_RELEASE_CONTROL_URL = `http://127.0.0.1:${server.address().port}`;
         env.FLOW_RELEASE_CONTROL_TOKEN = token;

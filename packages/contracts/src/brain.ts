@@ -152,6 +152,9 @@ export const BrainWorkspace = Schema.Struct({
 export type BrainWorkspace = typeof BrainWorkspace.Type;
 export const BrainState = Schema.Struct({
   transferVersion: Schema.optionalKey(Schema.Literal(1)),
+  // False where this computer cannot host a Brain (no native graph database,
+  // e.g. Windows); only a Cloud Brain can be connected. Absent means true.
+  localBrains: Schema.optionalKey(Schema.Boolean),
   configuredProjectIds: Schema.optional(Schema.Array(ProjectId)),
   database: Schema.Struct({
     status: Schema.Literals(["stopped", "ready", "error"]),

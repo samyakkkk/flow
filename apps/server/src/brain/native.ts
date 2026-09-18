@@ -79,6 +79,15 @@ async function extractNativeArchive(buffer: Buffer, directory: string) {
     });
   });
 }
+/** Whether a native FalkorDB exists for this host. Where it does not (Windows),
+    the computer cannot host a Brain and only connects to a Cloud Brain. */
+export const nativeFalkorSupported = (
+  platform: NodeJS.Platform,
+  architecture: NodeJS.Architecture,
+): boolean =>
+  (platform === "darwin" && architecture === "arm64") ||
+  (platform === "linux" && architecture === "x64");
+
 export async function prepareNativeFalkor(
   directory: string,
   platform: NodeJS.Platform,

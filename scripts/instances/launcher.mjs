@@ -287,14 +287,19 @@ export async function start(input) {
       // An installed service owns the supervisor's lifecycle; starting a second
       // one here would race it for the instance lock.
       const service = await import("./service.mjs");
-      const managed = input.name === "primary" ? await service.managedService() : null;
+      // Windows has no service manager integration, so the launcher always
+      // owns the supervisor there.
+      const managed =
+        input.name === "primary" && NodeOS.platform() !== "win32"
+          ? await service.managedService()
+          : null;
       if (managed?.loaded) await service.restartManaged(managed);
       else {
         const log = openSync(join(directory, "runtime.log"), "a", 0o600);
         const child = spawn(
           process.execPath,
           [join(sourceRoot, "scripts/flow.mjs"), "--supervise", directory],
-          { detached: true, stdio: ["ignore", log, log], env: process.env },
+          { detached: true, windowsHide: true, stdio: ["ignore", log, log], env: process.env },
         );
         closeSync(log);
         await new Promise((resolve, reject) => {
@@ -341,8 +346,10 @@ export async function start(input) {
 }
 export async function main(args) {
   const input = parse([...args]);
-  if (NodeOS.platform() === "win32" && input.action !== "help")
-    throw Error("The managed launcher currently supports macOS and Linux.");
+  // Windows runs the server and browser UI like any other host. What it lacks
+  // is a service manager integration, so `flow service` stays macOS/Linux.
+  if (NodeOS.platform() === "win32" && input.action === "service")
+    throw Error("flow service is not available on Windows yet. Run flow to start Flow.");
   if (input.action === "supervise")
     return (await import("./supervisor.mjs")).supervise(input.directory);
   if (input.action === "service")

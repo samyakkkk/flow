@@ -7,19 +7,19 @@ import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 
 const root = NodePath.resolve(process.argv[2] || ".");
+// Packages live in pnpm's virtual store, or directly in node_modules under a
+// hoisted layout.
 const store = NodePath.join(root, "node_modules/.pnpm");
+const moduleRoots = NodeFS.existsSync(store)
+  ? NodeFS.readdirSync(store, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
+      .map((entry) => NodePath.join(store, entry.name, "node_modules"))
+  : [NodePath.join(root, "node_modules")];
 let count = 0;
-for (const entry of NodeFS.readdirSync(store, { withFileTypes: true })) {
-  if (!entry.isDirectory() || entry.name === "node_modules") continue;
-  count++;
-  NodeAssert.doesNotMatch(
-    entry.name,
-    /^(?:expo(?:-|@)|@expo\+|alchemy@|workerd@|@cloudflare\+)/,
-    `Unrelated mobile/cloud package installed: ${entry.name}`,
-  );
+for (const modules of moduleRoots) {
   // Native package manifests describe which platform the payload supports.
-  const modules = NodePath.join(store, entry.name, "node_modules");
   for (const name of NodeFS.readdirSync(modules)) {
+    if (name.startsWith(".")) continue;
     const base = NodePath.join(modules, name);
     if (NodeFS.lstatSync(base).isSymbolicLink()) continue;
     const paths = name.startsWith("@")
@@ -30,6 +30,12 @@ for (const entry of NodeFS.readdirSync(store, { withFileTypes: true })) {
       const manifest = NodePath.join(path, "package.json");
       if (!NodeFS.existsSync(manifest)) continue;
       const pkg = JSON.parse(NodeFS.readFileSync(manifest, "utf8"));
+      count++;
+      NodeAssert.doesNotMatch(
+        String(pkg.name),
+        /^(?:expo(?:-.*)?|@expo\/.*|alchemy|workerd|@cloudflare\/.*)$/,
+        `Unrelated mobile/cloud package installed: ${pkg.name}`,
+      );
       for (const [field, current] of [
         ["os", NodeOS.platform()],
         ["cpu", NodeOS.arch()],
@@ -85,7 +91,11 @@ try {
   database.close();
 }
 await new Promise((resolve, reject) => {
-  const terminal = serverRequire("node-pty").spawn("/bin/sh", ["-c", "printf FLOW_TERMINAL_OK"], {
+  const [shell, shellArgs] =
+    NodeOS.platform() === "win32"
+      ? [process.env.ComSpec || "cmd.exe", ["/d", "/c", "echo FLOW_TERMINAL_OK"]]
+      : ["/bin/sh", ["-c", "printf FLOW_TERMINAL_OK"]];
+  const terminal = serverRequire("node-pty").spawn(shell, shellArgs, {
     name: "xterm",
     cols: 80,
     rows: 24,
@@ -113,3 +123,6 @@ await new Promise((resolve, reject) => {
 console.log(
   `Browser installation verified: ${count} packages, ${NodeOS.platform()}/${NodeOS.arch()}, no unrelated workspace or platform payloads.`,
 );
+// On Windows node-pty's console host keeps the event loop alive after the
+// terminal has exited, so a passed check would otherwise never return.
+process.exit(0);

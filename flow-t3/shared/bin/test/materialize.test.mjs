@@ -308,3 +308,10 @@ test("machine-scope rendering registers every tool once in user configuration an
   for (const gone of [".cursor/hooks.json", ".cursor/mcp.json", ".gemini/config/hooks.json", ".gemini/settings.json", ".config/opencode/plugins/flow.ts", ".copilot/hooks/flow.json", ".claude/skills", ".agents", codexHome + "/hooks.json"])
     assert.ok(!existsSync(join(home, gone)), gone);
 }));
+
+test("pre-approved tools are exactly the gateway's read tools", async () => {
+  const { FLOW_READ_TOOLS } = await import("../lib/materialize.mjs");
+  const { SESSION_VERBS } = await import("../../graph-gateway/src/session-verbs.ts");
+  const reads = [...SESSION_VERBS].filter((name) => !["remember", "correct_graph"].includes(name));
+  assert.deepEqual([...FLOW_READ_TOOLS].sort(), reads.sort());
+});
