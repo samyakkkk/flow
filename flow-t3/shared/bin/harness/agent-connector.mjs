@@ -214,7 +214,9 @@ export async function main(argv) {
   const materializer = () => import('../lib/materialize.mjs');
   const requestedFolder = resolve(options.folder ?? process.cwd());
   const folder = await fs.realpath(requestedFolder).catch(error => { if (['status', 'resolve'].includes(action) && error.code === 'ENOENT') return requestedFolder; throw error; });
-  if (action === 'install' || (action === 'setup' && !options.brain)) {
+  // The installer connects a Cloud Brain from wherever it was run: that folder means
+  // nothing, and checkouts of the Brain's repositories connect themselves.
+  if (action === 'install' || (action === 'setup' && (!options.brain || (options.cloud && !options.folder)))) {
     const result = await install({ stateDir: options['state-dir'], harness: options.harness, materializer: await materializer() });
     console.log(JSON.stringify({ ...result, next: 'Restart your coding agents and approve their hook or MCP trust prompts once. Folders whose repositories belong to a Flow Brain are connected automatically.' }, null, 2));
     return;

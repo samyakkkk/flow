@@ -127,3 +127,115 @@ esac
     NodeAssert.match(runtime.stdout, /^v24\./);
   },
 );
+const target =
+  NodeOS.platform() === "darwin" && NodeOS.arch() === "arm64"
+    ? "darwin-arm64"
+    : NodeOS.platform() === "linux" && NodeOS.arch() === "x64"
+      ? "linux-x64"
+      : null;
+NodeTest.test(
+  "a command copied from a Cloud dashboard installs Flow and connects that Brain",
+  { skip: !target, timeout: 60_000 },
+  async (t) => {
+    const home = await NodeFSP.realpath(
+      await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "flow-cloud-install-")),
+    );
+    t.after(() => NodeFSP.rm(home, { recursive: true, force: true }));
+    const write = async (name, text, mode = 0o700) => {
+      const file = NodePath.join(home, name);
+      await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true });
+      await NodeFSP.writeFile(file, text, { mode });
+      return file;
+    };
+    // Stand-ins for the download and the bundle: this exercises the installer's
+    // own handling of the dashboard's options, not the release it installs.
+    const launcher = await write(
+      "launcher",
+      `#!/bin/bash
+# flow-managed-launcher
+printf '%s\\n' "$*" >> "$FLOW_TEST_LOG"
+while [ "$#" -gt 0 ]; do [ "$1" = --enrollment-file ] && file=$2; shift; done
+{ stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file"; cat "$file"; echo; } >> "$FLOW_TEST_LOG"
+[ -z "\${FLOW_TEST_FAIL:-}" ] || { echo 'Setup prompt expired, was already used, or belongs to another Brain.' >&2; exit 1; }
+`,
+    );
+    await write(
+      "bundle/runtime/bin/node",
+      `#!/bin/bash
+case "$*" in *install-bundle*) mkdir -p "$FLOW_RELEASE_HOME/bin" && cp "${launcher}" "$FLOW_RELEASE_HOME/bin/flow" ;; esac
+`,
+    );
+    const asset = `flow-browser-${target}.tar.gz`;
+    await execute("tar", [
+      "-czf",
+      NodePath.join(home, asset),
+      "-C",
+      NodePath.join(home, "bundle"),
+      ".",
+    ]);
+    const digest = NodeCrypto.createHash("sha256")
+      .update(await NodeFSP.readFile(NodePath.join(home, asset)))
+      .digest("hex");
+    await write(`${asset}.sha256`, `${digest}  ${asset}\n`);
+    await write(
+      "tools/curl",
+      `#!/bin/bash
+while [ "$#" -gt 0 ]; do
+  case "$1" in https://*) url="$1" ;; --output) shift; out="$1" ;; esac
+  shift
+done
+case "$url" in
+  */retire-legacy-flow.mjs) /bin/cp "$FLOW_TEST_HELPER" "$out" ;;
+  *) /bin/cp "${home}/$(basename "$url")" "$out" ;;
+esac
+`,
+    );
+    const credential = "ab".repeat(32);
+    const log = NodePath.join(home, "log");
+    const run = (extra = {}) =>
+      execute(
+        "/bin/bash",
+        [
+          NodePath.join(root, "install.sh"),
+          ...["--cloud", "https://brain.example", "--cloud-brain", "brain-1"],
+          ...["--enrollment", credential],
+        ],
+        {
+          env: {
+            HOME: home,
+            PATH: NodePath.join(home, "tools") + ":/usr/bin:/bin:/usr/sbin:/sbin",
+            FLOW_TEST_HELPER: NodePath.join(root, "scripts/retire-legacy-flow.mjs"),
+            FLOW_RELEASE_HOME: NodePath.join(home, "release"),
+            FLOW_TEST_LOG: log,
+            ...extra,
+          },
+        },
+      );
+    const connected = await run();
+    NodeAssert.match(
+      connected.stdout,
+      /Connected to your team's Brain at https:\/\/brain\.example/,
+    );
+    NodeAssert.doesNotMatch(connected.stdout, /Create your Brain/);
+    NodeAssert.doesNotMatch(connected.stdout + connected.stderr, new RegExp(credential));
+    const [command, mode, saved] = (await NodeFSP.readFile(log, "utf8")).trim().split("\n");
+    NodeAssert.match(
+      command,
+      /^setup --cloud https:\/\/brain\.example --cloud-brain brain-1 --enrollment-file \S+ --harness detected$/,
+    );
+    NodeAssert.doesNotMatch(command, /--folder/);
+    NodeAssert.equal(mode, "600");
+    NodeAssert.equal(saved, credential);
+    // Nothing of the one-time credential stays on disk.
+    const left = await execute("grep", ["-rl", credential, NodePath.join(home, "release")]).catch(
+      () => ({ stdout: "" }),
+    );
+    NodeAssert.equal(left.stdout, "");
+
+    const failed = await run({ FLOW_TEST_FAIL: "1" }).catch((error) => error);
+    NodeAssert.equal(failed.code, 1);
+    NodeAssert.match(failed.stderr, /Setup prompt expired/);
+    NodeAssert.match(failed.stderr, /copy a new one\s+and run it again/);
+    NodeAssert.match(failed.stdout, /Flow is installed/);
+  },
+);

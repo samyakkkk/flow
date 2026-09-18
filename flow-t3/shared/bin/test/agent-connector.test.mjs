@@ -289,6 +289,21 @@ test('Cloud registry preserves the Mac registry and installed hooks work without
   assert.equal(f.hooks().length,1);
 });
 
+test('Cloud setup without a folder installs the tools and binds nothing', async t => {
+  const f = await fixture(t);
+  f.workspaces.push({ id: 'cloud-1', name: 'Cloud Brain', cli: 'claude', sources: [], remote: { endpoint: 'https://brain.example', brainId: 'remote', status: 'ready' } });
+  const setup = await f.run([connector, 'setup', '--cloud', 'https://brain.example', '--cloud-brain', 'remote', '--state-dir', f.state, '--harness', 'claude']);
+  assert.equal(setup.code, 0, setup.stderr);
+  const result = JSON.parse(setup.stdout);
+  assert.equal(result.status, 'installed'); assert.deepEqual(result.harnesses, ['claude']);
+  const config = JSON.parse(await fs.readFile(join(f.root, '.flow/config.json'), 'utf8'));
+  assert.deepEqual(config.machine.stateDirs, [await fs.realpath(f.state)]);
+  assert.deepEqual(Object.keys(config.projects ?? {}), []);
+  // Naming a folder still binds it, as the dashboard's per-folder setup does.
+  const bound = await f.run([connector, 'setup', '--cloud', 'https://brain.example', '--cloud-brain', 'remote', '--state-dir', f.state, '--folder', f.folder]);
+  assert.equal(bound.code, 0, bound.stderr); assert.equal(JSON.parse(bound.stdout).workspace, 'cloud-1');
+});
+
 test('plain folder setup and doctor work without initializing Git', async t => {
   const f = await fixture(t);
   await fs.rm(join(f.folder, '.git'), { recursive: true });
