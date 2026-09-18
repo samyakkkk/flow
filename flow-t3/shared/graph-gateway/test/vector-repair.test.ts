@@ -38,7 +38,7 @@ test('merge preserves embedding ownership, reconciliation repairs lists, and mis
   assert.equal(result.embedded, 1);
   assert.ok(queries.some(x => x.q.includes("typeOf(n.embedding) <> 'Vectorf32'")));
   const orient = await callVerb('orient', { repo: 'screenshot-headless' });
-  assert.match(JSON.stringify(orient), /not indexed/);
+  assert.match(JSON.stringify(orient), /no overview recorded for \\"screenshot-headless\\"/);
   assert.doesNotMatch(JSON.stringify(orient), /Wrong repository/);
   vectorFailure = true;
   const search = await callVerb('find_entity', { q: 'some service' });
