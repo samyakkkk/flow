@@ -231,7 +231,7 @@ test("uninstalling never removes another installation's flow command", async (t)
     path: join(user, ".local/bin"),
     agentHome: join(user, ".flow"),
   });
-  assert.match(await fs.readFile(foreign, "utf8"), /opt\/other/);
+  assert.match(await fs.readFile(foreign, "utf8"), /opt[\\/]other/);
 });
 
 test("Windows gets a batch launcher that survives a home with spaces", () => {

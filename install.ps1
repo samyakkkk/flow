@@ -1,4 +1,4 @@
-# Installs the Flow CLI on Windows:  irm https://raw.githubusercontent.com/samyakkkk/flow/main/install.ps1 | iex
+# Installs the Flow CLI on Windows:  irm https://raw.githubusercontent.com/samyakkkk/flow/release/install.ps1 | iex
 #
 # Flow on Windows runs the server and the browser UI and connects to a Brain
 # hosted elsewhere (Flow Cloud or another computer). It does not host a Brain:
