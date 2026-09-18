@@ -123,8 +123,9 @@ jobs:
   package-windows:
     needs: version
     runs-on: windows-2025
-    # Not yet proven end to end, and not published: a failure here must never
-    # hold back or fail a macOS/Linux release. Remove once it is green.
+    # Published when it succeeds. A failure here must never hold back or fail a
+    # macOS/Linux release: publish then ships without the Windows files, and
+    # install.ps1 finds no bundle until the next release that has one.
     continue-on-error: true
     timeout-minutes: 25
     defaults:
@@ -174,12 +175,13 @@ jobs:
           & $flow stop
       - uses: actions/upload-artifact@v4
         with:
-          name: flow-browser-windows-${{ github.run_id }}
+          name: flow-browser-release-windows
           path: release-browser/*
           if-no-files-found: error
   publish:
-    if: github.event_name != 'pull_request'
-    needs: [version, package]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.version.result == 'success' && needs.package.result == 'success' }}
+    # Waits for Windows so its bundle joins the release; see package-windows.
+    needs: [version, package, package-windows]
     runs-on: ubuntu-24.04
     # ~600 MB per release, uploaded twice; GitHub's upload service can be slow.
     timeout-minutes: 120
