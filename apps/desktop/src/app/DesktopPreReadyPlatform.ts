@@ -48,6 +48,10 @@ export const resolveEarlyLinuxElectronOptionsFromProcess =
 export const legacyHomeExistsForProcess = (): boolean =>
   NodeFS.existsSync(legacyBaseDirProbePath(NodeOS.homedir(), NodePath.join));
 
+/** Whether a path exists, answered synchronously: used to pick the profile
+    folder before the app is ready, where an async check would race `ready`. */
+export const pathExistsForProcess = (path: string): boolean => NodeFS.existsSync(path);
+
 export class DesktopPreReadyElectronOptions extends Context.Service<
   DesktopPreReadyElectronOptions,
   {

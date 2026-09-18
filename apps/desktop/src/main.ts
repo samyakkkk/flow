@@ -83,6 +83,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       // Probed once at startup: an install already at `~/.t3` keeps it, a fresh
       // one gets `~/.flow`. See `@t3tools/shared/homeBaseDir`.
       legacyHomeExists: DesktopPreReadyPlatform.legacyHomeExistsForProcess(),
+      userDataDirExists: DesktopPreReadyPlatform.pathExistsForProcess,
       ...metadata,
     });
   }),

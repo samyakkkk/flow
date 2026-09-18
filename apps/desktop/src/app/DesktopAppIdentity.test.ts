@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 
 import type * as Electron from "electron";
 
@@ -112,7 +111,6 @@ const withIdentity = <A, E, R>(
     readonly calls?: ElectronAppCalls;
     readonly environment?: TestEnvironmentInput;
     readonly existingProfile?: string;
-    readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
     readonly pngIconPath?: Option.Option<string>;
   } = {},
@@ -128,20 +126,22 @@ const withIdentity = <A, E, R>(
       DesktopAppIdentity.layer.pipe(
         Layer.provideMerge(
           FileSystem.layerNoop({
-            exists: (path) =>
-              input.legacyPathProbeError
-                ? Effect.fail(input.legacyPathProbeError)
-                : Effect.succeed(
-                    input.existingProfile !== undefined &&
-                      path.endsWith(`/${input.existingProfile}`),
-                  ),
+            // The profile is never probed through FileSystem: any async I/O
+            // before the Clerk bridge lets Electron become ready first.
+            exists: () => Effect.die("resolveUserDataPath must not do I/O"),
             readFileString: () =>
               Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
           }),
         ),
         Layer.provideMerge(makeAssetsLayer(input.pngIconPath ?? Option.none())),
         Layer.provideMerge(makeElectronAppLayer(calls)),
-        Layer.provideMerge(makeEnvironmentLayer(input.environment)),
+        Layer.provideMerge(
+          makeEnvironmentLayer({
+            userDataDirExists: (path) =>
+              input.existingProfile !== undefined && path.endsWith(`/${input.existingProfile}`),
+            ...input.environment,
+          }),
+        ),
       ),
     ),
   );
@@ -176,32 +176,18 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
-  it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/t3code";
-    const cause = PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "FileSystem",
-      method: "exists",
-      description: "permission denied",
-      pathOrDescriptor: legacyPath,
-    });
-
-    return withIdentity(
+  it.effect("prefers the first earlier name when both exist", () =>
+    withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
-
-        assert.instanceOf(error, DesktopAppIdentity.DesktopUserDataPathResolutionError);
-        assert.equal(error.legacyPath, legacyPath);
-        assert.strictEqual(error.cause, cause);
         assert.equal(
-          error.message,
-          `Failed to inspect legacy desktop user-data path at "${legacyPath}".`,
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/t3code",
         );
       }),
-      { legacyPathProbeError: cause },
-    );
-  });
+      { environment: { userDataDirExists: () => true } },
+    ),
+  );
 
   it.effect("configures app identity from the environment commit override", () => {
     const calls: ElectronAppCalls = {
