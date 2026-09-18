@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - Native cloud cache adapter owns its filesystem paths.
 // @effect-diagnostics globalFetch:off - Explicit remote Brain transport.
+// @effect-diagnostics globalDate:off - Tool catalog refresh interval outside the Effect runtime.
 import { CloudReadCache } from "../../../../flow-t3/shared/runtime/src/cloud-read-cache.ts";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import { BrainState, BrainDocument, ChatMemoryList } from "@t3tools/contracts";
@@ -86,6 +88,11 @@ const transferReceipt = Schema.decodeUnknownSync(
 );
 const state = Schema.decodeUnknownSync(BrainState);
 const tool = Schema.decodeUnknownSync(McpSchema.CallToolResult);
+const toolCatalog = Schema.decodeUnknownSync(Schema.Array(McpSchema.Tool));
+const savedToolCatalog = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ version: Schema.Literal(1), tools: Schema.Unknown })),
+);
+const TOOLS_REFRESH_MS = 5 * 60_000;
 const memories = Schema.decodeUnknownSync(ChatMemoryList);
 const document = Schema.decodeUnknownSync(Schema.NullOr(BrainDocument));
 const reply = Schema.decodeUnknownSync(
@@ -109,6 +116,10 @@ export class CloudClient {
   readonly instance: string;
   readonly brainId: string | undefined;
   readonly cache: CloudReadCache<BrainState, BrainDocument> | undefined;
+  private readonly toolsFile: string | undefined;
+  private catalog: ReturnType<typeof toolCatalog> | undefined;
+  private catalogCheckedAt = -Infinity;
+  private catalogPending: Promise<ReturnType<typeof toolCatalog>> | undefined;
   constructor(
     endpoint: string,
     token: string,
@@ -125,6 +136,7 @@ export class CloudClient {
       const scope = NodeCrypto.createHash("sha256")
         .update(JSON.stringify([this.endpoint, brainId, instance, token]))
         .digest("hex");
+      this.toolsFile = NodePath.join(cacheDirectory, `${scope}.tools.json`);
       this.cache = new CloudReadCache({
         file: NodePath.join(cacheDirectory, `${scope}.json`),
         state: async () => {
@@ -181,6 +193,46 @@ export class CloudClient {
     return !metadataOnly && this.cache
       ? this.cache.state()
       : state(await this.request("state", { metadataOnly }));
+  }
+  /**
+   * The cloud's own tool catalog: it executes the calls, so it names the tools.
+   * Served from memory, then disk, and refreshed in the background; only a Brain
+   * with no saved catalog waits on the network.
+   */
+  async tools() {
+    if (!this.catalog && this.toolsFile)
+      try {
+        this.catalog = toolCatalog(
+          savedToolCatalog(await NodeFSP.readFile(this.toolsFile, "utf8")).tools,
+        );
+      } catch {
+        // Missing or obsolete catalog files are ordinary cold starts.
+      }
+    if (!this.catalog) return this.refreshTools();
+    if (Date.now() - this.catalogCheckedAt >= TOOLS_REFRESH_MS)
+      void this.refreshTools().catch(() => {});
+    return this.catalog;
+  }
+  private refreshTools() {
+    this.catalogPending ??= (async () => {
+      try {
+        const catalog = toolCatalog(await this.request("tools"));
+        this.catalog = catalog;
+        if (this.toolsFile) {
+          await NodeFSP.mkdir(NodePath.dirname(this.toolsFile), { recursive: true, mode: 0o700 });
+          const temporary = `${this.toolsFile}.tmp`;
+          await NodeFSP.writeFile(temporary, JSON.stringify({ version: 1, tools: catalog }), {
+            mode: 0o600,
+          });
+          await NodeFSP.rename(temporary, this.toolsFile);
+        }
+        return catalog;
+      } finally {
+        this.catalogCheckedAt = Date.now();
+        this.catalogPending = undefined;
+      }
+    })();
+    return this.catalogPending;
   }
   async call(name: string, args: Record<string, unknown>, context: BrainSessionContext) {
     return tool(await this.request("call", { name, args, context }));

@@ -5,6 +5,7 @@ import { ProjectBrainBindings } from "./project-bindings.ts";
 import { brainResourceEnvironment, type BrainCuratorRunner } from "@flow/brain-runtime";
 // @effect-diagnostics globalTimers:off - Native capture retry lifecycle is owned and stopped by this runtime.
 import {
+  originalBrainTools,
   startSessionWorker,
   type BrainCapture,
   type BrainSessionContext,
@@ -1465,6 +1466,27 @@ export class BrainRuntime {
         (await this.cloud(workspace)).document(documentId)
       );
     return (await this.sessionWorker(workspace)).document(documentId);
+  }
+  /**
+   * The tool catalog a coding agent is shown for one Brain. A Cloud Brain runs
+   * the calls, so it supplies the catalog; `remember` is the exception because
+   * conversation notes are written on this computer.
+   */
+  async brainTools(workspaceId: string) {
+    const local = await originalBrainTools();
+    const workspace = this.workspace(workspaceId);
+    if (!workspace.remote) return local;
+    try {
+      const remote = await (await this.cloud(workspace)).tools();
+      return [
+        ...remote.filter((tool) => tool.name !== "remember"),
+        ...local.filter((tool) => tool.name === "remember"),
+      ];
+    } catch {
+      // Never reached and never cached: show this version's catalog so the agent
+      // still starts. Its calls report the unavailable cloud; nothing runs locally.
+      return local;
+    }
   }
   async callProjectTool(
     projectId: ProjectId,

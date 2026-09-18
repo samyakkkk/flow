@@ -80,7 +80,11 @@ function mcpFolder() {
 }
 export async function mcp(project) {
   const cwd = mcpFolder();
-  const binding = await bindingFor(project, cwd);
+  // A chat run by Flow already has these tools on its own t3-code server, bound to
+  // that chat; offering them again here would show every tool twice. Capture skips
+  // the same sessions.
+  const hosted = Boolean(process.env.FLOW_SESSION_ID);
+  const binding = hosted ? undefined : await bindingFor(project, cwd);
   const tools = binding ? await (async () => { await flush(binding.project, binding).catch(() => {}); return request(binding, 'tools'); })() : [];
   let session;
   const unbound = `mcp:${randomUUID()}`;
@@ -89,7 +93,9 @@ export async function mcp(project) {
   const extra = binding ? [
     { name: 'bind_session', description: 'Bind this MCP connection to the exact Flow session handle emitted by the capture hook. Never guess a handle or use another conversation’s handle. The reply names this conversation’s notes document for get_entity.', inputSchema: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'], additionalProperties: false } },
   ] : [];
-  const instructions = binding
+  const instructions = hosted
+    ? 'This chat is run by Flow: its Flow Brain tools are on the t3-code MCP server. Use those.'
+    : binding
     ? `Flow Brain ${JSON.stringify(binding.name ?? binding.workspace)} is connected to this folder.\n${FLOW_ROUTING}\nBind the exact Flow conversation handle from the startup hook using bind_session before remember. Never infer the latest conversation in a folder.`
     : 'No Flow Brain is bound to this folder, so no Flow tools are available here. Continue without Flow memory; bind the folder to a Brain in Flow to enable them.';
   const lines = createInterface({ input: process.stdin });
