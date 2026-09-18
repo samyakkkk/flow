@@ -17,6 +17,7 @@ import * as NodeUtil from "node:util";
 const { promisify } = NodeUtil;
 import * as NodeTimersPromises from "node:timers/promises";
 const { setTimeout: delay } = NodeTimersPromises;
+import { styles } from "./style.mjs";
 const exec = promisify(execFile);
 export const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const registryRoot = () =>
@@ -188,7 +189,16 @@ async function openBrowser(url) {
       : NodeOS.platform() === "win32"
         ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
         : ["xdg-open", [url]];
-  await exec(...command).catch(() => console.log(`Open ${url}`));
+  // Print the address either way: a browser may not have opened, may open on
+  // another display, and the link is the one thing worth copying out.
+  const opened = await exec(...command).then(
+    () => true,
+    () => false,
+  );
+  const style = styles();
+  console.log(
+    `${opened ? "Flow is open at" : style.yellow("Open Flow at")} ${style.cyan(style.underline(url))}`,
+  );
 }
 /** The installed Flow desktop app, if any. Only the two standard macOS
     application folders count; anything else is a build, not an install. */
@@ -233,7 +243,10 @@ async function openClient(url, input) {
     // FLOW_* variable in a developer's shell cannot point the app elsewhere.
     const env = (await import("./supervisor.mjs")).cleanEnvironment(process.env);
     await exec("open", ["-a", app, "--env", `FLOW_INSTANCE_HOME=${registryRoot()}`], { env });
-    console.log(`Opened ${app}. Browser: ${url} (or run flow --browser)`);
+    const style = styles();
+    console.log(
+      `Flow is open in ${app}\nIn a browser: ${style.cyan(style.underline(url))} (or run flow --browser)`,
+    );
   } catch {
     await openBrowser(url);
   }
@@ -292,8 +305,9 @@ export async function start(input) {
       }
     }
     status = await waitFor(directory, (value) => value?.phase === "ready");
+    const style = styles();
     console.log(
-      `${config.name}: ${status.url}\nMode: ${config.mode}${config.from ? ` (uses ${config.from})` : ""}`,
+      `${style.green(config.name)} ${style.dim("·")} ${style.dim(`${config.mode}${config.from ? ` (uses ${config.from})` : ""}`)}`,
     );
     const pairingConfig =
       config.mode === "ui-only"
@@ -319,7 +333,7 @@ export async function start(input) {
     pairingUrl.host = frontend.host;
     pairingUrl.protocol = frontend.protocol;
     if (!input.noOpen) await openClient(pairingUrl.toString(), input);
-    else console.log(`Pairing URL: ${pairingUrl}`);
+    else console.log(`Open Flow at ${styles().cyan(styles().underline(pairingUrl.toString()))}`);
     return status;
   } finally {
     release();
