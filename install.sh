@@ -71,11 +71,19 @@ if [ "$FLOW_TARGET" = darwin-arm64 ]; then
   (cd "$FLOW_INSTALL_TEMP" && $FLOW_SHASUM -c cleanup.sha256)
   printf 'Checking for old Flow installations…\n'
   PATH="$FLOW_CLEANUP_PATH" "$FLOW_INSTALL_TEMP/bundle/runtime/bin/node" \
-    "$FLOW_INSTALL_TEMP/retire-legacy-flow.mjs"
+    --disable-warning=ExperimentalWarning "$FLOW_INSTALL_TEMP/retire-legacy-flow.mjs"
 fi
-"$FLOW_INSTALL_TEMP/bundle/runtime/bin/node" \
+"$FLOW_INSTALL_TEMP/bundle/runtime/bin/node" --disable-warning=ExperimentalWarning \
   "$FLOW_INSTALL_TEMP/bundle/scripts/flow-release.mjs" install-bundle \
   "$FLOW_INSTALL_TEMP/bundle" "$FLOW_SHA" "$@"
+
+# Colour only for a terminal that wants it (https://no-color.org).
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+  FLOW_BOLD=$(printf '\033[1m'); FLOW_DIM=$(printf '\033[2m'); FLOW_CYAN=$(printf '\033[36m')
+  FLOW_GREEN=$(printf '\033[32m'); FLOW_OFF=$(printf '\033[0m')
+else
+  FLOW_BOLD=; FLOW_DIM=; FLOW_CYAN=; FLOW_GREEN=; FLOW_OFF=
+fi
 
 # `<home>/bin/flow` always exists; the command on PATH is taken only when it is
 # free, so tell people which one actually works for them.
@@ -88,14 +96,14 @@ fi
 
 cat <<EOF
 
-Flow is installed.
+${FLOW_GREEN}Flow is installed.${FLOW_OFF}
 
-Start it any time with:
-  $FLOW_RUN                 open Flow in your browser
-  $FLOW_RUN --no-open       print the link instead of opening a browser
-  $FLOW_RUN status | stop | update | --help
+${FLOW_BOLD}Start it any time with:${FLOW_OFF}
+  ${FLOW_CYAN}$FLOW_RUN${FLOW_OFF}                 open Flow in your browser
+  ${FLOW_CYAN}$FLOW_RUN --no-open${FLOW_OFF}       print the link instead of opening a browser
+  ${FLOW_DIM}$FLOW_RUN status | stop | update | --help${FLOW_OFF}
 
-Then, in the browser:
+${FLOW_BOLD}Then, in the browser:${FLOW_OFF}
   1. Connect this computer.
   2. Create your Brain and choose the coding agent that processes your
      conversations — Claude Code, Codex or OpenCode.
@@ -104,12 +112,13 @@ Then, in the browser:
      from it in every session.
 EOF
 if [ "$FLOW_RUN" != flow ]; then
-  printf '\nAdd %s to your PATH to run it as `flow`.\n' "$(dirname "$FLOW_LAUNCHER")"
+  printf '\n%sAdd %s to your PATH to run it as `flow`.%s\n' "$FLOW_BOLD" "$(dirname "$FLOW_LAUNCHER")" "$FLOW_OFF"
 fi
 
 # Only offer to open a browser for someone sitting at a terminal: a coding agent
 # or a script running this installer should just get the instructions.
 if [ -t 1 ]; then
-  printf '\nStarting Flow…\n'
+  printf '\n%sStarting Flow…%s\n' "$FLOW_DIM" "$FLOW_OFF"
+
   "$FLOW_LAUNCHER"
 fi
