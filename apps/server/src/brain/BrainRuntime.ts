@@ -549,7 +549,11 @@ export class BrainRuntime {
   private flowGraph(workspace: Workspace) {
     return this.db!.selectGraph(`flow_brain_${workspace.id.replaceAll("-", "")}`);
   }
+  /** Startup gate: the server refuses to run with a Brain runtime that should
+      have a database and does not. A host that cannot host a Brain has none by
+      design, and must still start so it can connect to one elsewhere. */
   assertAvailable() {
+    if (!this.localBrains && !this.closed) return;
     if (!this.db?.isRunning || this.closed)
       throw new Error(this.database.message || "The app's brain runtime is unavailable.");
   }

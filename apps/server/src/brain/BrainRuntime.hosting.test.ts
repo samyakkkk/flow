@@ -46,3 +46,13 @@ test("a supported host still says it can host a Brain", async () => {
   const runtime = new BrainRuntime(await scratch(), { platform: "linux", architecture: "x64" });
   expect((await runtime.state()).localBrains).toBe(true);
 });
+
+test("the server still starts on a computer that cannot host a Brain", async () => {
+  // Flow on Windows exited at launch: startup ran the same availability check
+  // a Brain host gets, and having no database failed it.
+  const windows = new BrainRuntime(await scratch(), { platform: "win32", architecture: "x64" });
+  await windows.initialize();
+  expect(() => windows.assertAvailable()).not.toThrow();
+  await windows.close();
+  expect(() => windows.assertAvailable()).toThrow();
+});
