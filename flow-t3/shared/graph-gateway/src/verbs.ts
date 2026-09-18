@@ -1,4 +1,5 @@
 import { sessionValue } from "./session-context.js";
+import { matchRepository, type RepositoryRow } from "./repo-identity.js";
 import { z } from "zod";
 import { sourceRead, sourceSearch } from "./source.js";
 import { DEFAULT_GRAPH, deletedGraphError, run } from "./graph.js";
@@ -809,16 +810,22 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   const branch = input.branch || sessionValue("FLOW_BRANCH") || "";
 
   const [repoRows, counts] = await Promise.all([
-    run(input.graph, `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.description AS description`),
+    run(
+      input.graph,
+      `MATCH (r:Repository) RETURN r.id AS id, r.name AS name, r.remote AS remote, r.description AS description`,
+    ),
     run(input.graph, `MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count ORDER BY count DESC`),
   ]);
 
-  // Repo identity: match by name when the caller told us which repo; otherwise
-  // whatever the graph holds (single-repo projects). Missing node ≠ error —
-  // the graph may simply not be indexed yet.
-  const repoRow =
-    (repo ? (repoRows as Array<{ id: string; name: string; description: string }>).find((r) => r.name === repo || r.id === `repo:${repo}`) :
-    (repoRows as Array<{ id: string; name: string; description: string }>)[0]);
+  // The session names its repo loosely; the graph names it after the source.
+  // Match through the git remote, then the repository name (see repo-identity).
+  const repositories: RepositoryRow[] = (repoRows as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    name: typeof row.name === "string" ? row.name : null,
+    remote: typeof row.remote === "string" ? row.remote : null,
+    description: typeof row.description === "string" ? row.description : null,
+  }));
+  const repoRow = matchRepository(repo, repositories);
 
   const countMap = new Map((counts as Array<{ type: string; count: number }>).map((c) => [c.type, c.count]));
   const total = [...countMap.values()].reduce((a, b) => a + b, 0);
@@ -842,15 +849,14 @@ async function orient(input: z.infer<z.ZodObject<typeof orientInput>>) {
   out.push(`CONNECTED PROJECT: ${process.env.FLOW_PROJECT_NAME ? JSON.stringify(process.env.FLOW_PROJECT_NAME) : "(identity unavailable)"}`);
   out.push(`[flow orient — repo "${repo || "(unspecified)"}"${branch ? ` @ ${branch}` : ""}]`);
   out.push("");
-  if (repoRow) {
+  // Only a real overview earns this line. Without one the section is left out
+  // rather than filled with a placeholder: the graph below is what to query.
+  if (repoRow?.description) {
     out.push(`WHAT THIS IS: ${oneLine(repoRow.description, 4000)} [${repoRow.id}]`);
-  } else {
-    out.push(`WHAT THIS IS: (repo "${repo}" not indexed in the graph yet)`);
+    out.push("");
   }
-  out.push("");
-  // Orient reports state only. How to use the tools lives in their descriptions
-  // and the agent instructions; conversations, docs and skills are appended by
-  // the Brain host, which owns that store.
+  // Conversations, docs, skills and the instruction to query this Brain are
+  // appended by the Brain host, which owns that store.
   out.push(`GRAPH: ${total} nodes${mapBits.length ? ` — ${mapBits.join(", ")}` : ""}.`);
   if ((serviceIds as Array<{ id: string }>).length)
     out.push(`Start from ${(serviceIds as Array<{ id: string }>).map((s) => `[${s.id}]`).join(" ")}`);
