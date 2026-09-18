@@ -23,25 +23,29 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const runGh = async (args) =>
   (await execFile("gh", args, { maxBuffer: 16 * 1024 * 1024 })).stdout;
 
-/** What the release already holds, or null when it does not exist yet. Read
-    through the API rather than `gh release view`, which does not report the
-    digest GitHub computed for each stored asset. */
+/** What the release already holds, or null when it does not exist yet.
+    A versioned release is a draft while it is being filled, and GitHub's
+    `releases/tags/<tag>` never returns drafts, so the id comes from
+    `gh release view`, which does see them. The release is then read by id
+    through the API, the only place that reports each asset's stored digest. */
 export async function storedRelease(tag, gh) {
+  let id;
   try {
-    const release = JSON.parse(await gh(["api", `repos/{owner}/{repo}/releases/tags/${tag}`]));
-    return {
-      isDraft: release.draft === true,
-      assets: new Map(
-        (release.assets ?? []).map((asset) => [
-          asset.name,
-          // Older assets predate stored digests; without one, upload again.
-          typeof asset.digest === "string" ? asset.digest.replace(/^sha256:/, "") : null,
-        ]),
-      ),
-    };
+    id = JSON.parse(await gh(["release", "view", tag, "--json", "databaseId"])).databaseId;
   } catch {
     return null;
   }
+  const release = JSON.parse(await gh(["api", `repos/{owner}/{repo}/releases/${id}`]));
+  return {
+    isDraft: release.draft === true,
+    assets: new Map(
+      (release.assets ?? []).map((asset) => [
+        asset.name,
+        // Older assets predate stored digests; without one, upload again.
+        typeof asset.digest === "string" ? asset.digest.replace(/^sha256:/, "") : null,
+      ]),
+    ),
+  };
 }
 
 export const sha256 = (path) =>

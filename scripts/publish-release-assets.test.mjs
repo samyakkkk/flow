@@ -22,7 +22,10 @@ function fakeGitHub({ release = null, failUploads = {} } = {}) {
     calls.push(args.join(" "));
     const [noun, verb, tag] = args;
     if (noun === "api") {
-      if (!gh.release) throw Error("release not found");
+      if (!gh.release) throw Error("HTTP 404: Not Found");
+      // Like GitHub: looking a release up by tag never finds a draft.
+      if (verb.includes("/releases/tags/") && gh.release.isDraft)
+        throw Error("HTTP 404: Not Found");
       return JSON.stringify({
         draft: gh.release.isDraft,
         assets: [...gh.release.assets].map(([name, digest]) => ({
@@ -32,6 +35,10 @@ function fakeGitHub({ release = null, failUploads = {} } = {}) {
       });
     }
     if (noun !== "release") throw Error(`unexpected ${noun}`);
+    if (verb === "view") {
+      if (!gh.release) throw Error("release not found");
+      return JSON.stringify({ databaseId: 1 });
+    }
     if (verb === "create") {
       gh.release = { isDraft: !args.includes("--prerelease"), assets: new Map() };
       return "";
@@ -85,6 +92,24 @@ test("a versioned release stays a draft until it holds exactly what was built", 
   assert.deepEqual([...gh.release.assets.keys()].sort(), [...sizes.keys()].sort());
   assert.ok(gh.calls.some((call) => call.startsWith("release create") && call.includes("--draft")));
   assert.ok(gh.calls.at(-1).includes("--draft=false"));
+});
+
+test("a draft is found again while it is being filled", async () => {
+  // GitHub hides drafts from its by-tag lookup. Reading through it made a
+  // publish upload every asset and then report them all missing (0.1.6).
+  const gh = fakeGitHub();
+  await publishReleaseAssets({
+    tag: "flow-desktop-v1.0.0",
+    files,
+    gh,
+    log: () => {},
+    sleep: async () => {},
+  });
+  assert.equal(gh.release.isDraft, false);
+  assert.ok(
+    !gh.calls.some((call) => call.includes("/releases/tags/")),
+    "never looks drafts up by tag",
+  );
 });
 
 test("a rerun uploads only what is missing or changed", async () => {
