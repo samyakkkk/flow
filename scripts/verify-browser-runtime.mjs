@@ -12,17 +12,27 @@ import * as NodeUtil from "node:util";
 const root = await NodeFSP.realpath(process.argv[2] || ".");
 const require = NodeModule.createRequire(NodePath.join(root, "apps/server/package.json"));
 const execute = NodeUtil.promisify(NodeChildProcess.execFile);
-const git = NodePath.join(root, "runtime/git/bin/git");
+// Windows bundles MinGit and hosts no Brain (FalkorDB has no Windows build),
+// so it verifies Git, SQLite, the terminal and the Brain tool catalog only.
+const windows = NodeOS.platform() === "win32";
+const git = NodePath.join(root, windows ? "runtime/git/cmd/git.exe" : "runtime/git/bin/git");
 const gitHome = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "flow-git-"));
 try {
   const env = {
-    PATH: `${NodePath.dirname(git)}:/usr/bin:/bin`,
+    PATH: windows
+      ? `${NodePath.dirname(git)};${NodePath.join(process.env.SystemRoot || "C:\\Windows", "System32")}`
+      : `${NodePath.dirname(git)}:/usr/bin:/bin`,
     HOME: gitHome,
+    ...(windows ? { USERPROFILE: gitHome, SystemRoot: process.env.SystemRoot } : {}),
     GIT_CONFIG_NOSYSTEM: "1",
   };
   const invoke = (args) => execute(git, args, { cwd: gitHome, env });
+  // Git for Windows reports its paths with forward slashes.
+  const slashes = (path) => path.replaceAll("\\", "/").toLowerCase();
   NodeAssert.ok(
-    (await invoke(["--exec-path"])).stdout.trim().startsWith(NodePath.join(root, "runtime/git/")),
+    slashes((await invoke(["--exec-path"])).stdout.trim()).startsWith(
+      slashes(NodePath.join(root, "runtime/git/")),
+    ),
   );
   await invoke(["init", "--initial-branch=main", "repo"]);
   await NodeFSP.writeFile(NodePath.join(gitHome, "repo/example.txt"), "bundled git works\n");
@@ -56,7 +66,10 @@ try {
   database.close();
 }
 await new Promise((resolve, reject) => {
-  const terminal = require("node-pty").spawn("/bin/sh", ["-c", "printf FLOW_RUNTIME_OK"], {
+  const [shell, shellArgs] = windows
+    ? [process.env.ComSpec || "cmd.exe", ["/d", "/c", "echo FLOW_RUNTIME_OK"]]
+    : ["/bin/sh", ["-c", "printf FLOW_RUNTIME_OK"]];
+  const terminal = require("node-pty").spawn(shell, shellArgs, {
     name: "xterm",
     cols: 80,
     rows: 24,
@@ -86,6 +99,10 @@ const { originalBrainTools } = await import(
 );
 const tools = await originalBrainTools();
 NodeAssert.ok(tools.length > 0, "Brain worker must load its tool catalog");
+if (windows) {
+  console.log(`Bundled runtime verified: ${NodeOS.platform()}/${NodeOS.arch()}, no local Brain.`);
+  process.exit(0);
+}
 const { getLlama } = await import(NodeURL.pathToFileURL(require.resolve("node-llama-cpp")));
 const llama = await getLlama({ gpu: "auto" });
 await llama.dispose();

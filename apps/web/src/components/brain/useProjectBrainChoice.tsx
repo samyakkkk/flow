@@ -61,7 +61,12 @@ export function useProjectBrainChoice({ required = false }: { required?: boolean
           setSelected(
             boundBrain?.id ?? result.value.state.workspaces[0]?.id ?? (required ? "" : "none"),
           );
-          if (required && result.value.state.workspaces.length === 0) setCreateOpen(true);
+          if (
+            required &&
+            result.value.state.workspaces.length === 0 &&
+            result.value.state.localBrains !== false
+          )
+            setCreateOpen(true);
         } else
           setError(
             required
@@ -122,9 +127,11 @@ export function useProjectBrainChoice({ required = false }: { required?: boolean
                 ]}
                 onChange={setSelected}
               />
-              <Button variant="outline" disabled={!state} onClick={() => setCreateOpen(true)}>
-                New brain
-              </Button>
+              {state?.localBrains === false ? null : (
+                <Button variant="outline" disabled={!state} onClick={() => setCreateOpen(true)}>
+                  New brain
+                </Button>
+              )}
             </div>
             {loading && (
               <p role="status" className="text-xs text-muted-foreground">
