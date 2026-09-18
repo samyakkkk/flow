@@ -9,7 +9,7 @@ import {
   type BrainCapture,
   type BrainSessionContext,
 } from "./session-worker.ts";
-import { prepareNativeFalkor } from "./native.ts";
+import { nativeFalkorSupported, prepareNativeFalkor } from "./native.ts";
 // @effect-diagnostics globalDate:off - Persisted wall-clock timestamps at the native adapter boundary.
 // @effect-diagnostics nodeBuiltinImport:off - Native database/CLI adapter owns Node lifecycle and filesystem I/O.
 import {
@@ -425,7 +425,20 @@ export class BrainRuntime {
     this.writes = pending.catch(() => {});
     return pending;
   }
+  /** This computer can host a Brain only where a native graph database exists. */
+  get localBrains() {
+    return nativeFalkorSupported(this.host.platform, this.host.architecture);
+  }
   async start() {
+    if (!this.localBrains) {
+      // Not an error: a Cloud Brain needs no local database, and that is the
+      // only kind this computer connects to.
+      this.database = {
+        status: "stopped",
+        message: "This computer connects to a Cloud Brain; it cannot host one.",
+      };
+      return;
+    }
     if (this.db?.isRunning) return;
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -668,6 +681,7 @@ export class BrainRuntime {
       };
     return {
       transferVersion: 1,
+      localBrains: this.localBrains,
       configuredProjectIds: this.projectBindings.configuredProjectIds(),
       database: this.database,
       embeddings: { status: this.embeddings.status, message: this.embeddings.message },
@@ -971,6 +985,9 @@ export class BrainRuntime {
       return null;
     }
     if (command.action === "create") {
+      // The UI never offers this here; refuse it for any other caller too.
+      if (!this.localBrains)
+        throw new Error("This computer cannot host a Brain. Connect a Cloud Brain instead.");
       const name = command.name.trim();
       if (!name || name.length > 80)
         throw new Error("Workspace name must contain 1–80 characters.");

@@ -38,7 +38,8 @@ export function BrainPage({
   skills?: ReactNode;
   memories?: ReactNode;
   children: ReactNode;
-  onCreate: () => void;
+  /** Absent where this computer cannot host a Brain, so none is offered. */
+  onCreate?: () => void;
 }) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
@@ -68,7 +69,7 @@ export function BrainPage({
           sources={children}
           docs={docs}
           skills={skills}
-          onCreate={onCreate}
+          {...(onCreate ? { onCreate } : {})}
         />
       </main>
     </SidebarInset>

@@ -824,7 +824,11 @@ export function ConnectedAgentsStep({
   const [cli, setCli] = useState<BrainCli>("claude");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<BrainSetupMode>("create");
+  const [chosenMode, setMode] = useState<BrainSetupMode>("create");
+  // A computer that cannot host a Brain (Windows) is never offered one: the
+  // step is just "connect to your team Brain", with no choice to make.
+  const localBrains = brainState?.localBrains !== false;
+  const mode: BrainSetupMode = localBrains ? chosenMode : "connect";
   const [endpoint, setEndpoint] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -908,7 +912,7 @@ export function ConnectedAgentsStep({
   }));
   return (
     <>
-      {!choice ? (
+      {!choice && localBrains ? (
         <div
           role="radiogroup"
           aria-label="Brain setup"
