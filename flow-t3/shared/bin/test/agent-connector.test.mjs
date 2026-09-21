@@ -314,3 +314,9 @@ test('plain folder setup and doctor work without initializing Git', async t => {
   await assert.rejects(fs.stat(join(f.folder, '.git')), { code: 'ENOENT' });
   assert.equal((await f.setup()).code, 0);
 });
+
+test('imports inside a host whose argv[1] is not a real file, as OpenCode plugins do', () => {
+  // OpenCode is a compiled binary: argv[1] is a virtual path that does not exist on disk.
+  const script = `process.argv[1] = '/$bunfs/root/src/index.js'; const m = await import(${JSON.stringify(connector)}); if (typeof m.capture !== 'function') process.exit(2);`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], { stdio: 'pipe' });
+});

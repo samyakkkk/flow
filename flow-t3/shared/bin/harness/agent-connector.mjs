@@ -310,4 +310,6 @@ export async function main(argv) {
   }
   console.log(JSON.stringify({ brain: brain.name, workspace: brain.id, folder, project: saved.project, harnesses: installed.harnesses, status: 'configured', next: 'Restart your coding agents in this folder; approve their MCP and hook trust prompts once per computer, then run flow agents doctor here.' }, null, 2));
 }
-if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
+// A host whose argv[1] is not a real file (OpenCode's compiled binary imports this module) is not a direct run.
+const runDirectly = () => { try { return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url; } catch { return false; } };
+if (process.argv[1] && runDirectly()) main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
