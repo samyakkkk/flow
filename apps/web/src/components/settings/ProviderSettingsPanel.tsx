@@ -727,7 +727,7 @@ export function EnvironmentProviderSettings({
     // The envelope is the single enabled flag: keep the legacy in-config
     // flag out of the synthesized blob, or an explicit `enabled: false`
     // would keep winning over the envelope and the Switch could never
-    // turn that provider back on.
+    // turn a default-off provider on.
     const synthesizedInstance = (): ProviderInstanceConfig | undefined => {
       if (legacyConfig === undefined) {
         return undefined;

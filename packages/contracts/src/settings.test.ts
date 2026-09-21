@@ -436,10 +436,13 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables every agent by default", () => {
+  it("enables only the stable bindings by default", () => {
     const decoded = decodeServerSettings({});
-    for (const driver of ["codex", "claudeAgent", "cursor", "grok", "opencode"] as const)
-      expect(decoded.providers[driver].enabled, driver).toBe(true);
+    expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.claudeAgent.enabled).toBe(true);
+    expect(decoded.providers.cursor.enabled).toBe(false);
+    expect(decoded.providers.grok.enabled).toBe(false);
+    expect(decoded.providers.opencode.enabled).toBe(false);
   });
 
   it("keeps Cursor enabled when an existing user explicitly opted in", () => {
@@ -460,19 +463,19 @@ describe("provider enabled defaults", () => {
     const grok = ProviderDriverKind.make("grok");
     const codex = ProviderDriverKind.make("codex");
     // No flags anywhere: driver default applies.
-    expect(resolveProviderInstanceEnabled({ driver: grok, config: {} })).toBe(true);
+    expect(resolveProviderInstanceEnabled({ driver: grok, config: {} })).toBe(false);
     expect(resolveProviderInstanceEnabled({ driver: codex, config: {} })).toBe(true);
     // Unknown fork drivers stay enabled.
     expect(
       resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("ollama"), config: {} }),
     ).toBe(true);
     // Envelope flag wins over the driver default.
-    expect(resolveProviderInstanceEnabled({ driver: grok, enabled: false, config: {} })).toBe(false);
+    expect(resolveProviderInstanceEnabled({ driver: grok, enabled: true, config: {} })).toBe(true);
     expect(resolveProviderInstanceEnabled({ driver: codex, enabled: false, config: {} })).toBe(
       false,
     );
     // Legacy in-config flag fills in when the envelope is silent.
-    expect(resolveProviderInstanceEnabled({ driver: grok, config: { enabled: false } })).toBe(false);
+    expect(resolveProviderInstanceEnabled({ driver: grok, config: { enabled: true } })).toBe(true);
     // Conflicting flags: the explicit false wins, whichever side it is on.
     expect(
       resolveProviderInstanceEnabled({ driver: grok, enabled: true, config: { enabled: false } }),
