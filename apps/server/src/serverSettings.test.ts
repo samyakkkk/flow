@@ -18,7 +18,6 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -52,27 +51,6 @@ const makeFailingSecretStoreLayer = (cause: ServerSecretStore.SecretStoreError) 
       remove: () => Effect.void,
     }),
   );
-
-const recordProviderUsage = (provider: string, instanceId: string | null = provider) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      INSERT INTO projection_thread_sessions (
-        thread_id,
-        status,
-        provider_name,
-        provider_instance_id,
-        updated_at
-      )
-      VALUES (
-        ${`thread-${instanceId ?? provider}`},
-        ${"ready"},
-        ${provider},
-        ${instanceId},
-        ${"2026-08-25T00:00:00.000Z"}
-      )
-    `;
-  });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("preserves context when reading a provider environment secret fails", () => {
@@ -119,23 +97,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(error.message, cause.message);
     }).pipe(Effect.provide(settingsLayer));
   });
-
-  it.effect("identifies provider history query failures", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DROP TABLE projection_thread_sessions`;
-
-      const error = yield* Effect.flip(serverSettings.getSettings);
-
-      assert.deepInclude(error, {
-        _tag: "ServerSettingsError",
-        operation: "read-provider-history",
-        settingsPath: serverConfig.settingsPath,
-      });
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
 
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
@@ -587,72 +548,84 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("enables previously used providers from sparse settings files", () =>
+  it.effect("turns every agent on for a new installation and saves nothing for them", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        '{"providers":{"opencode":{"serverUrl":"http://127.0.0.1:4096"}}}',
-      );
-      yield* recordProviderUsage("opencode");
 
-      const settings = yield* serverSettings.getSettings;
+      const initial = yield* serverSettings.getSettings;
+      for (const driver of ["codex", "claudeAgent", "cursor", "grok", "opencode"] as const)
+        assert.isTrue(initial.providers[driver].enabled, driver);
 
-      assert.isFalse(settings.providers.grok.enabled);
-      assert.isTrue(settings.providers.opencode.enabled);
-      assert.isFalse(settings.providers.cursor.enabled);
-      assert.equal(settings.providers.opencode.serverUrl, "http://127.0.0.1:4096");
+      yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.isUndefined(JSON.parse(raw).providers);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("preserves existing provider instances without explicit enabled flags", () =>
+  it.effect("clears once the off flags an earlier version stamped on unused agents", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* fileSystem.writeFileString(
         serverConfig.settingsPath,
-        '{"providerInstances":{"cursor_work":{"driver":"cursor","config":{}},"grok":{"driver":"grok","config":{}},"opencode_work":{"driver":"opencode","config":{"serverUrl":"http://127.0.0.1:4096"}},"opencode_unused":{"driver":"opencode","config":{}}}}',
+        '{"providers":{"cursor":{"enabled":false},"grok":{"enabled":false},"opencode":{"enabled":false,"serverUrl":"http://127.0.0.1:4096"}}}',
       );
-      yield* recordProviderUsage("cursor", "cursor_work");
-      yield* recordProviderUsage("grok", null);
-      yield* recordProviderUsage("opencode", "opencode_work");
 
       const settings = yield* serverSettings.getSettings;
 
       assert.isTrue(settings.providers.cursor.enabled);
-      assert.isTrue(settings.providerInstances[ProviderInstanceId.make("cursor_work")]?.enabled);
-      assert.isTrue(settings.providerInstances[ProviderInstanceId.make("grok")]?.enabled);
-      assert.isTrue(settings.providerInstances[ProviderInstanceId.make("opencode_work")]?.enabled);
-      const unused = settings.providerInstances[ProviderInstanceId.make("opencode_unused")];
-      assert.isDefined(unused);
-      assert.isFalse(resolveProviderInstanceEnabled(unused));
+      assert.isTrue(settings.providers.grok.enabled);
+      assert.isTrue(settings.providers.opencode.enabled);
+      assert.equal(settings.providers.opencode.serverUrl, "http://127.0.0.1:4096");
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(raw).providers, {
+        opencode: { serverUrl: "http://127.0.0.1:4096" },
+      });
+      assert.isTrue(yield* fileSystem.exists(`${serverConfig.settingsPath}.agents-on`));
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("preserves explicit provider disables in existing settings files", () =>
+  it.effect("keeps an agent off when the user turns it off after that", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(`${serverConfig.settingsPath}.agents-on`, "");
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"providers":{"opencode":{"enabled":false}}}',
+      );
+
+      assert.isFalse((yield* serverSettings.getSettings).providers.opencode.enabled);
+
+      const next = yield* serverSettings.updateSettings({ providers: { grok: { enabled: false } } });
+      assert.isFalse(next.providers.grok.enabled);
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.isFalse(JSON.parse(raw).providers.grok.enabled);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("leaves an individually disabled agent instance alone", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* fileSystem.writeFileString(
         serverConfig.settingsPath,
-        '{"providers":{"grok":{"enabled":false},"opencode":{"enabled":false},"cursor":{"enabled":false}},"providerInstances":{"grok":{"driver":"grok","enabled":false,"config":{}},"opencode":{"driver":"opencode","config":{"enabled":false}},"cursor":{"driver":"cursor","enabled":false,"config":{}}}}',
+        '{"providerInstances":{"opencode_work":{"driver":"opencode","enabled":false,"config":{}}}}',
       );
-      yield* recordProviderUsage("grok");
-      yield* recordProviderUsage("opencode");
-      yield* recordProviderUsage("cursor");
 
       const settings = yield* serverSettings.getSettings;
 
-      assert.isFalse(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
-      assert.isFalse(settings.providers.cursor.enabled);
-      assert.isFalse(settings.providerInstances[ProviderInstanceId.make("grok")]?.enabled);
-      assert.isFalse(settings.providerInstances[ProviderInstanceId.make("opencode")]?.enabled);
-      assert.isFalse(settings.providerInstances[ProviderInstanceId.make("cursor")]?.enabled);
+      const work = settings.providerInstances[ProviderInstanceId.make("opencode_work")];
+      assert.isDefined(work);
+      assert.isFalse(resolveProviderInstanceEnabled(work));
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -671,182 +644,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const settings = yield* serverSettings.getSettings;
 
       assert.equal(settings.textGenerationModelSelection.instanceId, "claudeAgent");
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("keeps unused providers disabled in existing sparse settings files", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(serverConfig.settingsPath, "{}");
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.isFalse(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
-      assert.isFalse(settings.providers.cursor.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("preserves provider history when no settings file exists", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* recordProviderUsage("grok");
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.isTrue(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
-      assert.isFalse(settings.providers.cursor.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("preserves provider history when the settings file is invalid", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(serverConfig.settingsPath, "{invalid json");
-      yield* recordProviderUsage("cursor");
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.isTrue(settings.providers.cursor.enabled);
-      assert.isFalse(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("preserves valid provider flags when another settings field is invalid", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        '{"addProjectBaseDirectory":42,"providers":{"cursor":{"enabled":false},"grok":{"enabled":true}}}',
-      );
-      yield* recordProviderUsage("cursor");
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.isFalse(settings.providers.cursor.enabled);
-      assert.isTrue(settings.providers.grok.enabled);
-      assert.isFalse(settings.providers.opencode.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("restores providers from persisted runtime sessions", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`
-        INSERT INTO provider_session_runtime (
-          thread_id,
-          provider_name,
-          provider_instance_id,
-          adapter_key,
-          status,
-          last_seen_at
-        )
-        VALUES (
-          ${"thread-opencode-runtime"},
-          ${"opencode"},
-          ${"opencode"},
-          ${"opencode"},
-          ${"ready"},
-          ${"2026-08-25T00:00:00.000Z"}
-        )
-      `;
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.isFalse(settings.providers.grok.enabled);
-      assert.isTrue(settings.providers.opencode.enabled);
-      assert.isFalse(settings.providers.cursor.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("persists explicit disables after a provider has been used", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* recordProviderUsage("grok");
-
-      assert.isTrue((yield* serverSettings.getSettings).providers.grok.enabled);
-
-      const settings = yield* serverSettings.updateSettings({
-        providers: { grok: { enabled: false } },
-      });
-      assert.isFalse(settings.providers.grok.enabled);
-
-      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.isFalse(JSON.parse(raw).providers.grok.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("persists explicit provider enables before their first use", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-
-      yield* serverSettings.updateSettings({
-        providers: {
-          cursor: { enabled: true },
-          grok: { enabled: true },
-          opencode: { enabled: true },
-        },
-      });
-      yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
-
-      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const persisted = JSON.parse(raw);
-      assert.isTrue(persisted.providers.cursor.enabled);
-      assert.isTrue(persisted.providers.grok.enabled);
-      assert.isTrue(persisted.providers.opencode.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
-  it.effect("keeps optional providers disabled after a new installation writes settings", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-
-      const initial = yield* serverSettings.getSettings;
-      assert.isFalse(initial.providers.grok.enabled);
-      assert.isFalse(initial.providers.opencode.enabled);
-      assert.isFalse(initial.providers.cursor.enabled);
-
-      const next = yield* serverSettings.updateSettings({
-        addProjectBaseDirectory: "~/Development",
-        providerInstances: {
-          [ProviderInstanceId.make("grok")]: {
-            driver: ProviderDriverKind.make("grok"),
-            config: {},
-          },
-        },
-      });
-
-      assert.isFalse(next.providers.grok.enabled);
-      assert.isFalse(next.providers.opencode.enabled);
-      assert.isFalse(next.providers.cursor.enabled);
-      const grok = next.providerInstances[ProviderInstanceId.make("grok")];
-      assert.isDefined(grok);
-      assert.isFalse(resolveProviderInstanceEnabled(grok));
-
-      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const persisted = JSON.parse(raw);
-      assert.isFalse(persisted.providers.cursor.enabled);
-      assert.isFalse(persisted.providers.grok.enabled);
-      assert.isFalse(persisted.providers.opencode.enabled);
-      assert.isUndefined(persisted.providerInstances.grok.enabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -947,8 +744,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         autoCompactWindow: "",
       });
       assert.deepEqual(next.providers.opencode, {
-        // OpenCode is disabled by default; this update only touches paths.
-        enabled: false,
+        enabled: true,
         binaryPath: "/opt/homebrew/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
         serverPassword: "secret-password",
@@ -997,7 +793,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("writes non-default settings and explicit optional provider defaults to disk", () =>
+  it.effect("writes only non-default settings to disk", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -1034,14 +830,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
           },
-          cursor: {
-            enabled: false,
-          },
-          grok: {
-            enabled: false,
-          },
           opencode: {
-            enabled: false,
             serverUrl: "http://127.0.0.1:4096",
             serverPassword: "secret-password",
           },
