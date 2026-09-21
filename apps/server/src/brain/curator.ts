@@ -4,10 +4,10 @@ import {
   CodexSettings,
   ClaudeSettings,
   OpenCodeSettings,
-  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_MODEL,
+  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   ProviderDriverKind,
   type ServerSettings,
-  DEFAULT_MODEL,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
@@ -101,15 +101,35 @@ export function selectCuratorProvider(settings: ServerSettings, cli: BrainCurato
     throw new Error("The Brain has no supported extraction CLI configured.");
   const driver = cli === "claude" ? "claudeAgent" : cli;
   const preferred = settings.defaultModelSelection?.instanceId;
-  const entries = Object.entries(deriveProviderInstanceConfigMap(settings)).filter(
-    ([, entry]) => entry.driver === driver && resolveProviderInstanceEnabled(entry),
+  // Choosing this agent in Brain settings is the consent to run it. The provider's own switch
+  // only decides whether chat lists and probes it, and is off by default for most agents.
+  const all = Object.entries(deriveProviderInstanceConfigMap(settings)).filter(
+    ([, entry]) => entry.driver === driver,
   );
+  const enabled = all.filter(([, entry]) => resolveProviderInstanceEnabled(entry));
+  const entries = enabled.length ? enabled : all;
   const selected = entries.find(([id]) => id === preferred) ?? entries[0];
   if (!selected)
-    throw new Error(
-      `Enable a ${cli} provider to extract this Brain's notes, memories, and skills.`,
-    );
+    throw new Error(`This computer has no ${cli} agent set up to write this Brain's notes.`);
   return { instanceId: ProviderInstanceId.make(selected[0]), instance: selected[1] };
+}
+
+/**
+ * Notes are routine background work, so Codex and Claude use their inexpensive text model rather
+ * than the chat default. OpenCode has no universal model, only what this user's subscriptions
+ * serve; curator-opencode resolves that from their own model.
+ */
+export function selectCuratorModel(driver: string, openCodeModel?: string): string {
+  const model =
+    driver === "opencode"
+      ? openCodeModel
+      : (DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[ProviderDriverKind.make(driver)] ??
+        DEFAULT_MODEL);
+  if (!model)
+    throw new Error(
+      'Flow cannot tell which OpenCode model your subscriptions include. Run OpenCode once with the model you use, or set "model" in its config, then conversation notes resume.',
+    );
+  return model;
 }
 
 export function selectLocalCuratorCli(settings: ServerSettings): "codex" | "claude" | "opencode" {
@@ -152,7 +172,14 @@ const makeWorker = (request: BrainCuratorRun, settings: ServerSettings) =>
           });
         const isolated = yield* Effect.acquireRelease(
           Effect.tryPromise({
-            try: () => prepareOpenCodeCurator(environment),
+            try: () =>
+              prepareOpenCodeCurator(environment, {
+                binaryPath: expandHomePath(config.binaryPath),
+                chosenModel:
+                  settings.defaultModelSelection?.instanceId === instanceId
+                    ? settings.defaultModelSelection.model
+                    : undefined,
+              }),
             catch: (error) => new CuratorError({ message: String(error) }),
           }),
           (isolated) => Effect.promise(isolated.close),
@@ -224,13 +251,10 @@ const makeWorker = (request: BrainCuratorRun, settings: ServerSettings) =>
       );
     });
     const threadId = ThreadId.make(`flow-curator-${NodeCrypto.randomUUID()}`);
-    const defaultSelection = settings.defaultModelSelection;
-    const model =
-      defaultSelection?.instanceId === instanceId
-        ? defaultSelection.model
-        : (nativeModel ??
-          DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make(instance.driver)] ??
-          DEFAULT_MODEL);
+    const model = yield* Effect.try({
+      try: () => selectCuratorModel(instance.driver, nativeModel),
+      catch: (error) => new CuratorError({ message: (error as Error).message }),
+    });
     const modelSelection = createModelSelection(
       instanceId,
       model,
