@@ -1,5 +1,6 @@
 import { BrainIcon } from "./BrainIcon";
 import { useEffect, useRef, useState } from "react";
+import * as Schema from "effect/Schema";
 import type { BrainResponse, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { retainChatContextOnError } from "@t3tools/client-runtime/state/brain";
 import {
@@ -26,6 +27,10 @@ import { Button } from "../ui/button";
 import { BrainDocumentDialog, BrainDocumentLibrary } from "./BrainDocuments";
 import { ConversationNotesPreview } from "./ConversationNotesPreview";
 import { cliName } from "./BrainControls";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+
+// Remembered per browser, so a phone can keep the panel folded to its header.
+const PANEL_COLLAPSED_KEY = "flow:chat-brain-panel-collapsed";
 
 export function ChatBrainPanel({
   environmentId,
@@ -43,6 +48,11 @@ export function ChatBrainPanel({
   const [savedNow, setSavedNow] = useState(false);
   const [notesExpanded, setNotesExpanded] = useState(true);
   const [brainExpanded, setBrainExpanded] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useLocalStorage(
+    PANEL_COLLAPSED_KEY,
+    false,
+    Schema.Boolean,
+  );
   const [view, setView] = useState<string | null>(null);
   const { chooseBrain, brainChoiceDialog } = useProjectBrainChoice();
   const [connecting, setConnecting] = useState(false);
@@ -209,12 +219,23 @@ export function ChatBrainPanel({
         aria-label="Flow brain and conversation notes"
         className="order-first m-3 min-h-0 shrink-0 self-start w-[calc(100%-1.5rem)] lg:order-last lg:ml-0 lg:mr-4 lg:mt-4 lg:w-80"
       >
-        <div className="max-h-[55dvh] overflow-y-auto rounded-3xl border border-border/70 bg-card/95 p-4 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.16)] lg:max-h-[75dvh]">
-          <div className="mb-3 flex items-center gap-2">
+        <div
+          className={`max-h-[55dvh] overflow-y-auto rounded-3xl border border-border/70 bg-card/95 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.16)] lg:max-h-[75dvh] ${panelCollapsed ? "px-4 py-2.5" : "p-4"}`}
+        >
+          <button
+            type="button"
+            aria-expanded={!panelCollapsed}
+            onClick={() => setPanelCollapsed((value) => !value)}
+            className={`flex w-full items-center gap-2 text-left ${panelCollapsed ? "" : "mb-3"}`}
+          >
             <BrainCircuitIcon className="size-4 text-primary" />
             <h2 className="text-sm font-semibold">Flow</h2>
             <span className="ml-auto text-xs text-muted-foreground">Your context</span>
-          </div>
+            <ChevronDownIcon
+              className={`size-4 shrink-0 text-muted-foreground ${panelCollapsed ? "" : "rotate-180"}`}
+            />
+          </button>
+          <div hidden={panelCollapsed}>
           {error && (
             <p role="alert" className="mb-3 text-xs text-destructive">
               Could not refresh context. {response ? "Showing last loaded data." : "Reconnecting…"}
@@ -442,6 +463,7 @@ export function ChatBrainPanel({
               </>
             )}
           </section>
+          </div>
         </div>
       </aside>
       {brainChoiceDialog}
